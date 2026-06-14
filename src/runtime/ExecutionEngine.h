@@ -46,8 +46,10 @@ public:
                                   const proto::ProtoObject* fnMarkerProto,
                                   const proto::ProtoString* bytecodeKey,
                                   const proto::ProtoString* arityKey,
+                                  const proto::ProtoString* capturesKey,
                                   const proto::ProtoObject* const* args = nullptr,
-                                  unsigned int argCount = 0);
+                                  unsigned int argCount = 0,
+                                  const proto::ProtoObject* captures = nullptr);
 };
 
 } // namespace protoClojure

@@ -51,6 +51,7 @@ struct CompilerMarkers {
     const proto::ProtoString* bytesKey;
     const proto::ProtoString* bytecodeKey;       // session 5 — opaque ptr
     const proto::ProtoString* arityKey;          // session 5
+    const proto::ProtoString* capturesKey;       // session 6 — closure captures list
 };
 
 class Compiler {
@@ -78,15 +79,27 @@ private:
     // fn-body's locals live there, and the scope is popped when the body
     // finishes. `let` and `loop` extend the current scope's local table.
     struct Scope {
-        // name → local slot (params first, then let/loop bindings).
+        // name → local slot (params first, then captures introduced on
+        // demand, then let/loop bindings — all three live in the same
+        // slot space; the BytecodeModule's captureSpecs records which
+        // slots are captures, to be populated at CALL time).
         std::unordered_map<std::string, int> nameToSlot;
         int nextSlot = 0;
         int arity    = 0;  // number of params at the start of this scope
 
-        // recur target — populated by `loop` (or by `fn` once we add
-        // implicit-loop-around-fn semantics in session 5+). The slots
-        // vector tells `recur` which locals to rebind, in left-to-right
-        // order. Empty stack = recur is illegal at the current position.
+        // Session 6 — closure captures recorded for THIS scope. Each
+        // entry says: at MAKE_FN time, PUSH_LOCAL parentSlot from the
+        // enclosing scope's frame; at CALL time, write the wrapper's
+        // captures[i] into localSlot of THIS scope's frame. Copied into
+        // the BytecodeModule's captureSpecs_ at compileFnBody exit.
+        struct Capture {
+            int parentSlot;
+            int localSlot;
+        };
+        std::vector<Capture> captures;
+
+        // recur target — populated by `loop`. The slots vector tells
+        // `recur` which locals to rebind, in left-to-right order.
         struct RecurTarget {
             std::size_t  bodyStart;     // byte offset (PC) to JUMP_BACK to
             std::vector<int> slots;     // local slot indices for the bindings
@@ -96,10 +109,13 @@ private:
 
     std::vector<Scope> scopes_;
 
-    // Look up `name` in the innermost scope (the top of scopes_). Returns
-    // -1 if not found. For session 5 we do NOT walk up the scope chain —
-    // closures land in a later session, and nested fns capture nothing yet.
-    int lookupLocal(const std::string& name) const;
+    // Resolve `name` against the scope chain. If found in the innermost
+    // scope, returns its slot directly. If found in some outer scope,
+    // creates a capture chain through every intermediate scope that does
+    // not already host `name` (each intermediate scope captures from its
+    // own enclosing scope's slot), and returns the slot in the innermost
+    // scope. Returns -1 if `name` is not bound in any active scope.
+    int resolveLocal(const std::string& name);
 };
 
 } // namespace protoClojure

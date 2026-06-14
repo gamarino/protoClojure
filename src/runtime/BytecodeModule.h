@@ -68,6 +68,23 @@ public:
     void setArity(int n)       { arity_ = n; }
     void setLocalCount(int n)  { localCount_ = n; }
 
+    // Closure capture specification (session 6). For each free variable
+    // the body references through its enclosing scope, the compiler
+    // records: parentSlot — the slot in the enclosing scope's frame to
+    // read at MAKE_FN time; localSlot — the slot in THIS body's frame to
+    // populate at CALL time from the wrapper's __captures__ list. Order
+    // of captureSpecs matters: the outer-scope PUSH_LOCALs and the
+    // wrapper's captures list both walk this order.
+    struct CaptureSpec {
+        int parentSlot;
+        int localSlot;
+    };
+    void addCapture(int parentSlot, int localSlot) {
+        captureSpecs_.push_back({parentSlot, localSlot});
+    }
+    const std::vector<CaptureSpec>& captureSpecs() const { return captureSpecs_; }
+    int captureCount() const { return static_cast<int>(captureSpecs_.size()); }
+
     // Sub-module ownership for fn bodies. The compiler calls addBlock to
     // append a freshly-compiled fn body; MAKE_FN's operand is the returned
     // index. The C++-side std::unique_ptr ownership is invisible to
@@ -82,6 +99,7 @@ private:
     std::vector<std::uint8_t>                    bytes_;
     std::vector<Const>                           consts_;
     std::vector<std::unique_ptr<BytecodeModule>> blocks_;
+    std::vector<CaptureSpec>                     captureSpecs_;
     int                                          arity_      = 0;
     int                                          localCount_ = 0;
 };

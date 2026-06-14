@@ -93,19 +93,24 @@ Compiler::compileFnBody(proto::ProtoContext* ctx,
     auto body = std::make_unique<BytecodeModule>();
     body->setArity(static_cast<int>(arity));
 
-    // Push a fresh fn scope. Params go in slots 0..arity-1.
+    // Push a fresh fn scope. Params go in slots 0..arity-1. We never hold
+    // a Scope& across a recursive compileForm() — that call may compile a
+    // nested fn, push_back another Scope, and reallocate `scopes_`, which
+    // would dangle the reference. Always re-acquire via scopes_.back().
     scopes_.push_back(Scope{});
-    Scope& scope = scopes_.back();
-    scope.arity = static_cast<int>(arity);
-    for (unsigned long i = 0; i < arity; ++i) {
-        const proto::ProtoObject* p = params->getAt(ctx, (int)i);
-        if (!isStringy(p)) {
-            scopes_.pop_back();
-            throw CompileError("fn/defn: parameter name must be a symbol");
+    {
+        Scope& scope = scopes_.back();
+        scope.arity = static_cast<int>(arity);
+        for (unsigned long i = 0; i < arity; ++i) {
+            const proto::ProtoObject* p = params->getAt(ctx, (int)i);
+            if (!isStringy(p)) {
+                scopes_.pop_back();
+                throw CompileError("fn/defn: parameter name must be a symbol");
+            }
+            scope.nameToSlot[asUtf8(ctx, p)] = static_cast<int>(i);
         }
-        scope.nameToSlot[asUtf8(ctx, p)] = static_cast<int>(i);
+        scope.nextSlot = static_cast<int>(arity);
     }
-    scope.nextSlot = static_cast<int>(arity);
 
     // Compile the body forms after the params vector.
     unsigned long bodyStart = paramsAt + 1;
@@ -120,17 +125,56 @@ Compiler::compileFnBody(proto::ProtoContext* ctx,
     }
     body->emit(Op::RETURN, 0);
 
+    // Re-acquire — nested fn compilation may have grown scopes_ and
+    // invalidated any reference held before the body loop.
+    Scope& scope = scopes_.back();
     body->setLocalCount(scope.nextSlot - scope.arity);
+    for (const auto& c : scope.captures) {
+        body->addCapture(c.parentSlot, c.localSlot);
+    }
     scopes_.pop_back();
     return body;
 }
 
-int Compiler::lookupLocal(const std::string& name) const {
+int Compiler::resolveLocal(const std::string& name) {
     if (scopes_.empty()) return -1;
-    const auto& top = scopes_.back();
-    auto it = top.nameToSlot.find(name);
-    if (it == top.nameToSlot.end()) return -1;
-    return it->second;
+
+    // Find the deepest scope at index `foundIdx` that has `name`.
+    int top = static_cast<int>(scopes_.size()) - 1;
+    int foundIdx = -1;
+    for (int i = top; i >= 0; --i) {
+        if (scopes_[i].nameToSlot.count(name)) {
+            foundIdx = i;
+            break;
+        }
+    }
+    if (foundIdx < 0)      return -1;
+    if (foundIdx == top)   return scopes_[top].nameToSlot[name];
+
+    // Found in an outer scope. Walk back upward, creating a capture in
+    // every intermediate scope that does not already host `name`. Each
+    // intermediate capture sources its value from the immediately-
+    // enclosing scope's slot for `name` (which we just created the
+    // previous iteration if it wasn't already there).
+    int sourceSlot = scopes_[foundIdx].nameToSlot[name];
+    for (int i = foundIdx + 1; i <= top; ++i) {
+        auto& s = scopes_[i];
+        auto it = s.nameToSlot.find(name);
+        if (it != s.nameToSlot.end()) {
+            // Already a slot in this scope (a previous capture or a
+            // genuine local) — adopt it as the source for the next level.
+            sourceSlot = it->second;
+            continue;
+        }
+        int newSlot = s.nextSlot++;
+        if (newSlot > 255) {
+            throw CompileError("closure: local-slot overflow (>255)");
+        }
+        s.nameToSlot[name] = newSlot;
+        s.captures.push_back({sourceSlot, newSlot});
+        sourceSlot = newSlot;
+    }
+    return scopes_[top].nameToSlot[name];
 }
 
 void Compiler::compileForm(proto::ProtoContext* ctx,
@@ -166,10 +210,11 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             throw CompileError("empty () not yet implemented in v0.0.x");
         }
         const proto::ProtoObject* head = lst->getAt(ctx, 0);
-        if (!isStringy(head)) {
-            throw CompileError("call head must be a symbol in v0.0.x");
-        }
-        std::string headName = asUtf8(ctx, head);
+        // Special-form dispatch keys on the head's text; only symbols
+        // qualify. A non-stringy head (e.g. `((outer 100) 20)` where the
+        // callable is itself an expression) is always a regular call and
+        // is compiled below via compileForm on the head.
+        std::string headName = isStringy(head) ? asUtf8(ctx, head) : std::string{};
 
         // ---- Special forms -------------------------------------------------
 
@@ -283,9 +328,12 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             throw CompileError("quote: unsupported atom in v0.0.x");
         }
 
-        // (fn [params] body...) — compile body into a sub-module, emit
-        // MAKE_FN with the sub-module index. Session 5: no closures; the
-        // fn captures nothing from the enclosing lexical scope.
+        // (fn [params] body...) — compile body into a sub-module, push any
+        // captured parent-scope values, then MAKE_FN. Captures land in
+        // session 6: compileFnBody records them on the body module via
+        // addCapture; we emit one PUSH_LOCAL per capture from the parent
+        // scope in declared order. MAKE_FN at runtime pops exactly that
+        // many values into the wrapper's __captures__ list.
         if (headName == "fn") {
             std::unique_ptr<BytecodeModule> body =
                 compileFnBody(ctx, lst, markers);
@@ -293,13 +341,22 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (blockIdx > 255) {
                 throw CompileError("fn: too many fn bodies (>255) in module");
             }
+            const auto& caps = out.block(blockIdx).captureSpecs();
+            for (const auto& c : caps) {
+                if (c.parentSlot < 0 || c.parentSlot > 255) {
+                    throw CompileError("fn: capture parent-slot overflow");
+                }
+                out.emit(Op::PUSH_LOCAL,
+                    static_cast<std::uint8_t>(c.parentSlot));
+            }
             out.emit(Op::MAKE_FN, static_cast<std::uint8_t>(blockIdx));
             return;
         }
 
         // (defn name [params] body...) — sugar for (def name (fn [params]
-        // body...)). Implement directly to avoid building an intermediate
-        // protoCore list.
+        // body...)). Captures handled identically to (fn ...). Top-level
+        // defns can in principle have zero captures (no enclosing scope),
+        // but the mechanism is harmless either way.
         if (headName == "defn") {
             if (n < 3) {
                 throw CompileError("defn: expects (defn name [params] body...)");
@@ -308,15 +365,19 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (!isStringy(nameForm)) {
                 throw CompileError("defn: name must be a symbol");
             }
-            // Build the equivalent fn-form pieces (params + body) and reuse
-            // compileFnBody. We pass the full `lst` plus the param-start
-            // index so compileFnBody can reach into the form.
             std::unique_ptr<BytecodeModule> body =
-                compileFnBody(ctx, lst, markers);  // expects head to be
-                                                    // skipped, params at idx 2
+                compileFnBody(ctx, lst, markers);
             std::size_t blockIdx = out.addBlock(std::move(body));
             if (blockIdx > 255) {
                 throw CompileError("defn: too many fn bodies (>255) in module");
+            }
+            const auto& caps = out.block(blockIdx).captureSpecs();
+            for (const auto& c : caps) {
+                if (c.parentSlot < 0 || c.parentSlot > 255) {
+                    throw CompileError("defn: capture parent-slot overflow");
+                }
+                out.emit(Op::PUSH_LOCAL,
+                    static_cast<std::uint8_t>(c.parentSlot));
             }
             out.emit(Op::MAKE_FN, static_cast<std::uint8_t>(blockIdx));
             std::size_t nameIdx = out.addSymbol(asUtf8(ctx, nameForm));
@@ -343,7 +404,6 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (bn % 2 != 0) {
                 throw CompileError("let: bindings must come in name/value pairs");
             }
-            Scope& scope = scopes_.back();
             for (unsigned long i = 0; i < bn; i += 2) {
                 const proto::ProtoObject* nameForm = bvec->getAt(ctx, (int)i);
                 const proto::ProtoObject* valForm  = bvec->getAt(ctx, (int)(i + 1));
@@ -351,6 +411,9 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                     throw CompileError("let: binding name must be a symbol");
                 }
                 compileForm(ctx, valForm, out, markers);  // push value
+                // Re-acquire scope each iteration: compileForm may have
+                // pushed nested fn scopes and reallocated scopes_.
+                Scope& scope = scopes_.back();
                 int slot = scope.nextSlot++;
                 if (slot > 255) {
                     throw CompileError("let: local-slot overflow (>255)");
@@ -388,7 +451,6 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (bn % 2 != 0) {
                 throw CompileError("loop: bindings must come in name/value pairs");
             }
-            Scope& scope = scopes_.back();
             std::vector<int> recurSlots;
             for (unsigned long i = 0; i < bn; i += 2) {
                 const proto::ProtoObject* nameForm = bvec->getAt(ctx, (int)i);
@@ -397,6 +459,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                     throw CompileError("loop: binding name must be a symbol");
                 }
                 compileForm(ctx, valForm, out, markers);
+                Scope& scope = scopes_.back();    // re-acquire post-recursion
                 int slot = scope.nextSlot++;
                 if (slot > 255) {
                     throw CompileError("loop: local-slot overflow (>255)");
@@ -410,7 +473,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             Scope::RecurTarget tgt;
             tgt.bodyStart = out.pos();
             tgt.slots = recurSlots;
-            scope.recurStack.push_back(tgt);
+            scopes_.back().recurStack.push_back(tgt);
 
             if (n == 2) {
                 out.emit(Op::PUSH_NIL, 0);
@@ -421,7 +484,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 }
             }
 
-            scope.recurStack.pop_back();
+            scopes_.back().recurStack.pop_back();
             return;
         }
 
@@ -464,18 +527,25 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
 
         // ---- Plain call form -----------------------------------------------
 
-        // The head is treated as a symbol reference. If it is bound in the
-        // current fn scope (a let-bound function value), emit PUSH_LOCAL;
-        // otherwise emit PUSH_VAR for a global lookup at runtime.
-        int slot = lookupLocal(headName);
-        if (slot >= 0) {
-            out.emit(Op::PUSH_LOCAL, static_cast<std::uint8_t>(slot));
-        } else {
-            std::size_t headIdx = out.addSymbol(headName);
-            if (headIdx > 255) {
-                throw CompileError("const-pool overflow on symbol");
+        // Emit the callable. A symbolic head with a name not matched by
+        // any special form above is treated as a regular reference:
+        // resolveLocal first (which handles closures), then PUSH_VAR for
+        // a runtime global lookup. A non-stringy head (an arbitrary
+        // expression that yields a callable, e.g. `((make-add 5) 10)`)
+        // is compiled directly.
+        if (isStringy(head)) {
+            int slot = resolveLocal(headName);
+            if (slot >= 0) {
+                out.emit(Op::PUSH_LOCAL, static_cast<std::uint8_t>(slot));
+            } else {
+                std::size_t headIdx = out.addSymbol(headName);
+                if (headIdx > 255) {
+                    throw CompileError("const-pool overflow on symbol");
+                }
+                out.emit(Op::PUSH_VAR, static_cast<std::uint8_t>(headIdx));
             }
-            out.emit(Op::PUSH_VAR, static_cast<std::uint8_t>(headIdx));
+        } else {
+            compileForm(ctx, head, out, markers);
         }
 
         // Push each argument.
@@ -515,7 +585,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
     // PUSH_LOCAL; otherwise fall back to a runtime global lookup.
     if (isStringy(form)) {
         std::string name = asUtf8(ctx, form);
-        int slot = lookupLocal(name);
+        int slot = resolveLocal(name);
         if (slot >= 0) {
             out.emit(Op::PUSH_LOCAL, static_cast<std::uint8_t>(slot));
             return;

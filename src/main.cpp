@@ -100,13 +100,15 @@ int runFile(const char* path) {
         proto::ProtoString::createSymbol(ctx, "__bytecode__");
     const proto::ProtoString* arityKey =
         proto::ProtoString::createSymbol(ctx, "__arity__");
+    const proto::ProtoString* capturesKey =
+        proto::ProtoString::createSymbol(ctx, "__captures__");
 
     protoClojure::ReaderMarkers readerMarkers{
         ctx->getAutomaticLocal(kSlotStringMarker), bytesKey};
     protoClojure::CompilerMarkers compilerMarkers{
         ctx->getAutomaticLocal(kSlotStringMarker),
         ctx->getAutomaticLocal(kSlotFnMarker),
-        bytesKey, bytecodeKey, arityKey};
+        bytesKey, bytecodeKey, arityKey, capturesKey};
 
     // Read every form from the file.
     std::string source = slurp(path);
@@ -145,7 +147,7 @@ int runFile(const char* path) {
     try {
         eng.run(ctx, mod, ctx->getAutomaticLocal(kSlotGlobals),
                 ctx->getAutomaticLocal(kSlotFnMarker),
-                bytecodeKey, arityKey);
+                bytecodeKey, arityKey, capturesKey);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s: runtime error: %s\n", path, e.what());
         return 1;

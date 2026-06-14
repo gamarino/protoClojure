@@ -38,8 +38,10 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                      const proto::ProtoObject* fnMarkerProto,
                      const proto::ProtoString* bytecodeKey,
                      const proto::ProtoString* arityKey,
+                     const proto::ProtoString* capturesKey,
                      const proto::ProtoObject* const* args,
-                     unsigned int argCount) {
+                     unsigned int argCount,
+                     const proto::ProtoObject* captures) {
     // One ProtoContext per frame. Layout of automaticLocals:
     //   [0 .. arity-1]                         — params (bound at call)
     //   [arity .. arity+localCount-1]          — lets / loops
@@ -56,6 +58,26 @@ ExecutionEngine::run(proto::ProtoContext* parent,
     // Bind incoming args (call site is responsible for matching arity).
     for (unsigned int i = 0; i < argCount; ++i) {
         frame.setAutomaticLocal(locBase + i, args[i]);
+    }
+
+    // Session 6 — closure captures. The wrapper passes its __captures__
+    // list; we walk the BytecodeModule's captureSpecs in parallel and
+    // write each value into the body-local slot it expects.
+    const auto& capSpecs = mod.captureSpecs();
+    if (!capSpecs.empty()) {
+        if (!captures || captures == PROTO_NONE) {
+            throw std::runtime_error(
+                "VM: fn expects captures but none were provided");
+        }
+        const proto::ProtoList* clist = captures->asList(&frame);
+        if (!clist || clist->getSize(&frame) != capSpecs.size()) {
+            throw std::runtime_error(
+                "VM: captures list size mismatch with body captureSpecs");
+        }
+        for (std::size_t i = 0; i < capSpecs.size(); ++i) {
+            frame.setAutomaticLocal(locBase + capSpecs[i].localSlot,
+                clist->getAt(&frame, static_cast<int>(i)));
+        }
     }
 
     auto pushVal = [&](const proto::ProtoObject* v) {
@@ -130,17 +152,36 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 if (operand >= mod.blockCount())
                     throw std::runtime_error("VM: MAKE_FN out-of-range");
                 const BytecodeModule& subMod = mod.block(operand);
-                // Wrap the sub-module's address in a child of fnMarkerProto.
-                // The bytecode pointer is stored as a tagged-int attribute so
-                // protoCore traverses it as just an integer value — the
-                // BytecodeModule itself is owned by the outer module's
-                // unique_ptr<BytecodeModule> blocks_ vector, not by protoCore.
+
+                // Session 6 — pop captureCount values from the stack and
+                // collect them into a ProtoList (top-of-stack = LAST
+                // capture, walking back gives source order). The compiler
+                // emitted exactly captureCount PUSH_LOCALs from the
+                // enclosing scope, one per capture, in capture-spec order.
+                int nCaps = subMod.captureCount();
+                if (sp < static_cast<unsigned int>(nCaps)) {
+                    throw std::runtime_error("VM: MAKE_FN underflow on captures");
+                }
+                const proto::ProtoObject* capsList =
+                    frame.newList()->asObject(&frame);
+                if (nCaps > 0) {
+                    // Walk back nCaps slots from the top to preserve emit order.
+                    for (int i = 0; i < nCaps; ++i) {
+                        const proto::ProtoObject* v =
+                            frame.getAutomaticLocal(stackBase + sp - nCaps + i);
+                        capsList = capsList->asList(&frame)
+                            ->appendLast(&frame, v)->asObject(&frame);
+                    }
+                    sp -= static_cast<unsigned int>(nCaps);
+                }
+
                 proto::ProtoObject* wrap = const_cast<proto::ProtoObject*>(
                     fnMarkerProto->newChild(&frame, /*isMutable=*/true));
                 wrap->setAttribute(&frame, bytecodeKey,
                     frame.fromLong(reinterpret_cast<long long>(&subMod)));
                 wrap->setAttribute(&frame, arityKey,
                     frame.fromLong(subMod.arity()));
+                wrap->setAttribute(&frame, capturesKey, capsList);
                 pushVal(wrap);
                 break;
             }
@@ -176,12 +217,16 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                         callArgs[i] = frame.getAutomaticLocal(
                             stackBase + sp - argc + i);
                     }
+                    // Read closure captures from the wrapper (PROTO_NONE
+                    // if the fn has none — body's captureSpecs is empty).
+                    const proto::ProtoObject* capsVal =
+                        callable->getAttribute(&frame, capturesKey);
                     sp -= (argc + 1);
 
                     const proto::ProtoObject* result = this->run(
                         &frame, *subMod, globals,
-                        fnMarkerProto, bytecodeKey, arityKey,
-                        callArgs, argc);
+                        fnMarkerProto, bytecodeKey, arityKey, capturesKey,
+                        callArgs, argc, capsVal);
                     pushVal(result);
                     break;
                 }
