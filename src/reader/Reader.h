@@ -61,7 +61,9 @@ struct ReaderError : std::runtime_error {
 // pay one extra heap allocation each, which is acceptable.
 struct ReaderMarkers {
     const proto::ProtoObject* stringMarkerProto;
+    const proto::ProtoObject* vectorMarkerProto;  // session 9 — `[..]` literals
     const proto::ProtoString* bytesKey;
+    const proto::ProtoString* itemsKey;           // session 9 — vector items list
 };
 
 class Reader {

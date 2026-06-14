@@ -36,12 +36,17 @@ std::size_t BytecodeModule::addBlock(std::unique_ptr<BytecodeModule> sub) {
 }
 
 std::size_t BytecodeModule::addLong(long long v) {
-    consts_.push_back(Const{ConstKind::Long, v, {}});
+    consts_.push_back(Const{ConstKind::Long, v, 0.0, {}});
+    return consts_.size() - 1;
+}
+
+std::size_t BytecodeModule::addDouble(double v) {
+    consts_.push_back(Const{ConstKind::Double, 0, v, {}});
     return consts_.size() - 1;
 }
 
 std::size_t BytecodeModule::addString(const std::string& s) {
-    consts_.push_back(Const{ConstKind::String, 0, s});
+    consts_.push_back(Const{ConstKind::String, 0, 0.0, s});
     return consts_.size() - 1;
 }
 
@@ -55,7 +60,7 @@ std::size_t BytecodeModule::addSymbol(const std::string& s) {
             return i;
         }
     }
-    consts_.push_back(Const{ConstKind::Symbol, 0, s});
+    consts_.push_back(Const{ConstKind::Symbol, 0, 0.0, s});
     return consts_.size() - 1;
 }
 

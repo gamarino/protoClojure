@@ -50,6 +50,7 @@ struct Token {
     TokenKind   kind;
     std::string text;           // raw lexeme (or error message when kind=Error)
     long long   intValue = 0;   // valid for Integer
+    double      doubleValue = 0.0;  // valid for Float (session 9)
     int         line   = 1;
     int         column = 1;
 };

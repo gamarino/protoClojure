@@ -67,6 +67,26 @@ static bool isWrappedString(proto::ProtoContext* ctx,
     return proto == markers.stringMarkerProto;
 }
 
+// Session 9 — true iff `form` is a Reader-wrapped `[..]` vector literal.
+// The underlying items live in a ProtoList under itemsKey.
+static bool isWrappedVector(proto::ProtoContext* ctx,
+                            const proto::ProtoObject* form,
+                            const CompilerMarkers& markers) {
+    if (!form) return false;
+    const proto::ProtoObject* proto = form->getPrototype(ctx);
+    return proto == markers.vectorMarkerProto;
+}
+
+// Returns the ProtoList of items under a wrapped vector. Caller has already
+// verified isWrappedVector.
+static const proto::ProtoList* vectorItems(proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* form,
+                                           const CompilerMarkers& markers) {
+    const proto::ProtoObject* raw =
+        form->getAttribute(ctx, markers.itemsKey);
+    return raw->asList(ctx);
+}
+
 std::unique_ptr<BytecodeModule>
 Compiler::compileFnBody(proto::ProtoContext* ctx,
                         const proto::ProtoList* fnForm,
@@ -84,10 +104,18 @@ Compiler::compileFnBody(proto::ProtoContext* ctx,
 
     if (n <= paramsAt) throw CompileError("fn/defn: missing parameter vector");
     const proto::ProtoObject* paramsForm = fnForm->getAt(ctx, (int)paramsAt);
-    if (!isList(paramsForm)) {
+    const proto::ProtoList* params = nullptr;
+    if (isWrappedVector(ctx, paramsForm, markers)) {
+        params = vectorItems(ctx, paramsForm, markers);
+    } else if (isList(paramsForm)) {
+        // Pre-session-9 legacy: bare ProtoList counts as a params vector.
+        // Multi-arity inner arities also reach here via compileArity's
+        // direct call path; keep accepting raw lists for that.
+        params = paramsForm->asList(ctx);
+    } else {
         throw CompileError("fn/defn: parameter list must be a vector");
     }
-    return compileArity(ctx, paramsForm->asList(ctx), fnForm, paramsAt + 1, markers);
+    return compileArity(ctx, params, fnForm, paramsAt + 1, markers);
 }
 
 std::unique_ptr<BytecodeModule>
@@ -248,6 +276,16 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         if (idx > 255) {
             throw CompileError("const-pool overflow (>255 entries) — EXTEND "
                                "prefix not yet implemented in v0.0.x");
+        }
+        out.emit(Op::PUSH_CONST, static_cast<std::uint8_t>(idx));
+        return;
+    }
+
+    // Float literal — emit PUSH_CONST <addDouble>.
+    if (form->isFloat(ctx)) {
+        std::size_t idx = out.addDouble(form->asDouble(ctx));
+        if (idx > 255) {
+            throw CompileError("const-pool overflow on float");
         }
         out.emit(Op::PUSH_CONST, static_cast<std::uint8_t>(idx));
         return;
@@ -525,10 +563,14 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             }
 
             const proto::ProtoObject* first = lst->getAt(ctx, (int)aritiesStart);
+            // Single-arity: the form right after the head/name is a vector
+            // literal `[..]` (wrapped). Multi-arity: a list whose first
+            // element is itself a wrapped vector — `(fn ([x] ...) ([x y] ...))`.
             bool multiArity = false;
             if (isList(first)) {
                 const proto::ProtoList* fl = first->asList(ctx);
-                if (fl->getSize(ctx) >= 1 && isList(fl->getAt(ctx, 0))) {
+                if (fl->getSize(ctx) >= 1 &&
+                    isWrappedVector(ctx, fl->getAt(ctx, 0), markers)) {
                     multiArity = true;
                 }
             }
@@ -570,11 +612,16 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                         throw CompileError("multi-arity: arity missing params");
                     }
                     const proto::ProtoObject* paramsForm = alist->getAt(ctx, 0);
-                    if (!isList(paramsForm)) {
+                    const proto::ProtoList* params = nullptr;
+                    if (isWrappedVector(ctx, paramsForm, markers)) {
+                        params = vectorItems(ctx, paramsForm, markers);
+                    } else if (isList(paramsForm)) {
+                        params = paramsForm->asList(ctx);
+                    } else {
                         throw CompileError("multi-arity: params must be a vector");
                     }
                     std::unique_ptr<BytecodeModule> body =
-                        compileArity(ctx, paramsForm->asList(ctx), alist, 1, markers);
+                        compileArity(ctx, params, alist, 1, markers);
                     std::size_t blockIdx = out.addBlock(std::move(body));
                     if (blockIdx > 255) {
                         throw CompileError("fn: too many fn bodies (>255)");
@@ -619,10 +666,14 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             }
             if (n < 2) throw CompileError("let: expects bindings vector");
             const proto::ProtoObject* bindings = lst->getAt(ctx, 1);
-            if (!isList(bindings)) {
+            const proto::ProtoList* bvec = nullptr;
+            if (isWrappedVector(ctx, bindings, markers)) {
+                bvec = vectorItems(ctx, bindings, markers);
+            } else if (isList(bindings)) {
+                bvec = bindings->asList(ctx);
+            } else {
                 throw CompileError("let: bindings must be a vector");
             }
-            const proto::ProtoList* bvec = bindings->asList(ctx);
             unsigned long bn = bvec->getSize(ctx);
             if (bn % 2 != 0) {
                 throw CompileError("let: bindings must come in name/value pairs");
@@ -666,10 +717,14 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             }
             if (n < 2) throw CompileError("loop: expects bindings vector");
             const proto::ProtoObject* bindings = lst->getAt(ctx, 1);
-            if (!isList(bindings)) {
+            const proto::ProtoList* bvec = nullptr;
+            if (isWrappedVector(ctx, bindings, markers)) {
+                bvec = vectorItems(ctx, bindings, markers);
+            } else if (isList(bindings)) {
+                bvec = bindings->asList(ctx);
+            } else {
                 throw CompileError("loop: bindings must be a vector");
             }
-            const proto::ProtoList* bvec = bindings->asList(ctx);
             unsigned long bn = bvec->getSize(ctx);
             if (bn % 2 != 0) {
                 throw CompileError("loop: bindings must come in name/value pairs");
@@ -797,6 +852,24 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             throw CompileError("call with >255 args not supported in v0.0.x");
         }
         out.emit(Op::CALL, static_cast<std::uint8_t>(argc));
+        return;
+    }
+
+    // Session 9 — `[..]` vector literal in expression position. Compile as
+    // a call to the `vector` primitive: emit PUSH_VAR vector, then each
+    // item, then CALL N. The wrapper marker stays out of the bytecode —
+    // it is purely a compile-time hint to distinguish `[..]` from `(..)`.
+    if (isWrappedVector(ctx, form, markers)) {
+        const proto::ProtoList* items = vectorItems(ctx, form, markers);
+        unsigned long ni = items->getSize(ctx);
+        std::size_t headIdx = out.addSymbol("vector");
+        if (headIdx > 255) throw CompileError("vector: const-pool overflow");
+        out.emit(Op::PUSH_VAR, static_cast<std::uint8_t>(headIdx));
+        for (unsigned long i = 0; i < ni; ++i) {
+            compileForm(ctx, items->getAt(ctx, (int)i), out, markers);
+        }
+        if (ni > 255) throw CompileError("vector: >255 items in literal");
+        out.emit(Op::CALL, static_cast<std::uint8_t>(ni));
         return;
     }
 

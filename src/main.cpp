@@ -72,11 +72,12 @@ int runFile(const char* path) {
     //   1 : forms (the ProtoList readAll() returned).
     //   2 : stringMarkerProto — see ReaderMarkers / CompilerMarkers docs.
     //   3 : fnMarkerProto — wraps user-fn callables (session 5).
-    ctx->resizeAutomaticLocals(4);
+    ctx->resizeAutomaticLocals(5);
     constexpr unsigned int kSlotGlobals      = 0;
     constexpr unsigned int kSlotForms        = 1;
     constexpr unsigned int kSlotStringMarker = 2;
     constexpr unsigned int kSlotFnMarker     = 3;
+    constexpr unsigned int kSlotVectorMarker = 4;
 
     const proto::ProtoObject* globalsObj =
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
@@ -94,6 +95,10 @@ int runFile(const char* path) {
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
     ctx->setAutomaticLocal(kSlotFnMarker, fnMarkerProto);
 
+    const proto::ProtoObject* vectorMarkerProto =
+        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+    ctx->setAutomaticLocal(kSlotVectorMarker, vectorMarkerProto);
+
     const proto::ProtoString* bytesKey =
         proto::ProtoString::createSymbol(ctx, "__bytes__");
     const proto::ProtoString* bytecodeKey =
@@ -104,13 +109,18 @@ int runFile(const char* path) {
         proto::ProtoString::createSymbol(ctx, "__captures__");
     const proto::ProtoString* aritiesKey =
         proto::ProtoString::createSymbol(ctx, "__arities__");
+    const proto::ProtoString* itemsKey =
+        proto::ProtoString::createSymbol(ctx, "__items__");
 
     protoClojure::ReaderMarkers readerMarkers{
-        ctx->getAutomaticLocal(kSlotStringMarker), bytesKey};
+        ctx->getAutomaticLocal(kSlotStringMarker),
+        ctx->getAutomaticLocal(kSlotVectorMarker),
+        bytesKey, itemsKey};
     protoClojure::CompilerMarkers compilerMarkers{
         ctx->getAutomaticLocal(kSlotStringMarker),
         ctx->getAutomaticLocal(kSlotFnMarker),
-        bytesKey, bytecodeKey, arityKey, capturesKey, aritiesKey};
+        ctx->getAutomaticLocal(kSlotVectorMarker),
+        bytesKey, bytecodeKey, arityKey, capturesKey, aritiesKey, itemsKey};
 
     // Read every form from the file.
     std::string source = slurp(path);

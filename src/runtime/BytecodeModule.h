@@ -28,6 +28,7 @@ class BytecodeModule {
 public:
     enum class ConstKind : uint8_t {
         Long,
+        Double,    // session 9 — IEEE-754 64-bit float literal
         String,
         Symbol,    // interned at materialisation time via ProtoString::createSymbol
     };
@@ -35,11 +36,13 @@ public:
     struct Const {
         ConstKind kind;
         long long ival = 0;
+        double    dval = 0.0;
         std::string sval;        // only the std-side raw bytes; never enters protoCore
     };
 
     // Const-pool insertion. Returns the index for use in PUSH_CONST / PUSH_VAR.
     std::size_t addLong(long long v);
+    std::size_t addDouble(double v);
     std::size_t addString(const std::string& s);
     std::size_t addSymbol(const std::string& s);
 

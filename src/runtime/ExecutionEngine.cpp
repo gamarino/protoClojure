@@ -22,6 +22,7 @@ const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
     using K = BytecodeModule::ConstKind;
     switch (c.kind) {
         case K::Long:   return ctx->fromLong(c.ival);
+        case K::Double: return ctx->fromDouble(c.dval);
         case K::String: return ctx->fromUTF8String(c.sval.c_str());
         case K::Symbol:
             return reinterpret_cast<const proto::ProtoObject*>(

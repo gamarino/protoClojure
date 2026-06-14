@@ -35,17 +35,41 @@ namespace {
 
 // Common helpers ------------------------------------------------------------
 
-// Pull an argument and coerce to long long, throwing on type mismatch. v0.0.x
-// is integer-only for arithmetic; Float/Ratio arrive in session 5+.
+// Pull an argument and coerce to long long. Pre-session-9 helper kept for
+// the comparison-chain template; for arithmetic see argAsNumber below.
 long long argAsLong(proto::ProtoContext* ctx, const proto::ProtoList* args,
                     int i, const char* primName) {
     const proto::ProtoObject* a = args->getAt(ctx, i);
     if (!a || !a->isInteger(ctx)) {
         throw std::runtime_error(
             std::string(primName) + ": argument " + std::to_string(i) +
-            " is not an integer (v0.0.x is integer-only)");
+            " is not an integer");
     }
     return a->asLong(ctx);
+}
+
+// Session 9 — numeric union. Carries either an int or a float, with the
+// promotion rule "any float in the input → float result". Used by the
+// arithmetic and comparison primitives.
+struct Num {
+    bool   isFloat;
+    long long  ival;
+    double     dval;
+    double  asDouble() const { return isFloat ? dval : static_cast<double>(ival); }
+};
+
+Num argAsNumber(proto::ProtoContext* ctx, const proto::ProtoList* args,
+                int i, const char* primName) {
+    const proto::ProtoObject* a = args->getAt(ctx, i);
+    if (!a) {
+        throw std::runtime_error(
+            std::string(primName) + ": argument " + std::to_string(i) + " is nil");
+    }
+    if (a->isInteger(ctx)) return {false, a->asLong(ctx), 0.0};
+    if (a->isFloat(ctx))   return {true,  0, a->asDouble(ctx)};
+    throw std::runtime_error(
+        std::string(primName) + ": argument " + std::to_string(i) +
+        " is not a number");
 }
 
 // Pointer-tag constants matching protoCore's internal layout. Mirrored
@@ -79,6 +103,16 @@ void printValue(proto::ProtoContext* ctx, std::FILE* out,
         std::fprintf(out, "%lld", v->asLong(ctx));
         return;
     }
+    if (v->isFloat(ctx)) {
+        double d = v->asDouble(ctx);
+        // Match Clojure-JVM: integer-valued floats print with `.0`.
+        if (d == static_cast<long long>(d)) {
+            std::fprintf(out, "%lld.0", static_cast<long long>(d));
+        } else {
+            std::fprintf(out, "%g", d);
+        }
+        return;
+    }
     if (isListTag(v)) {
         const proto::ProtoList* lst = v->asList(ctx);
         std::fputc('(', out);
@@ -88,6 +122,18 @@ void printValue(proto::ProtoContext* ctx, std::FILE* out,
             printValue(ctx, out, lst->getAt(ctx, static_cast<int>(i)));
         }
         std::fputc(')', out);
+        return;
+    }
+    if (v->isTuple(ctx)) {
+        const proto::ProtoTuple* t =
+            reinterpret_cast<const proto::ProtoTuple*>(v);
+        std::fputc('[', out);
+        unsigned long n = t->getSize(ctx);
+        for (unsigned long i = 0; i < n; ++i) {
+            if (i > 0) std::fputc(' ', out);
+            printValue(ctx, out, t->getAt(ctx, static_cast<int>(i)));
+        }
+        std::fputc(']', out);
         return;
     }
     if (proto::ProtoObject::isStringTagFast(v)) {
@@ -105,6 +151,15 @@ void appendValue(proto::ProtoContext* ctx, std::ostringstream& os,
     if (v == PROTO_TRUE)        { os << "true"; return; }
     if (v == PROTO_FALSE)       { os << "false"; return; }
     if (v->isInteger(ctx))      { os << v->asLong(ctx); return; }
+    if (v->isFloat(ctx)) {
+        double d = v->asDouble(ctx);
+        if (d == static_cast<long long>(d)) {
+            os << static_cast<long long>(d) << ".0";
+        } else {
+            os << d;
+        }
+        return;
+    }
     if (isListTag(v)) {
         const proto::ProtoList* lst = v->asList(ctx);
         os << '(';
@@ -114,6 +169,18 @@ void appendValue(proto::ProtoContext* ctx, std::ostringstream& os,
             appendValue(ctx, os, lst->getAt(ctx, static_cast<int>(i)));
         }
         os << ')';
+        return;
+    }
+    if (v->isTuple(ctx)) {
+        const proto::ProtoTuple* t =
+            reinterpret_cast<const proto::ProtoTuple*>(v);
+        os << '[';
+        unsigned long n = t->getSize(ctx);
+        for (unsigned long i = 0; i < n; ++i) {
+            if (i > 0) os << ' ';
+            appendValue(ctx, os, t->getAt(ctx, static_cast<int>(i)));
+        }
+        os << ']';
         return;
     }
     if (proto::ProtoObject::isStringTagFast(v)) {
@@ -153,12 +220,58 @@ const proto::ProtoObject* prim_println(proto::ProtoContext* ctx,
 
 // Arithmetic (integer-only in v0.0.x) -------------------------------------
 
+// Arithmetic helper: walk all args; if any is float, the result is a
+// double computed via `dop`; otherwise it's a long computed via `iop`.
+template <typename Iop, typename Dop>
+const proto::ProtoObject* arithFold(proto::ProtoContext* ctx,
+                                    const proto::ProtoList* args,
+                                    const char* name,
+                                    long long iIdent, double dIdent,
+                                    Iop iop, Dop dop) {
+    unsigned long n = args ? args->getSize(ctx) : 0;
+    bool anyFloat = false;
+    for (unsigned long i = 0; i < n; ++i) {
+        Num x = argAsNumber(ctx, args, (int)i, name);
+        if (x.isFloat) { anyFloat = true; break; }
+    }
+    if (anyFloat) {
+        double acc = dIdent;
+        bool started = false;
+        for (unsigned long i = 0; i < n; ++i) {
+            double v = argAsNumber(ctx, args, (int)i, name).asDouble();
+            acc = started ? dop(acc, v) : v;
+            started = true;
+        }
+        return ctx->fromDouble(n == 0 ? dIdent : acc);
+    } else {
+        long long acc = iIdent;
+        bool started = false;
+        for (unsigned long i = 0; i < n; ++i) {
+            long long v = argAsLong(ctx, args, (int)i, name);
+            acc = started ? iop(acc, v) : v;
+            started = true;
+        }
+        return ctx->fromLong(n == 0 ? iIdent : acc);
+    }
+}
+
 const proto::ProtoObject* prim_plus(proto::ProtoContext* ctx,
                                     const proto::ProtoObject*,
                                     const proto::ParentLink*,
                                     const proto::ProtoList* args,
                                     const proto::ProtoSparseList*) {
     unsigned long n = args ? args->getSize(ctx) : 0;
+    if (n == 0) return ctx->fromLong(0);
+    bool anyFloat = false;
+    for (unsigned long i = 0; i < n; ++i) {
+        if (argAsNumber(ctx, args, (int)i, "+").isFloat) { anyFloat = true; break; }
+    }
+    if (anyFloat) {
+        double acc = 0.0;
+        for (unsigned long i = 0; i < n; ++i)
+            acc += argAsNumber(ctx, args, (int)i, "+").asDouble();
+        return ctx->fromDouble(acc);
+    }
     long long acc = 0;
     for (unsigned long i = 0; i < n; ++i) acc += argAsLong(ctx, args, (int)i, "+");
     return ctx->fromLong(acc);
@@ -171,6 +284,17 @@ const proto::ProtoObject* prim_minus(proto::ProtoContext* ctx,
                                      const proto::ProtoSparseList*) {
     unsigned long n = args ? args->getSize(ctx) : 0;
     if (n == 0) throw std::runtime_error("- : needs at least one arg");
+    bool anyFloat = false;
+    for (unsigned long i = 0; i < n; ++i) {
+        if (argAsNumber(ctx, args, (int)i, "-").isFloat) { anyFloat = true; break; }
+    }
+    if (anyFloat) {
+        if (n == 1) return ctx->fromDouble(-argAsNumber(ctx, args, 0, "-").asDouble());
+        double acc = argAsNumber(ctx, args, 0, "-").asDouble();
+        for (unsigned long i = 1; i < n; ++i)
+            acc -= argAsNumber(ctx, args, (int)i, "-").asDouble();
+        return ctx->fromDouble(acc);
+    }
     if (n == 1) return ctx->fromLong(-argAsLong(ctx, args, 0, "-"));
     long long acc = argAsLong(ctx, args, 0, "-");
     for (unsigned long i = 1; i < n; ++i) acc -= argAsLong(ctx, args, (int)i, "-");
@@ -183,8 +307,57 @@ const proto::ProtoObject* prim_mul(proto::ProtoContext* ctx,
                                    const proto::ProtoList* args,
                                    const proto::ProtoSparseList*) {
     unsigned long n = args ? args->getSize(ctx) : 0;
+    if (n == 0) return ctx->fromLong(1);
+    bool anyFloat = false;
+    for (unsigned long i = 0; i < n; ++i) {
+        if (argAsNumber(ctx, args, (int)i, "*").isFloat) { anyFloat = true; break; }
+    }
+    if (anyFloat) {
+        double acc = 1.0;
+        for (unsigned long i = 0; i < n; ++i)
+            acc *= argAsNumber(ctx, args, (int)i, "*").asDouble();
+        return ctx->fromDouble(acc);
+    }
     long long acc = 1;
     for (unsigned long i = 0; i < n; ++i) acc *= argAsLong(ctx, args, (int)i, "*");
+    return ctx->fromLong(acc);
+}
+
+// `/` arrives in session 9 — float-by-default once any arg is float; int
+// truncating div when all ints. Matches Clojure for ints when divisible;
+// not bit-for-bit for Ratios (we have no Ratio in v0.9, so we truncate).
+const proto::ProtoObject* prim_div(proto::ProtoContext* ctx,
+                                   const proto::ProtoObject*,
+                                   const proto::ParentLink*,
+                                   const proto::ProtoList* args,
+                                   const proto::ProtoSparseList*) {
+    unsigned long n = args ? args->getSize(ctx) : 0;
+    if (n == 0) throw std::runtime_error("/: needs at least one arg");
+    bool anyFloat = false;
+    for (unsigned long i = 0; i < n; ++i) {
+        if (argAsNumber(ctx, args, (int)i, "/").isFloat) { anyFloat = true; break; }
+    }
+    if (anyFloat) {
+        if (n == 1) return ctx->fromDouble(1.0 / argAsNumber(ctx, args, 0, "/").asDouble());
+        double acc = argAsNumber(ctx, args, 0, "/").asDouble();
+        for (unsigned long i = 1; i < n; ++i) {
+            double v = argAsNumber(ctx, args, (int)i, "/").asDouble();
+            if (v == 0.0) throw std::runtime_error("/: divide by zero");
+            acc /= v;
+        }
+        return ctx->fromDouble(acc);
+    }
+    if (n == 1) {
+        long long v = argAsLong(ctx, args, 0, "/");
+        if (v == 0) throw std::runtime_error("/: divide by zero");
+        return ctx->fromLong(1 / v);
+    }
+    long long acc = argAsLong(ctx, args, 0, "/");
+    for (unsigned long i = 1; i < n; ++i) {
+        long long v = argAsLong(ctx, args, (int)i, "/");
+        if (v == 0) throw std::runtime_error("/: divide by zero");
+        acc /= v;
+    }
     return ctx->fromLong(acc);
 }
 
@@ -195,7 +368,9 @@ const proto::ProtoObject* prim_inc(proto::ProtoContext* ctx,
                                    const proto::ProtoSparseList*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("inc: expects 1 arg");
-    return ctx->fromLong(argAsLong(ctx, args, 0, "inc") + 1);
+    Num x = argAsNumber(ctx, args, 0, "inc");
+    if (x.isFloat) return ctx->fromDouble(x.dval + 1.0);
+    return ctx->fromLong(x.ival + 1);
 }
 
 const proto::ProtoObject* prim_dec(proto::ProtoContext* ctx,
@@ -205,13 +380,16 @@ const proto::ProtoObject* prim_dec(proto::ProtoContext* ctx,
                                    const proto::ProtoSparseList*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("dec: expects 1 arg");
-    return ctx->fromLong(argAsLong(ctx, args, 0, "dec") - 1);
+    Num x = argAsNumber(ctx, args, 0, "dec");
+    if (x.isFloat) return ctx->fromDouble(x.dval - 1.0);
+    return ctx->fromLong(x.ival - 1);
 }
 
 // Comparison ---------------------------------------------------------------
 
 // Variadic monotonic chain helper. Returns true if for every adjacent pair
-// (a, b) the predicate(a, b) holds. Matches Clojure's `(< 1 2 3 4)` etc.
+// (a, b) the predicate(a, b) holds. Numeric promotion: any float in the
+// chain promotes ALL comparisons to double — matches Clojure-JVM.
 template <typename Pred>
 const proto::ProtoObject* monotonicChain(proto::ProtoContext* ctx,
                                          const proto::ProtoList* args,
@@ -219,9 +397,9 @@ const proto::ProtoObject* monotonicChain(proto::ProtoContext* ctx,
                                          Pred pred) {
     unsigned long n = args ? args->getSize(ctx) : 0;
     if (n < 2) return PROTO_TRUE;            // 0- or 1-arg form is true
-    long long prev = argAsLong(ctx, args, 0, name);
+    double prev = argAsNumber(ctx, args, 0, name).asDouble();
     for (unsigned long i = 1; i < n; ++i) {
-        long long cur = argAsLong(ctx, args, (int)i, name);
+        double cur = argAsNumber(ctx, args, (int)i, name).asDouble();
         if (!pred(prev, cur)) return PROTO_FALSE;
         prev = cur;
     }
@@ -233,7 +411,7 @@ const proto::ProtoObject* prim_lt(proto::ProtoContext* ctx,
                                   const proto::ParentLink*,
                                   const proto::ProtoList* args,
                                   const proto::ProtoSparseList*) {
-    return monotonicChain(ctx, args, "<", [](long long a, long long b){ return a < b; });
+    return monotonicChain(ctx, args, "<", [](double a, double b){ return a < b; });
 }
 
 const proto::ProtoObject* prim_le(proto::ProtoContext* ctx,
@@ -241,7 +419,7 @@ const proto::ProtoObject* prim_le(proto::ProtoContext* ctx,
                                   const proto::ParentLink*,
                                   const proto::ProtoList* args,
                                   const proto::ProtoSparseList*) {
-    return monotonicChain(ctx, args, "<=", [](long long a, long long b){ return a <= b; });
+    return monotonicChain(ctx, args, "<=", [](double a, double b){ return a <= b; });
 }
 
 const proto::ProtoObject* prim_gt(proto::ProtoContext* ctx,
@@ -249,7 +427,7 @@ const proto::ProtoObject* prim_gt(proto::ProtoContext* ctx,
                                   const proto::ParentLink*,
                                   const proto::ProtoList* args,
                                   const proto::ProtoSparseList*) {
-    return monotonicChain(ctx, args, ">", [](long long a, long long b){ return a > b; });
+    return monotonicChain(ctx, args, ">", [](double a, double b){ return a > b; });
 }
 
 const proto::ProtoObject* prim_ge(proto::ProtoContext* ctx,
@@ -257,7 +435,7 @@ const proto::ProtoObject* prim_ge(proto::ProtoContext* ctx,
                                   const proto::ParentLink*,
                                   const proto::ProtoList* args,
                                   const proto::ProtoSparseList*) {
-    return monotonicChain(ctx, args, ">=", [](long long a, long long b){ return a >= b; });
+    return monotonicChain(ctx, args, ">=", [](double a, double b){ return a >= b; });
 }
 
 const proto::ProtoObject* prim_eq(proto::ProtoContext* ctx,
@@ -267,7 +445,7 @@ const proto::ProtoObject* prim_eq(proto::ProtoContext* ctx,
                                   const proto::ProtoSparseList*) {
     // = on integers in v0.0.x — for collections / strings we need structural
     // equality which lands later. Variadic chain like Clojure's =.
-    return monotonicChain(ctx, args, "=", [](long long a, long long b){ return a == b; });
+    return monotonicChain(ctx, args, "=", [](double a, double b){ return a == b; });
 }
 
 // str ----------------------------------------------------------------------
@@ -289,18 +467,31 @@ const proto::ProtoObject* prim_str(proto::ProtoContext* ctx,
 
 // List + predicate primitives (session 7) -----------------------------------
 
-// Treat nil as the empty list for traversal — Clojure's seq nil == nil but
-// (first nil) == nil, (rest nil) == (), (count nil) == 0. We collapse the
-// distinction in v0.7.x: anything that isn't a list and isn't nil/false
-// is an error when given to first/rest/count.
+// Treat nil as the empty seq. Vectors (ProtoTuple) are seq-coerced via
+// ProtoTuple::asList, which converts in O(N) but is fine for v0.9
+// benchmarks (consumers walk linearly anyway). Strings stay opaque for
+// session 9 — supported in session 10.
 const proto::ProtoList* asSeqOrNull(proto::ProtoContext* ctx,
                                     const proto::ProtoObject* v) {
     if (!v || v == PROTO_NONE) return nullptr;
-    if (!isListTag(v)) {
-        throw std::runtime_error(
-            "seq op: argument is not a list (v0.7.x lists-only)");
+    if (isListTag(v)) return v->asList(ctx);
+    if (v->isTuple(ctx)) {
+        // v->asTuple() not exposed by handle API; route via the tuple
+        // protocol on the object.
+        const proto::ProtoTuple* t =
+            reinterpret_cast<const proto::ProtoTuple*>(v);
+        return t->asList(ctx);
     }
-    return v->asList(ctx);
+    throw std::runtime_error(
+        "seq op: argument is not a list or vector");
+}
+
+// Returns the ProtoTuple* underlying `v` if it's a vector; nullptr otherwise.
+const proto::ProtoTuple* asTupleOrNull(proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* v) {
+    if (!v) return nullptr;
+    if (!v->isTuple(ctx)) return nullptr;
+    return reinterpret_cast<const proto::ProtoTuple*>(v);
 }
 
 const proto::ProtoObject* prim_list(proto::ProtoContext* ctx,
@@ -316,6 +507,101 @@ const proto::ProtoObject* prim_list(proto::ProtoContext* ctx,
             ->asObject(ctx);
     }
     return out;
+}
+
+// Session 9 — `(vector x y z)` builds a ProtoTuple. The bytecode form
+// `[x y z]` desugars to a call here, so vector-literal performance is
+// dominated by tuple build cost (O(N)).
+const proto::ProtoObject* prim_vector(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject*,
+                                      const proto::ParentLink*,
+                                      const proto::ProtoList* args,
+                                      const proto::ProtoSparseList*) {
+    unsigned long n = args ? args->getSize(ctx) : 0;
+    // Build via newList → appendLast → asTuple-equivalent path.
+    // The cheapest path is `newTupleFromList(list)` once we have the list.
+    const proto::ProtoObject* lstObj = ctx->newList()->asObject(ctx);
+    for (unsigned long i = 0; i < n; ++i) {
+        lstObj = lstObj->asList(ctx)
+            ->appendLast(ctx, args->getAt(ctx, static_cast<int>(i)))
+            ->asObject(ctx);
+    }
+    return ctx->newTupleFromList(lstObj->asList(ctx))->asObject(ctx);
+}
+
+// (vec coll) — converts any seqable (list or vector) to a vector.
+const proto::ProtoObject* prim_vec(proto::ProtoContext* ctx,
+                                   const proto::ProtoObject*,
+                                   const proto::ParentLink*,
+                                   const proto::ProtoList* args,
+                                   const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("vec: expects 1 arg");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (v->isTuple(ctx)) return v;  // already a vector
+    const proto::ProtoList* lst = asSeqOrNull(ctx, v);
+    if (!lst) return ctx->newTuple()->asObject(ctx);
+    return ctx->newTupleFromList(lst)->asObject(ctx);
+}
+
+// (nth coll i) / (nth coll i not-found)
+const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
+                                   const proto::ProtoObject*,
+                                   const proto::ParentLink*,
+                                   const proto::ProtoList* args,
+                                   const proto::ProtoSparseList*) {
+    unsigned long ac = args ? args->getSize(ctx) : 0;
+    if (ac != 2 && ac != 3)
+        throw std::runtime_error("nth: expects (nth coll i) or (nth coll i nf)");
+    const proto::ProtoObject* coll = args->getAt(ctx, 0);
+    long long idx = argAsLong(ctx, args, 1, "nth");
+    const proto::ProtoObject* notFound = (ac == 3) ? args->getAt(ctx, 2) : nullptr;
+
+    // Vector path: O(log N).
+    if (coll && coll->isTuple(ctx)) {
+        const proto::ProtoTuple* t =
+            reinterpret_cast<const proto::ProtoTuple*>(coll);
+        long long sz = static_cast<long long>(t->getSize(ctx));
+        if (idx < 0 || idx >= sz) {
+            if (notFound) return notFound;
+            throw std::runtime_error("nth: index out of bounds");
+        }
+        return t->getAt(ctx, static_cast<int>(idx));
+    }
+    // List path: O(N).
+    const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
+    if (!lst) {
+        if (notFound) return notFound;
+        throw std::runtime_error("nth: nil collection");
+    }
+    long long sz = static_cast<long long>(lst->getSize(ctx));
+    if (idx < 0 || idx >= sz) {
+        if (notFound) return notFound;
+        throw std::runtime_error("nth: index out of bounds");
+    }
+    return lst->getAt(ctx, static_cast<int>(idx));
+}
+
+const proto::ProtoObject* prim_vector_p(proto::ProtoContext* ctx,
+                                        const proto::ProtoObject*,
+                                        const proto::ParentLink*,
+                                        const proto::ProtoList* args,
+                                        const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("vector?: expects 1 arg");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    return (v && v->isTuple(ctx)) ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_list_p(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject*,
+                                      const proto::ParentLink*,
+                                      const proto::ProtoList* args,
+                                      const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("list?: expects 1 arg");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    return (v && isListTag(v)) ? PROTO_TRUE : PROTO_FALSE;
 }
 
 const proto::ProtoObject* prim_first(proto::ProtoContext* ctx,
@@ -542,9 +828,15 @@ void installPrimitives(proto::ProtoContext* ctx,
     install(">=",      &prim_ge);
     install("=",       &prim_eq);
     install("str",     &prim_str);
+    install("/",       &prim_div);
 
     // Session 7 — collection + higher-order.
     install("list",    &prim_list);
+    install("vector",  &prim_vector);
+    install("vec",     &prim_vec);
+    install("nth",     &prim_nth);
+    install("vector?", &prim_vector_p);
+    install("list?",   &prim_list_p);
     install("first",   &prim_first);
     install("rest",    &prim_rest);
     install("cons",    &prim_cons);

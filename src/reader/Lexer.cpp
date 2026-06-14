@@ -183,14 +183,48 @@ Token Lexer::lexNumber(bool negative) {
         digits += current();
         advance();
     }
+
+    // Session 9 — optional fractional / exponent part for floats. A `.` not
+    // followed by a digit is rejected (matches Clojure-JVM: `1.` is allowed
+    // there but produces 1.0; we are stricter for now and require at least
+    // one fractional digit).
+    bool isFloat = false;
+    if (!eof() && current() == '.') {
+        char la = lookahead();
+        if (std::isdigit(static_cast<unsigned char>(la))) {
+            isFloat = true;
+            digits += '.';
+            advance();
+            while (!eof() && std::isdigit(static_cast<unsigned char>(current()))) {
+                digits += current();
+                advance();
+            }
+        }
+    }
+    if (!eof() && (current() == 'e' || current() == 'E')) {
+        isFloat = true;
+        digits += current();
+        advance();
+        if (!eof() && (current() == '+' || current() == '-')) {
+            digits += current();
+            advance();
+        }
+        if (eof() || !std::isdigit(static_cast<unsigned char>(current()))) {
+            return makeError("malformed number literal: " + digits + "(missing exponent digits)",
+                             startLine, startCol);
+        }
+        while (!eof() && std::isdigit(static_cast<unsigned char>(current()))) {
+            digits += current();
+            advance();
+        }
+    }
+
     // Numbers followed by a Clojure symbol char (e.g. `42x`) are an error —
     // Clojure does not permit that and JVM Clojure also rejects.
     if (!eof()) {
         char trail = current();
         if (std::isalpha(static_cast<unsigned char>(trail))
             || trail == '_' || trail == '.') {
-            // Reserved for Float / Ratio / 0xff etc. in later sessions. For
-            // now, anything stuck to a number is an error.
             std::string bad = digits;
             while (!eof() && (std::isalnum(static_cast<unsigned char>(current()))
                               || current() == '_' || current() == '.')) {
@@ -202,11 +236,16 @@ Token Lexer::lexNumber(bool negative) {
         }
     }
     Token t;
-    t.kind = TokenKind::Integer;
     t.text = digits;
-    t.intValue = std::strtoll(digits.c_str(), nullptr, 10);
     t.line = startLine;
     t.column = startCol;
+    if (isFloat) {
+        t.kind = TokenKind::Float;
+        t.doubleValue = std::strtod(digits.c_str(), nullptr);
+    } else {
+        t.kind = TokenKind::Integer;
+        t.intValue = std::strtoll(digits.c_str(), nullptr, 10);
+    }
     return t;
 }
 

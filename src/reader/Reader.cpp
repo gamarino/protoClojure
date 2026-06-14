@@ -48,6 +48,9 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
             // ownership of rooting the return value.
             return parent->fromLong(tok.intValue);
 
+        case TokenKind::Float:
+            return parent->fromDouble(tok.doubleValue);
+
         case TokenKind::String: {
             // String literal — wrap so the Compiler can distinguish it from
             // a same-bytes inline symbol (protoCore inlines short bytes into
@@ -74,18 +77,35 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
         }
 
         case TokenKind::LParen:
-        case TokenKind::LBracket:
-            // Vectors and lists both materialise as a ProtoList for v0.0.x —
-            // sufficient for fn / let / loop bindings and any other shape
-            // the special-form dispatch wants to walk. The bracket
-            // distinction lives in the Lexer's token; once read, both
-            // bracket shapes become an ordered ProtoList. JVM Clojure's
-            // separate IPersistentVector type is a follow-up.
-            return readList(parent,
-                            tok.kind == TokenKind::LParen
-                                ? TokenKind::RParen
-                                : TokenKind::RBracket,
+            return readList(parent, TokenKind::RParen,
                             tok.line, tok.column);
+
+        case TokenKind::LBracket: {
+            // Session 9 — `[..]` is now a tagged vector literal, distinct
+            // from `(..)` lists. We still parse the items into a ProtoList
+            // (same shape the rest of the reader produces), but wrap it
+            // under vectorMarkerProto with the items list under itemsKey
+            // so the compiler can tell `[x y]` apart from `(x y)`. The
+            // compiler unwraps for fn/let/loop bindings; for expressions
+            // it emits a `(vector x y)` call so a ProtoTuple materialises
+            // at runtime.
+            proto::ProtoContext wrapScope(parent->space, parent);
+            wrapScope.resizeAutomaticLocals(2);
+            constexpr unsigned int kSlotItems = 0;
+            constexpr unsigned int kSlotWrap  = 1;
+            const proto::ProtoObject* items =
+                readList(&wrapScope, TokenKind::RBracket,
+                         tok.line, tok.column);
+            wrapScope.setAutomaticLocal(kSlotItems, items);
+            wrapScope.setAutomaticLocal(kSlotWrap,
+                markers_.vectorMarkerProto->newChild(&wrapScope,
+                                                      /*isMutable=*/true));
+            const_cast<proto::ProtoObject*>(
+                wrapScope.getAutomaticLocal(kSlotWrap))
+                ->setAttribute(&wrapScope, markers_.itemsKey,
+                               wrapScope.getAutomaticLocal(kSlotItems));
+            return wrapScope.getAutomaticLocal(kSlotWrap);
+        }
 
         case TokenKind::Error:
             throw ReaderError(tok.text, tok.line, tok.column);

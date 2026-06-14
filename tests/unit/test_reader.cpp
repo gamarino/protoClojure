@@ -17,9 +17,13 @@ struct ReaderFixture : ::testing::Test {
 
     const proto::ProtoObject* stringMarker =
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+    const proto::ProtoObject* vectorMarker =
+        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
     const proto::ProtoString* bytesKey =
         proto::ProtoString::createSymbol(ctx, "__bytes__");
-    ReaderMarkers markers{stringMarker, bytesKey};
+    const proto::ProtoString* itemsKey =
+        proto::ProtoString::createSymbol(ctx, "__items__");
+    ReaderMarkers markers{stringMarker, vectorMarker, bytesKey, itemsKey};
 
     // Convenience: extract the bytes of either a bare ProtoString (symbol or
     // string-tagged) or a string-marker-wrapped object.
