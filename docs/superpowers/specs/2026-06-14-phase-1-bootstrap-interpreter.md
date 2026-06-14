@@ -1194,28 +1194,65 @@ Measure:
 - Max RSS.
 - For the tight-loop script: ops/sec.
 
-### 11.2 The comparison baseline
+### 11.2 The comparison baselines and the four-axis framework
 
-Babashka. The Clojure programmer's "fast Clojure" today. If we
-beat or tie Babashka on startup and stay within 3× on
-steady-state, we are in a healthy position to publish phase 2.
+We measure against two Clojures and four axes. The unit of comparison
+is **never** "is X faster" alone; it is always the four-axis tuple
+that captures the actual tradeoff a Clojure programmer is making
+when they choose a runtime.
 
-JVM Clojure as a sanity check. Expect to lose on steady-state
-(JVM's JIT is genuinely fast); we are *not* targeting JVM parity
-in phase 1.
+**Primary baseline: JVM Clojure** (the canonical implementation).
+Comparing to JVM Clojure is what tells a Clojurist whether
+protoClojure is a credible *runtime* or a toy. The single-thread
+steady-state arm is where JVM Clojure is genuinely strong — twenty
+five years of HotSpot JIT — and where we expect to lose.
+
+**Secondary baseline: Babashka** (GraalVM AOT). The Clojure
+programmer's "fast Clojure for CLI tools" today. Useful sanity
+check: if we are catastrophically slower than Babashka, something
+is structurally wrong.
+
+**The four axes:**
+
+| Axis                                | JVM Clojure              | protoClojure realistic           | Where the winner is   |
+|-------------------------------------|--------------------------|----------------------------------|-----------------------|
+| Startup (cold + first print)        | 600-1500ms               | <50ms target                     | protoClojure 10-30×   |
+| Steady-state single-thread CPU      | fast (JIT inlines)       | 3-10× slower                     | JVM, **5× the target**|
+| Steady-state multi-core parallel    | thread-pooled but slow   | GIL-free, real OS threads        | protoClojure 1-4×     |
+| RSS footprint (long-running proc)   | 100-300MB                | 10-30MB                          | protoClojure 5-10×    |
+
+The headline framing — for the README, conference talks, blog
+posts — is **the tuple, never a single number**. The Clojure
+community has the sensibility (inherited from Hickey) to value
+honest multi-dimensional measurement over cherry-picked
+benchmarks. Posting "fib(30) in N seconds" alone is asking to be
+dismissed for missing the point.
 
 ### 11.3 The decision rule
 
-If the benchmark shows:
-- **Within target on startup AND within 3× of Babashka on
-  steady-state** → continue with phase 2 (the rest of `clojure.core`
-  + laziness + protocols).
-- **Catastrophic** on a clearly-fixable bottleneck → pause phase
-  2, profile, fix, then continue. The kind of "catastrophic" we
-  worry about is >10× Babashka or >100ms startup — both indicate
-  something is structurally wrong, not just unoptimised.
-- **Slow but plausible** (3-10× Babashka) → continue phase 2; the
-  performance work is itself a phase 6 milestone.
+The phase-1 → phase-2 go/no-go is read off the four axes:
+
+- **Within target on startup AND within 5× of JVM Clojure on
+  steady-state single-thread AND wining on the other two axes** →
+  continue with phase 2 (the rest of `clojure.core` + laziness +
+  protocols). This is the **expected** outcome and constitutes
+  "success" for v0.1.
+- **Beating 5× JVM on single-thread** → tag it as the public-facing
+  number; continue phase 2.
+- **Worse than 5× JVM on single-thread but within 10×** → continue
+  phase 2 anyway; performance work is its own phase 6 milestone.
+  Mark the public release as "performance preview" and explain.
+- **Catastrophic on a clearly-fixable bottleneck (>10× JVM
+  single-thread OR >150ms startup)** → pause phase 2, profile, fix,
+  then continue. These thresholds indicate something structurally
+  wrong, not just unoptimised — bad opcode dispatch, missing tagged
+  immediates, GC thrashing.
+- **Babashka comparison**: a separate sanity check. If we lose to
+  Babashka on startup (Babashka is ~10-30ms; we should be in the
+  same range or better), the AOT comparison is uncomfortable and we
+  document. If we lose to Babashka by >5× on steady-state, something
+  in our hot path is broken — Babashka is also a bytecode-on-JVM
+  story, AOT'd; we should not be a generation behind it.
 
 ---
 

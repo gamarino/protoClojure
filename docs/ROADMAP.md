@@ -57,15 +57,20 @@ basic interactive REPL.
 - `try / catch / finally`, `throw`, `ex-info`.
 - An interactive prompt: read-eval-print loop on stdin.
 - A first demo script that exercises every feature so far.
-- Performance smoke benchmark vs Babashka on the demo.
+- Performance smoke benchmark — **primary baseline JVM Clojure**,
+  secondary Babashka. The yardstick is the four-axis tuple
+  (startup, single-thread CPU, multi-core, RSS), not a single
+  number. See `docs/superpowers/specs/2026-06-14-phase-1-bootstrap-interpreter.md`
+  §11 for the full framework.
 
 **Done when:** the 10-line factorial / fizzbuzz / word-count examples
 from the README work, run from file, and at the REPL.
 
-**Decision point:** if performance is *catastrophic* (>10× Babashka on
-startup OR steady-state), pause and profile before continuing. If it
-is within 3×, continue — performance follow-up is an optimisation
-project, not a v0.1 blocker.
+**Decision point:** if single-thread steady-state is *catastrophic*
+(>10× JVM Clojure OR >150ms startup), pause and profile before
+continuing. If within 5× JVM single-thread AND winning on the
+other three axes, continue — the target is met and "success" for
+v0.1 is on the table.
 
 ---
 
@@ -156,8 +161,16 @@ workstation in under 5 minutes.
 
 ## Phase 6 — Quality pass and v0.1 release (1-2 weeks)
 
-- Bench against Babashka: startup time, fib(30), word-count, JSON
-  parse-and-walk. Publish results honest, even when unflattering.
+- Bench against **JVM Clojure** (primary) and Babashka (secondary)
+  across the four axes (startup, single-thread CPU, multi-core
+  parallel, RSS). Workloads include fib(N), word-count, JSON
+  parse-and-walk, a CPU-bound `pmap` over 4-8 cores (this is where
+  protoClojure has a structural advantage worth showing), and a
+  long-running daemon to measure RSS footprint. Publish honest
+  multi-dimensional results — even when unflattering on the
+  single-thread axis. The framing is the tuple, never a single
+  number; see `docs/superpowers/specs/2026-06-14-phase-1-bootstrap-interpreter.md`
+  §11 for the full rationale.
 - Documentation polish: every example in `LANGUAGE.md` and the tutorial
   must run.
 - Examples directory: 8-10 idiomatic scripts of increasing complexity.
