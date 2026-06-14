@@ -62,6 +62,7 @@ public:
                                   const proto::ProtoString* bytecodeKey,
                                   const proto::ProtoString* arityKey,
                                   const proto::ProtoString* capturesKey,
+                                  const proto::ProtoString* aritiesKey,
                                   const proto::ProtoObject* const* args = nullptr,
                                   unsigned int argCount = 0,
                                   const proto::ProtoObject* captures = nullptr);

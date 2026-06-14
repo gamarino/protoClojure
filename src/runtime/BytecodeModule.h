@@ -97,10 +97,26 @@ public:
     const BytecodeModule& block(std::size_t i) const { return *blocks_[i]; }
     std::size_t blockCount() const { return blocks_.size(); }
 
+    // Session 8 — multi-arity fn dispatch group. Each ArityGroup records
+    // the block indices that make up the N arities of a single multi-
+    // arity fn. The compiler emits MAKE_FN_MULTI with operand = the
+    // group's index; the VM walks blockIndices in order to pop captures
+    // and build the wrapper's __arities__ list.
+    struct ArityGroup {
+        std::vector<std::size_t> blockIndices;
+    };
+    std::size_t addArityGroup(std::vector<std::size_t> blockIndices) {
+        arityGroups_.push_back(ArityGroup{std::move(blockIndices)});
+        return arityGroups_.size() - 1;
+    }
+    const ArityGroup& arityGroup(std::size_t i) const { return arityGroups_[i]; }
+    std::size_t arityGroupCount() const { return arityGroups_.size(); }
+
 private:
     std::vector<std::uint8_t>                    bytes_;
     std::vector<Const>                           consts_;
     std::vector<std::unique_ptr<BytecodeModule>> blocks_;
+    std::vector<ArityGroup>                      arityGroups_;
     std::vector<CaptureSpec>                     captureSpecs_;
     int                                          arity_      = 0;
     int                                          localCount_ = 0;

@@ -50,6 +50,15 @@ enum class Op : uint8_t {
                            //        as positional args and dispatch like
                            //        CALL with argc = list size. Operand
                            //        reserved (must be 0 in v0.7.x).
+
+    // Session 8 additions:
+    DUP             = 17,  // copy top of stack (used by and/or short-circuit)
+    JUMP_IF_TRUE    = 18,  // pop; jump forward if value is NOT (nil|false)
+    MAKE_FN_MULTI   = 19,  // operand = arityGroup index in parent module;
+                           //           wraps N arities into a single multi-
+                           //           arity fn. Pops sum-of-captureCounts
+                           //           values off the stack (arity 0 caps
+                           //           first, then arity 1, ...).
 };
 
 inline constexpr std::size_t kInstrSize = 2;

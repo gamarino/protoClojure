@@ -32,6 +32,30 @@ const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
 
 } // namespace
 
+// Helper: pick which arity-spec inside a multi-arity wrapper to use for
+// a given argc. First pass: exact fixed match. Second pass: variadic with
+// argc >= minArity. Returns the index into the __arities__ list, or -1.
+static int pickArity(proto::ProtoContext* ctx,
+                     const proto::ProtoList* aritiesList,
+                     unsigned int argc) {
+    unsigned long N = aritiesList->getSize(ctx);
+    for (unsigned long k = 0; k < N; ++k) {
+        const proto::ProtoList* spec =
+            aritiesList->getAt(ctx, (int)k)->asList(ctx);
+        long long a = spec->getAt(ctx, 0)->asLong(ctx);
+        bool variadic = spec->getAt(ctx, 2) == PROTO_TRUE;
+        if (!variadic && a == static_cast<long long>(argc)) return (int)k;
+    }
+    for (unsigned long k = 0; k < N; ++k) {
+        const proto::ProtoList* spec =
+            aritiesList->getAt(ctx, (int)k)->asList(ctx);
+        long long a = spec->getAt(ctx, 0)->asLong(ctx);
+        bool variadic = spec->getAt(ctx, 2) == PROTO_TRUE;
+        if (variadic && static_cast<long long>(argc) >= a) return (int)k;
+    }
+    return -1;
+}
+
 const proto::ProtoObject*
 ExecutionEngine::invoke(proto::ProtoContext* ctx,
                         const proto::ProtoObject* callable,
@@ -43,12 +67,32 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
     // User-fn path — same shape as the in-VM dispatchCall, but the args
     // come from a caller-provided buffer rather than the operand stack.
     if (callable->getPrototype(ctx) == cc->fnMarkerProto) {
-        const proto::ProtoObject* ptrObj =
-            callable->getAttribute(ctx, cc->bytecodeKey);
-        if (!ptrObj || !ptrObj->isInteger(ctx))
-            throw std::runtime_error("VM: invoke: malformed fn-wrapper");
-        const BytecodeModule* subMod =
-            reinterpret_cast<const BytecodeModule*>(ptrObj->asLong(ctx));
+        const BytecodeModule* subMod = nullptr;
+        const proto::ProtoObject* capsVal = nullptr;
+
+        // Multi-arity? Check for __arities__ on the wrapper.
+        const proto::ProtoObject* aritiesObj =
+            callable->getAttribute(ctx, cc->aritiesKey);
+        if (aritiesObj && aritiesObj != PROTO_NONE) {
+            const proto::ProtoList* aritiesList = aritiesObj->asList(ctx);
+            int k = pickArity(ctx, aritiesList, argc);
+            if (k < 0)
+                throw std::runtime_error(
+                    "VM: invoke: no matching arity for argc=" + std::to_string(argc));
+            const proto::ProtoList* spec =
+                aritiesList->getAt(ctx, k)->asList(ctx);
+            subMod = reinterpret_cast<const BytecodeModule*>(
+                spec->getAt(ctx, 1)->asLong(ctx));
+            capsVal = spec->getAt(ctx, 3);
+        } else {
+            const proto::ProtoObject* ptrObj =
+                callable->getAttribute(ctx, cc->bytecodeKey);
+            if (!ptrObj || !ptrObj->isInteger(ctx))
+                throw std::runtime_error("VM: invoke: malformed fn-wrapper");
+            subMod = reinterpret_cast<const BytecodeModule*>(ptrObj->asLong(ctx));
+            capsVal = callable->getAttribute(ctx, cc->capturesKey);
+        }
+
         int fixed = subMod->arity();
         bool variadic = subMod->isVariadic();
         if (!variadic && fixed != static_cast<int>(argc))
@@ -70,11 +114,10 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
                 callArgs[i] = args[i];
             }
         }
-        const proto::ProtoObject* capsVal =
-            callable->getAttribute(ctx, cc->capturesKey);
         return this->run(ctx, *subMod, cc->globals,
                          const_cast<proto::ProtoObject*>(cc->fnMarkerProto),
                          cc->bytecodeKey, cc->arityKey, cc->capturesKey,
+                         cc->aritiesKey,
                          callArgs, passArgc, capsVal);
     }
 
@@ -110,6 +153,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                      const proto::ProtoString* bytecodeKey,
                      const proto::ProtoString* arityKey,
                      const proto::ProtoString* capturesKey,
+                     const proto::ProtoString* aritiesKey,
                      const proto::ProtoObject* const* args,
                      unsigned int argCount,
                      const proto::ProtoObject* captures) {
@@ -120,7 +164,8 @@ ExecutionEngine::run(proto::ProtoContext* parent,
     const ActiveCallContext* prior = activeCallContext();
     ActiveCallContext saved = prior ? *prior : ActiveCallContext{};
     ActiveCallContext cc{this, globals,
-                         fnMarkerProto, bytecodeKey, arityKey, capturesKey};
+                         fnMarkerProto, bytecodeKey, arityKey, capturesKey,
+                         aritiesKey};
     setActiveCallContext(cc);
     struct Guard {
         const ActiveCallContext* prior; ActiveCallContext saved;
@@ -196,13 +241,33 @@ ExecutionEngine::run(proto::ProtoContext* parent,
 
         // User fn — prototype matches fnMarkerProto.
         if (callable->getPrototype(&frame) == fnMarkerProto) {
-            const proto::ProtoObject* ptrObj =
-                callable->getAttribute(&frame, bytecodeKey);
-            if (!ptrObj || !ptrObj->isInteger(&frame))
-                throw std::runtime_error("VM: malformed fn-wrapper");
-            const BytecodeModule* subMod =
-                reinterpret_cast<const BytecodeModule*>(
+            const BytecodeModule* subMod = nullptr;
+            const proto::ProtoObject* capsVal = nullptr;
+
+            // Multi-arity? Pick the matching arity-spec first.
+            const proto::ProtoObject* aritiesObj =
+                callable->getAttribute(&frame, aritiesKey);
+            if (aritiesObj && aritiesObj != PROTO_NONE) {
+                const proto::ProtoList* aritiesList = aritiesObj->asList(&frame);
+                int k = pickArity(&frame, aritiesList, argc);
+                if (k < 0)
+                    throw std::runtime_error(
+                        "VM: no matching arity for argc=" + std::to_string(argc));
+                const proto::ProtoList* spec =
+                    aritiesList->getAt(&frame, k)->asList(&frame);
+                subMod = reinterpret_cast<const BytecodeModule*>(
+                    spec->getAt(&frame, 1)->asLong(&frame));
+                capsVal = spec->getAt(&frame, 3);
+            } else {
+                const proto::ProtoObject* ptrObj =
+                    callable->getAttribute(&frame, bytecodeKey);
+                if (!ptrObj || !ptrObj->isInteger(&frame))
+                    throw std::runtime_error("VM: malformed fn-wrapper");
+                subMod = reinterpret_cast<const BytecodeModule*>(
                     ptrObj->asLong(&frame));
+                capsVal = callable->getAttribute(&frame, capturesKey);
+            }
+
             int fixed = subMod->arity();
             bool variadic = subMod->isVariadic();
             if (!variadic && fixed != static_cast<int>(argc)) {
@@ -243,12 +308,10 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                         stackBase + sp - argc + i);
                 }
             }
-            const proto::ProtoObject* capsVal =
-                callable->getAttribute(&frame, capturesKey);
             sp -= (argc + 1);
             const proto::ProtoObject* result = this->run(
                 &frame, *subMod, globals,
-                fnMarkerProto, bytecodeKey, arityKey, capturesKey,
+                fnMarkerProto, bytecodeKey, arityKey, capturesKey, aritiesKey,
                 callArgs, passArgc, capsVal);
             pushVal(result);
             return;
@@ -443,6 +506,84 @@ ExecutionEngine::run(proto::ProtoContext* parent,
             case Op::JUMP_BACK:
                 pc -= static_cast<std::size_t>(operand) * kInstrSize;
                 break;
+
+            case Op::JUMP_IF_TRUE: {
+                const proto::ProtoObject* v = popVal();
+                if (v != PROTO_NONE && v != PROTO_FALSE) {
+                    pc += static_cast<std::size_t>(operand) * kInstrSize;
+                }
+                break;
+            }
+
+            case Op::DUP: {
+                if (sp == 0) throw std::runtime_error("VM: DUP on empty stack");
+                pushVal(frame.getAutomaticLocal(stackBase + sp - 1));
+                break;
+            }
+
+            case Op::MAKE_FN_MULTI: {
+                if (operand >= mod.arityGroupCount())
+                    throw std::runtime_error("VM: MAKE_FN_MULTI out-of-range");
+                const auto& group = mod.arityGroup(operand);
+                // Tally captures across all arities and slice the stack
+                // back into per-arity lists.
+                std::size_t totalCaps = 0;
+                for (std::size_t bi : group.blockIndices) {
+                    totalCaps += static_cast<std::size_t>(
+                        mod.block(bi).captureCount());
+                }
+                if (sp < totalCaps)
+                    throw std::runtime_error("VM: MAKE_FN_MULTI underflow");
+
+                // Build the __arities__ list of 4-tuples
+                //   (arity, bc-ptr, variadic?, captures-list)
+                const proto::ProtoObject* aritiesList =
+                    frame.newList()->asObject(&frame);
+                unsigned int baseSp = sp - static_cast<unsigned int>(totalCaps);
+                unsigned int cur = baseSp;
+                for (std::size_t bi : group.blockIndices) {
+                    const BytecodeModule& sub = mod.block(bi);
+                    int nCaps = sub.captureCount();
+                    const proto::ProtoObject* capsList =
+                        frame.newList()->asObject(&frame);
+                    for (int i = 0; i < nCaps; ++i) {
+                        const proto::ProtoObject* v =
+                            frame.getAutomaticLocal(stackBase + cur + i);
+                        capsList = capsList->asList(&frame)
+                            ->appendLast(&frame, v)->asObject(&frame);
+                    }
+                    cur += static_cast<unsigned int>(nCaps);
+
+                    // spec = (arity, bc-ptr, variadic, caps)
+                    const proto::ProtoObject* spec =
+                        frame.newList()->asObject(&frame);
+                    spec = spec->asList(&frame)
+                        ->appendLast(&frame, frame.fromLong(sub.arity()))
+                        ->asObject(&frame);
+                    spec = spec->asList(&frame)
+                        ->appendLast(&frame, frame.fromLong(
+                            reinterpret_cast<long long>(&sub)))
+                        ->asObject(&frame);
+                    spec = spec->asList(&frame)
+                        ->appendLast(&frame,
+                            sub.isVariadic() ? PROTO_TRUE : PROTO_FALSE)
+                        ->asObject(&frame);
+                    spec = spec->asList(&frame)
+                        ->appendLast(&frame, capsList)
+                        ->asObject(&frame);
+
+                    aritiesList = aritiesList->asList(&frame)
+                        ->appendLast(&frame, spec)
+                        ->asObject(&frame);
+                }
+                sp = baseSp;
+
+                proto::ProtoObject* wrap = const_cast<proto::ProtoObject*>(
+                    fnMarkerProto->newChild(&frame, /*isMutable=*/true));
+                wrap->setAttribute(&frame, aritiesKey, aritiesList);
+                pushVal(wrap);
+                break;
+            }
 
             case Op::PUSH_NIL:   pushVal(PROTO_NONE);  break;
             case Op::PUSH_TRUE:  pushVal(PROTO_TRUE);  break;

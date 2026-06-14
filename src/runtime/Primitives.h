@@ -46,6 +46,7 @@ struct ActiveCallContext {
     const proto::ProtoString*  bytecodeKey;
     const proto::ProtoString*  arityKey;
     const proto::ProtoString*  capturesKey;
+    const proto::ProtoString*  aritiesKey;       // session 8
 };
 void setActiveCallContext(const ActiveCallContext& cc);
 void clearActiveCallContext();

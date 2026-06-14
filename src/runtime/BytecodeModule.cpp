@@ -23,6 +23,9 @@ const char* opName(Op op) {
         case Op::MAKE_FN:       return "MAKE_FN";
         case Op::JUMP_BACK:     return "JUMP_BACK";
         case Op::CALL_APPLY:    return "CALL_APPLY";
+        case Op::DUP:           return "DUP";
+        case Op::JUMP_IF_TRUE:  return "JUMP_IF_TRUE";
+        case Op::MAKE_FN_MULTI: return "MAKE_FN_MULTI";
     }
     return "?";
 }

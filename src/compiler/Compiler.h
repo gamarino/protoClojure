@@ -52,6 +52,7 @@ struct CompilerMarkers {
     const proto::ProtoString* bytecodeKey;       // session 5 — opaque ptr
     const proto::ProtoString* arityKey;          // session 5
     const proto::ProtoString* capturesKey;       // session 6 — closure captures list
+    const proto::ProtoString* aritiesKey;        // session 8 — multi-arity dispatch list
 };
 
 class Compiler {
@@ -72,6 +73,18 @@ public:
     compileFnBody(proto::ProtoContext* ctx,
                   const proto::ProtoList* fnForm,
                   const CompilerMarkers& markers);
+
+    // Session 8 — compile a SINGLE arity from a multi-arity fn form. The
+    // arity is itself a list whose first element is the params vector
+    // (no head symbol). Used by the multi-arity branch of (fn ...) /
+    // (defn ...). Same scope-push / capture-cascade semantics as
+    // compileFnBody.
+    std::unique_ptr<BytecodeModule>
+    compileArity(proto::ProtoContext* ctx,
+                 const proto::ProtoList* paramsForm,
+                 const proto::ProtoList* arityForm,
+                 unsigned long bodyStartIdx,
+                 const CompilerMarkers& markers);
 
 private:
     // One per active function scope. The outermost compileForm call (top-

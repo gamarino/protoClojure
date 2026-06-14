@@ -87,12 +87,22 @@ Compiler::compileFnBody(proto::ProtoContext* ctx,
     if (!isList(paramsForm)) {
         throw CompileError("fn/defn: parameter list must be a vector");
     }
-    const proto::ProtoList* params = paramsForm->asList(ctx);
+    return compileArity(ctx, paramsForm->asList(ctx), fnForm, paramsAt + 1, markers);
+}
+
+std::unique_ptr<BytecodeModule>
+Compiler::compileArity(proto::ProtoContext* ctx,
+                       const proto::ProtoList* params,
+                       const proto::ProtoList* arityForm,
+                       unsigned long bodyStartIdx,
+                       const CompilerMarkers& markers) {
+    unsigned long n = arityForm->getSize(ctx);
     unsigned long rawCount = params->getSize(ctx);
 
-    // Session 7 — scan for variadic `& rest`. The token `&` is the literal
-    // ampersand symbol; the param that follows is the rest-binding (a list
-    // of leftover args). Only one rest-param allowed, only at the tail.
+    // Session 7/8 — scan for variadic `& rest`. The token `&` is the
+    // literal ampersand symbol; the param that follows is the rest-
+    // binding (a list of leftover args). Only one rest-param allowed,
+    // only at the tail.
     unsigned long fixedArity = rawCount;
     bool isVariadic = false;
     std::string restName;
@@ -142,18 +152,31 @@ Compiler::compileFnBody(proto::ProtoContext* ctx,
         }
     }
 
+    // Session 8 — implicit recur target at the top of the body. recur
+    // rebinds the fn's fixed params and jumps back to the body's first
+    // instruction. (A variadic param could be supported too, but Clojure
+    // semantics for recur over &rest require subtler handling; defer.)
+    {
+        Scope::RecurTarget tgt;
+        tgt.bodyStart = body->pos();
+        for (int i = 0; i < static_cast<int>(fixedArity); ++i) tgt.slots.push_back(i);
+        scopes_.back().recurStack.push_back(tgt);
+    }
+
     // Compile the body forms after the params vector.
-    unsigned long bodyStart = paramsAt + 1;
-    if (bodyStart >= n) {
+    if (bodyStartIdx >= n) {
         // Empty body → return nil.
         body->emit(Op::PUSH_NIL, 0);
     } else {
-        for (unsigned long i = bodyStart; i < n; ++i) {
-            compileForm(ctx, fnForm->getAt(ctx, (int)i), *body, markers);
+        for (unsigned long i = bodyStartIdx; i < n; ++i) {
+            compileForm(ctx, arityForm->getAt(ctx, (int)i), *body, markers);
             if (i + 1 < n) body->emit(Op::POP, 0);
         }
     }
     body->emit(Op::RETURN, 0);
+    if (!scopes_.back().recurStack.empty()) {
+        scopes_.back().recurStack.pop_back();
+    }
 
     // Re-acquire — nested fn compilation may have grown scopes_ and
     // invalidated any reference held before the body loop.
@@ -306,6 +329,131 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             return;
         }
 
+        // (when test body...) → desugar to (if test (do body...) nil).
+        if (headName == "when" || headName == "when-not") {
+            if (n < 2) throw CompileError("when/when-not: expects test + body");
+            bool negate = (headName == "when-not");
+            compileForm(ctx, lst->getAt(ctx, 1), out, markers);   // test
+            std::size_t jifAt = out.emit(
+                negate ? Op::JUMP_IF_TRUE : Op::JUMP_IF_FALSE, 0);
+            if (n == 2) {
+                out.emit(Op::PUSH_NIL, 0);
+            } else {
+                for (unsigned long i = 2; i < n; ++i) {
+                    compileForm(ctx, lst->getAt(ctx, (int)i), out, markers);
+                    if (i + 1 < n) out.emit(Op::POP, 0);
+                }
+            }
+            std::size_t jmpAt = out.emit(Op::JUMP, 0);
+            std::size_t elseStart = out.pos();
+            std::size_t elseOffset =
+                (elseStart - (jifAt + kInstrSize)) / kInstrSize;
+            if (elseOffset > 255) {
+                throw CompileError("when: body too large for 1-byte offset");
+            }
+            out.patchOperand(jifAt, static_cast<std::uint8_t>(elseOffset));
+            out.emit(Op::PUSH_NIL, 0);
+            std::size_t after = out.pos();
+            std::size_t jOff = (after - (jmpAt + kInstrSize)) / kInstrSize;
+            if (jOff > 255) {
+                throw CompileError("when: tail too large for 1-byte offset");
+            }
+            out.patchOperand(jmpAt, static_cast<std::uint8_t>(jOff));
+            return;
+        }
+
+        // (cond test1 expr1 test2 expr2 ... [:else expr])
+        //   Compiles to a chain of JUMP_IF_FALSE-skipping each pair.
+        //   `:else` is a literal symbol that compiles to true (any truthy
+        //   value works). If no clause matches and no :else is given,
+        //   yields nil.
+        if (headName == "cond") {
+            unsigned long pn = n - 1;
+            if (pn % 2 != 0) {
+                throw CompileError("cond: clauses must come in pairs");
+            }
+            std::vector<std::size_t> endPatches;
+            for (unsigned long i = 1; i < n; i += 2) {
+                const proto::ProtoObject* test = lst->getAt(ctx, (int)i);
+                const proto::ProtoObject* expr = lst->getAt(ctx, (int)(i + 1));
+                bool isElse = isStringy(test) &&
+                              (asUtf8(ctx, test) == ":else" ||
+                               asUtf8(ctx, test) == "else");
+                std::size_t skipAt = 0;
+                if (!isElse) {
+                    compileForm(ctx, test, out, markers);
+                    skipAt = out.emit(Op::JUMP_IF_FALSE, 0);
+                }
+                compileForm(ctx, expr, out, markers);
+                endPatches.push_back(out.emit(Op::JUMP, 0));
+                if (!isElse) {
+                    std::size_t after = out.pos();
+                    std::size_t off =
+                        (after - (skipAt + kInstrSize)) / kInstrSize;
+                    if (off > 255) {
+                        throw CompileError("cond: clause too large");
+                    }
+                    out.patchOperand(skipAt, static_cast<std::uint8_t>(off));
+                }
+            }
+            // Fall-through (no clause matched) yields nil.
+            out.emit(Op::PUSH_NIL, 0);
+            std::size_t end = out.pos();
+            for (std::size_t at : endPatches) {
+                std::size_t off = (end - (at + kInstrSize)) / kInstrSize;
+                if (off > 255) {
+                    throw CompileError("cond: total length too large");
+                }
+                out.patchOperand(at, static_cast<std::uint8_t>(off));
+            }
+            return;
+        }
+
+        // (and a b c ...) — short-circuit. Each value is evaluated; the
+        // result is the first falsey, or the last truthy. Implementation:
+        //   compile a, DUP, JUMP_IF_FALSE end, POP, compile b, DUP, ...
+        if (headName == "and") {
+            if (n == 1) { out.emit(Op::PUSH_TRUE, 0); return; }
+            std::vector<std::size_t> shortAts;
+            for (unsigned long i = 1; i < n; ++i) {
+                compileForm(ctx, lst->getAt(ctx, (int)i), out, markers);
+                if (i + 1 < n) {
+                    out.emit(Op::DUP, 0);
+                    shortAts.push_back(out.emit(Op::JUMP_IF_FALSE, 0));
+                    out.emit(Op::POP, 0);  // drop the truthy copy left by DUP
+                }
+            }
+            std::size_t end = out.pos();
+            for (std::size_t at : shortAts) {
+                std::size_t off = (end - (at + kInstrSize)) / kInstrSize;
+                if (off > 255) throw CompileError("and: too large");
+                out.patchOperand(at, static_cast<std::uint8_t>(off));
+            }
+            return;
+        }
+
+        // (or a b c ...) — short-circuit. Result is the first truthy, or
+        // the last value. Mirror of and using JUMP_IF_TRUE.
+        if (headName == "or") {
+            if (n == 1) { out.emit(Op::PUSH_NIL, 0); return; }
+            std::vector<std::size_t> shortAts;
+            for (unsigned long i = 1; i < n; ++i) {
+                compileForm(ctx, lst->getAt(ctx, (int)i), out, markers);
+                if (i + 1 < n) {
+                    out.emit(Op::DUP, 0);
+                    shortAts.push_back(out.emit(Op::JUMP_IF_TRUE, 0));
+                    out.emit(Op::POP, 0);
+                }
+            }
+            std::size_t end = out.pos();
+            for (std::size_t at : shortAts) {
+                std::size_t off = (end - (at + kInstrSize)) / kInstrSize;
+                if (off > 255) throw CompileError("or: too large");
+                out.patchOperand(at, static_cast<std::uint8_t>(off));
+            }
+            return;
+        }
+
         // (do form1 form2 ... formN) — evaluate each form, POP between for
         // statement-level discard. The last form's value is the do's value.
         if (headName == "do") {
@@ -358,61 +506,106 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             throw CompileError("quote: unsupported atom in v0.0.x");
         }
 
-        // (fn [params] body...) — compile body into a sub-module, push any
-        // captured parent-scope values, then MAKE_FN. Captures land in
-        // session 6: compileFnBody records them on the body module via
-        // addCapture; we emit one PUSH_LOCAL per capture from the parent
-        // scope in declared order. MAKE_FN at runtime pops exactly that
-        // many values into the wrapper's __captures__ list.
-        if (headName == "fn") {
-            std::unique_ptr<BytecodeModule> body =
-                compileFnBody(ctx, lst, markers);
-            std::size_t blockIdx = out.addBlock(std::move(body));
-            if (blockIdx > 255) {
-                throw CompileError("fn: too many fn bodies (>255) in module");
+        // (fn ...) / (defn name ...) — single OR multi-arity. Multi-arity
+        // is detected by inspecting the form immediately after the head
+        // (and the name, for defn): if it is a list whose first element
+        // is itself a list, the form is multi-arity. Each subsequent form
+        // is then a `(params body...)` arity body.
+        if (headName == "fn" || headName == "defn") {
+            unsigned long aritiesStart = (headName == "fn") ? 1 : 2;
+            if (n <= aritiesStart) {
+                throw CompileError("fn/defn: missing parameter vector");
             }
-            const auto& caps = out.block(blockIdx).captureSpecs();
-            for (const auto& c : caps) {
-                if (c.parentSlot < 0 || c.parentSlot > 255) {
-                    throw CompileError("fn: capture parent-slot overflow");
+            const proto::ProtoObject* nameForm = nullptr;
+            if (headName == "defn") {
+                nameForm = lst->getAt(ctx, 1);
+                if (!isStringy(nameForm)) {
+                    throw CompileError("defn: name must be a symbol");
                 }
-                out.emit(Op::PUSH_LOCAL,
-                    static_cast<std::uint8_t>(c.parentSlot));
             }
-            out.emit(Op::MAKE_FN, static_cast<std::uint8_t>(blockIdx));
-            return;
-        }
 
-        // (defn name [params] body...) — sugar for (def name (fn [params]
-        // body...)). Captures handled identically to (fn ...). Top-level
-        // defns can in principle have zero captures (no enclosing scope),
-        // but the mechanism is harmless either way.
-        if (headName == "defn") {
-            if (n < 3) {
-                throw CompileError("defn: expects (defn name [params] body...)");
-            }
-            const proto::ProtoObject* nameForm = lst->getAt(ctx, 1);
-            if (!isStringy(nameForm)) {
-                throw CompileError("defn: name must be a symbol");
-            }
-            std::unique_ptr<BytecodeModule> body =
-                compileFnBody(ctx, lst, markers);
-            std::size_t blockIdx = out.addBlock(std::move(body));
-            if (blockIdx > 255) {
-                throw CompileError("defn: too many fn bodies (>255) in module");
-            }
-            const auto& caps = out.block(blockIdx).captureSpecs();
-            for (const auto& c : caps) {
-                if (c.parentSlot < 0 || c.parentSlot > 255) {
-                    throw CompileError("defn: capture parent-slot overflow");
+            const proto::ProtoObject* first = lst->getAt(ctx, (int)aritiesStart);
+            bool multiArity = false;
+            if (isList(first)) {
+                const proto::ProtoList* fl = first->asList(ctx);
+                if (fl->getSize(ctx) >= 1 && isList(fl->getAt(ctx, 0))) {
+                    multiArity = true;
                 }
-                out.emit(Op::PUSH_LOCAL,
-                    static_cast<std::uint8_t>(c.parentSlot));
             }
-            out.emit(Op::MAKE_FN, static_cast<std::uint8_t>(blockIdx));
-            std::size_t nameIdx = out.addSymbol(asUtf8(ctx, nameForm));
-            if (nameIdx > 255) throw CompileError("defn: const-pool overflow");
-            out.emit(Op::STORE_GLOBAL, static_cast<std::uint8_t>(nameIdx));
+
+            auto emitCapsThenOp = [&](std::size_t blockIdx, Op makeOp,
+                                      std::uint8_t makeOperand) {
+                const auto& caps = out.block(blockIdx).captureSpecs();
+                for (const auto& c : caps) {
+                    if (c.parentSlot < 0 || c.parentSlot > 255) {
+                        throw CompileError("fn: capture parent-slot overflow");
+                    }
+                    out.emit(Op::PUSH_LOCAL,
+                        static_cast<std::uint8_t>(c.parentSlot));
+                }
+                out.emit(makeOp, makeOperand);
+            };
+
+            if (!multiArity) {
+                // Single-arity — unchanged from session 6.
+                std::unique_ptr<BytecodeModule> body =
+                    compileFnBody(ctx, lst, markers);
+                std::size_t blockIdx = out.addBlock(std::move(body));
+                if (blockIdx > 255) {
+                    throw CompileError("fn: too many fn bodies (>255) in module");
+                }
+                emitCapsThenOp(blockIdx, Op::MAKE_FN,
+                               static_cast<std::uint8_t>(blockIdx));
+            } else {
+                // Multi-arity — compile each `(params body...)` separately,
+                // push their captures (arity 0 first), emit MAKE_FN_MULTI.
+                std::vector<std::size_t> blockIdxs;
+                for (unsigned long i = aritiesStart; i < n; ++i) {
+                    const proto::ProtoObject* aobj = lst->getAt(ctx, (int)i);
+                    if (!isList(aobj)) {
+                        throw CompileError("multi-arity: each arity must be a list");
+                    }
+                    const proto::ProtoList* alist = aobj->asList(ctx);
+                    if (alist->getSize(ctx) < 1) {
+                        throw CompileError("multi-arity: arity missing params");
+                    }
+                    const proto::ProtoObject* paramsForm = alist->getAt(ctx, 0);
+                    if (!isList(paramsForm)) {
+                        throw CompileError("multi-arity: params must be a vector");
+                    }
+                    std::unique_ptr<BytecodeModule> body =
+                        compileArity(ctx, paramsForm->asList(ctx), alist, 1, markers);
+                    std::size_t blockIdx = out.addBlock(std::move(body));
+                    if (blockIdx > 255) {
+                        throw CompileError("fn: too many fn bodies (>255)");
+                    }
+                    blockIdxs.push_back(blockIdx);
+                }
+                // Push captures in arity-emission order so the VM can pop
+                // them back into per-arity lists.
+                for (std::size_t bi : blockIdxs) {
+                    const auto& caps = out.block(bi).captureSpecs();
+                    for (const auto& c : caps) {
+                        if (c.parentSlot < 0 || c.parentSlot > 255) {
+                            throw CompileError("fn: capture parent-slot overflow");
+                        }
+                        out.emit(Op::PUSH_LOCAL,
+                            static_cast<std::uint8_t>(c.parentSlot));
+                    }
+                }
+                std::size_t groupIdx = out.addArityGroup(std::move(blockIdxs));
+                if (groupIdx > 255) {
+                    throw CompileError("fn: too many arity groups (>255)");
+                }
+                out.emit(Op::MAKE_FN_MULTI,
+                         static_cast<std::uint8_t>(groupIdx));
+            }
+
+            if (headName == "defn") {
+                std::size_t nameIdx = out.addSymbol(asUtf8(ctx, nameForm));
+                if (nameIdx > 255) throw CompileError("defn: const-pool overflow");
+                out.emit(Op::STORE_GLOBAL, static_cast<std::uint8_t>(nameIdx));
+            }
             return;
         }
 
@@ -625,11 +818,19 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         return;
     }
 
-    // Bare stringy atom — by elimination this is a symbol reference. If it
-    // is bound in the current fn scope (a param or a let-binding), emit
-    // PUSH_LOCAL; otherwise fall back to a runtime global lookup.
+    // Bare stringy atom — keyword literal, reserved literal (true / false
+    // / nil), local reference, or runtime global lookup, in that order.
     if (isStringy(form)) {
         std::string name = asUtf8(ctx, form);
+        if (name == "true")  { out.emit(Op::PUSH_TRUE,  0); return; }
+        if (name == "false") { out.emit(Op::PUSH_FALSE, 0); return; }
+        if (name == "nil")   { out.emit(Op::PUSH_NIL,   0); return; }
+        if (!name.empty() && name[0] == ':') {
+            std::size_t idx = out.addSymbol(name);
+            if (idx > 255) throw CompileError("const-pool overflow on keyword");
+            out.emit(Op::PUSH_CONST, static_cast<std::uint8_t>(idx));
+            return;
+        }
         int slot = resolveLocal(name);
         if (slot >= 0) {
             out.emit(Op::PUSH_LOCAL, static_cast<std::uint8_t>(slot));
