@@ -945,6 +945,16 @@ const proto::ProtoObject* prim_cons(proto::ProtoContext* ctx,
     return lst->appendFirst(ctx, x)->asObject(ctx);
 }
 
+// Session 15 helper — true iff v is a plain ProtoString (string-tag or
+// symbol-tag): the canonical "stringy" predicate.
+static bool isStringLike(const proto::ProtoObject* v) {
+    return v && proto::ProtoObject::isStringTagFast(v);
+}
+
+static const proto::ProtoString* asProtoString(const proto::ProtoObject* v) {
+    return reinterpret_cast<const proto::ProtoString*>(v);
+}
+
 const proto::ProtoObject* prim_count(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
                                      const proto::ParentLink*,
@@ -954,6 +964,9 @@ const proto::ProtoObject* prim_count(proto::ProtoContext* ctx,
         throw std::runtime_error("count: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!v || v == PROTO_NONE) return ctx->fromLong(0);
+    if (isStringLike(v)) {
+        return ctx->fromLong(static_cast<long long>(asProtoString(v)->getSize(ctx)));
+    }
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     return ctx->fromLong(lst ? static_cast<long long>(lst->getSize(ctx)) : 0);
 }
@@ -967,6 +980,9 @@ const proto::ProtoObject* prim_empty_p(proto::ProtoContext* ctx,
         throw std::runtime_error("empty?: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!v || v == PROTO_NONE) return PROTO_TRUE;
+    if (isStringLike(v)) {
+        return asProtoString(v)->getSize(ctx) == 0 ? PROTO_TRUE : PROTO_FALSE;
+    }
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     return (!lst || lst->getSize(ctx) == 0) ? PROTO_TRUE : PROTO_FALSE;
 }
@@ -1000,7 +1016,18 @@ const proto::ProtoObject* prim_reverse(proto::ProtoContext* ctx,
                                        const proto::ProtoSparseList*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("reverse: expects 1 arg");
-    const proto::ProtoList* lst = asSeqOrNull(ctx, args->getAt(ctx, 0));
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    // String input → reverse character by character (codepoint-aware
+    // via std::string + UTF-8 walk would be a follow-up; v0.15 reverses
+    // raw bytes which is correct for ASCII).
+    if (isStringLike(v)) {
+        const proto::ProtoString* s = asProtoString(v);
+        std::string raw = s->toStdString(ctx);
+        std::string r(raw.rbegin(), raw.rend());
+        return reinterpret_cast<const proto::ProtoObject*>(
+            proto::ProtoString::fromStdString(ctx, r));
+    }
+    const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     const proto::ProtoObject* out = ctx->newList()->asObject(ctx);
     if (!lst) return out;
     unsigned long n = lst->getSize(ctx);
@@ -1102,6 +1129,329 @@ const proto::ProtoObject* prim_reduce(proto::ProtoContext* ctx,
     return acc;
 }
 
+// Session 15 — string primitives. `clojure.string`-shaped surface,
+// exposed in the global namespace for v0.x (no `ns` yet). UTF-8
+// underlies every operation but most ops are ASCII-correct only:
+// `upper-case`/`lower-case` go through std::toupper/tolower, search
+// ops use byte-level matching. UTF-8 codepoint-correctness is a
+// v0.2 follow-up (logged as a deviation in STATUS).
+
+const proto::ProtoObject* prim_subs(proto::ProtoContext* ctx,
+                                    const proto::ProtoObject*,
+                                    const proto::ParentLink*,
+                                    const proto::ProtoList* args,
+                                    const proto::ProtoSparseList*) {
+    unsigned long ac = args ? args->getSize(ctx) : 0;
+    if (ac != 2 && ac != 3)
+        throw std::runtime_error("subs: expects (subs s start) or (subs s start end)");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (!isStringLike(v))
+        throw std::runtime_error("subs: first arg must be a string");
+    const proto::ProtoString* s = asProtoString(v);
+    long long start = argAsLong(ctx, args, 1, "subs");
+    long long sz = static_cast<long long>(s->getSize(ctx));
+    long long end = (ac == 3) ? argAsLong(ctx, args, 2, "subs") : sz;
+    if (start < 0 || start > sz || end < start || end > sz)
+        throw std::runtime_error("subs: bounds out of range");
+    return reinterpret_cast<const proto::ProtoObject*>(
+        s->getSlice(ctx, static_cast<int>(start), static_cast<int>(end)));
+}
+
+const proto::ProtoObject* prim_upper_case(proto::ProtoContext* ctx,
+                                          const proto::ProtoObject*,
+                                          const proto::ParentLink*,
+                                          const proto::ProtoList* args,
+                                          const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("upper-case: expects 1 arg");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (!isStringLike(v))
+        throw std::runtime_error("upper-case: arg must be a string");
+    std::string raw = asProtoString(v)->toStdString(ctx);
+    for (auto& c : raw) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    return reinterpret_cast<const proto::ProtoObject*>(
+        proto::ProtoString::fromStdString(ctx, raw));
+}
+
+const proto::ProtoObject* prim_lower_case(proto::ProtoContext* ctx,
+                                          const proto::ProtoObject*,
+                                          const proto::ParentLink*,
+                                          const proto::ProtoList* args,
+                                          const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("lower-case: expects 1 arg");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (!isStringLike(v))
+        throw std::runtime_error("lower-case: arg must be a string");
+    std::string raw = asProtoString(v)->toStdString(ctx);
+    for (auto& c : raw) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return reinterpret_cast<const proto::ProtoObject*>(
+        proto::ProtoString::fromStdString(ctx, raw));
+}
+
+const proto::ProtoObject* prim_starts_with_p(proto::ProtoContext* ctx,
+                                             const proto::ProtoObject*,
+                                             const proto::ParentLink*,
+                                             const proto::ProtoList* args,
+                                             const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 2)
+        throw std::runtime_error("starts-with?: expects (starts-with? s prefix)");
+    const proto::ProtoObject* sv = args->getAt(ctx, 0);
+    const proto::ProtoObject* pv = args->getAt(ctx, 1);
+    if (!isStringLike(sv) || !isStringLike(pv))
+        throw std::runtime_error("starts-with?: both args must be strings");
+    std::string s = asProtoString(sv)->toStdString(ctx);
+    std::string p = asProtoString(pv)->toStdString(ctx);
+    return (s.rfind(p, 0) == 0) ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_ends_with_p(proto::ProtoContext* ctx,
+                                           const proto::ProtoObject*,
+                                           const proto::ParentLink*,
+                                           const proto::ProtoList* args,
+                                           const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 2)
+        throw std::runtime_error("ends-with?: expects (ends-with? s suffix)");
+    const proto::ProtoObject* sv = args->getAt(ctx, 0);
+    const proto::ProtoObject* pv = args->getAt(ctx, 1);
+    if (!isStringLike(sv) || !isStringLike(pv))
+        throw std::runtime_error("ends-with?: both args must be strings");
+    std::string s = asProtoString(sv)->toStdString(ctx);
+    std::string p = asProtoString(pv)->toStdString(ctx);
+    if (p.size() > s.size()) return PROTO_FALSE;
+    return std::equal(p.rbegin(), p.rend(), s.rbegin()) ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_includes_p(proto::ProtoContext* ctx,
+                                          const proto::ProtoObject*,
+                                          const proto::ParentLink*,
+                                          const proto::ProtoList* args,
+                                          const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 2)
+        throw std::runtime_error("includes?: expects (includes? s sub)");
+    const proto::ProtoObject* sv = args->getAt(ctx, 0);
+    const proto::ProtoObject* pv = args->getAt(ctx, 1);
+    if (!isStringLike(sv) || !isStringLike(pv))
+        throw std::runtime_error("includes?: both args must be strings");
+    std::string s = asProtoString(sv)->toStdString(ctx);
+    std::string p = asProtoString(pv)->toStdString(ctx);
+    return (s.find(p) != std::string::npos) ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_index_of(proto::ProtoContext* ctx,
+                                        const proto::ProtoObject*,
+                                        const proto::ParentLink*,
+                                        const proto::ProtoList* args,
+                                        const proto::ProtoSparseList*) {
+    unsigned long ac = args ? args->getSize(ctx) : 0;
+    if (ac != 2 && ac != 3)
+        throw std::runtime_error("index-of: expects (index-of s sub) or (index-of s sub from)");
+    const proto::ProtoObject* sv = args->getAt(ctx, 0);
+    const proto::ProtoObject* pv = args->getAt(ctx, 1);
+    if (!isStringLike(sv) || !isStringLike(pv))
+        throw std::runtime_error("index-of: first two args must be strings");
+    std::string s = asProtoString(sv)->toStdString(ctx);
+    std::string p = asProtoString(pv)->toStdString(ctx);
+    std::size_t from = (ac == 3) ? static_cast<std::size_t>(argAsLong(ctx, args, 2, "index-of"))
+                                 : 0;
+    std::size_t found = s.find(p, from);
+    if (found == std::string::npos) return PROTO_NONE;
+    return ctx->fromLong(static_cast<long long>(found));
+}
+
+const proto::ProtoObject* prim_replace(proto::ProtoContext* ctx,
+                                       const proto::ProtoObject*,
+                                       const proto::ParentLink*,
+                                       const proto::ProtoList* args,
+                                       const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 3)
+        throw std::runtime_error("replace: expects (replace s match replacement)");
+    const proto::ProtoObject* sv = args->getAt(ctx, 0);
+    const proto::ProtoObject* mv = args->getAt(ctx, 1);
+    const proto::ProtoObject* rv = args->getAt(ctx, 2);
+    if (!isStringLike(sv) || !isStringLike(mv) || !isStringLike(rv))
+        throw std::runtime_error("replace: all three args must be strings");
+    std::string s = asProtoString(sv)->toStdString(ctx);
+    std::string m = asProtoString(mv)->toStdString(ctx);
+    std::string r = asProtoString(rv)->toStdString(ctx);
+    if (m.empty()) return sv;
+    std::string out;
+    out.reserve(s.size());
+    std::size_t pos = 0;
+    while (pos < s.size()) {
+        std::size_t found = s.find(m, pos);
+        if (found == std::string::npos) {
+            out.append(s, pos, std::string::npos);
+            break;
+        }
+        out.append(s, pos, found - pos);
+        out.append(r);
+        pos = found + m.size();
+    }
+    return reinterpret_cast<const proto::ProtoObject*>(
+        proto::ProtoString::fromStdString(ctx, out));
+}
+
+// (join sep coll) — concatenate `coll` items, separator between each.
+// (join coll) — same with empty separator.
+const proto::ProtoObject* prim_join(proto::ProtoContext* ctx,
+                                    const proto::ProtoObject*,
+                                    const proto::ParentLink*,
+                                    const proto::ProtoList* args,
+                                    const proto::ProtoSparseList*) {
+    unsigned long ac = args ? args->getSize(ctx) : 0;
+    if (ac != 1 && ac != 2)
+        throw std::runtime_error("join: expects (join coll) or (join sep coll)");
+    std::string sep;
+    const proto::ProtoObject* coll;
+    if (ac == 2) {
+        const proto::ProtoObject* sv = args->getAt(ctx, 0);
+        if (!isStringLike(sv))
+            throw std::runtime_error("join: separator must be a string");
+        sep = asProtoString(sv)->toStdString(ctx);
+        coll = args->getAt(ctx, 1);
+    } else {
+        coll = args->getAt(ctx, 0);
+    }
+    const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
+    std::ostringstream os;
+    if (lst) {
+        unsigned long n = lst->getSize(ctx);
+        for (unsigned long i = 0; i < n; ++i) {
+            if (i > 0) os << sep;
+            appendValue(ctx, os, lst->getAt(ctx, static_cast<int>(i)));
+        }
+    }
+    return reinterpret_cast<const proto::ProtoObject*>(
+        proto::ProtoString::fromStdString(ctx, os.str()));
+}
+
+// (split s delim) — returns a list of substrings split by `delim`.
+const proto::ProtoObject* prim_split(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject*,
+                                     const proto::ParentLink*,
+                                     const proto::ProtoList* args,
+                                     const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 2)
+        throw std::runtime_error("split: expects (split s delim)");
+    const proto::ProtoObject* sv = args->getAt(ctx, 0);
+    const proto::ProtoObject* dv = args->getAt(ctx, 1);
+    if (!isStringLike(sv) || !isStringLike(dv))
+        throw std::runtime_error("split: both args must be strings");
+    std::string s = asProtoString(sv)->toStdString(ctx);
+    std::string d = asProtoString(dv)->toStdString(ctx);
+    const proto::ProtoObject* out = ctx->newList()->asObject(ctx);
+    if (d.empty()) {
+        // Split into individual codepoints would be ideal; v0.15
+        // splits per byte.
+        for (char c : s) {
+            std::string one(1, c);
+            const proto::ProtoString* piece =
+                proto::ProtoString::fromStdString(ctx, one);
+            out = out->asList(ctx)->appendLast(ctx,
+                reinterpret_cast<const proto::ProtoObject*>(piece))->asObject(ctx);
+        }
+        return out;
+    }
+    std::size_t pos = 0;
+    while (true) {
+        std::size_t found = s.find(d, pos);
+        std::string piece = (found == std::string::npos)
+            ? s.substr(pos)
+            : s.substr(pos, found - pos);
+        const proto::ProtoString* p =
+            proto::ProtoString::fromStdString(ctx, piece);
+        out = out->asList(ctx)->appendLast(ctx,
+            reinterpret_cast<const proto::ProtoObject*>(p))->asObject(ctx);
+        if (found == std::string::npos) break;
+        pos = found + d.size();
+    }
+    return out;
+}
+
+static bool isAsciiWs(unsigned char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+const proto::ProtoObject* prim_trim(proto::ProtoContext* ctx,
+                                    const proto::ProtoObject*,
+                                    const proto::ParentLink*,
+                                    const proto::ProtoList* args,
+                                    const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("trim: expects 1 arg");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (!isStringLike(v))
+        throw std::runtime_error("trim: arg must be a string");
+    std::string s = asProtoString(v)->toStdString(ctx);
+    std::size_t a = 0, b = s.size();
+    while (a < b && isAsciiWs(static_cast<unsigned char>(s[a]))) ++a;
+    while (b > a && isAsciiWs(static_cast<unsigned char>(s[b - 1]))) --b;
+    return reinterpret_cast<const proto::ProtoObject*>(
+        proto::ProtoString::fromStdString(ctx, s.substr(a, b - a)));
+}
+
+const proto::ProtoObject* prim_triml(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject*,
+                                     const proto::ParentLink*,
+                                     const proto::ProtoList* args,
+                                     const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("triml: expects 1 arg");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (!isStringLike(v))
+        throw std::runtime_error("triml: arg must be a string");
+    std::string s = asProtoString(v)->toStdString(ctx);
+    std::size_t a = 0;
+    while (a < s.size() && isAsciiWs(static_cast<unsigned char>(s[a]))) ++a;
+    return reinterpret_cast<const proto::ProtoObject*>(
+        proto::ProtoString::fromStdString(ctx, s.substr(a)));
+}
+
+const proto::ProtoObject* prim_trimr(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject*,
+                                     const proto::ParentLink*,
+                                     const proto::ProtoList* args,
+                                     const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("trimr: expects 1 arg");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (!isStringLike(v))
+        throw std::runtime_error("trimr: arg must be a string");
+    std::string s = asProtoString(v)->toStdString(ctx);
+    std::size_t b = s.size();
+    while (b > 0 && isAsciiWs(static_cast<unsigned char>(s[b - 1]))) --b;
+    return reinterpret_cast<const proto::ProtoObject*>(
+        proto::ProtoString::fromStdString(ctx, s.substr(0, b)));
+}
+
+const proto::ProtoObject* prim_blank_p(proto::ProtoContext* ctx,
+                                       const proto::ProtoObject*,
+                                       const proto::ParentLink*,
+                                       const proto::ProtoList* args,
+                                       const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("blank?: expects 1 arg");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (!v || v == PROTO_NONE) return PROTO_TRUE;
+    if (!isStringLike(v)) return PROTO_FALSE;
+    std::string s = asProtoString(v)->toStdString(ctx);
+    for (char c : s) {
+        if (!isAsciiWs(static_cast<unsigned char>(c))) return PROTO_FALSE;
+    }
+    return PROTO_TRUE;
+}
+
+const proto::ProtoObject* prim_string_p(proto::ProtoContext* ctx,
+                                        const proto::ProtoObject*,
+                                        const proto::ParentLink*,
+                                        const proto::ProtoList* args,
+                                        const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("string?: expects 1 arg");
+    return isStringLike(args->getAt(ctx, 0)) ? PROTO_TRUE : PROTO_FALSE;
+}
+
 } // namespace
 
 void installPrimitives(proto::ProtoContext* ctx,
@@ -1147,6 +1497,24 @@ void installPrimitives(proto::ProtoContext* ctx,
     install("keys",      &prim_keys);
     install("vals",      &prim_vals);
     install("map?",      &prim_map_p);
+
+    // Session 15 — string ops (clojure.string-shaped, in the global
+    // namespace since `ns` does not exist yet).
+    install("string?",     &prim_string_p);
+    install("subs",        &prim_subs);
+    install("upper-case",  &prim_upper_case);
+    install("lower-case",  &prim_lower_case);
+    install("starts-with?",&prim_starts_with_p);
+    install("ends-with?",  &prim_ends_with_p);
+    install("includes?",   &prim_includes_p);
+    install("index-of",    &prim_index_of);
+    install("replace",     &prim_replace);
+    install("join",        &prim_join);
+    install("split",       &prim_split);
+    install("trim",        &prim_trim);
+    install("triml",       &prim_triml);
+    install("trimr",       &prim_trimr);
+    install("blank?",      &prim_blank_p);
     install("first",   &prim_first);
     install("rest",    &prim_rest);
     install("cons",    &prim_cons);

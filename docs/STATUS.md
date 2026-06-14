@@ -27,6 +27,7 @@ harness produces honest numbers vs Babashka 1.4.192 (see
 | 12 | Fewer attribute lookups per CALL (perf cleanup) | 93 |
 | 13 | Maps + `& {:keys [...]}` named-arg destructuring | 103 |
 | 14 | Dual call convention closed: trailing kv pairs + `:or` + `:as` | 113 |
+| 15 | clojure.string-shaped primitives (subs, upper/lower, join/split, trim, ...) | 126 |
 
 The dated design specs live under `docs/superpowers/specs/`; the
 memory entries for each session live under
@@ -100,6 +101,11 @@ memory entries for each session live under
 - [x] Vector ops: `vector vec nth`
 - [x] Higher-order: `map filter reduce` (via ActiveCallContext re-entry)
 - [x] I/O: `println str`
+- [x] **String ops (session 15)**: `string?`, `subs`, `upper-case`,
+      `lower-case`, `starts-with?`, `ends-with?`, `includes?`,
+      `index-of`, `replace`, `join`, `split`, `trim`, `triml`,
+      `trimr`, `blank?`. Also: `count` / `empty?` / `reverse` now
+      accept strings.
 
 ### Bytecode VM
 
@@ -225,7 +231,8 @@ for the design.
 - [ ] More higher-order: `comp partial juxt`
 - [ ] More predicates: `every? some not-any? not-every?`
 - [ ] Range / sequence: `range iterate repeat cycle take drop take-while drop-while partition partition-all`
-- [ ] String ops: `re-pattern re-find re-seq re-matches format`
+- [ ] Regex: `re-pattern re-find re-seq re-matches`
+- [ ] `format` (printf-style)
 - [ ] `frequencies group-by sort sort-by`
 - [ ] `pr-str print prn pr`
 - [ ] `clojure.string` — count chars, upper, lower, split, join, subs, replace, trim
@@ -271,6 +278,7 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D14 | LargeInteger promotion is automatic on `*` — no `*'` needed (CONTRA Clojure-JVM, by design) | (perm) |
 | D15 | `(= 1 1.0)` returns `true` in v0.x (CONTRA Clojure-JVM where `=` is type-strict) | (perm) |
 | D16 | `:or` defaults fire on **explicit nil** as well as missing keys (CONTRA JVM-Clojure where only missing keys take the default) | v0.2 |
+| D17 | String ops (`upper-case`, `lower-case`, `split`, `reverse`, `trim`, `index-of`) are byte-level / ASCII-correct only; multi-byte UTF-8 codepoints traverse as bytes (CONTRA JVM-Clojure which is codepoint-aware) | v0.2 |
 
 ## Known issues
 
