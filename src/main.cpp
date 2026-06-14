@@ -67,11 +67,16 @@ int runFile(const char* path) {
     proto::ProtoSpace space;
     proto::ProtoContext* ctx = space.rootContext;
 
-    // P1/P2: the globals namespace lives in a slot on `ctx` so it stays
-    // rooted for the whole run. It is a mutable child of objectPrototype;
-    // installPrimitives sets attributes on it in place.
-    ctx->resizeAutomaticLocals(1);
-    constexpr unsigned int kSlotGlobals = 0;
+    // Slots layout (kept stable for the whole run, rooted via the root ctx):
+    //   0 : globals namespace (mutable child of objectPrototype).
+    //   1 : forms (the ProtoList readAll() returned).
+    //   2 : stringMarkerProto — see ReaderMarkers / CompilerMarkers docs.
+    //   3 : reserved for the next slot we will need.
+    ctx->resizeAutomaticLocals(4);
+    constexpr unsigned int kSlotGlobals      = 0;
+    constexpr unsigned int kSlotForms        = 1;
+    constexpr unsigned int kSlotStringMarker = 2;
+
     const proto::ProtoObject* globalsObj =
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
     ctx->setAutomaticLocal(kSlotGlobals, globalsObj);
@@ -80,14 +85,24 @@ int runFile(const char* path) {
         ctx, const_cast<proto::ProtoObject*>(
             ctx->getAutomaticLocal(kSlotGlobals)));
 
-    // Read every form from the file. readAll returns a ProtoList; we walk
-    // it once to compile, then execute.
-    std::string source = slurp(path);
-    protoClojure::Reader reader(ctx, std::move(source));
+    // String-marker prototype: a mutable child of objectPrototype used to
+    // wrap every string literal coming out of the Reader so it stays
+    // distinguishable from a same-bytes inline-encoded symbol.
+    const proto::ProtoObject* stringMarkerProto =
+        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+    ctx->setAutomaticLocal(kSlotStringMarker, stringMarkerProto);
 
-    // Hold the forms list in a slot so it survives the compile loop.
-    ctx->resizeAutomaticLocals(2);
-    constexpr unsigned int kSlotForms = 1;
+    const proto::ProtoString* bytesKey =
+        proto::ProtoString::createSymbol(ctx, "__bytes__");
+
+    protoClojure::ReaderMarkers readerMarkers{
+        ctx->getAutomaticLocal(kSlotStringMarker), bytesKey};
+    protoClojure::CompilerMarkers compilerMarkers{
+        ctx->getAutomaticLocal(kSlotStringMarker), bytesKey};
+
+    // Read every form from the file.
+    std::string source = slurp(path);
+    protoClojure::Reader reader(ctx, std::move(source), readerMarkers);
     try {
         const proto::ProtoList* forms = reader.readAll();
         ctx->setAutomaticLocal(kSlotForms, forms->asObject(ctx));
@@ -107,7 +122,7 @@ int runFile(const char* path) {
         const proto::ProtoObject* form =
             forms->getAt(ctx, static_cast<int>(i));
         try {
-            compiler.compileForm(ctx, form, mod);
+            compiler.compileForm(ctx, form, mod, compilerMarkers);
         } catch (const protoClojure::CompileError& e) {
             std::fprintf(stderr, "%s: compile error: %s\n", path, e.what());
             return 1;

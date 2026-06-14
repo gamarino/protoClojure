@@ -20,12 +20,22 @@
 namespace protoClojure {
 
 enum class Op : uint8_t {
-    NOP        = 0,
-    PUSH_CONST = 1,
-    PUSH_VAR   = 2,
-    CALL       = 3,
-    POP        = 4,
-    RETURN     = 5,
+    NOP             = 0,
+    PUSH_CONST      = 1,
+    PUSH_VAR        = 2,
+    CALL            = 3,
+    POP             = 4,
+    RETURN          = 5,
+
+    // Session 4 additions:
+    STORE_GLOBAL    = 6,   // operand = const-pool symbol idx; pops TOS, sets
+                           //           (globals symName) = value. Re-pushes
+                           //           the stored value as the def's result.
+    JUMP            = 7,   // operand = forward offset in instructions (×2 bytes)
+    JUMP_IF_FALSE   = 8,   // pop; if value is nil or false, jump operand instrs.
+    PUSH_NIL        = 9,   // push PROTO_NONE (the Clojure nil)
+    PUSH_TRUE       = 10,
+    PUSH_FALSE      = 11,
 };
 
 inline constexpr std::size_t kInstrSize = 2;

@@ -43,8 +43,18 @@ public:
     std::size_t addSymbol(const std::string& s);
 
     // Emit one instruction word (opcode + operand). The operand must fit in
-    // one byte for v0.0.x; the EXTEND-prefix mechanism is a session-4 follow-up.
-    void emit(Op op, std::uint8_t operand);
+    // one byte for v0.0.x; the EXTEND-prefix mechanism is a session-5 follow-up.
+    // Returns the byte offset of the *opcode* byte — used by patchOperand to
+    // back-patch JUMP / JUMP_IF_FALSE forward-targets.
+    std::size_t emit(Op op, std::uint8_t operand);
+
+    // Rewrite the operand byte of an already-emitted instruction. Used to
+    // back-patch forward jumps once the target PC is known.
+    void patchOperand(std::size_t opcodeOffset, std::uint8_t newOperand);
+
+    // The current byte position — used as the "now" point for computing a
+    // forward jump's offset.
+    std::size_t pos() const { return bytes_.size(); }
 
     // Read-only access for the executor.
     const std::vector<std::uint8_t>& bytes() const { return bytes_; }

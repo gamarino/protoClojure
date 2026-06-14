@@ -4,8 +4,9 @@
 
 namespace protoClojure {
 
-Reader::Reader(proto::ProtoContext* ctx, std::string source)
-    : ctx_(ctx), lexer_(std::move(source)) {}
+Reader::Reader(proto::ProtoContext* ctx, std::string source,
+               const ReaderMarkers& markers)
+    : ctx_(ctx), lexer_(std::move(source)), markers_(markers) {}
 
 const proto::ProtoObject* Reader::readOne() {
     Token tok = lexer_.next();
@@ -47,10 +48,22 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
             // ownership of rooting the return value.
             return parent->fromLong(tok.intValue);
 
-        case TokenKind::String:
-            // fromUTF8String — NOT interned. Each string literal allocates a
-            // fresh ProtoString. Identity is meaningless for strings.
-            return parent->fromUTF8String(tok.text.c_str());
+        case TokenKind::String: {
+            // String literal — wrap so the Compiler can distinguish it from
+            // a same-bytes inline symbol (protoCore inlines short bytes into
+            // the pointer and loses the symbol/string distinction at that
+            // representation; see ReaderMarkers doc). The raw ProtoString
+            // is stashed under bytesKey on a fresh mutable child of
+            // stringMarkerProto.
+            const proto::ProtoObject* raw =
+                parent->fromUTF8String(tok.text.c_str());
+            const proto::ProtoObject* wrap =
+                markers_.stringMarkerProto->newChild(parent,
+                                                      /*isMutable=*/true);
+            const_cast<proto::ProtoObject*>(wrap)
+                ->setAttribute(parent, markers_.bytesKey, raw);
+            return wrap;
+        }
 
         case TokenKind::Symbol: {
             // createSymbol — interned for the lifetime of the ProtoSpace.

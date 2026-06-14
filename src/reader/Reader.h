@@ -32,6 +32,7 @@ namespace proto {
 class ProtoContext;
 class ProtoObject;
 class ProtoList;
+class ProtoString;
 }
 
 namespace protoClojure {
@@ -43,9 +44,30 @@ struct ReaderError : std::runtime_error {
         : std::runtime_error(msg), line(ln), column(col) {}
 };
 
+// Markers used by the reader/compiler to disambiguate strings from symbols
+// when short bytes (≤6) make protoCore inline them into the pointer
+// (POINTER_TAG_EMBEDDED_VALUE | EMBEDDED_TYPE_INLINE_STRING). At that
+// encoding ProtoString::isSymbol() returns false uniformly, so the
+// createSymbol vs fromUTF8String distinction is lost at the pointer level.
+//
+// Workaround: the Reader WRAPS every string-token result in a small heap
+// object (a mutable child of stringMarkerProto) with the raw ProtoString
+// stored under bytesKey. The Compiler checks the form's prototype against
+// stringMarkerProto to decide string vs symbol; the wrapped bytes are
+// extracted via getAttribute(bytesKey).
+//
+// Symbols stay as raw ProtoString and may inline as before — they remain
+// the cheap representation (Clojure code is symbol-heavy). String literals
+// pay one extra heap allocation each, which is acceptable.
+struct ReaderMarkers {
+    const proto::ProtoObject* stringMarkerProto;
+    const proto::ProtoString* bytesKey;
+};
+
 class Reader {
 public:
-    Reader(proto::ProtoContext* ctx, std::string source);
+    Reader(proto::ProtoContext* ctx, std::string source,
+           const ReaderMarkers& markers);
 
     // Read one form. Returns nullptr ONLY at EOF.
     //
@@ -67,6 +89,7 @@ public:
 private:
     proto::ProtoContext* ctx_;
     Lexer lexer_;
+    ReaderMarkers markers_;
 
     // Dispatch on a token to read one form. Receives the parent context
     // so any child context it constructs is correctly chained for the GC.

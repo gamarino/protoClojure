@@ -6,12 +6,18 @@ namespace protoClojure {
 
 const char* opName(Op op) {
     switch (op) {
-        case Op::NOP:        return "NOP";
-        case Op::PUSH_CONST: return "PUSH_CONST";
-        case Op::PUSH_VAR:   return "PUSH_VAR";
-        case Op::CALL:       return "CALL";
-        case Op::POP:        return "POP";
-        case Op::RETURN:     return "RETURN";
+        case Op::NOP:           return "NOP";
+        case Op::PUSH_CONST:    return "PUSH_CONST";
+        case Op::PUSH_VAR:      return "PUSH_VAR";
+        case Op::CALL:          return "CALL";
+        case Op::POP:           return "POP";
+        case Op::RETURN:        return "RETURN";
+        case Op::STORE_GLOBAL:  return "STORE_GLOBAL";
+        case Op::JUMP:          return "JUMP";
+        case Op::JUMP_IF_FALSE: return "JUMP_IF_FALSE";
+        case Op::PUSH_NIL:      return "PUSH_NIL";
+        case Op::PUSH_TRUE:     return "PUSH_TRUE";
+        case Op::PUSH_FALSE:    return "PUSH_FALSE";
     }
     return "?";
 }
@@ -40,9 +46,19 @@ std::size_t BytecodeModule::addSymbol(const std::string& s) {
     return consts_.size() - 1;
 }
 
-void BytecodeModule::emit(Op op, std::uint8_t operand) {
+std::size_t BytecodeModule::emit(Op op, std::uint8_t operand) {
+    std::size_t at = bytes_.size();
     bytes_.push_back(static_cast<std::uint8_t>(op));
     bytes_.push_back(operand);
+    return at;
+}
+
+void BytecodeModule::patchOperand(std::size_t opcodeOffset,
+                                  std::uint8_t newOperand) {
+    if (opcodeOffset + 1 >= bytes_.size()) {
+        throw std::runtime_error("patchOperand: out of range");
+    }
+    bytes_[opcodeOffset + 1] = newOperand;
 }
 
 } // namespace protoClojure

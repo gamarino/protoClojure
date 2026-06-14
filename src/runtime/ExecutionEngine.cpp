@@ -4,6 +4,7 @@
 
 #include "protoCore.h"
 
+#include <cstdio>
 #include <stdexcept>
 
 namespace protoClojure {
@@ -174,6 +175,54 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 if (sp == 0) return PROTO_NONE;
                 return frame.getAutomaticLocal(sp - 1);
             }
+
+            case Op::STORE_GLOBAL: {
+                if (operand >= mod.constCount()) {
+                    throw std::runtime_error("VM: STORE_GLOBAL out-of-range");
+                }
+                const auto& c = mod.constAt(operand);
+                if (c.kind != BytecodeModule::ConstKind::Symbol) {
+                    throw std::runtime_error("VM: STORE_GLOBAL key not a symbol");
+                }
+                if (sp == 0) {
+                    throw std::runtime_error("VM: STORE_GLOBAL with empty stack");
+                }
+                const proto::ProtoString* key =
+                    proto::ProtoString::createSymbol(&frame, c.sval.c_str());
+                const proto::ProtoObject* val = frame.getAutomaticLocal(sp - 1);
+                const_cast<proto::ProtoObject*>(globals)
+                    ->setAttribute(&frame, key, val);
+                break;
+            }
+
+            case Op::JUMP: {
+                pc += static_cast<std::size_t>(operand) * kInstrSize;
+                break;
+            }
+
+            case Op::JUMP_IF_FALSE: {
+                if (sp == 0) {
+                    throw std::runtime_error("VM: JUMP_IF_FALSE with empty stack");
+                }
+                const proto::ProtoObject* v = frame.getAutomaticLocal(--sp);
+                // Clojure truthiness: only nil and false are falsy. PROTO_NONE
+                // is nil; PROTO_FALSE is false. Everything else (including 0
+                // and "") is truthy.
+                if (v == PROTO_NONE || v == PROTO_FALSE) {
+                    pc += static_cast<std::size_t>(operand) * kInstrSize;
+                }
+                break;
+            }
+
+            case Op::PUSH_NIL:
+                push(PROTO_NONE);
+                break;
+            case Op::PUSH_TRUE:
+                push(PROTO_TRUE);
+                break;
+            case Op::PUSH_FALSE:
+                push(PROTO_FALSE);
+                break;
 
             default:
                 throw std::runtime_error("VM: unknown opcode");

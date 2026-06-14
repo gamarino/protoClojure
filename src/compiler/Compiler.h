@@ -28,12 +28,21 @@
 namespace proto {
 class ProtoContext;
 class ProtoObject;
+class ProtoString;
 }
 
 namespace protoClojure {
 
 struct CompileError : std::runtime_error {
     CompileError(const std::string& msg) : std::runtime_error(msg) {}
+};
+
+// Mirror of ReaderMarkers — the Compiler needs the same two markers to
+// recognise wrapped string literals coming back from the Reader. See the
+// ReaderMarkers comment in src/reader/Reader.h for the why.
+struct CompilerMarkers {
+    const proto::ProtoObject* stringMarkerProto;
+    const proto::ProtoString* bytesKey;
 };
 
 class Compiler {
@@ -43,7 +52,8 @@ public:
     // top-level form, then appends a final RETURN.
     void compileForm(proto::ProtoContext* ctx,
                      const proto::ProtoObject* form,
-                     BytecodeModule& out);
+                     BytecodeModule& out,
+                     const CompilerMarkers& markers);
 };
 
 } // namespace protoClojure
