@@ -1,22 +1,23 @@
 /*
  * Reader — turns a token stream into protoCore objects.
  *
- * Architectural rule from day one: every recursive read scope is one
- * `proto::ProtoContext` (== one method invocation in protoCore terms),
- * chained via `previous` to its caller's context, with its own
- * `automaticLocals` slot region holding the in-progress work
- * (the building list, the last-read element). The GC sees every
- * ProtoObject we hold across an allocation; multithreading is free
- * because each ProtoContext is bound to its calling thread.
+ * Architectural rules — see
+ *   docs/superpowers/specs/2026-06-14-engineering-principles.md
  *
- * Calling convention for the C++ side:
- *   - Functions receive the *parent* ProtoContext as a parameter.
- *   - A function that has intermediate state across an allocation
- *     pushes its own child ProtoContext at entry and stores that
- *     state in a slot.
- *   - The return value is whatever sits in the relevant slot at the
- *     time of return. The CALLER must store it in its own slot
- *     before the next allocation — returns are unrooted by design.
+ *   P1: Every ProtoObject* held across an allocation lives in a
+ *       ProtoContext::automaticLocals slot. NEVER in a C++ stack
+ *       local or member field. The protoCore tracing GC walks
+ *       automaticLocals; pointers it cannot see may be reclaimed.
+ *
+ *   P2: ProtoContext is per method invocation. Each recursive
+ *       readList call pushes a child ProtoContext chained to its
+ *       parent via `previous`. Multithreading is free because each
+ *       context is bound to its calling thread.
+ *
+ *   P3: No std:: objects inside protoCore. Tokens may carry a
+ *       std::string text; on the boundary we use c_str() so
+ *       protoCore copies the bytes into its own ProtoString. After
+ *       that, the std side is free to die.
  *
  * Session 2 scope: integers, strings, symbols, and lists (the
  * recursive case).
