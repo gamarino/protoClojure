@@ -3,8 +3,17 @@
 > Authoritative. If a tutorial chapter and this document disagree, this
 > document is correct and the tutorial has a bug.
 
-This is the v0.1 reference. Sections marked **[v0.2]** or **[v0.3]**
-describe planned behaviour; the current build does not implement them.
+This is the **design reference** for protoClojure — the surface the
+implementation is converging on. The implementation is at
+**session 12**; the table in §1.3 below summarises what is shipped
+today vs scoped for later phases. `docs/STATUS.md` is the living
+tracker; if a feature you expect is not in STATUS, it is not
+implemented.
+
+Sections marked **[v0.2]** or **[v0.3]** describe planned behaviour;
+the current build does not implement them. Sections without a tag
+describe v0.x and may be partly or fully shipped — check STATUS for
+the exact line.
 
 ---
 
@@ -29,7 +38,66 @@ Three priorities, in order:
    documented in `STATUS.md`. Unimplemented forms raise; they do not
    silently return `nil`.
 
-### 1.2 A first example
+### 1.2 Implementation status at a glance (session 12)
+
+This snapshot exists so a reader picking up the language reference can
+tell at a glance which parts of the surface are runnable today. The
+**living** tracker is `docs/STATUS.md`.
+
+| Surface area | Status |
+|---|---|
+| Numbers — integers (SmallInt + LargeInt promoted) | ✅ shipped |
+| Numbers — IEEE-754 floats (`3.14`, `1e6`) | ✅ shipped |
+| Numbers — ratios `1/3` | ⏳ planned |
+| Strings | ✅ shipped (literal + `str` + `println`) |
+| Strings — `clojure.string` ops (split, join, upper, …) | ⏳ planned |
+| Symbols, keywords, booleans, nil literals | ✅ shipped |
+| Reader macros `'`, `` ` ``, `~`, `~@`, `#(...)`, `#'`, `#_`, `^` | ⏳ planned (only `'` quote of atoms today) |
+| Lists `(...)` | ✅ shipped |
+| Vectors `[...]` | ✅ shipped (ProtoTuple, distinct from list) |
+| Maps `{...}` | ⏳ planned (session 14) |
+| Sets `#{...}` | ⏳ planned |
+| `def`, `defn`, `fn`, `let`, `loop`, `recur` | ✅ shipped |
+| Multi-arity `defn` | ✅ shipped |
+| Variadic `& rest` | ✅ shipped |
+| `if`, `do`, `quote`, `apply` | ✅ shipped |
+| `when`, `when-not`, `cond`, `and`, `or` | ✅ shipped |
+| `throw`, `try`, `catch`, `finally`, `ex-info` | ⏳ planned (session 18) |
+| Closures with N-level lexical capture | ✅ shipped |
+| Named arguments `& {:keys [...]}` | ⏳ planned (session 13 — PROMOTED) |
+| Namespaces (`ns`, `:require`, `:as`, `:refer`) | ⏳ planned |
+| State (`atom`, `swap!`, `reset!`, `@`) | ⏳ planned (sessions 26-27) |
+| Lazy seqs (`lazy-seq`, `range`, `iterate`) | ⏳ planned |
+| User-defined macros (`defmacro`) | ⏳ planned (session 17) |
+| REPL | ⏳ planned (session 19+) |
+| nREPL server | ⏳ planned (sessions 20-21) |
+| UMD providers (`py/`, `js/`, `pst/`, `clj/`) | ⏳ planned (sessions 22-25) |
+
+The examples in §1.3 below describe the **eventual** v0.1 shape. The
+ones marked "(shipped)" run today; the ones marked "(planned)" are
+included to define the target surface.
+
+### 1.3 A first example
+
+**Example A — runs today (session 12 surface).**
+
+```clojure
+(defn greet [who]
+  (println "hello," who))
+
+(defn -main [] (greet "world"))
+
+(-main)   ;; => hello, world
+```
+
+Run:
+
+```bash
+$ protoclj greeting.clj
+hello, world
+```
+
+**Example B — target shape for v0.1 (planned).**
 
 ```clojure
 (ns demo.greeting
@@ -42,17 +110,10 @@ Three priorities, in order:
   (println (greet (or (first args) "world"))))
 ```
 
-Run:
+This will run once `ns`, `:require`, and `clojure.string` land
+(sessions 15, 16, 22 per `ROADMAP.md`).
 
-```bash
-$ protoclj demo/greeting.clj
-hello world
-
-$ protoclj demo/greeting.clj alice
-hello alice
-```
-
-The first example with cross-runtime interop:
+**Example C — cross-runtime interop, target shape (planned, session 23+).**
 
 ```clojure
 (ns demo.numpy-bridge

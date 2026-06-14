@@ -5,6 +5,13 @@
 > writing code, useful for understanding *why* a feature is the way it is
 > when the reference only documents *what* it does.
 
+> **Implementation status (session 12).** §1 (substrate) is fully
+> realised — the runtime IS what is described there. §2 onward
+> describes the design surface the implementation is converging on.
+> Areas marked in `docs/STATUS.md` as "shipped" match the design as
+> written; areas marked "planned" describe the target shape, not the
+> current behaviour.
+
 ---
 
 ## 1. The substrate

@@ -12,7 +12,16 @@ The authoritative language reference is
 [`docs/INTEROP.md`](INTEROP.md). The live tracker of what works and what
 deviates is [`docs/STATUS.md`](STATUS.md). Every non-trivial code
 snippet in this tutorial is intended to run against the `protoclj`
-binary — once it exists.
+binary.
+
+> **What runs today (session 12).** The interpreter exists, the
+> conformance suite has 93 fixtures, and chapters 1, 2 (most of it),
+> 4 (lists + vectors + numbers; not maps/sets yet), and 5 (functions
+> + closures + multi-arity) run end-to-end. Chapters 6 (atoms), 8
+> (modules / `ns`), 9 (interop), 10 (REPL), 11 (macros) describe
+> features scoped for the next sessions — see `docs/ROADMAP.md`.
+> The tutorial text is stable; the implementation is filling in
+> behind it.
 
 ## How to use this tutorial
 
@@ -47,15 +56,18 @@ of the underlying object model, the protoCore concurrency primitives.
 
 ## A note on running the examples
 
-Every snippet in this tutorial expects the `protoclj` binary. Until the
-interpreter is implemented (Phase 1 of `ROADMAP.md`), the snippets are
-the executable specification — the implementation must make them work.
-
-Two ways to run protoClojure code appear throughout:
+The `protoclj` binary exists and runs `.clj` files. The interactive
+REPL, the `-e` one-expression flag, and the nREPL server are coming
+in sessions 19-21 (see `docs/ROADMAP.md`). Today:
 
 ```bash
-$ protoclj -e '(+ 1 2)'         # evaluate one expression, print the result
-$ protoclj script.clj           # run a file
-$ protoclj                       # interactive REPL
-$ protoclj --nrepl 7888          # nREPL server on port 7888 (for CIDER/Calva)
+$ protoclj script.clj           # works today
+$ protoclj --version            # works today
+$ protoclj -e '(+ 1 2)'         # planned, sessions 19+
+$ protoclj                       # planned (interactive REPL), session 19
+$ protoclj --nrepl 7888          # planned (nREPL server), sessions 20-21
 ```
+
+The runnable examples shipped with the repository live under
+[`examples/`](../examples/) and exercise the session-12 surface end-to-
+end.

@@ -4,75 +4,151 @@
 > finished, or dropped. If a feature you expect is missing here, it is
 > not implemented.
 
-**Current phase: design.** The interpreter is not implemented. The
-documents in `docs/` are the design spec for v0.1.
+**Current state:** post-session 12. The interpreter runs. 93 conformance
+fixtures + the unit tests all pass on the `main` branch. The bench
+harness produces honest numbers vs Babashka 1.4.192 (see
+`benchmarks/RESULTS.md`).
 
 ---
 
-## What is in this repository today
+## Session-by-session progress
 
-- Language reference draft (`docs/LANGUAGE.md`)
-- Module / interop design (`docs/INTEROP.md`)
-- Architectural design (`docs/DESIGN.md`)
-- Roadmap (`docs/ROADMAP.md`)
-- Two-audience tutorial outline (`docs/TUTORIAL.md`)
+| Session | What it shipped | Conformance count |
+|---:|---|---:|
+| 1-3 | Lexer, reader, bytecode VM, `println` | 32 |
+| 4 | `def`, `if`, `do`, integer arithmetic, comparisons | 42 |
+| 5 | `fn`, `defn`, `let`, `loop`, `recur` | 48 |
+| 6 | Closures with N-level lexical capture | 54 |
+| 7 | Variadic `& rest`, `apply`, `map` / `filter` / `reduce` | 66 |
+| 8 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, keywords | 80 |
+| 9 | IEEE-754 floats, vectors distinct from lists | 90 |
+| 10 | First benchmark vs Babashka | 90 |
+| 11 | SmallInt fast-path opcodes + LargeInteger promotion | 93 |
+| 12 | Fewer attribute lookups per CALL (perf cleanup) | 93 |
 
-## What is NOT in this repository today
-
-- The C++ interpreter (`src/`, `test/`)
-- The `clojure.core` standard library
-- The nREPL server
-- A `protoclj` binary
-- Examples in `examples/` (placeholders only)
-- CI / benchmarks
+The dated design specs live under `docs/superpowers/specs/`; the
+memory entries for each session live under
+`~/.claude/projects/-home-gamarino-Documentos-proyectos/memory/`.
 
 ---
 
-## Implemented (v0.1 progress)
-
-Nothing yet. Will tick off as features land.
+## Implemented and stable
 
 ### Reader
 
-- [ ] Numbers (integer, float, ratio, radix-N)
-- [ ] Strings, characters
-- [ ] Symbols, keywords (incl. namespace-qualified)
-- [ ] Booleans, nil
-- [ ] List `(...)`
-- [ ] Vector `[...]`
-- [ ] Map `{...}`
-- [ ] Set `#{...}`
-- [ ] Quote `'`, quasiquote `` ` ``, unquote `~`, splice `~@`
-- [ ] Anonymous fn `#(...)`
+- [x] Integers (SmallInteger + auto-promoted LargeInteger)
+- [x] Floats — `3.14`, `1e6`, `1.5e-3`
+- [x] Strings — `"hello"` (Reader wraps under `stringMarkerProto`)
+- [x] Symbols (auto-interned via protoCore SymbolTable)
+- [x] Keywords — `:foo`, self-evaluating constants
+- [x] Booleans + nil — `true`, `false`, `nil` as compile-time literals
+- [x] List `(...)`
+- [x] Vector `[...]` (Reader wraps under `vectorMarkerProto`)
+- [x] Line comments `;;`
+
+### Special forms
+
+- [x] `def`
+- [x] `defn` (single-arity)
+- [x] `defn` (multi-arity, with optional variadic catch-all)
+- [x] `fn` (single + multi-arity)
+- [x] `let`
+- [x] `loop`
+- [x] `recur` — inside `loop` AND at the top of a fn body (implicit recur target)
+- [x] `if`
+- [x] `do`
+- [x] `quote` (atoms only — list quoting is a later session)
+- [x] `apply` — special form, two-arg shape `(apply f coll)`
+- [x] `when`, `when-not`
+- [x] `cond` (with `:else` / `else`)
+- [x] `and`, `or` (short-circuit via DUP + JUMP_IF_TRUE/FALSE)
+- [x] Variadic `& rest` in fn params
+
+### Data structures (live in the VM)
+
+- [x] Lists — protoCore `ProtoList`
+- [x] Vectors — protoCore `ProtoTuple` (O(log N) `nth`)
+- [x] Strings — protoCore `ProtoString`
+- [x] Integers — `SmallInteger` tagged + auto-promoted `LargeInteger`
+- [x] Floats — `ProtoObject::fromDouble`
+
+### Numeric semantics
+
+- [x] SmallInt fast-path arithmetic via opcodes (`ADD SUB MUL LT LE GT GE EQ`)
+- [x] Automatic promotion to LargeInteger on overflow
+- [x] Automatic promotion to double when any operand is float
+- [x] Print path handles SmallInt + LargeInt + Float correctly
+
+### Closures
+
+- [x] N-level lexical capture across nested `fn` bodies
+- [x] Captures cascade — intermediate scopes create capture slots automatically
+- [x] First-class fns — `((make-mul k) x)` callable head, passed around freely
+
+### Primitives installed at startup
+
+- [x] Arithmetic: `+ - * / inc dec`
+- [x] Comparison: `< <= > >= =`
+- [x] Predicates: `nil? empty? vector? list? not`
+- [x] List ops: `list first rest cons count reverse`
+- [x] Vector ops: `vector vec nth`
+- [x] Higher-order: `map filter reduce` (via ActiveCallContext re-entry)
+- [x] I/O: `println str`
+
+### Bytecode VM
+
+- [x] 28 opcodes — see `src/runtime/Opcodes.h`
+- [x] `MAKE_FN` / `MAKE_FN_MULTI` — single + multi-arity wrappers
+- [x] `CALL_APPLY` — spread-args dispatch
+- [x] Split fn prototypes (`fnSingleProto` / `fnMultiProto`) for single-getAttribute CALL
+- [x] SmallInt fast-path binary opcodes
+- [x] DUP + JUMP_IF_TRUE for short-circuit `and` / `or`
+
+### Tooling
+
+- [x] `protoclj <script.clj>` — single-file evaluation
+- [x] `protoclj --version` / `-h`
+- [x] Conformance suite under `tests/conformance/` — discovered by glob
+- [x] Bench harness `benchmarks/bench.sh` (vs Babashka)
+
+---
+
+## NOT yet implemented (tracked)
+
+These are the features the docs / examples reference but the implementation
+does not yet support. Calling any of them raises a clear error.
+
+### Reader (not yet)
+
+- [ ] Maps `{...}`
+- [ ] Sets `#{...}`
+- [ ] Quasiquote `` ` ``, unquote `~`, splice `~@`
+- [ ] Anonymous-fn shorthand `#(...)`
 - [ ] Var-quote `#'`
 - [ ] Discard `#_`
 - [ ] Metadata `^{...}` plus shorthands `^kw` `^Type`
-- [ ] Reader literals `#inst` `#uuid` (parse-only in v0.1)
+- [ ] Reader literals `#inst` `#uuid`
+- [ ] Ratio literal `1/3`
+- [ ] Character literal `\a`
+- [ ] Namespace-qualified symbols / keywords `foo/bar`, `:ns/kw`
 
-### Evaluator / special forms
+### Special forms (not yet)
 
-- [ ] `def`
-- [ ] `if`
-- [ ] `do`
-- [ ] `let*` (and `let` macro on top)
-- [ ] `loop*` + `recur`
-- [ ] `fn*` (and `fn`, `defn`)
-- [ ] `quote`
-- [ ] `var`
 - [ ] `throw`
 - [ ] `try` / `catch` / `finally`
+- [ ] `let*` / `fn*` raw forms (only the macro names are accepted today)
+- [ ] `var` form
+- [ ] `case`, `if-let`, `when-let`
+- [ ] Threading: `->` `->>` `as->` `some->` `some->>`
 
-### Data structures
+### Data structures (not yet)
 
-- [ ] List (`ProtoList` linked mode)
-- [ ] Vector (`ProtoList` indexed mode)
-- [ ] Map (`ProtoSparseList`)
-- [ ] Set (`ProtoSparseList` keyed)
-- [ ] Lazy seq (`LazySeq` wrapper)
-- [ ] Structural equality `=`
-- [ ] Hashing for collections
+- [ ] Maps — `ProtoSparseList` based, with `assoc` / `get` / `dissoc`
+- [ ] Sets — `ProtoSparseList` based, with `conj` / `disj`
+- [ ] Lazy seqs — `LazySeq` wrapper
+- [ ] Structural equality across types — today `=` is numeric only
 
-### Namespaces & vars
+### Namespaces & vars (not yet)
 
 - [ ] `ns` form
 - [ ] `:require :as :refer`
@@ -81,15 +157,16 @@ Nothing yet. Will tick off as features land.
 - [ ] `^:dynamic` vars + `binding`
 - [ ] `alter-var-root`
 
-### State
+### State (not yet)
 
 - [ ] `atom`, `swap!`, `reset!`, `compare-and-set!`, `deref` / `@`
 - [ ] `add-watch`, `remove-watch`
 - [ ] `volatile!`, `vreset!`, `vswap!`
 - [ ] `delay`, `force`, `realized?`
 - [ ] `promise`, `deliver`
+- [ ] `future`, `pmap`, `agent`
 
-### Module system (UMD hybrid)
+### Module system / UMD (not yet)
 
 - [ ] Clojure-path resolver (unprefixed)
 - [ ] `py/` provider
@@ -100,76 +177,95 @@ Nothing yet. Will tick off as features land.
 - [ ] Conversion helpers `clj->py` `py->clj` `clj->js` `js->clj`
       `clj->pst` `pst->clj`
 
-### Core library
+### protoCore call convention — dual syntax (PROMOTED, not deferred)
 
-- [ ] Arithmetic primitives (`+ - * / quot rem mod inc dec`)
-- [ ] Comparison (`= == not= < <= > >=`)
-- [ ] Predicates (`nil? true? false? zero? pos? neg? even? odd?`)
-- [ ] Collection primitives (`first rest next cons conj count empty? seq`)
-- [ ] Map operations (`get assoc dissoc update merge select-keys keys vals`)
-- [ ] Higher-order (`map filter reduce apply comp partial juxt`)
-- [ ] Control macros (`when when-not if-let when-let cond case`)
-- [ ] Threading (`-> ->> as-> some-> some->>`)
-- [ ] String basics (`str format`)
-- [ ] `re-pattern`, `re-find`, `re-seq`, `re-matches`
-- [ ] `frequencies`, `group-by`, `sort`, `sort-by`
-- [ ] `range`, `iterate`, `repeat`, `cycle`, `take`, `drop`,
-      `take-while`, `drop-while`, `partition`, `partition-all`
-- [ ] `into`, `concat`, `mapcat`, `interleave`, `interpose`
-- [ ] `pr-str`, `print`, `println`, `prn`, `pr`
+The dual syntax for **consuming AND generating** functions under the
+protoCore call convention (bare name + positional vector + named dict)
+is what makes UMD interop transparent. protoST already implements its
+side of this (see `protoST/docs/superpowers/specs/2026-06-13-protocore-call-syntax.md`);
+protoClojure ships only the positional half today. The named-arg half
+was previously marked "deferred to v0.2" — that was wrong, and is being
+revisited:
 
-### REPL
+- [x] Positional consume — `(foo 1 2 3)` lands on a `ProtoMethod` with
+      `posArgs = [1,2,3]`, `kwArgs = nil`. Works today for primitives
+      and user fns.
+- [x] Positional generate — `defn`-produced functions are reachable from
+      protoST and protoPython via the same convention (bare attribute
+      name on the namespace).
+- [ ] **Named consume — `(foo 1 2 :unit :feet)` should reach a foreign
+      method's `kwArgs` dict.** Required for `(np/zeros [3 3] :dtype :float64)`
+      and the rest of the UMD interop story.
+- [ ] **Named generate — `(defn foo [a b & {:keys [unit] :or {unit :meters}}])`
+      should produce a function whose protoCore call signature
+      advertises `unit=:meters` to foreign callers.**
+- [ ] Keyword + map literals in the Reader (prerequisite for the named
+      half; partly there — keywords work, maps don't).
 
-- [ ] Interactive `protoclj` REPL (local, no nREPL)
+See `docs/superpowers/specs/2026-06-14-protocore-call-convention.md`
+for the design.
+
+### Core library extensions (not yet)
+
+- [ ] `quot rem mod`
+- [ ] More predicates: `true? false? zero? pos? neg? even? odd?`
+- [ ] More collection: `next conj seq into concat mapcat interleave interpose`
+- [ ] Map operations: `assoc dissoc update merge select-keys keys vals get-in update-in assoc-in`
+- [ ] More higher-order: `comp partial juxt`
+- [ ] More predicates: `every? some not-any? not-every?`
+- [ ] Range / sequence: `range iterate repeat cycle take drop take-while drop-while partition partition-all`
+- [ ] String ops: `re-pattern re-find re-seq re-matches format`
+- [ ] `frequencies group-by sort sort-by`
+- [ ] `pr-str print prn pr`
+- [ ] `clojure.string` — count chars, upper, lower, split, join, subs, replace, trim
+
+### REPL (not yet)
+
+- [ ] Interactive `protoclj` REPL
 - [ ] `*1` `*2` `*3` `*e`
 - [ ] `(doc symbol)`, `(source symbol)`
-- [ ] nREPL server: `eval`, `interrupt`, `clone`, `close`, `describe`,
-      `load-file`
-- [ ] nREPL `info`, `complete` (stretch)
-- [ ] Smooth CIDER session
+- [ ] nREPL server (CIDER / Calva / Conjure compatible)
 
-### Macros
+### Macros (not yet)
 
 - [ ] Compile-time evaluation pipeline (the bootstrap)
 - [ ] `clojure.core` macros defined in protoClojure
-- [ ] User-defined macros
+- [ ] User-defined macros (`defmacro`)
 
-### Standard library namespaces (post-`clojure.core`)
+### Bootstrap (not yet)
 
-- [ ] `clojure.string`
-- [ ] `clojure.set`
-- [ ] `clojure.walk`
-- [ ] `clojure.edn`
-- [ ] `clojure.pprint`
+- [ ] A real `core.clj` evaluated at startup — stops the "everything is a C++ primitive" pattern
 
 ---
 
 ## Intentional deviations from Clojure-JVM
 
-See `LANGUAGE.md` §13 for the canonical list. Summary of the v0.1
-deviations:
+See `LANGUAGE.md` for the full discussion. Summary:
 
 | ID  | Departure                                                  | Track  |
 | --- | ---------------------------------------------------------- | ------ |
 | D1  | No JVM interop                                             | core   |
 | D2  | No Java classes                                            | core   |
 | D3  | Characters are 1-codepoint strings                         | core   |
-| D4  | No chunked sequences in v0.1                               | v0.2   |
-| D5  | No transducers in v0.1                                     | v0.2   |
-| D6  | No STM in v0.1                                             | v0.2   |
-| D7  | No agents in v0.1                                          | v0.3   |
+| D4  | No chunked sequences in v0.x                               | v0.2   |
+| D5  | No transducers in v0.x                                     | v0.2   |
+| D6  | No STM in v0.x                                             | v0.2   |
+| D7  | No agents in v0.x (yet — the protoST actor model will land here) | v0.3 |
 | D8  | No `core.async` (likely permanent — re-imagined on actors) | v0.3+  |
-| D9  | No `defrecord` / `deftype` in v0.1                         | v0.2   |
-| D10 | No `BigDecimal` literal `M` suffix in v0.1                 | v0.2   |
+| D9  | No `defrecord` / `deftype` in v0.x                         | v0.2   |
+| D10 | No `BigDecimal` literal `M` suffix in v0.x                 | v0.2   |
 | D11 | No `clojure.spec`                                          | v0.x   |
 | D12 | `clojure.java.*` namespaces do not exist                   | (perm) |
 | D13 | `read-string` strict on unregistered reader literals       | core   |
+| D14 | LargeInteger promotion is automatic on `*` — no `*'` needed (CONTRA Clojure-JVM, by design) | (perm) |
+| D15 | `(= 1 1.0)` returns `true` in v0.x (CONTRA Clojure-JVM where `=` is type-strict) | (perm) |
 
 ## Known issues
 
-None yet — there is no code to have issues.
+None blocking. Items in the "NOT yet implemented" list are scoped
+features, not bugs.
 
 ## Closed items
 
-Empty. Future releases will record resolutions here with commit SHAs,
-mirroring protoST's STATUS layout.
+Recorded by session. See the commit log on `main` for SHAs; the
+"Session-by-session progress" table at the top is the index.

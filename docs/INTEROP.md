@@ -4,6 +4,15 @@
 > has Python, JavaScript, and Smalltalk, all through one resolver. This
 > document explains how that works and where the seams are.
 
+> **Implementation status (session 12).** Everything in this document
+> is design — the providers (`py/`, `js/`, `pst/`, `clj/`) are scoped
+> for Phase 5 of `ROADMAP.md` (sessions 22-25). The positional half of
+> the protoCore call convention works today (a `defn`-defined function
+> is reachable from protoST and protoPython with positional args); the
+> named-arg half is the priority of session 13. Until the providers
+> land, `(:require [py/numpy])` raises a clear "UMD provider not yet
+> registered" error.
+
 ---
 
 ## 1. The hybrid module system at a glance

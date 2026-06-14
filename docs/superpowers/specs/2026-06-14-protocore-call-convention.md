@@ -50,32 +50,59 @@ attribute on the same protoCore object and run the same bytecode.
 
 ## 3. What is *not* yet there (and how it lands)
 
-Named arguments. Clojure's idiom for "named arguments" is map
-destructuring:
+Named arguments. **PROMOTED** to immediate priority (session 13) — see
+ROADMAP §"Phase 2". The user requirement, made explicit in session 12,
+is twofold:
+
+- The dual convention must work in **both directions** (consume foreign
+  named-arg methods, generate user-`defn` functions whose foreign call
+  signature advertises named args).
+- It must **not break Clojure surface syntax**. No `key=value` form
+  (that is protoST's surface shape). The Clojure-native equivalent is
+  trailing `:keyword value` pairs OR a trailing map, which is what
+  `clojure.test/deftest`, `assoc`, `(merge {:a 1} ...)` already do.
+
+The natural Clojure idiom is map destructuring on the callee side:
 
 ```clojure
 (defn area [w h & {:keys [unit] :or {unit :meters}}]
   ...)
-(area 3 4 :unit :feet)
+
+(area 3 4 :unit :feet)      ;; trailing kv pairs — most common
+(area 3 4 {:unit :feet})    ;; trailing map — also legal
 ```
 
-The surface syntax is Clojure-native; the **bytecode layer** is the
-same shape protoST uses (session 5 conformance fixtures already
-cover positional; the named half lands when map literals + keyword
-literals reach v0.x). When that lands:
+That surface stays unchanged. The wire-level change is at the
+bytecode + dispatch layer:
 
-- The compiler sorts named keys alphabetically.
-- The call site pushes positional values in source order, then
-  named values in alphabetical-key order.
-- A new opcode (or an overload of `CALL`) carries `(nPos, nNamed,
-  sortedNamedKeys)` — same descriptor protoST uses, sharing the
-  mangled-symbol encoding.
-- The dispatcher does the same chain walk → bytecode method →
-  build-frame work. A missing named key triggers the
-  `:or`-defaulted expression in the method's prologue, again
-  mirroring protoST's unset-sentinel pattern.
+- **Compiler — `defn` body.** When the params vector contains
+  `& {:keys [...]}`, the compiler records the declared named-key set
+  on the BytecodeModule and emits a body whose prologue reads each
+  key from the incoming kwArgs (or applies the `:or` default).
+- **Compiler — call site.** `(area 3 4 :unit :feet)`: positional
+  argc=2, then a trailing pair `(:unit :feet)`. The compiler
+  speculatively emits a CALL_KW opcode that carries the sorted set
+  of named keys (same mangled-symbol shape protoST uses). At runtime
+  the dispatcher routes positional args to slots 0..nPos-1 and named
+  values into the kwArgs dict the callee expects.
+- **Foreign callable.** When the receiver is a foreign module
+  (protoPython, protoJS, protoST), the dispatcher hands the kwArgs
+  dict to the foreign method via the protoCore call ABI's existing
+  `kwArgs` slot — same shape protoST's `SEND_CALL` produces. No
+  per-language adapter needed; the kernel does the work.
+- **Generated callable.** A `defn` with `& {:keys}` produces a
+  wrapper whose own protoCore signature exposes the keys it accepts.
+  Foreign callers (protoST `recv area(3, 4, unit: 'feet')`,
+  protoPython `area(3, 4, unit='feet')`) reach the right slot
+  without any wrapper-specific glue.
 
-Deferred to v0.2+, not v0.1.
+**The surface stays Clojure.** The only new visible behaviour is
+that `(area 3 4 :unit :feet)` now correctly delegates the trailing
+pairs to a kwArgs dict instead of treating them as a positional list
+of keyword/value alternations. Backwards-compat fallback: if the
+callee does **not** declare `& {:keys}`, the trailing args are bound
+to `& rest` as a list (the v0.x behaviour), so existing fixtures and
+examples keep working unchanged.
 
 ## 4. Why this matters — the cross-runtime promise
 
