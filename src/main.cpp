@@ -72,12 +72,13 @@ int runFile(const char* path) {
     //   1 : forms (the ProtoList readAll() returned).
     //   2 : stringMarkerProto — see ReaderMarkers / CompilerMarkers docs.
     //   3 : fnMarkerProto — wraps user-fn callables (session 5).
-    ctx->resizeAutomaticLocals(5);
+    ctx->resizeAutomaticLocals(6);
     constexpr unsigned int kSlotGlobals      = 0;
     constexpr unsigned int kSlotForms        = 1;
     constexpr unsigned int kSlotStringMarker = 2;
-    constexpr unsigned int kSlotFnMarker     = 3;
+    constexpr unsigned int kSlotFnSingle     = 3;
     constexpr unsigned int kSlotVectorMarker = 4;
+    constexpr unsigned int kSlotFnMulti      = 5;
 
     const proto::ProtoObject* globalsObj =
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
@@ -91,9 +92,16 @@ int runFile(const char* path) {
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
     ctx->setAutomaticLocal(kSlotStringMarker, stringMarkerProto);
 
-    const proto::ProtoObject* fnMarkerProto =
+    // Session 12 — single-arity and multi-arity wrappers use DIFFERENT
+    // prototypes so the CALL dispatcher picks the path via getPrototype
+    // alone, without an `__arities__` probe per call.
+    const proto::ProtoObject* fnSingleProto =
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
-    ctx->setAutomaticLocal(kSlotFnMarker, fnMarkerProto);
+    ctx->setAutomaticLocal(kSlotFnSingle, fnSingleProto);
+
+    const proto::ProtoObject* fnMultiProto =
+        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+    ctx->setAutomaticLocal(kSlotFnMulti, fnMultiProto);
 
     const proto::ProtoObject* vectorMarkerProto =
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
@@ -118,7 +126,6 @@ int runFile(const char* path) {
         bytesKey, itemsKey};
     protoClojure::CompilerMarkers compilerMarkers{
         ctx->getAutomaticLocal(kSlotStringMarker),
-        ctx->getAutomaticLocal(kSlotFnMarker),
         ctx->getAutomaticLocal(kSlotVectorMarker),
         bytesKey, bytecodeKey, arityKey, capturesKey, aritiesKey, itemsKey};
 
@@ -158,7 +165,8 @@ int runFile(const char* path) {
     protoClojure::ExecutionEngine eng;
     try {
         eng.run(ctx, mod, ctx->getAutomaticLocal(kSlotGlobals),
-                ctx->getAutomaticLocal(kSlotFnMarker),
+                ctx->getAutomaticLocal(kSlotFnSingle),
+                ctx->getAutomaticLocal(kSlotFnMulti),
                 bytecodeKey, arityKey, capturesKey, aritiesKey);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s: runtime error: %s\n", path, e.what());

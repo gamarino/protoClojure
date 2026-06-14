@@ -95,16 +95,21 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("VM: invoke() called outside a run()");
 
-    // User-fn path — same shape as the in-VM dispatchCall, but the args
-    // come from a caller-provided buffer rather than the operand stack.
-    if (callable->getPrototype(ctx) == cc->fnMarkerProto) {
+    // Session 12 — single getPrototype probe picks the path. Single-
+    // arity wrappers cost ONE getAttribute (bytecode); the captures
+    // read is skipped entirely when the body has no captures (the
+    // dominant case for top-level defns like the bench fib).
+    const proto::ProtoObject* proto = callable->getPrototype(ctx);
+    const bool isSingle = (proto == cc->fnSingleProto);
+    const bool isMulti  = (proto == cc->fnMultiProto);
+
+    if (isSingle || isMulti) {
         const BytecodeModule* subMod = nullptr;
         const proto::ProtoObject* capsVal = nullptr;
 
-        // Multi-arity? Check for __arities__ on the wrapper.
-        const proto::ProtoObject* aritiesObj =
-            callable->getAttribute(ctx, cc->aritiesKey);
-        if (aritiesObj && aritiesObj != PROTO_NONE) {
+        if (isMulti) {
+            const proto::ProtoObject* aritiesObj =
+                callable->getAttribute(ctx, cc->aritiesKey);
             const proto::ProtoList* aritiesList = aritiesObj->asList(ctx);
             int k = pickArity(ctx, aritiesList, argc);
             if (k < 0)
@@ -121,7 +126,10 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
             if (!ptrObj || !ptrObj->isInteger(ctx))
                 throw std::runtime_error("VM: invoke: malformed fn-wrapper");
             subMod = reinterpret_cast<const BytecodeModule*>(ptrObj->asLong(ctx));
-            capsVal = callable->getAttribute(ctx, cc->capturesKey);
+            // C optimisation — only fetch captures when the body needs them.
+            if (subMod->captureCount() > 0) {
+                capsVal = callable->getAttribute(ctx, cc->capturesKey);
+            }
         }
 
         int fixed = subMod->arity();
@@ -146,7 +154,8 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
             }
         }
         return this->run(ctx, *subMod, cc->globals,
-                         const_cast<proto::ProtoObject*>(cc->fnMarkerProto),
+                         const_cast<proto::ProtoObject*>(cc->fnSingleProto),
+                         const_cast<proto::ProtoObject*>(cc->fnMultiProto),
                          cc->bytecodeKey, cc->arityKey, cc->capturesKey,
                          cc->aritiesKey,
                          callArgs, passArgc, capsVal);
@@ -180,7 +189,8 @@ const proto::ProtoObject*
 ExecutionEngine::run(proto::ProtoContext* parent,
                      const BytecodeModule& mod,
                      const proto::ProtoObject* globals,
-                     const proto::ProtoObject* fnMarkerProto,
+                     const proto::ProtoObject* fnSingleProto,
+                     const proto::ProtoObject* fnMultiProto,
                      const proto::ProtoString* bytecodeKey,
                      const proto::ProtoString* arityKey,
                      const proto::ProtoString* capturesKey,
@@ -195,8 +205,8 @@ ExecutionEngine::run(proto::ProtoContext* parent,
     const ActiveCallContext* prior = activeCallContext();
     ActiveCallContext saved = prior ? *prior : ActiveCallContext{};
     ActiveCallContext cc{this, globals,
-                         fnMarkerProto, bytecodeKey, arityKey, capturesKey,
-                         aritiesKey};
+                         fnSingleProto, fnMultiProto,
+                         bytecodeKey, arityKey, capturesKey, aritiesKey};
     setActiveCallContext(cc);
     struct Guard {
         const ActiveCallContext* prior; ActiveCallContext saved;
@@ -269,16 +279,18 @@ ExecutionEngine::run(proto::ProtoContext* parent,
     // args list onto the stack before calling this).
     auto dispatchCall = [&](unsigned int argc) {
         const proto::ProtoObject* callable = peekAt(argc);
+        const proto::ProtoObject* proto = callable->getPrototype(&frame);
+        const bool isSingle = (proto == fnSingleProto);
+        const bool isMulti  = (proto == fnMultiProto);
 
-        // User fn — prototype matches fnMarkerProto.
-        if (callable->getPrototype(&frame) == fnMarkerProto) {
+        if (isSingle || isMulti) {
             const BytecodeModule* subMod = nullptr;
             const proto::ProtoObject* capsVal = nullptr;
 
-            // Multi-arity? Pick the matching arity-spec first.
-            const proto::ProtoObject* aritiesObj =
-                callable->getAttribute(&frame, aritiesKey);
-            if (aritiesObj && aritiesObj != PROTO_NONE) {
+            if (isMulti) {
+                // Multi-arity — read __arities__ and pick the spec.
+                const proto::ProtoObject* aritiesObj =
+                    callable->getAttribute(&frame, aritiesKey);
                 const proto::ProtoList* aritiesList = aritiesObj->asList(&frame);
                 int k = pickArity(&frame, aritiesList, argc);
                 if (k < 0)
@@ -290,13 +302,19 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                     spec->getAt(&frame, 1)->asLong(&frame));
                 capsVal = spec->getAt(&frame, 3);
             } else {
+                // Single-arity — one getAttribute (bytecode). The
+                // captures lookup is skipped when the body has no
+                // captures (the dominant case for top-level defns:
+                // fib, sum-loop, factorial, ...).
                 const proto::ProtoObject* ptrObj =
                     callable->getAttribute(&frame, bytecodeKey);
                 if (!ptrObj || !ptrObj->isInteger(&frame))
                     throw std::runtime_error("VM: malformed fn-wrapper");
                 subMod = reinterpret_cast<const BytecodeModule*>(
                     ptrObj->asLong(&frame));
-                capsVal = callable->getAttribute(&frame, capturesKey);
+                if (subMod->captureCount() > 0) {
+                    capsVal = callable->getAttribute(&frame, capturesKey);
+                }
             }
 
             int fixed = subMod->arity();
@@ -342,7 +360,8 @@ ExecutionEngine::run(proto::ProtoContext* parent,
             sp -= (argc + 1);
             const proto::ProtoObject* result = this->run(
                 &frame, *subMod, globals,
-                fnMarkerProto, bytecodeKey, arityKey, capturesKey, aritiesKey,
+                fnSingleProto, fnMultiProto,
+                bytecodeKey, arityKey, capturesKey, aritiesKey,
                 callArgs, passArgc, capsVal);
             pushVal(result);
             return;
@@ -457,13 +476,18 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                     sp -= static_cast<unsigned int>(nCaps);
                 }
 
+                // Single-arity wrapper — fnSingleProto carries
+                // __bytecode__ always and __captures__ only when the
+                // body has captures. arityKey was vestigial (the
+                // dispatcher reads arity directly from subMod) and is
+                // no longer set on the wrapper.
                 proto::ProtoObject* wrap = const_cast<proto::ProtoObject*>(
-                    fnMarkerProto->newChild(&frame, /*isMutable=*/true));
+                    fnSingleProto->newChild(&frame, /*isMutable=*/true));
                 wrap->setAttribute(&frame, bytecodeKey,
                     frame.fromLong(reinterpret_cast<long long>(&subMod)));
-                wrap->setAttribute(&frame, arityKey,
-                    frame.fromLong(subMod.arity()));
-                wrap->setAttribute(&frame, capturesKey, capsList);
+                if (nCaps > 0) {
+                    wrap->setAttribute(&frame, capturesKey, capsList);
+                }
                 pushVal(wrap);
                 break;
             }
@@ -610,7 +634,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 sp = baseSp;
 
                 proto::ProtoObject* wrap = const_cast<proto::ProtoObject*>(
-                    fnMarkerProto->newChild(&frame, /*isMutable=*/true));
+                    fnMultiProto->newChild(&frame, /*isMutable=*/true));
                 wrap->setAttribute(&frame, aritiesKey, aritiesList);
                 pushVal(wrap);
                 break;

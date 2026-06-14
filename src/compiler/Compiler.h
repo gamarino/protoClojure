@@ -46,8 +46,11 @@ struct CompileError : std::runtime_error {
 // prototype is fnMarkerProto with the bytecode pointer + arity stored as
 // attributes. The Compiler emits MAKE_FN; the VM constructs the wrapper.
 struct CompilerMarkers {
+    // The Compiler does NOT use any fn prototype directly — wrappers are
+    // built at MAKE_FN / MAKE_FN_MULTI time inside the VM. The session-12
+    // cleanup removed fnMarkerProto from this struct; the VM carries the
+    // single-arity and multi-arity prototypes through ActiveCallContext.
     const proto::ProtoObject* stringMarkerProto;
-    const proto::ProtoObject* fnMarkerProto;     // session 5
     const proto::ProtoObject* vectorMarkerProto; // session 9 — `[..]` literal
     const proto::ProtoString* bytesKey;
     const proto::ProtoString* bytecodeKey;       // session 5 — opaque ptr

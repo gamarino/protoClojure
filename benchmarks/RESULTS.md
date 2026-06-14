@@ -12,15 +12,36 @@ runs the script through each interpreter 3 times and reports the
 minimum wall-clock (cold-start + execution). No JVM warmup phase.
 Result strings are compared across runtimes for correctness.
 
-## Session-11 numbers (after SmallInt fast-path + protoCore promoting arithmetic)
+## Session-12 numbers (after split fn prototypes + captures-only-if-needed)
 
 | Workload         | protoclj (ms) | bb (ms) | ratio   | Result        | Match |
 |------------------|--------------:|--------:|--------:|---------------|:-----:|
-| `fib(30)`        |           720 |     498 | 1.45×   | 832040        | ✓ |
-| `tak(18,12,6)`   |            52 |      44 | 1.18×   | 7             | ✓ |
-| `sum-loop(1M)`   |            66 |     195 | **0.34×** | 500000500000 | ✓ |
-| `reduce-list(10K)` |          30 |      35 | 0.86×   | 49995000      | ✓ |
-| `sum-squares(1K)` |           19 |      32 | 0.59×   | 332833500     | ✓ |
+| `fib(30)`        |           620 |     496 | 1.25×   | 832040        | ✓ |
+| `tak(18,12,6)`   |            45 |      42 | 1.07×   | 7             | ✓ |
+| `sum-loop(1M)`   |            66 |     196 | **0.34×** | 500000500000 | ✓ |
+| `reduce-list(10K)` |          29 |      33 | 0.88×   | 49995000      | ✓ |
+| `sum-squares(1K)` |           19 |      28 | 0.68×   | 332833500     | ✓ |
+
+### Session 10 → 11 → 12 trajectory on `fib(30)`
+
+| Round | Wall (ms) | Cycles | Instructions | IPC  | L1-d misses |
+|-------|----------:|-------:|-------------:|-----:|------------:|
+| s10   |      4113 | (n/a)  |       (n/a)  | (n/a)|       (n/a) |
+| s11   |       720 |  2.45G |        5.93G | 2.42 |       11.2M |
+| s12   |       620 |  2.05G |        5.02G | 2.45 |        7.6M |
+
+Per-call:
+- s11: 720 ms / 2.7M calls = **267 ns/call**
+- s12: 620 ms / 2.7M calls = **230 ns/call**  (−14%)
+- bb:  498 ms / 2.7M calls = **184 ns/call**
+
+We are now ~25% over Babashka per call. The residual ~46 ns/call sits in
+frame setup (new ProtoContext, resizeAutomaticLocals, captures
+seeding, recursive run() entry) — not in attribute lookups. The next
+lever is either a ProtoContext pool (D — invasive) or threaded
+dispatch in run(). IPC at 2.45 with 0.07% branch-miss rate suggests
+threaded dispatch will return less than expected; the pool likely
+more.
 
 Reading the ratio: `<1` means protoClojure is faster than Babashka by
 that factor. Three of five workloads now run **faster than Babashka**;
@@ -33,8 +54,41 @@ the **5× JVM** target set in the brainstorm phase.
 ## What changed since session 10
 
 Session 10 ratios were 8.3× / 2.3× / 8.1× / 1.5× / 0.53× (slower than bb
-across the board on compute-bound rows). Session 11 collapses that gap.
-Two changes:
+across the board on compute-bound rows). Sessions 11 and 12 closed that
+gap. Three sets of changes:
+
+### Session 12 — fewer getAttribute calls per CALL
+
+The user observed (correctly): protoCore already runs a 1024-entry
+per-thread attribute cache plus a mutable-snapshot cache, so adding
+a parallel inline cache at the protoClojure layer would be redundant.
+The real lever is to **ask for fewer attribute lookups per call.**
+
+Concretely:
+
+1. **Split fn prototypes.** Single-arity wrappers now use
+   `fnSingleProto`; multi-arity use `fnMultiProto`. The CALL handler
+   picks the path by `getPrototype` alone — no more
+   `getAttribute(aritiesKey)` probe on every single-arity call. (The
+   negative-hit was cheap in the cache but still a load + compare
+   per call.)
+
+2. **Captures-only-if-needed.** When the body's `captureCount() == 0`
+   (top-level defns: fib, sum-to-n, factorial, ...), the dispatcher
+   skips `getAttribute(capturesKey)` entirely.
+
+3. **arityKey vestigial-write removed.** The wrapper used to carry
+   `__arity__` redundantly; the dispatcher always reads arity from
+   `subMod->arity()` instead.
+
+Single-arity CALL goes from 3 getAttribute → **1** (just `bytecodeKey`).
+
+`perf stat` confirmation on fib(30):
+- instructions: 5.93G → 5.02G (−15%)
+- L1-d misses: 11.2M → 7.6M (−32%)
+- branch-miss / IPC unchanged → no new dispatch overhead
+
+### Session 11 — SmallInt fast-path
 
 1. **SmallInt fast-path binary opcodes** (`ADD` `SUB` `MUL` `LT` `LE`
    `GT` `GE` `EQ`). The compiler now emits these directly for

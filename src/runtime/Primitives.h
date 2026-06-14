@@ -42,7 +42,14 @@ void installPrimitives(proto::ProtoContext* ctx,
 struct ActiveCallContext {
     ExecutionEngine*           engine;
     const proto::ProtoObject*  globals;
-    const proto::ProtoObject*  fnMarkerProto;
+    // Session 12 — split the single prototype `fnMarkerProto` into two:
+    // single-arity wrappers carry `__bytecode__` (+ `__captures__` only
+    // when the body has captures), multi-arity wrappers carry
+    // `__arities__`. The CALL handler picks the path via `getPrototype`
+    // alone — no more `getAttribute(aritiesKey)` probe to discover
+    // arity-shape on every single-arity call.
+    const proto::ProtoObject*  fnSingleProto;
+    const proto::ProtoObject*  fnMultiProto;
     const proto::ProtoString*  bytecodeKey;
     const proto::ProtoString*  arityKey;
     const proto::ProtoString*  capturesKey;
