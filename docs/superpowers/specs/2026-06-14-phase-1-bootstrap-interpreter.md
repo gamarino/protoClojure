@@ -977,6 +977,62 @@ yet supported.
 
 ## 10. The week-by-week plan
 
+### 10.0 Testing strategy — conformance-first
+
+Before the weekly deliverables, an architectural commitment about
+how features get tested.
+
+protoST and protoPython both grew large suites of **black-box
+conformance fixtures** — small `.st` / `.py` files with an expected
+output declared as a directive in the first line. A simple shell
+runner invokes the binary, captures stdout, and compares.
+
+protoClojure adopts the same pattern from **day one**. Each fixture
+looks like this:
+
+```clojure
+;; EXPECT: hello, world
+(println "hello, world")
+```
+
+```clojure
+;; EXPECT: 30
+(let [x 10 y 20] (println (+ x y)))
+```
+
+The runner is ~80 lines of `bash`, registered as a `ctest` test per
+fixture. Authoring a new test is ~5 lines of Clojure plus one
+directive comment.
+
+**Why this matters for cost.** A GoogleTest case in C++ is ~40-80
+lines of boilerplate; a conformance fixture is ~5 lines of
+demonstrative Clojure. Over the 30-50 features that land in phase
+1, the savings compound to days of calendar time. The fixtures
+also *double as documentation* — each one is a runnable example of
+the feature it covers.
+
+**Where conformance fixtures do NOT replace unit tests.** The
+lexer, the reader's structural correctness, the bytecode module's
+constant pool integrity, and the VM's GC discipline still benefit
+from GoogleTest unit tests because they exercise pieces below the
+script-level interface. The split is roughly:
+
+- **Conformance fixtures** for every user-facing feature: literals,
+  special forms, primitives, macros, error behaviour.
+- **GoogleTest unit tests** for sub-language internals: the lexer
+  token stream, the reader's metadata attachment, the bytecode
+  module's serialisation, the VM's frame layout, the GC
+  discipline patterns.
+
+Roughly: ~80% of test code is conformance fixtures, ~20% is
+GoogleTest unit tests. JVM Clojure has a similar ratio (`test/`
+directory plus generative tests in scripts).
+
+The runner script and the first fixture (`hello-world.clj` →
+`EXPECT: hello, world`) ship in **week 1**, so every subsequent
+feature pays its test as a one-line addition. Concrete deliverable
+in §10.1 below.
+
 ### Week 1 — Reader and minimum eval (Mon → Fri, ~30 hours)
 
 **Deliverables:**
@@ -1007,8 +1063,20 @@ yet supported.
 9. The file runner: `main.cpp` parses `protoclj script.clj`, reads
    and compiles the file's forms one by one, runs them. ~200
    lines.
-10. Unit tests for the reader and the minimum VM. ~800 lines of
-    GoogleTest.
+10. **The conformance suite scaffolding** (`tests/conformance/run.sh`,
+    `tests/conformance/CMakeLists.txt`, the directive parser, the
+    `EXPECT:` / `EXPECT-ERROR:` / `XFAIL:` directives, lifted from
+    protoST's pattern). ~150 lines of bash + ~50 lines of CMake.
+    Plus the first three fixtures:
+    `tests/conformance/01-literals/integer.clj`,
+    `tests/conformance/01-literals/string.clj`,
+    `tests/conformance/01-literals/hello-world.clj`. Every feature
+    landed from week 2 onward adds a fixture as it is implemented.
+11. GoogleTest unit tests for the lexer and the reader's
+    metadata-attachment correctness — the pieces that black-box
+    fixtures cannot easily exercise. ~400 lines of GoogleTest
+    (down from the ~800 originally estimated, because most of what
+    the user sees moves to conformance fixtures).
 
 **Week-1 end state:**
 
@@ -1265,10 +1333,14 @@ Phase 1 is done when **all** of these hold:
 2. The interactive REPL launches, accepts at least the meta-commands
    in §8.2, supports `*1`/`*2`/`*3`/`*e`, and survives a
    non-pathological hour of interactive use.
-3. The unit tests in `test/unit/` pass under both Release and ASan
-   builds, single-threaded, with no UB or use-after-free.
-4. The conformance fixtures in `test/conformance/` pass black-box
-   through `protoclj`.
+3. The GoogleTest unit tests in `tests/unit/` (lexer, reader,
+   bytecode-module, VM internals) pass under both Release and
+   ASan builds, single-threaded, with no UB or use-after-free.
+4. The conformance fixtures in `tests/conformance/` — by end of
+   phase 1 there should be **~80-120 fixtures** covering literals,
+   special forms, control macros, collection ops, higher-order,
+   arithmetic, errors, and the four reference scripts. Every one
+   passes black-box through `protoclj` under Release and ASan.
 5. The smoke benchmark runs to completion and produces numbers we
    are willing to publish in phase 2.
 6. The `STATUS.md` is updated: every name in the phase-1 catalog
