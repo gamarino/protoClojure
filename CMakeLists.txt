@@ -49,10 +49,6 @@ endif()
 include_directories(${PROTOCORE_INCLUDE_DIRS} include headers src)
 
 # --- protoClojure reader library ---
-# A small static library so unit tests can link against it without rebuilding
-# main.cpp. As phase 1 grows we will accumulate compiler/runtime/etc. into
-# similarly small libraries here, then link the protoclj binary against the
-# set.
 add_library(protoclj_reader STATIC
     src/reader/Lexer.cpp
     src/reader/Reader.cpp
@@ -60,11 +56,30 @@ add_library(protoclj_reader STATIC
 target_link_libraries(protoclj_reader PUBLIC ${PROTOCORE_LIBRARY})
 target_compile_options(protoclj_reader PRIVATE -Wall -Wextra -Wpedantic)
 
-# --- protoClojure binary (minimum-viable so far) ---
+# --- protoClojure runtime library (bytecode, VM, primitives) ---
+add_library(protoclj_runtime STATIC
+    src/runtime/BytecodeModule.cpp
+    src/runtime/ExecutionEngine.cpp
+    src/runtime/Primitives.cpp
+)
+target_link_libraries(protoclj_runtime PUBLIC ${PROTOCORE_LIBRARY})
+target_compile_options(protoclj_runtime PRIVATE -Wall -Wextra -Wpedantic)
+
+# --- protoClojure compiler library ---
+add_library(protoclj_compiler STATIC
+    src/compiler/Compiler.cpp
+)
+target_link_libraries(protoclj_compiler PUBLIC protoclj_runtime)
+target_compile_options(protoclj_compiler PRIVATE -Wall -Wextra -Wpedantic)
+
+# --- protoClojure binary ---
 add_executable(protoclj
     src/main.cpp
 )
-target_link_libraries(protoclj PRIVATE protoclj_reader)
+target_link_libraries(protoclj PRIVATE
+    protoclj_reader
+    protoclj_compiler
+    protoclj_runtime)
 target_compile_options(protoclj PRIVATE -Wall -Wextra -Wpedantic)
 
 # --- Tests ---
