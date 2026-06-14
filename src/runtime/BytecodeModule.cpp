@@ -18,8 +18,17 @@ const char* opName(Op op) {
         case Op::PUSH_NIL:      return "PUSH_NIL";
         case Op::PUSH_TRUE:     return "PUSH_TRUE";
         case Op::PUSH_FALSE:    return "PUSH_FALSE";
+        case Op::PUSH_LOCAL:    return "PUSH_LOCAL";
+        case Op::STORE_LOCAL:   return "STORE_LOCAL";
+        case Op::MAKE_FN:       return "MAKE_FN";
+        case Op::JUMP_BACK:     return "JUMP_BACK";
     }
     return "?";
+}
+
+std::size_t BytecodeModule::addBlock(std::unique_ptr<BytecodeModule> sub) {
+    blocks_.push_back(std::move(sub));
+    return blocks_.size() - 1;
 }
 
 std::size_t BytecodeModule::addLong(long long v) {

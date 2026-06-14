@@ -71,11 +71,12 @@ int runFile(const char* path) {
     //   0 : globals namespace (mutable child of objectPrototype).
     //   1 : forms (the ProtoList readAll() returned).
     //   2 : stringMarkerProto — see ReaderMarkers / CompilerMarkers docs.
-    //   3 : reserved for the next slot we will need.
+    //   3 : fnMarkerProto — wraps user-fn callables (session 5).
     ctx->resizeAutomaticLocals(4);
     constexpr unsigned int kSlotGlobals      = 0;
     constexpr unsigned int kSlotForms        = 1;
     constexpr unsigned int kSlotStringMarker = 2;
+    constexpr unsigned int kSlotFnMarker     = 3;
 
     const proto::ProtoObject* globalsObj =
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
@@ -85,20 +86,27 @@ int runFile(const char* path) {
         ctx, const_cast<proto::ProtoObject*>(
             ctx->getAutomaticLocal(kSlotGlobals)));
 
-    // String-marker prototype: a mutable child of objectPrototype used to
-    // wrap every string literal coming out of the Reader so it stays
-    // distinguishable from a same-bytes inline-encoded symbol.
     const proto::ProtoObject* stringMarkerProto =
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
     ctx->setAutomaticLocal(kSlotStringMarker, stringMarkerProto);
 
+    const proto::ProtoObject* fnMarkerProto =
+        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+    ctx->setAutomaticLocal(kSlotFnMarker, fnMarkerProto);
+
     const proto::ProtoString* bytesKey =
         proto::ProtoString::createSymbol(ctx, "__bytes__");
+    const proto::ProtoString* bytecodeKey =
+        proto::ProtoString::createSymbol(ctx, "__bytecode__");
+    const proto::ProtoString* arityKey =
+        proto::ProtoString::createSymbol(ctx, "__arity__");
 
     protoClojure::ReaderMarkers readerMarkers{
         ctx->getAutomaticLocal(kSlotStringMarker), bytesKey};
     protoClojure::CompilerMarkers compilerMarkers{
-        ctx->getAutomaticLocal(kSlotStringMarker), bytesKey};
+        ctx->getAutomaticLocal(kSlotStringMarker),
+        ctx->getAutomaticLocal(kSlotFnMarker),
+        bytesKey, bytecodeKey, arityKey};
 
     // Read every form from the file.
     std::string source = slurp(path);
@@ -135,7 +143,9 @@ int runFile(const char* path) {
 
     protoClojure::ExecutionEngine eng;
     try {
-        eng.run(ctx, mod, ctx->getAutomaticLocal(kSlotGlobals));
+        eng.run(ctx, mod, ctx->getAutomaticLocal(kSlotGlobals),
+                ctx->getAutomaticLocal(kSlotFnMarker),
+                bytecodeKey, arityKey);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s: runtime error: %s\n", path, e.what());
         return 1;

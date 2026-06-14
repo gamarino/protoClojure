@@ -11,27 +11,18 @@ namespace protoClojure {
 
 namespace {
 
-// Per-frame stack size. Plenty for v0.0.x; the slot region can grow via
-// resizeAutomaticLocals if a future frame needs more. Sized at 64 because
-// the worst hello-world frame uses ~3 slots.
-constexpr unsigned int kFrameStackSize = 64;
+// Per-frame stack size budget. Locals (params + let-bindings) live in slots
+// 0..(arity + localCount - 1); the operand stack lives starting at offset
+// arity + localCount.
+constexpr unsigned int kOperandStackSize = 64;
 
-// Materialise one const-pool entry into a ProtoObject. Allocation goes via
-// the supplied context — meaning the result's natural rooting is on the
-// caller's frame, where it will be stored into a slot immediately by the
-// PUSH_CONST handler.
 const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
                                        const BytecodeModule::Const& c) {
     using K = BytecodeModule::ConstKind;
     switch (c.kind) {
-        case K::Long:
-            return ctx->fromLong(c.ival);
-        case K::String:
-            return ctx->fromUTF8String(c.sval.c_str());
+        case K::Long:   return ctx->fromLong(c.ival);
+        case K::String: return ctx->fromUTF8String(c.sval.c_str());
         case K::Symbol:
-            // Materialised symbols are interned — same pointer for the same
-            // name across the whole ProtoSpace. The globals table is keyed
-            // by these pointers, so identity equality short-circuits hash.
             return reinterpret_cast<const proto::ProtoObject*>(
                 proto::ProtoString::createSymbol(ctx, c.sval.c_str()));
     }
@@ -43,28 +34,51 @@ const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
 const proto::ProtoObject*
 ExecutionEngine::run(proto::ProtoContext* parent,
                      const BytecodeModule& mod,
-                     const proto::ProtoObject* globals) {
-    // One ProtoContext per frame. Its automaticLocals is the operand stack.
+                     const proto::ProtoObject* globals,
+                     const proto::ProtoObject* fnMarkerProto,
+                     const proto::ProtoString* bytecodeKey,
+                     const proto::ProtoString* arityKey,
+                     const proto::ProtoObject* const* args,
+                     unsigned int argCount) {
+    // One ProtoContext per frame. Layout of automaticLocals:
+    //   [0 .. arity-1]                         — params (bound at call)
+    //   [arity .. arity+localCount-1]          — lets / loops
+    //   [arity+localCount .. + kOperandStackSize-1]  — operand stack
+    const unsigned int locBase   = 0;
+    const unsigned int stackBase = static_cast<unsigned int>(mod.arity()
+                                                              + mod.localCount());
+    const unsigned int totalSize = stackBase + kOperandStackSize;
+
     proto::ProtoContext frame(parent->space, parent);
-    frame.resizeAutomaticLocals(kFrameStackSize);
-    unsigned int sp = 0;
+    frame.resizeAutomaticLocals(totalSize);
+    unsigned int sp = 0;   // 0 means "stack empty"; max sp = kOperandStackSize
 
-    const auto& bytes = mod.bytes();
-    std::size_t pc = 0;
+    // Bind incoming args (call site is responsible for matching arity).
+    for (unsigned int i = 0; i < argCount; ++i) {
+        frame.setAutomaticLocal(locBase + i, args[i]);
+    }
 
-    auto push = [&](const proto::ProtoObject* v) {
-        if (sp >= kFrameStackSize) {
+    auto pushVal = [&](const proto::ProtoObject* v) {
+        if (sp >= kOperandStackSize) {
             throw std::runtime_error("VM: operand-stack overflow");
         }
-        frame.setAutomaticLocal(sp++, v);
+        frame.setAutomaticLocal(stackBase + sp, v);
+        ++sp;
     };
-    auto pop = [&]() -> const proto::ProtoObject* {
+    auto popVal = [&]() -> const proto::ProtoObject* {
         if (sp == 0) {
             throw std::runtime_error("VM: operand-stack underflow");
         }
-        return frame.getAutomaticLocal(--sp);
+        --sp;
+        return frame.getAutomaticLocal(stackBase + sp);
     };
-    (void)pop;  // silence unused; the per-opcode use is below
+    auto peekAt = [&](unsigned int depth) -> const proto::ProtoObject* {
+        // depth=0 → top, depth=1 → one below top, etc.
+        return frame.getAutomaticLocal(stackBase + sp - 1 - depth);
+    };
+
+    const auto& bytes = mod.bytes();
+    std::size_t pc = 0;
 
     while (pc + 1 < bytes.size()) {
         Op op = static_cast<Op>(bytes[pc]);
@@ -76,21 +90,18 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 break;
 
             case Op::PUSH_CONST: {
-                if (operand >= mod.constCount()) {
+                if (operand >= mod.constCount())
                     throw std::runtime_error("VM: PUSH_CONST out-of-range");
-                }
-                push(materialise(&frame, mod.constAt(operand)));
+                pushVal(materialise(&frame, mod.constAt(operand)));
                 break;
             }
 
             case Op::PUSH_VAR: {
-                if (operand >= mod.constCount()) {
+                if (operand >= mod.constCount())
                     throw std::runtime_error("VM: PUSH_VAR out-of-range");
-                }
                 const auto& c = mod.constAt(operand);
-                if (c.kind != BytecodeModule::ConstKind::Symbol) {
+                if (c.kind != BytecodeModule::ConstKind::Symbol)
                     throw std::runtime_error("VM: PUSH_VAR const is not a symbol");
-                }
                 const proto::ProtoString* key =
                     proto::ProtoString::createSymbol(&frame, c.sval.c_str());
                 const proto::ProtoObject* v =
@@ -99,137 +110,167 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                     throw std::runtime_error(
                         "VM: unable to resolve symbol: " + c.sval);
                 }
-                push(v);
+                pushVal(v);
+                break;
+            }
+
+            case Op::PUSH_LOCAL: {
+                pushVal(frame.getAutomaticLocal(locBase + operand));
+                break;
+            }
+
+            case Op::STORE_LOCAL: {
+                if (sp == 0)
+                    throw std::runtime_error("VM: STORE_LOCAL with empty stack");
+                frame.setAutomaticLocal(locBase + operand, popVal());
+                break;
+            }
+
+            case Op::MAKE_FN: {
+                if (operand >= mod.blockCount())
+                    throw std::runtime_error("VM: MAKE_FN out-of-range");
+                const BytecodeModule& subMod = mod.block(operand);
+                // Wrap the sub-module's address in a child of fnMarkerProto.
+                // The bytecode pointer is stored as a tagged-int attribute so
+                // protoCore traverses it as just an integer value — the
+                // BytecodeModule itself is owned by the outer module's
+                // unique_ptr<BytecodeModule> blocks_ vector, not by protoCore.
+                proto::ProtoObject* wrap = const_cast<proto::ProtoObject*>(
+                    fnMarkerProto->newChild(&frame, /*isMutable=*/true));
+                wrap->setAttribute(&frame, bytecodeKey,
+                    frame.fromLong(reinterpret_cast<long long>(&subMod)));
+                wrap->setAttribute(&frame, arityKey,
+                    frame.fromLong(subMod.arity()));
+                pushVal(wrap);
                 break;
             }
 
             case Op::CALL: {
                 unsigned int argc = operand;
-                if (sp < argc + 1u) {
-                    throw std::runtime_error(
-                        "VM: CALL with insufficient stack");
+                if (sp < argc + 1u)
+                    throw std::runtime_error("VM: CALL with insufficient stack");
+                // Callable is at depth argc; args at depths argc-1..0.
+                const proto::ProtoObject* callable = peekAt(argc);
+
+                // User fn — prototype matches fnMarkerProto.
+                if (callable->getPrototype(&frame) == fnMarkerProto) {
+                    const proto::ProtoObject* ptrObj =
+                        callable->getAttribute(&frame, bytecodeKey);
+                    if (!ptrObj || !ptrObj->isInteger(&frame))
+                        throw std::runtime_error("VM: malformed fn-wrapper");
+                    const BytecodeModule* subMod =
+                        reinterpret_cast<const BytecodeModule*>(
+                            ptrObj->asLong(&frame));
+                    if (subMod->arity() != static_cast<int>(argc)) {
+                        throw std::runtime_error(
+                            "VM: fn arity mismatch (expected " +
+                            std::to_string(subMod->arity()) +
+                            ", got " + std::to_string(argc) + ")");
+                    }
+                    // Collect args into a small C++ buffer; pop the call site
+                    // values; recurse into run().
+                    const proto::ProtoObject* callArgs[16];
+                    if (argc > 16)
+                        throw std::runtime_error("VM: >16 args not supported in v0.0.x");
+                    for (unsigned int i = 0; i < argc; ++i) {
+                        callArgs[i] = frame.getAutomaticLocal(
+                            stackBase + sp - argc + i);
+                    }
+                    sp -= (argc + 1);
+
+                    const proto::ProtoObject* result = this->run(
+                        &frame, *subMod, globals,
+                        fnMarkerProto, bytecodeKey, arityKey,
+                        callArgs, argc);
+                    pushVal(result);
+                    break;
                 }
-                // The callable sits at stack depth argc (top-of-stack is the
-                // LAST argument). Layout immediately before CALL:
-                //   sp-1 - argc → callable
-                //   sp - argc   → arg 0
-                //   sp - argc+1 → arg 1
-                //   ...
-                //   sp - 1      → arg N-1
-                //
-                // We build a fresh args ProtoList in a child context so it
-                // stays GC-rooted for the duration of the primitive call.
+
+                // C++ primitive — same shape as session 3/4.
                 proto::ProtoContext callScope(frame.space, &frame);
                 callScope.resizeAutomaticLocals(2);
                 constexpr unsigned int kSlotArgs     = 0;
                 constexpr unsigned int kSlotCallable = 1;
-                callScope.setAutomaticLocal(
-                    kSlotArgs, callScope.newList()->asObject(&callScope));
-                callScope.setAutomaticLocal(
-                    kSlotCallable, frame.getAutomaticLocal(sp - 1 - argc));
-
+                callScope.setAutomaticLocal(kSlotArgs,
+                    callScope.newList()->asObject(&callScope));
+                callScope.setAutomaticLocal(kSlotCallable, callable);
                 for (unsigned int i = 0; i < argc; ++i) {
                     const proto::ProtoObject* arg =
-                        frame.getAutomaticLocal(sp - argc + i);
+                        frame.getAutomaticLocal(stackBase + sp - argc + i);
                     const proto::ProtoList* cur =
                         callScope.getAutomaticLocal(kSlotArgs)->asList(&callScope);
                     const proto::ProtoList* updated =
                         cur->appendLast(&callScope, arg);
-                    callScope.setAutomaticLocal(
-                        kSlotArgs, updated->asObject(&callScope));
+                    callScope.setAutomaticLocal(kSlotArgs,
+                        updated->asObject(&callScope));
                 }
-
-                const proto::ProtoObject* callable =
+                const proto::ProtoObject* primCallable =
                     callScope.getAutomaticLocal(kSlotCallable);
-                proto::ProtoMethod fn = callable->asMethod(&callScope);
-                if (!fn) {
-                    throw std::runtime_error(
-                        "VM: value is not callable in CALL");
-                }
+                proto::ProtoMethod fn = primCallable->asMethod(&callScope);
+                if (!fn)
+                    throw std::runtime_error("VM: value is not callable in CALL");
                 const proto::ProtoObject* self =
-                    callable->asMethodSelf(&callScope);
+                    primCallable->asMethodSelf(&callScope);
                 const proto::ProtoList* argsList =
                     callScope.getAutomaticLocal(kSlotArgs)->asList(&callScope);
-
                 const proto::ProtoObject* result =
                     fn(&callScope, self, nullptr, argsList, nullptr);
-
-                // Drop the args + callable from the frame's operand stack,
-                // then push the result. We do this in a single statement
-                // sequence — no allocation between the call's return and
-                // the result's installation into the frame's slot.
                 sp -= (argc + 1);
-                push(result);
+                pushVal(result);
                 break;
             }
 
-            case Op::POP: {
-                if (sp == 0) {
-                    throw std::runtime_error("VM: POP on empty stack");
-                }
+            case Op::POP:
+                if (sp == 0) throw std::runtime_error("VM: POP on empty stack");
                 --sp;
                 break;
-            }
 
-            case Op::RETURN: {
+            case Op::RETURN:
                 if (sp == 0) return PROTO_NONE;
-                return frame.getAutomaticLocal(sp - 1);
-            }
+                return frame.getAutomaticLocal(stackBase + sp - 1);
 
             case Op::STORE_GLOBAL: {
-                if (operand >= mod.constCount()) {
+                if (operand >= mod.constCount())
                     throw std::runtime_error("VM: STORE_GLOBAL out-of-range");
-                }
                 const auto& c = mod.constAt(operand);
-                if (c.kind != BytecodeModule::ConstKind::Symbol) {
+                if (c.kind != BytecodeModule::ConstKind::Symbol)
                     throw std::runtime_error("VM: STORE_GLOBAL key not a symbol");
-                }
-                if (sp == 0) {
+                if (sp == 0)
                     throw std::runtime_error("VM: STORE_GLOBAL with empty stack");
-                }
                 const proto::ProtoString* key =
                     proto::ProtoString::createSymbol(&frame, c.sval.c_str());
-                const proto::ProtoObject* val = frame.getAutomaticLocal(sp - 1);
+                const proto::ProtoObject* val =
+                    frame.getAutomaticLocal(stackBase + sp - 1);
                 const_cast<proto::ProtoObject*>(globals)
                     ->setAttribute(&frame, key, val);
                 break;
             }
 
-            case Op::JUMP: {
+            case Op::JUMP:
                 pc += static_cast<std::size_t>(operand) * kInstrSize;
                 break;
-            }
 
             case Op::JUMP_IF_FALSE: {
-                if (sp == 0) {
-                    throw std::runtime_error("VM: JUMP_IF_FALSE with empty stack");
-                }
-                const proto::ProtoObject* v = frame.getAutomaticLocal(--sp);
-                // Clojure truthiness: only nil and false are falsy. PROTO_NONE
-                // is nil; PROTO_FALSE is false. Everything else (including 0
-                // and "") is truthy.
+                const proto::ProtoObject* v = popVal();
                 if (v == PROTO_NONE || v == PROTO_FALSE) {
                     pc += static_cast<std::size_t>(operand) * kInstrSize;
                 }
                 break;
             }
 
-            case Op::PUSH_NIL:
-                push(PROTO_NONE);
+            case Op::JUMP_BACK:
+                pc -= static_cast<std::size_t>(operand) * kInstrSize;
                 break;
-            case Op::PUSH_TRUE:
-                push(PROTO_TRUE);
-                break;
-            case Op::PUSH_FALSE:
-                push(PROTO_FALSE);
-                break;
+
+            case Op::PUSH_NIL:   pushVal(PROTO_NONE);  break;
+            case Op::PUSH_TRUE:  pushVal(PROTO_TRUE);  break;
+            case Op::PUSH_FALSE: pushVal(PROTO_FALSE); break;
 
             default:
                 throw std::runtime_error("VM: unknown opcode");
         }
     }
-    // Off the end without RETURN: return whatever is on top, or nil.
-    return (sp == 0) ? PROTO_NONE : frame.getAutomaticLocal(sp - 1);
+    return (sp == 0) ? PROTO_NONE : frame.getAutomaticLocal(stackBase + sp - 1);
 }
 
 } // namespace protoClojure

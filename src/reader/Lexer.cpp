@@ -148,9 +148,11 @@ Token Lexer::nextImpl_() {
     switch (c) {
         case '(': return single(TokenKind::LParen);
         case ')': return single(TokenKind::RParen);
-        // Brackets / braces and the reader-macro prefixes go through
-        // lexSymbolOrPunct's reserved-for-later path so we surface a clean
-        // error if the user types them in v0.0.x.
+        case '[': return single(TokenKind::LBracket);
+        case ']': return single(TokenKind::RBracket);
+        // Braces, hash-prefixes and the reader-macro prefixes still go
+        // through the reserved-for-later path so we surface a clean error
+        // if the user types them in v0.0.x.
         default:  break;
     }
 
@@ -281,7 +283,7 @@ Token Lexer::lexSymbolOrPunct() {
         return makeError("reserved-for-later token: " + name, startLine, startCol);
     };
 
-    if (c == '[' || c == ']' || c == '{' || c == '}'
+    if (c == '{' || c == '}'
         || c == '\'' || c == '`' || c == '~' || c == '^') {
         std::string s(1, c);
         advance();

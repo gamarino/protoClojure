@@ -22,13 +22,17 @@
 #pragma once
 #include "runtime/BytecodeModule.h"
 
+#include <memory>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace proto {
 class ProtoContext;
 class ProtoObject;
 class ProtoString;
+class ProtoList;
 }
 
 namespace protoClojure {
@@ -37,12 +41,16 @@ struct CompileError : std::runtime_error {
     CompileError(const std::string& msg) : std::runtime_error(msg) {}
 };
 
-// Mirror of ReaderMarkers — the Compiler needs the same two markers to
-// recognise wrapped string literals coming back from the Reader. See the
-// ReaderMarkers comment in src/reader/Reader.h for the why.
+// Marker prototypes + attribute keys the Compiler and VM need. The same
+// wrapping idea as ReaderMarkers: a user fn is a small heap object whose
+// prototype is fnMarkerProto with the bytecode pointer + arity stored as
+// attributes. The Compiler emits MAKE_FN; the VM constructs the wrapper.
 struct CompilerMarkers {
     const proto::ProtoObject* stringMarkerProto;
+    const proto::ProtoObject* fnMarkerProto;     // session 5
     const proto::ProtoString* bytesKey;
+    const proto::ProtoString* bytecodeKey;       // session 5 — opaque ptr
+    const proto::ProtoString* arityKey;          // session 5
 };
 
 class Compiler {
@@ -54,6 +62,44 @@ public:
                      const proto::ProtoObject* form,
                      BytecodeModule& out,
                      const CompilerMarkers& markers);
+
+    // Session 5: compile a Clojure `fn [params] body...` form into its OWN
+    // BytecodeModule (returned). The caller — typically the def/fn special
+    // forms inside compileForm — receives ownership and either embeds it as
+    // a sub-block of an outer module via addBlock, or stores it elsewhere.
+    std::unique_ptr<BytecodeModule>
+    compileFnBody(proto::ProtoContext* ctx,
+                  const proto::ProtoList* fnForm,
+                  const CompilerMarkers& markers);
+
+private:
+    // One per active function scope. The outermost compileForm call (top-
+    // level) operates with scopes_ empty; `fn` pushes a new scope, the
+    // fn-body's locals live there, and the scope is popped when the body
+    // finishes. `let` and `loop` extend the current scope's local table.
+    struct Scope {
+        // name → local slot (params first, then let/loop bindings).
+        std::unordered_map<std::string, int> nameToSlot;
+        int nextSlot = 0;
+        int arity    = 0;  // number of params at the start of this scope
+
+        // recur target — populated by `loop` (or by `fn` once we add
+        // implicit-loop-around-fn semantics in session 5+). The slots
+        // vector tells `recur` which locals to rebind, in left-to-right
+        // order. Empty stack = recur is illegal at the current position.
+        struct RecurTarget {
+            std::size_t  bodyStart;     // byte offset (PC) to JUMP_BACK to
+            std::vector<int> slots;     // local slot indices for the bindings
+        };
+        std::vector<RecurTarget> recurStack;
+    };
+
+    std::vector<Scope> scopes_;
+
+    // Look up `name` in the innermost scope (the top of scopes_). Returns
+    // -1 if not found. For session 5 we do NOT walk up the scope chain —
+    // closures land in a later session, and nested fns capture nothing yet.
+    int lookupLocal(const std::string& name) const;
 };
 
 } // namespace protoClojure

@@ -18,6 +18,7 @@
 #include "Opcodes.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -61,9 +62,28 @@ public:
     const Const& constAt(std::size_t i) const { return consts_[i]; }
     std::size_t constCount() const { return consts_.size(); }
 
+    // Function metadata used by user-fn dispatch in the VM.
+    int  arity()        const { return arity_; }
+    int  localCount()   const { return localCount_; }
+    void setArity(int n)       { arity_ = n; }
+    void setLocalCount(int n)  { localCount_ = n; }
+
+    // Sub-module ownership for fn bodies. The compiler calls addBlock to
+    // append a freshly-compiled fn body; MAKE_FN's operand is the returned
+    // index. The C++-side std::unique_ptr ownership is invisible to
+    // protoCore — the fn-wrapper holds an opaque pointer cast (see
+    // ExecutionEngine MAKE_FN handler). P3 stays clean: protoCore does not
+    // traverse into the std::vector.
+    std::size_t addBlock(std::unique_ptr<BytecodeModule> sub);
+    const BytecodeModule& block(std::size_t i) const { return *blocks_[i]; }
+    std::size_t blockCount() const { return blocks_.size(); }
+
 private:
-    std::vector<std::uint8_t> bytes_;
-    std::vector<Const>        consts_;
+    std::vector<std::uint8_t>                    bytes_;
+    std::vector<Const>                           consts_;
+    std::vector<std::unique_ptr<BytecodeModule>> blocks_;
+    int                                          arity_      = 0;
+    int                                          localCount_ = 0;
 };
 
 } // namespace protoClojure

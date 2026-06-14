@@ -96,11 +96,17 @@ private:
     const proto::ProtoObject* readFromToken(proto::ProtoContext* parent,
                                             const Token& tok);
 
-    // Read a list, opening paren already consumed. Pushes its own child
-    // ProtoContext; uses slot 0 for the building list and slot 1 for the
-    // most recently read element. Returns the slot-0 ProtoObject — caller
-    // must root immediately.
+    // Read a list, opening bracket already consumed. The caller passes
+    // `closeKind` to specify which closing token closes this list
+    // (RParen for `(...)`, RBracket for `[...]`). v0.0.x materialises
+    // both as a ProtoList — the distinction is lost after read; that is
+    // sufficient for fn/let/loop bindings.
+    //
+    // Pushes its own child ProtoContext; uses slot 0 for the building
+    // list and slot 1 for the most recently read element. Returns the
+    // slot-0 ProtoObject — caller must root immediately.
     const proto::ProtoObject* readList(proto::ProtoContext* parent,
+                                       TokenKind closeKind,
                                        int openLine, int openColumn);
 };
 

@@ -135,10 +135,18 @@ TEST(Lexer, HelloWorldShape) {
     EXPECT_EQ(toks[4].kind, TokenKind::EndOfFile);
 }
 
-TEST(Lexer, ReservedBracketReportsError) {
-    // `[1 2 3]` is reserved-for-later in v0.0.x. The lexer surfaces it as a
-    // clean Error rather than silently dropping.
+TEST(Lexer, BracketsAreLexedAsTokens) {
+    // Brackets implement vector literals starting in session 5 (fn / let /
+    // loop bindings). Confirm they tokenise to LBracket / RBracket.
     auto toks = tokenise("[1 2 3]");
+    ASSERT_GE(toks.size(), 5u);
+    EXPECT_EQ(toks[0].kind, TokenKind::LBracket);
+    EXPECT_EQ(toks[4].kind, TokenKind::RBracket);
+}
+
+TEST(Lexer, ReservedBraceReportsError) {
+    // `{:a 1}` is still reserved-for-later in v0.0.x (maps land later).
+    auto toks = tokenise("{:a 1}");
     ASSERT_GE(toks.size(), 1u);
     EXPECT_EQ(toks[0].kind, TokenKind::Error);
 }

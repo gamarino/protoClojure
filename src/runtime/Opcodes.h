@@ -36,6 +36,14 @@ enum class Op : uint8_t {
     PUSH_NIL        = 9,   // push PROTO_NONE (the Clojure nil)
     PUSH_TRUE       = 10,
     PUSH_FALSE      = 11,
+
+    // Session 5 additions:
+    PUSH_LOCAL      = 12,  // operand = local-slot index; push frame.local[i]
+    STORE_LOCAL     = 13,  // operand = local-slot index; pop, write into slot
+    MAKE_FN         = 14,  // operand = block-index in parent module; push
+                           //           a callable fn-wrapper for that body
+    JUMP_BACK       = 15,  // operand = BACKWARD offset (subtracted from pc)
+                           //           used by loop/recur
 };
 
 inline constexpr std::size_t kInstrSize = 2;

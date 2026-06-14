@@ -74,7 +74,18 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
         }
 
         case TokenKind::LParen:
-            return readList(parent, tok.line, tok.column);
+        case TokenKind::LBracket:
+            // Vectors and lists both materialise as a ProtoList for v0.0.x —
+            // sufficient for fn / let / loop bindings and any other shape
+            // the special-form dispatch wants to walk. The bracket
+            // distinction lives in the Lexer's token; once read, both
+            // bracket shapes become an ordered ProtoList. JVM Clojure's
+            // separate IPersistentVector type is a follow-up.
+            return readList(parent,
+                            tok.kind == TokenKind::LParen
+                                ? TokenKind::RParen
+                                : TokenKind::RBracket,
+                            tok.line, tok.column);
 
         case TokenKind::Error:
             throw ReaderError(tok.text, tok.line, tok.column);
@@ -94,7 +105,8 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
 }
 
 const proto::ProtoObject*
-Reader::readList(proto::ProtoContext* parent, int openLine, int openColumn) {
+Reader::readList(proto::ProtoContext* parent, TokenKind closeKind,
+                 int openLine, int openColumn) {
     // One ProtoContext per recursive read scope. Child of `parent`, with two
     // slots: the in-progress list (slot 0) and the most recent element
     // (slot 1). Both are GC-visible until this context destructs.
@@ -114,13 +126,20 @@ Reader::readList(proto::ProtoContext* parent, int openLine, int openColumn) {
     while (true) {
         Token tok = lexer_.next();
         if (tok.kind == TokenKind::EndOfFile) {
-            throw ReaderError("unterminated list — missing `)`",
-                              openLine, openColumn);
+            throw ReaderError(
+                closeKind == TokenKind::RParen
+                    ? "unterminated list — missing `)`"
+                    : "unterminated vector — missing `]`",
+                openLine, openColumn);
         }
-        if (tok.kind == TokenKind::RParen) {
-            // Snapshot the value, then let `frame` destruct on the natural
-            // return. The caller is responsible for rooting.
+        if (tok.kind == closeKind) {
             return frame.getAutomaticLocal(kSlotList);
+        }
+        if (tok.kind == TokenKind::RParen ||
+            tok.kind == TokenKind::RBracket) {
+            throw ReaderError(
+                std::string("mismatched ") + tokenKindName(tok.kind),
+                tok.line, tok.column);
         }
 
         // Read the next element into a slot IMMEDIATELY after the call

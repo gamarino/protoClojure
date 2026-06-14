@@ -22,6 +22,7 @@
 namespace proto {
 class ProtoContext;
 class ProtoObject;
+class ProtoString;
 }
 
 namespace protoClojure {
@@ -31,14 +32,22 @@ class BytecodeModule;
 class ExecutionEngine {
 public:
     // Run `mod` from PC=0 until RETURN or end-of-bytecode. The `globals`
-    // namespace resolves PUSH_VAR. Returns the value on top of the stack
-    // at RETURN, or PROTO_NONE if the stack is empty.
+    // namespace resolves PUSH_VAR. `fnMarkerProto` / `bytecodeKey` /
+    // `arityKey` are the markers MAKE_FN uses to construct user-fn
+    // wrappers and CALL uses to recognise them.
     //
-    // The returned pointer is UNROOTED — caller responsible for rooting
-    // it in its own slot before doing anything that allocates.
+    // Returns the value on top of the stack at RETURN, or PROTO_NONE if
+    // the stack is empty. The returned pointer is UNROOTED — caller
+    // responsible for rooting it in its own slot before doing anything
+    // that allocates.
     const proto::ProtoObject* run(proto::ProtoContext* parent,
                                   const BytecodeModule& mod,
-                                  const proto::ProtoObject* globals);
+                                  const proto::ProtoObject* globals,
+                                  const proto::ProtoObject* fnMarkerProto,
+                                  const proto::ProtoString* bytecodeKey,
+                                  const proto::ProtoString* arityKey,
+                                  const proto::ProtoObject* const* args = nullptr,
+                                  unsigned int argCount = 0);
 };
 
 } // namespace protoClojure
