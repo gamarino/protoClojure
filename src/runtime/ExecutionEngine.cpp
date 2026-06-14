@@ -1,6 +1,7 @@
 #include "ExecutionEngine.h"
 #include "BytecodeModule.h"
 #include "Opcodes.h"
+#include "Primitives.h"
 
 #include "protoCore.h"
 
@@ -32,6 +33,76 @@ const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
 } // namespace
 
 const proto::ProtoObject*
+ExecutionEngine::invoke(proto::ProtoContext* ctx,
+                        const proto::ProtoObject* callable,
+                        const proto::ProtoObject* const* args,
+                        unsigned int argc) {
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("VM: invoke() called outside a run()");
+
+    // User-fn path — same shape as the in-VM dispatchCall, but the args
+    // come from a caller-provided buffer rather than the operand stack.
+    if (callable->getPrototype(ctx) == cc->fnMarkerProto) {
+        const proto::ProtoObject* ptrObj =
+            callable->getAttribute(ctx, cc->bytecodeKey);
+        if (!ptrObj || !ptrObj->isInteger(ctx))
+            throw std::runtime_error("VM: invoke: malformed fn-wrapper");
+        const BytecodeModule* subMod =
+            reinterpret_cast<const BytecodeModule*>(ptrObj->asLong(ctx));
+        int fixed = subMod->arity();
+        bool variadic = subMod->isVariadic();
+        if (!variadic && fixed != static_cast<int>(argc))
+            throw std::runtime_error("VM: invoke: fn arity mismatch");
+        if (variadic && static_cast<int>(argc) < fixed)
+            throw std::runtime_error("VM: invoke: variadic underflow");
+        const proto::ProtoObject* callArgs[17];
+        unsigned int passArgc = argc;
+        if (variadic) passArgc = static_cast<unsigned int>(fixed) + 1;
+        for (int i = 0; i < fixed; ++i) callArgs[i] = args[i];
+        if (variadic) {
+            const proto::ProtoObject* rest = ctx->newList()->asObject(ctx);
+            for (unsigned int i = static_cast<unsigned int>(fixed); i < argc; ++i) {
+                rest = rest->asList(ctx)->appendLast(ctx, args[i])->asObject(ctx);
+            }
+            callArgs[fixed] = rest;
+        } else {
+            for (unsigned int i = static_cast<unsigned int>(fixed); i < argc; ++i) {
+                callArgs[i] = args[i];
+            }
+        }
+        const proto::ProtoObject* capsVal =
+            callable->getAttribute(ctx, cc->capturesKey);
+        return this->run(ctx, *subMod, cc->globals,
+                         const_cast<proto::ProtoObject*>(cc->fnMarkerProto),
+                         cc->bytecodeKey, cc->arityKey, cc->capturesKey,
+                         callArgs, passArgc, capsVal);
+    }
+
+    // C++ primitive — wrap args into a fresh ProtoList and dispatch.
+    proto::ProtoContext callScope(ctx->space, ctx);
+    callScope.resizeAutomaticLocals(2);
+    constexpr unsigned int kSlotArgs     = 0;
+    constexpr unsigned int kSlotCallable = 1;
+    callScope.setAutomaticLocal(kSlotArgs,
+        callScope.newList()->asObject(&callScope));
+    callScope.setAutomaticLocal(kSlotCallable, callable);
+    for (unsigned int i = 0; i < argc; ++i) {
+        const proto::ProtoList* cur =
+            callScope.getAutomaticLocal(kSlotArgs)->asList(&callScope);
+        callScope.setAutomaticLocal(kSlotArgs,
+            cur->appendLast(&callScope, args[i])->asObject(&callScope));
+    }
+    const proto::ProtoObject* primCallable =
+        callScope.getAutomaticLocal(kSlotCallable);
+    proto::ProtoMethod fn = primCallable->asMethod(&callScope);
+    if (!fn) throw std::runtime_error("VM: invoke: value is not callable");
+    const proto::ProtoObject* self = primCallable->asMethodSelf(&callScope);
+    const proto::ProtoList* argsList =
+        callScope.getAutomaticLocal(kSlotArgs)->asList(&callScope);
+    return fn(&callScope, self, nullptr, argsList, nullptr);
+}
+
+const proto::ProtoObject*
 ExecutionEngine::run(proto::ProtoContext* parent,
                      const BytecodeModule& mod,
                      const proto::ProtoObject* globals,
@@ -42,6 +113,23 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                      const proto::ProtoObject* const* args,
                      unsigned int argCount,
                      const proto::ProtoObject* captures) {
+    // Snapshot any prior active call context (we're nested under another
+    // run() invocation, e.g. a user fn called from a primitive that
+    // itself called us). Restore on every exit path so deep primitive
+    // recursion stays consistent.
+    const ActiveCallContext* prior = activeCallContext();
+    ActiveCallContext saved = prior ? *prior : ActiveCallContext{};
+    ActiveCallContext cc{this, globals,
+                         fnMarkerProto, bytecodeKey, arityKey, capturesKey};
+    setActiveCallContext(cc);
+    struct Guard {
+        const ActiveCallContext* prior; ActiveCallContext saved;
+        ~Guard() {
+            if (prior) setActiveCallContext(saved);
+            else clearActiveCallContext();
+        }
+    } guard{prior, saved};
+
     // One ProtoContext per frame. Layout of automaticLocals:
     //   [0 .. arity-1]                         — params (bound at call)
     //   [arity .. arity+localCount-1]          — lets / loops
@@ -97,6 +185,106 @@ ExecutionEngine::run(proto::ProtoContext* parent,
     auto peekAt = [&](unsigned int depth) -> const proto::ProtoObject* {
         // depth=0 → top, depth=1 → one below top, etc.
         return frame.getAutomaticLocal(stackBase + sp - 1 - depth);
+    };
+
+    // Dispatch a callable already on the stack at depth=argc (callable),
+    // with `argc` args at depths argc-1..0. Pops callable+args, pushes
+    // the result. Shared by CALL and CALL_APPLY (the latter expands its
+    // args list onto the stack before calling this).
+    auto dispatchCall = [&](unsigned int argc) {
+        const proto::ProtoObject* callable = peekAt(argc);
+
+        // User fn — prototype matches fnMarkerProto.
+        if (callable->getPrototype(&frame) == fnMarkerProto) {
+            const proto::ProtoObject* ptrObj =
+                callable->getAttribute(&frame, bytecodeKey);
+            if (!ptrObj || !ptrObj->isInteger(&frame))
+                throw std::runtime_error("VM: malformed fn-wrapper");
+            const BytecodeModule* subMod =
+                reinterpret_cast<const BytecodeModule*>(
+                    ptrObj->asLong(&frame));
+            int fixed = subMod->arity();
+            bool variadic = subMod->isVariadic();
+            if (!variadic && fixed != static_cast<int>(argc)) {
+                throw std::runtime_error(
+                    "VM: fn arity mismatch (expected " +
+                    std::to_string(fixed) +
+                    ", got " + std::to_string(argc) + ")");
+            }
+            if (variadic && static_cast<int>(argc) < fixed) {
+                throw std::runtime_error(
+                    "VM: variadic fn needs at least " +
+                    std::to_string(fixed) + " args, got " +
+                    std::to_string(argc));
+            }
+            const proto::ProtoObject* callArgs[17];
+            unsigned int passArgc = argc;
+            if (variadic) passArgc = static_cast<unsigned int>(fixed) + 1;
+            if (passArgc > 17)
+                throw std::runtime_error("VM: >16 args not supported in v0.7.x");
+            for (int i = 0; i < fixed; ++i) {
+                callArgs[i] = frame.getAutomaticLocal(
+                    stackBase + sp - argc + i);
+            }
+            if (variadic) {
+                const proto::ProtoObject* rest =
+                    frame.newList()->asObject(&frame);
+                for (unsigned int i = static_cast<unsigned int>(fixed); i < argc; ++i) {
+                    const proto::ProtoObject* v =
+                        frame.getAutomaticLocal(stackBase + sp - argc + i);
+                    rest = rest->asList(&frame)
+                        ->appendLast(&frame, v)->asObject(&frame);
+                }
+                callArgs[fixed] = rest;
+            } else {
+                for (unsigned int i = static_cast<unsigned int>(fixed);
+                     i < argc; ++i) {
+                    callArgs[i] = frame.getAutomaticLocal(
+                        stackBase + sp - argc + i);
+                }
+            }
+            const proto::ProtoObject* capsVal =
+                callable->getAttribute(&frame, capturesKey);
+            sp -= (argc + 1);
+            const proto::ProtoObject* result = this->run(
+                &frame, *subMod, globals,
+                fnMarkerProto, bytecodeKey, arityKey, capturesKey,
+                callArgs, passArgc, capsVal);
+            pushVal(result);
+            return;
+        }
+
+        // C++ primitive.
+        proto::ProtoContext callScope(frame.space, &frame);
+        callScope.resizeAutomaticLocals(2);
+        constexpr unsigned int kSlotArgs     = 0;
+        constexpr unsigned int kSlotCallable = 1;
+        callScope.setAutomaticLocal(kSlotArgs,
+            callScope.newList()->asObject(&callScope));
+        callScope.setAutomaticLocal(kSlotCallable, callable);
+        for (unsigned int i = 0; i < argc; ++i) {
+            const proto::ProtoObject* arg =
+                frame.getAutomaticLocal(stackBase + sp - argc + i);
+            const proto::ProtoList* cur =
+                callScope.getAutomaticLocal(kSlotArgs)->asList(&callScope);
+            const proto::ProtoList* updated =
+                cur->appendLast(&callScope, arg);
+            callScope.setAutomaticLocal(kSlotArgs,
+                updated->asObject(&callScope));
+        }
+        const proto::ProtoObject* primCallable =
+            callScope.getAutomaticLocal(kSlotCallable);
+        proto::ProtoMethod fn = primCallable->asMethod(&callScope);
+        if (!fn)
+            throw std::runtime_error("VM: value is not callable in CALL");
+        const proto::ProtoObject* self =
+            primCallable->asMethodSelf(&callScope);
+        const proto::ProtoList* argsList =
+            callScope.getAutomaticLocal(kSlotArgs)->asList(&callScope);
+        const proto::ProtoObject* result =
+            fn(&callScope, self, nullptr, argsList, nullptr);
+        sp -= (argc + 1);
+        pushVal(result);
     };
 
     const auto& bytes = mod.bytes();
@@ -190,78 +378,27 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 unsigned int argc = operand;
                 if (sp < argc + 1u)
                     throw std::runtime_error("VM: CALL with insufficient stack");
-                // Callable is at depth argc; args at depths argc-1..0.
-                const proto::ProtoObject* callable = peekAt(argc);
+                dispatchCall(argc);
+                break;
+            }
 
-                // User fn — prototype matches fnMarkerProto.
-                if (callable->getPrototype(&frame) == fnMarkerProto) {
-                    const proto::ProtoObject* ptrObj =
-                        callable->getAttribute(&frame, bytecodeKey);
-                    if (!ptrObj || !ptrObj->isInteger(&frame))
-                        throw std::runtime_error("VM: malformed fn-wrapper");
-                    const BytecodeModule* subMod =
-                        reinterpret_cast<const BytecodeModule*>(
-                            ptrObj->asLong(&frame));
-                    if (subMod->arity() != static_cast<int>(argc)) {
-                        throw std::runtime_error(
-                            "VM: fn arity mismatch (expected " +
-                            std::to_string(subMod->arity()) +
-                            ", got " + std::to_string(argc) + ")");
-                    }
-                    // Collect args into a small C++ buffer; pop the call site
-                    // values; recurse into run().
-                    const proto::ProtoObject* callArgs[16];
-                    if (argc > 16)
-                        throw std::runtime_error("VM: >16 args not supported in v0.0.x");
-                    for (unsigned int i = 0; i < argc; ++i) {
-                        callArgs[i] = frame.getAutomaticLocal(
-                            stackBase + sp - argc + i);
-                    }
-                    // Read closure captures from the wrapper (PROTO_NONE
-                    // if the fn has none — body's captureSpecs is empty).
-                    const proto::ProtoObject* capsVal =
-                        callable->getAttribute(&frame, capturesKey);
-                    sp -= (argc + 1);
-
-                    const proto::ProtoObject* result = this->run(
-                        &frame, *subMod, globals,
-                        fnMarkerProto, bytecodeKey, arityKey, capturesKey,
-                        callArgs, argc, capsVal);
-                    pushVal(result);
-                    break;
+            case Op::CALL_APPLY: {
+                // Stack: [..., callable, args-list]. Pop list, expand its
+                // elements onto the stack as positional args, then dispatch
+                // with argc = list size. Reuses the same dispatch as CALL.
+                if (sp < 2)
+                    throw std::runtime_error("VM: CALL_APPLY underflow");
+                const proto::ProtoObject* listObj = popVal();
+                if (!listObj)
+                    throw std::runtime_error("VM: CALL_APPLY: nil args list");
+                const proto::ProtoList* argsList = listObj->asList(&frame);
+                if (!argsList)
+                    throw std::runtime_error("VM: CALL_APPLY: not a list");
+                unsigned long ln = argsList->getSize(&frame);
+                for (unsigned long i = 0; i < ln; ++i) {
+                    pushVal(argsList->getAt(&frame, static_cast<int>(i)));
                 }
-
-                // C++ primitive — same shape as session 3/4.
-                proto::ProtoContext callScope(frame.space, &frame);
-                callScope.resizeAutomaticLocals(2);
-                constexpr unsigned int kSlotArgs     = 0;
-                constexpr unsigned int kSlotCallable = 1;
-                callScope.setAutomaticLocal(kSlotArgs,
-                    callScope.newList()->asObject(&callScope));
-                callScope.setAutomaticLocal(kSlotCallable, callable);
-                for (unsigned int i = 0; i < argc; ++i) {
-                    const proto::ProtoObject* arg =
-                        frame.getAutomaticLocal(stackBase + sp - argc + i);
-                    const proto::ProtoList* cur =
-                        callScope.getAutomaticLocal(kSlotArgs)->asList(&callScope);
-                    const proto::ProtoList* updated =
-                        cur->appendLast(&callScope, arg);
-                    callScope.setAutomaticLocal(kSlotArgs,
-                        updated->asObject(&callScope));
-                }
-                const proto::ProtoObject* primCallable =
-                    callScope.getAutomaticLocal(kSlotCallable);
-                proto::ProtoMethod fn = primCallable->asMethod(&callScope);
-                if (!fn)
-                    throw std::runtime_error("VM: value is not callable in CALL");
-                const proto::ProtoObject* self =
-                    primCallable->asMethodSelf(&callScope);
-                const proto::ProtoList* argsList =
-                    callScope.getAutomaticLocal(kSlotArgs)->asList(&callScope);
-                const proto::ProtoObject* result =
-                    fn(&callScope, self, nullptr, argsList, nullptr);
-                sp -= (argc + 1);
-                pushVal(result);
+                dispatchCall(static_cast<unsigned int>(ln));
                 break;
             }
 

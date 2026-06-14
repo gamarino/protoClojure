@@ -65,8 +65,10 @@ public:
     // Function metadata used by user-fn dispatch in the VM.
     int  arity()        const { return arity_; }
     int  localCount()   const { return localCount_; }
-    void setArity(int n)       { arity_ = n; }
-    void setLocalCount(int n)  { localCount_ = n; }
+    bool isVariadic()   const { return isVariadic_; }
+    void setArity(int n)        { arity_ = n; }
+    void setLocalCount(int n)   { localCount_ = n; }
+    void setVariadic(bool v)    { isVariadic_ = v; }
 
     // Closure capture specification (session 6). For each free variable
     // the body references through its enclosing scope, the compiler
@@ -102,6 +104,7 @@ private:
     std::vector<CaptureSpec>                     captureSpecs_;
     int                                          arity_      = 0;
     int                                          localCount_ = 0;
+    bool                                         isVariadic_ = false;
 };
 
 } // namespace protoClojure

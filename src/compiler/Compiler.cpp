@@ -88,20 +88,46 @@ Compiler::compileFnBody(proto::ProtoContext* ctx,
         throw CompileError("fn/defn: parameter list must be a vector");
     }
     const proto::ProtoList* params = paramsForm->asList(ctx);
-    unsigned long arity = params->getSize(ctx);
+    unsigned long rawCount = params->getSize(ctx);
+
+    // Session 7 — scan for variadic `& rest`. The token `&` is the literal
+    // ampersand symbol; the param that follows is the rest-binding (a list
+    // of leftover args). Only one rest-param allowed, only at the tail.
+    unsigned long fixedArity = rawCount;
+    bool isVariadic = false;
+    std::string restName;
+    for (unsigned long i = 0; i < rawCount; ++i) {
+        const proto::ProtoObject* p = params->getAt(ctx, (int)i);
+        if (isStringy(p) && asUtf8(ctx, p) == "&") {
+            if (i + 1 != rawCount - 1) {
+                throw CompileError(
+                    "fn/defn: `&` must be followed by exactly one rest-param");
+            }
+            const proto::ProtoObject* rp = params->getAt(ctx, (int)(i + 1));
+            if (!isStringy(rp)) {
+                throw CompileError("fn/defn: rest-param name must be a symbol");
+            }
+            restName  = asUtf8(ctx, rp);
+            fixedArity = i;
+            isVariadic = true;
+            break;
+        }
+    }
 
     auto body = std::make_unique<BytecodeModule>();
-    body->setArity(static_cast<int>(arity));
+    body->setArity(static_cast<int>(fixedArity));
+    body->setVariadic(isVariadic);
 
-    // Push a fresh fn scope. Params go in slots 0..arity-1. We never hold
-    // a Scope& across a recursive compileForm() — that call may compile a
-    // nested fn, push_back another Scope, and reallocate `scopes_`, which
-    // would dangle the reference. Always re-acquire via scopes_.back().
+    // Push a fresh fn scope. Fixed params go in slots 0..fixedArity-1; the
+    // rest-binding (if any) gets slot fixedArity. We never hold a Scope&
+    // across a recursive compileForm() — that call may compile a nested
+    // fn, push_back another Scope, and reallocate `scopes_`, which would
+    // dangle the reference. Always re-acquire via scopes_.back().
     scopes_.push_back(Scope{});
     {
         Scope& scope = scopes_.back();
-        scope.arity = static_cast<int>(arity);
-        for (unsigned long i = 0; i < arity; ++i) {
+        scope.arity = static_cast<int>(fixedArity);
+        for (unsigned long i = 0; i < fixedArity; ++i) {
             const proto::ProtoObject* p = params->getAt(ctx, (int)i);
             if (!isStringy(p)) {
                 scopes_.pop_back();
@@ -109,7 +135,11 @@ Compiler::compileFnBody(proto::ProtoContext* ctx,
             }
             scope.nameToSlot[asUtf8(ctx, p)] = static_cast<int>(i);
         }
-        scope.nextSlot = static_cast<int>(arity);
+        scope.nextSlot = static_cast<int>(fixedArity);
+        if (isVariadic) {
+            int restSlot = scope.nextSlot++;
+            scope.nameToSlot[restName] = restSlot;
+        }
     }
 
     // Compile the body forms after the params vector.
@@ -485,6 +515,21 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             }
 
             scopes_.back().recurStack.pop_back();
+            return;
+        }
+
+        // (apply f args-list) — special form. Compile f, compile the
+        // args-list (any expression that yields a list), emit CALL_APPLY.
+        // v0.7.x supports only the two-arg shape; the JVM-Clojure variadic
+        // form `(apply f x y coll)` lands once multi-arity arrives.
+        if (headName == "apply") {
+            if (n != 3) {
+                throw CompileError(
+                    "apply: v0.7.x supports only (apply f args-list)");
+            }
+            compileForm(ctx, lst->getAt(ctx, 1), out, markers);
+            compileForm(ctx, lst->getAt(ctx, 2), out, markers);
+            out.emit(Op::CALL_APPLY, 0);
             return;
         }
 

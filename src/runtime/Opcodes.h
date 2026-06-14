@@ -44,6 +44,12 @@ enum class Op : uint8_t {
                            //           a callable fn-wrapper for that body
     JUMP_BACK       = 15,  // operand = BACKWARD offset (subtracted from pc)
                            //           used by loop/recur
+
+    // Session 7 additions:
+    CALL_APPLY      = 16,  // stack: [callable, args-list]. Spread the list
+                           //        as positional args and dispatch like
+                           //        CALL with argc = list size. Operand
+                           //        reserved (must be 0 in v0.7.x).
 };
 
 inline constexpr std::size_t kInstrSize = 2;

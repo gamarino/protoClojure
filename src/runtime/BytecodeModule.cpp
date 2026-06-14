@@ -22,6 +22,7 @@ const char* opName(Op op) {
         case Op::STORE_LOCAL:   return "STORE_LOCAL";
         case Op::MAKE_FN:       return "MAKE_FN";
         case Op::JUMP_BACK:     return "JUMP_BACK";
+        case Op::CALL_APPLY:    return "CALL_APPLY";
     }
     return "?";
 }

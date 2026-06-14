@@ -25,12 +25,27 @@ class ProtoObject;
 class ProtoString;
 }
 
+namespace proto {
+class ProtoList;
+}
+
 namespace protoClojure {
 
 class BytecodeModule;
 
 class ExecutionEngine {
 public:
+    // Session 7 — external dispatch entry. Used by primitives that need
+    // to invoke a Clojure callable mid-primitive (map / reduce / filter
+    // calling the f they were handed). Handles user fns and C++
+    // primitives uniformly. Variadic packing matches the in-VM CALL
+    // path. Returns the callable's return value; never reads the
+    // operand stack.
+    const proto::ProtoObject* invoke(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject* callable,
+                                     const proto::ProtoObject* const* args,
+                                     unsigned int argc);
+
     // Run `mod` from PC=0 until RETURN or end-of-bytecode. The `globals`
     // namespace resolves PUSH_VAR. `fnMarkerProto` / `bytecodeKey` /
     // `arityKey` are the markers MAKE_FN uses to construct user-fn

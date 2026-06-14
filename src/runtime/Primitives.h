@@ -18,9 +18,13 @@
 namespace proto {
 class ProtoContext;
 class ProtoObject;
+class ProtoString;
+class ProtoList;
 }
 
 namespace protoClojure {
+
+class ExecutionEngine;
 
 // Install all v0.0.x primitives on the supplied globals object. The globals
 // object must be a mutable protoCore object (typically a child of
@@ -28,5 +32,23 @@ namespace protoClojure {
 // to the corresponding symbols from compiled bytecode will resolve.
 void installPrimitives(proto::ProtoContext* ctx,
                        proto::ProtoObject* globals);
+
+// Session 7 — primitives that invoke user fns (map / reduce / filter)
+// need access back into the bytecode VM. The ExecutionEngine installs
+// itself here on each top-level run() entry and restores on exit, so the
+// primitives can reach the current VM through this slot without changing
+// the ProtoMethod signature. Thread-local; safe under concurrent VMs in
+// later sessions.
+struct ActiveCallContext {
+    ExecutionEngine*           engine;
+    const proto::ProtoObject*  globals;
+    const proto::ProtoObject*  fnMarkerProto;
+    const proto::ProtoString*  bytecodeKey;
+    const proto::ProtoString*  arityKey;
+    const proto::ProtoString*  capturesKey;
+};
+void setActiveCallContext(const ActiveCallContext& cc);
+void clearActiveCallContext();
+const ActiveCallContext* activeCallContext();
 
 } // namespace protoClojure
