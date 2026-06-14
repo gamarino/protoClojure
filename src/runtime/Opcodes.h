@@ -59,6 +59,23 @@ enum class Op : uint8_t {
                            //           arity fn. Pops sum-of-captureCounts
                            //           values off the stack (arity 0 caps
                            //           first, then arity 1, ...).
+
+    // Session 11 additions — SmallInt fast-path binary arithmetic and
+    // comparison. Each opcode pops two operands, pushes one result.
+    // The fast path assumes both operands are tagged SmallInt; for any
+    // other shape (float, large int, type mismatch) we fall back to the
+    // matching primitive. The compiler emits these ONLY for the standard
+    // operator symbols and ONLY when those symbols are not shadowed by a
+    // local binding — so the call-site semantics under shadowing stay
+    // unchanged. Operand byte is reserved (must be 0).
+    ADD             = 20,
+    SUB             = 21,
+    MUL             = 22,
+    LT              = 23,
+    LE              = 24,
+    GT              = 25,
+    GE              = 26,
+    EQ              = 27,
 };
 
 inline constexpr std::size_t kInstrSize = 2;

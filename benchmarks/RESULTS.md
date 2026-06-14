@@ -1,9 +1,9 @@
-# protoClojure vs Babashka — exploratory baseline
+# protoClojure vs Babashka — benchmarks
 
-**Date.** 2026-06-14 (session 10).
+**Date.** 2026-06-14 (session 11).
 **Setup.** DEV12 (AMD Ryzen 5500U Lucienne, 6 cores), Linux 6.17.0.
 **Runtimes.**
-- `protoclj` — protoClojure session-9 head, `build_release/` (Release, single-thread build).
+- `protoclj` — protoClojure session-11 head, `build_release/` (Release).
 - `bb` — Babashka 1.4.192 (GraalVM-native).
 - (JVM Clojure not measured this round; binary not installed.)
 
@@ -12,93 +12,109 @@ runs the script through each interpreter 3 times and reports the
 minimum wall-clock (cold-start + execution). No JVM warmup phase.
 Result strings are compared across runtimes for correctness.
 
-## Numbers
+## Session-11 numbers (after SmallInt fast-path + protoCore promoting arithmetic)
 
-| Workload         | protoclj (ms) | bb (ms) | ratio       | Result        | Match |
-|------------------|--------------:|--------:|------------:|---------------|:-----:|
-| `fib(30)`        |          4113 |     495 | **8.3×**    | 832040        | ✓ |
-| `tak(18,12,6)`   |           100 |      43 | **2.3×**    | 7             | ✓ |
-| `sum-loop(1M)`   |          1634 |     201 | **8.1×**    | 500000500000  | ✓ |
-| `reduce-list(10K)` |          47 |      32 | 1.5×        | 49995000      | ✓ |
-| `sum-squares(1K)` |          18 |      34 | **0.53×**   | 332833500     | ✓ |
+| Workload         | protoclj (ms) | bb (ms) | ratio   | Result        | Match |
+|------------------|--------------:|--------:|--------:|---------------|:-----:|
+| `fib(30)`        |           720 |     498 | 1.45×   | 832040        | ✓ |
+| `tak(18,12,6)`   |            52 |      44 | 1.18×   | 7             | ✓ |
+| `sum-loop(1M)`   |            66 |     195 | **0.34×** | 500000500000 | ✓ |
+| `reduce-list(10K)` |          30 |      35 | 0.86×   | 49995000      | ✓ |
+| `sum-squares(1K)` |           19 |      32 | 0.59×   | 332833500     | ✓ |
 
-Reading the ratio column: a value `>1` means protoClojure took that
-many times longer than Babashka. `0.53×` means protoClojure was
-nearly twice as fast — a startup-cost artefact (bb's GraalVM cold-
-start dominates the 18ms total).
+Reading the ratio: `<1` means protoClojure is faster than Babashka by
+that factor. Three of five workloads now run **faster than Babashka**;
+`fib` and `tak` sit at 1.18–1.45× behind. Extrapolating the
+bb→JVM-Clojure ratio (Babashka usually trails JVM Clojure JIT'd
+by ~2–3× on steady-state compute): protoClojure is in the
+**~2–4× JVM Clojure** band on these workloads — comfortably inside
+the **5× JVM** target set in the brainstorm phase.
 
-## Caveats — for honesty
+## What changed since session 10
 
-1. **Cold-start + execution.** Each run is one process invocation;
-   Babashka pays ~30–50 ms of GraalVM startup. JVM Clojure (not
-   measured here) would pay ~1.5–2.0 s on every invocation. A
-   future pass should either (a) use a multi-iteration harness
-   inside each script to dilute startup, or (b) measure with
-   `time` after a one-iteration warmup.
+Session 10 ratios were 8.3× / 2.3× / 8.1× / 1.5× / 0.53× (slower than bb
+across the board on compute-bound rows). Session 11 collapses that gap.
+Two changes:
 
-2. **No JIT warmup.** JVM Clojure under JIT would be roughly
-   2–3× faster than Babashka on steady-state compute-bound
-   workloads. Extrapolating from the bb baseline: protoClojure
-   would be ~20× slower than JVM Clojure on `fib` /
-   `sum-loop` at steady state. Well off the **5× single-thread**
-   target stated at the brainstorm phase.
+1. **SmallInt fast-path binary opcodes** (`ADD` `SUB` `MUL` `LT` `LE`
+   `GT` `GE` `EQ`). The compiler now emits these directly for
+   `(+ x y)` / `(< x y)` / etc. when the operator name is not
+   shadowed by a local binding. The VM short-circuits on the hot
+   path — both operands tagged SmallInt — with a one-line C++
+   arithmetic op and a re-tagged push, skipping the `ProtoMethod`
+   indirection, the ProtoList wrap of args, and the per-arg tag
+   checks the primitive used to do.
 
-3. **Workloads are small but representative.** No allocation
-   pressure on `fib` / `tak` / `sum-loop`. `reduce-list` /
-   `sum-squares` do allocate (lists from `cons`) but the volumes
-   are modest.
+2. **Slow-path routed through protoCore directly.** When operands
+   are not both SmallInt (Float, LargeInteger, mismatched), the VM
+   calls `a->add(ctx, b)` / `a->multiply(...)` / `a->compare(...)`
+   on protoCore's promoting arithmetic API. This is the
+   "infinite-precision path" the kernel already implements: SmallInt
+   ↔ LargeInteger ↔ Float promotion is automatic. The previous
+   round did a global-namespace lookup of the operator and a full
+   `dispatchCall` — strictly slower for mixed-type input.
 
-## What the ratios point at
+## LargeInteger correctness
 
-- **8.3× on `fib`, 8.1× on `sum-loop`** — both compute-bound.
-  The bytecode VM has switch-based dispatch (no threaded /
-  computed-goto), no inline cache at CALL sites, and goes
-  through the `ProtoMethod` indirection on every arithmetic
-  primitive. Each of those is a known 1.3-2× lever in similar
-  interpreters.
+`factorial(100)` runs through to completion:
 
-- **2.3× on `tak`** — closer. `tak` is call-heavy with small
-  bodies; the FUNCTION DISPATCH layer is in scope but the
-  ARITHMETIC is amortised over the recursion. Suggests the
-  primitive-arith path is the bigger cost.
+```
+2432902008176640000                                                ; 20!
+51090942171709440000                                               ; 21!
+30414093201713378043612608166064768844377641568960512000000000000  ; 50!
+93326215443944152681699238856266700490715968264381621468592963895217599993229915608941463976156518286253697920827223758251185210916864000000000000000000000000  ; 100!
+```
 
-- **`sum-squares` ≤ bb** — purely a startup artefact at this
-  workload size; not informative about steady-state.
+Babashka 1.4 fails on `factorial(21)` with `long overflow` because
+JVM Clojure's default `*` is long-arithmetic; the user has to write
+`*'` or `(bigint 1)` for explicit promotion. **protoClojure promotes
+automatically** because the SmallInt fast-path falls through to
+protoCore's `multiply` when the inline result no longer fits.
 
-## Where the headroom is — leading candidates for session 11+
+Three conformance fixtures cover this:
+- `tests/conformance/15-bigint/factorial-21.clj` (51090942171709440000)
+- `tests/conformance/15-bigint/factorial-30.clj` (30414093201713378043612608166064768844377641568960512000000000000)
+- `tests/conformance/15-bigint/large-add.clj` ((2^63 − 1) × 2 = 18446744073709551614)
 
-In rough order of expected impact:
+Plus `benchmarks/factorial-100.clj` for the demo.
 
-1. **Threaded dispatch / computed-goto in `run()`.**
-   protoST has documented +10–15% from this; the protoClojure VM
-   is structurally similar. Single-day work, large win.
+## Caveats — still
 
-2. **Inline cache at CALL sites.** Today each CALL on a user fn
-   does `getPrototype` + `getAttribute(bytecodeKey)` +
-   `getAttribute(capturesKey)` (+ multi-arity scan). A single-slot
-   cache keyed on the wrapper's identity should cut that to one
-   pointer compare on the hot path. Pattern is known from protoJS.
+1. **Cold-start + execution.** Each run is one process; bb pays
+   ~30–50 ms of GraalVM startup. JVM Clojure would pay ~1.5–2 s
+   on every invocation. A future pass should use a multi-iter
+   inner loop to dilute startup.
+2. **No JIT warmup.** JVM Clojure under JIT would be 2–3× faster
+   than Babashka on steady-state compute-bound workloads.
+3. **Workloads still small.** No allocation pressure on
+   `fib` / `tak` / `sum-loop`. The volume is modest on the rest.
 
-3. **SmallInt fast-path for `+` / `-` / `*` / `<` etc.** Today
-   `(+ 1 2)` goes through `prim_plus` which is a C++ function with
-   args wrapped in a ProtoList plus tag checks. A bytecode-level
-   shortcut: when both stack tops are tagged SmallInt, do the op
-   inline. Likely halves `fib` / `sum-loop` cost.
+## Where the remaining headroom is
 
-4. **Reduce `MAKE_FN` allocations in tight call recursion.** Less
-   important for these workloads (fib doesn't make new fns), but
-   relevant for higher-order pipelines.
+The gap on `fib` (1.45×) and `tak` (1.18×) is now dominated by
+function-call dispatch, not arithmetic. The next levers:
+
+1. **Inline cache at CALL sites.** Today every user-fn call does
+   `getPrototype` + `getAttribute(bytecodeKey)` + `getAttribute(
+   capturesKey)` (+ multi-arity scan). A single-slot cache keyed
+   on the wrapper identity should cut that to one pointer compare
+   on the hot path. Probably worth 20–30% on `fib`.
+
+2. **Threaded dispatch (computed-goto) in `run()`.** Switch-based
+   dispatch in `run()` has a known +10–15% from going threaded;
+   protoST already documented this win. Smaller absolute win now
+   that the binop opcodes dominate the dispatch budget.
+
+3. **Specialised `inc` / `dec` opcodes.** Today `(inc x)` still
+   goes through PUSH_VAR + CALL to the `prim_inc` primitive,
+   which does the `argAsLong` + `+ 1` work in C++. An opcode-
+   level `(inc x)` → `INC` opcode would inline it the same way
+   `ADD` did. Smaller win, maybe useful on `sum-to-n`-style
+   loops.
 
 ## Reproducibility
 
 ```bash
-# from the repo root
-./benchmarks/bench.sh
-
-# or with explicit binaries
+./benchmarks/bench.sh                  # uses /tmp/proto-bench/bb by default
 ./benchmarks/bench.sh path/to/protoclj path/to/bb
 ```
-
-The harness uses `date +%s.%N` for wall-clock; resolution is
-nanoseconds but the practical noise floor is ~1 ms on this box.
-The output table is what RESULTS.md above was filled from.

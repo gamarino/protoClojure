@@ -100,7 +100,20 @@ void printValue(proto::ProtoContext* ctx, std::FILE* out,
     if (v == PROTO_TRUE)        { std::fputs("true", out); return; }
     if (v == PROTO_FALSE)       { std::fputs("false", out); return; }
     if (v->isInteger(ctx)) {
-        std::fprintf(out, "%lld", v->asLong(ctx));
+        // SmallInt: print via the tagged-pointer fast extract. LargeInt:
+        // route through protoCore's asIntegerString (long-long range may
+        // overflow). Mirror of the tagged check in ExecutionEngine.cpp;
+        // duplicated here to keep this file independent of the VM.
+        constexpr unsigned long kSmallIntMask  = 0x3FFUL;
+        constexpr unsigned long kSmallIntValue = 0x001UL;
+        unsigned long bits = reinterpret_cast<unsigned long>(v);
+        if ((bits & kSmallIntMask) == kSmallIntValue) {
+            std::fprintf(out, "%lld",
+                static_cast<long long>(reinterpret_cast<long long>(v) >> 10));
+        } else {
+            const proto::ProtoString* s = v->asIntegerString(ctx);
+            std::fputs(s->toStdString(ctx).c_str(), out);
+        }
         return;
     }
     if (v->isFloat(ctx)) {
@@ -150,7 +163,17 @@ void appendValue(proto::ProtoContext* ctx, std::ostringstream& os,
     if (!v || v == PROTO_NONE) { os << "nil"; return; }
     if (v == PROTO_TRUE)        { os << "true"; return; }
     if (v == PROTO_FALSE)       { os << "false"; return; }
-    if (v->isInteger(ctx))      { os << v->asLong(ctx); return; }
+    if (v->isInteger(ctx)) {
+        constexpr unsigned long kSmallIntMask  = 0x3FFUL;
+        constexpr unsigned long kSmallIntValue = 0x001UL;
+        unsigned long bits = reinterpret_cast<unsigned long>(v);
+        if ((bits & kSmallIntMask) == kSmallIntValue) {
+            os << static_cast<long long>(reinterpret_cast<long long>(v) >> 10);
+        } else {
+            os << v->asIntegerString(ctx)->toStdString(ctx);
+        }
+        return;
+    }
     if (v->isFloat(ctx)) {
         double d = v->asDouble(ctx);
         if (d == static_cast<long long>(d)) {

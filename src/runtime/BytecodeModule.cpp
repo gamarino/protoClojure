@@ -26,6 +26,14 @@ const char* opName(Op op) {
         case Op::DUP:           return "DUP";
         case Op::JUMP_IF_TRUE:  return "JUMP_IF_TRUE";
         case Op::MAKE_FN_MULTI: return "MAKE_FN_MULTI";
+        case Op::ADD:           return "ADD";
+        case Op::SUB:           return "SUB";
+        case Op::MUL:           return "MUL";
+        case Op::LT:            return "LT";
+        case Op::LE:            return "LE";
+        case Op::GT:            return "GT";
+        case Op::GE:            return "GE";
+        case Op::EQ:            return "EQ";
     }
     return "?";
 }

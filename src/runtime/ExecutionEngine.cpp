@@ -17,6 +17,36 @@ namespace {
 // arity + localCount.
 constexpr unsigned int kOperandStackSize = 64;
 
+// SmallInt tagged pointer constants — mirror of protoCore's
+// PROTO_SMALL_INT_TAG_MASK/VALUE for the hot-path checks. Re-declared here
+// to dodge the per-call function-call cost of going through the inline
+// helper; both definitions must match headers/protoCore.h.
+constexpr unsigned long kSmallIntTagMask  = 0x3FFUL;
+constexpr unsigned long kSmallIntTagValue = 0x001UL;
+
+inline bool isSmallIntFast(const proto::ProtoObject* v) {
+    return (reinterpret_cast<unsigned long>(v) & kSmallIntTagMask) ==
+           kSmallIntTagValue;
+}
+
+inline long long smallIntValueFast(const proto::ProtoObject* v) {
+    // Inverse of fromLong's `(v << 10) | tag` — arithmetic right-shift
+    // preserves sign for negatives, since the tag bits are always zero.
+    return reinterpret_cast<long long>(v) >> 10;
+}
+
+inline const proto::ProtoObject* smallIntFromLong(long long v) {
+    return reinterpret_cast<const proto::ProtoObject*>(
+        (v << 10) | static_cast<long long>(kSmallIntTagValue));
+}
+
+inline bool smallIntFitsLong(long long v) {
+    // Same bounds as PROTO_SMALL_INT_MIN/MAX (53-bit).
+    constexpr long long kMax =  (1LL << 53) - 1;
+    constexpr long long kMin = -(1LL << 53);
+    return v >= kMin && v <= kMax;
+}
+
 const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
                                        const BytecodeModule::Const& c) {
     using K = BytecodeModule::ConstKind;
@@ -589,6 +619,104 @@ ExecutionEngine::run(proto::ProtoContext* parent,
             case Op::PUSH_NIL:   pushVal(PROTO_NONE);  break;
             case Op::PUSH_TRUE:  pushVal(PROTO_TRUE);  break;
             case Op::PUSH_FALSE: pushVal(PROTO_FALSE); break;
+
+            // Session 11 — SmallInt fast-path binary ops. On the hot path
+            // (both args tagged SmallInt, result fits) we inline the
+            // arithmetic and skip the ProtoMethod indirection entirely.
+            // On any other shape we fall back to looking up the
+            // corresponding primitive on the globals namespace and
+            // dispatching it as a regular CALL — same semantics as if
+            // the compiler had emitted PUSH_VAR + CALL.
+            case Op::ADD:
+            case Op::SUB:
+            case Op::MUL:
+            case Op::LT:
+            case Op::LE:
+            case Op::GT:
+            case Op::GE:
+            case Op::EQ: {
+                if (sp < 2) throw std::runtime_error("VM: binop underflow");
+                const proto::ProtoObject* a =
+                    frame.getAutomaticLocal(stackBase + sp - 2);
+                const proto::ProtoObject* b =
+                    frame.getAutomaticLocal(stackBase + sp - 1);
+
+                // Fast path: both operands tagged SmallInt. Inline the
+                // arithmetic; on overflow past the 53-bit SmallInt range
+                // fall through to protoCore's promoting `add`/`subtract`/
+                // `multiply`, which materialise a LargeInteger when
+                // needed (the "infinite-precision" path documented in
+                // headers/protoCore.h).
+                if (isSmallIntFast(a) && isSmallIntFast(b)) {
+                    long long av = smallIntValueFast(a);
+                    long long bv = smallIntValueFast(b);
+                    sp -= 2;
+                    const proto::ProtoObject* r = PROTO_NONE;
+                    switch (op) {
+                        case Op::ADD: {
+                            long long s = av + bv;
+                            if (smallIntFitsLong(s)) r = smallIntFromLong(s);
+                            else                     r = a->add(&frame, b);
+                            break;
+                        }
+                        case Op::SUB: {
+                            long long s = av - bv;
+                            if (smallIntFitsLong(s)) r = smallIntFromLong(s);
+                            else                     r = a->subtract(&frame, b);
+                            break;
+                        }
+                        case Op::MUL: {
+                            // Multiplication can overflow long long itself
+                            // for large SmallInts; trust protoCore's slow
+                            // path when either operand exceeds the safe
+                            // 26-bit half-range, OR when the inline
+                            // result no longer fits SmallInt.
+                            constexpr long long kHalf = 1LL << 26;
+                            if (av <= -kHalf || av >= kHalf ||
+                                bv <= -kHalf || bv >= kHalf) {
+                                r = a->multiply(&frame, b);
+                            } else {
+                                long long s = av * bv;
+                                if (smallIntFitsLong(s)) r = smallIntFromLong(s);
+                                else                     r = a->multiply(&frame, b);
+                            }
+                            break;
+                        }
+                        case Op::LT: r = (av <  bv) ? PROTO_TRUE : PROTO_FALSE; break;
+                        case Op::LE: r = (av <= bv) ? PROTO_TRUE : PROTO_FALSE; break;
+                        case Op::GT: r = (av >  bv) ? PROTO_TRUE : PROTO_FALSE; break;
+                        case Op::GE: r = (av >= bv) ? PROTO_TRUE : PROTO_FALSE; break;
+                        case Op::EQ: r = (av == bv) ? PROTO_TRUE : PROTO_FALSE; break;
+                        default: break;
+                    }
+                    pushVal(r);
+                    break;
+                }
+
+                // Slow path: at least one operand is NOT a tagged
+                // SmallInt — could be Float, LargeInteger, or a non-
+                // numeric mistake. Route through protoCore's promoting
+                // add/subtract/multiply/compare which handle SmallInt ↔
+                // LargeInteger ↔ Float automatically. Throws on non-
+                // numeric input. The compiler never emits these opcodes
+                // when the operator is shadowed by a local, so we don't
+                // need to honour user-shadowing here.
+                sp -= 2;
+                const proto::ProtoObject* r = PROTO_NONE;
+                switch (op) {
+                    case Op::ADD: r = a->add(&frame, b);      break;
+                    case Op::SUB: r = a->subtract(&frame, b); break;
+                    case Op::MUL: r = a->multiply(&frame, b); break;
+                    case Op::LT:  r = a->compare(&frame, b) <  0 ? PROTO_TRUE : PROTO_FALSE; break;
+                    case Op::LE:  r = a->compare(&frame, b) <= 0 ? PROTO_TRUE : PROTO_FALSE; break;
+                    case Op::GT:  r = a->compare(&frame, b) >  0 ? PROTO_TRUE : PROTO_FALSE; break;
+                    case Op::GE:  r = a->compare(&frame, b) >= 0 ? PROTO_TRUE : PROTO_FALSE; break;
+                    case Op::EQ:  r = a->compare(&frame, b) == 0 ? PROTO_TRUE : PROTO_FALSE; break;
+                    default: break;
+                }
+                pushVal(r);
+                break;
+            }
 
             default:
                 throw std::runtime_error("VM: unknown opcode");

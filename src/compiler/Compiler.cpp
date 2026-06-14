@@ -820,13 +820,52 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
 
         // ---- Plain call form -----------------------------------------------
 
-        // Emit the callable. A symbolic head with a name not matched by
-        // any special form above is treated as a regular reference:
-        // resolveLocal first (which handles closures), then PUSH_VAR for
-        // a runtime global lookup. A non-stringy head (an arbitrary
-        // expression that yields a callable, e.g. `((make-add 5) 10)`)
-        // is compiled directly.
+        // Session 11 — SmallInt fast-path emission. For the standard
+        // operator names AND when the symbol is NOT shadowed by a local
+        // binding, we emit binary-fold opcodes (ADD / SUB / MUL / LT /
+        // LE / GT / GE / EQ) directly. The VM short-circuits when both
+        // operands are tagged SmallInt; otherwise it falls back to the
+        // primitive on globals — same semantics as PUSH_VAR + CALL.
         if (isStringy(head)) {
+            Op binOp = Op::NOP;
+            if      (headName == "+")  binOp = Op::ADD;
+            else if (headName == "-")  binOp = Op::SUB;
+            else if (headName == "*")  binOp = Op::MUL;
+            else if (headName == "<")  binOp = Op::LT;
+            else if (headName == "<=") binOp = Op::LE;
+            else if (headName == ">")  binOp = Op::GT;
+            else if (headName == ">=") binOp = Op::GE;
+            else if (headName == "=")  binOp = Op::EQ;
+
+            // Shadow check — if `+` (or whichever) is bound locally, we
+            // are calling the local binding, not the global primitive;
+            // fall back to the general PUSH_VAR + CALL path.
+            int shadowSlot = (binOp != Op::NOP) ? resolveLocal(headName) : -1;
+            unsigned long argc = n - 1;
+
+            if (binOp != Op::NOP && shadowSlot < 0 && argc >= 2) {
+                // Arithmetic: left-fold pairs. (op a b c d) emits
+                // a; b; OP; c; OP; d; OP. Comparisons fold the same way
+                // semantically — (< a b c) becomes ((< a b) && (< b c))
+                // in Clojure, but our SmallInt fast-path opcodes are
+                // strictly binary; for >2 args on comparisons, fall
+                // through to the global primitive (correct semantics).
+                bool isCompare = (binOp == Op::LT || binOp == Op::LE ||
+                                  binOp == Op::GT || binOp == Op::GE ||
+                                  binOp == Op::EQ);
+                if (isCompare && argc != 2) {
+                    // Defer to general path for chained comparisons.
+                } else {
+                    compileForm(ctx, lst->getAt(ctx, 1), out, markers);
+                    for (unsigned long i = 2; i < n; ++i) {
+                        compileForm(ctx, lst->getAt(ctx, (int)i), out, markers);
+                        out.emit(binOp, 0);
+                    }
+                    return;
+                }
+            }
+
+            // General path — emit callable, then args, then CALL.
             int slot = resolveLocal(headName);
             if (slot >= 0) {
                 out.emit(Op::PUSH_LOCAL, static_cast<std::uint8_t>(slot));
