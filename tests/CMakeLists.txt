@@ -1,3 +1,17 @@
+# --- GoogleTest via FetchContent (same pattern as protoCore) -----------------
+# Suppress the CMP0135 warning about FetchContent timestamps.
+cmake_policy(SET CMP0135 NEW)
+
+include(FetchContent)
+FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.zip
+)
+set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
+
+add_subdirectory(unit)
+
 # Phase 1 testing scaffolding.
 #
 # Conformance fixtures: discovered automatically from tests/conformance/**.clj.

@@ -46,13 +46,25 @@ else()
     set(CMAKE_BUILD_RPATH_USE_LINK_PATH TRUE)
 endif()
 
-include_directories(${PROTOCORE_INCLUDE_DIRS} include headers)
+include_directories(${PROTOCORE_INCLUDE_DIRS} include headers src)
+
+# --- protoClojure reader library ---
+# A small static library so unit tests can link against it without rebuilding
+# main.cpp. As phase 1 grows we will accumulate compiler/runtime/etc. into
+# similarly small libraries here, then link the protoclj binary against the
+# set.
+add_library(protoclj_reader STATIC
+    src/reader/Lexer.cpp
+    src/reader/Reader.cpp
+)
+target_link_libraries(protoclj_reader PUBLIC ${PROTOCORE_LIBRARY})
+target_compile_options(protoclj_reader PRIVATE -Wall -Wextra -Wpedantic)
 
 # --- protoClojure binary (minimum-viable so far) ---
 add_executable(protoclj
     src/main.cpp
 )
-target_link_libraries(protoclj PRIVATE ${PROTOCORE_LIBRARY})
+target_link_libraries(protoclj PRIVATE protoclj_reader)
 target_compile_options(protoclj PRIVATE -Wall -Wextra -Wpedantic)
 
 # --- Tests ---
