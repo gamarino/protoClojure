@@ -41,6 +41,7 @@ enum class TokenKind : uint8_t {
     HashUnderscore,  // reserved — #_
     HashApostrophe,  // reserved — #'
     Caret,           // reserved — ^
+    At,              // @  (session 16 — reader macro for `(deref ...)`)
 
     EndOfFile,
     Error,           // text carries the error message

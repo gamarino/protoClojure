@@ -32,6 +32,7 @@ const char* tokenKindName(TokenKind k) {
         case TokenKind::HashUnderscore: return "HashUnderscore";
         case TokenKind::HashApostrophe: return "HashApostrophe";
         case TokenKind::Caret:          return "Caret";
+        case TokenKind::At:             return "At";
         case TokenKind::EndOfFile:      return "EOF";
         case TokenKind::Error:          return "Error";
     }
@@ -152,6 +153,7 @@ Token Lexer::nextImpl_() {
         case ']': return single(TokenKind::RBracket);
         case '{': return single(TokenKind::LBrace);
         case '}': return single(TokenKind::RBrace);
+        case '@': return single(TokenKind::At);
         // Hash-prefixes and the reader-macro prefixes still go through
         // the reserved-for-later path so we surface a clean error if the
         // user types them.

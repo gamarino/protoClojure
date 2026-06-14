@@ -155,9 +155,17 @@ void printValue(proto::ProtoContext* ctx, std::FILE* out,
         std::fputs(s->toStdString(ctx).c_str(), out);
         return;
     }
-    // Session 13 — print maps. We check via ActiveCallContext rather
-    // than carrying mapMarkerProto through printValue everywhere.
+    // Session 13/16 — print maps and atoms via ActiveCallContext
+    // rather than carrying the markers through printValue everywhere.
     const ActiveCallContext* cc = activeCallContext();
+    if (cc && v->getPrototype(ctx) == cc->atomMarkerProto) {
+        std::fputs("#<atom ", out);
+        const proto::ProtoObject* inner =
+            v->getAttribute(ctx, cc->valueKey);
+        printValue(ctx, out, inner ? inner : PROTO_NONE);
+        std::fputc('>', out);
+        return;
+    }
     if (cc && v->getPrototype(ctx) == cc->mapMarkerProto) {
         const proto::ProtoObject* eRaw =
             v->getAttribute(ctx, cc->entriesKey);
@@ -1452,6 +1460,139 @@ const proto::ProtoObject* prim_string_p(proto::ProtoContext* ctx,
     return isStringLike(args->getAt(ctx, 0)) ? PROTO_TRUE : PROTO_FALSE;
 }
 
+// Session 16 — atoms. The wire shape is a child of atomMarkerProto
+// with the current value stored as the `__value__` own-attribute.
+// reset! does an in-place setAttribute (protoCore handles the CAS
+// loop internally for mutables, so single-writer correctness is
+// free). swap! runs a userfn-aware retry loop on top of
+// setAttributeIfEqual: read the OWN value, derive new via (f old
+// extra-args...), CAS, retry on mismatch. compare-and-set!
+// exposes the primitive single-attempt CAS to Clojure code.
+
+const proto::ProtoObject* prim_atom(proto::ProtoContext* ctx,
+                                    const proto::ProtoObject*,
+                                    const proto::ParentLink*,
+                                    const proto::ProtoList* args,
+                                    const proto::ProtoSparseList*) {
+    unsigned long n = args ? args->getSize(ctx) : 0;
+    if (n != 1)
+        throw std::runtime_error("atom: expects (atom initial-value)");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("atom: no active VM context");
+    proto::ProtoObject* a = const_cast<proto::ProtoObject*>(
+        cc->atomMarkerProto->newChild(ctx, /*isMutable=*/true));
+    a->setAttribute(ctx, cc->valueKey, args->getAt(ctx, 0));
+    return a;
+}
+
+const proto::ProtoObject* prim_atom_p(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject*,
+                                      const proto::ParentLink*,
+                                      const proto::ProtoList* args,
+                                      const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("atom?: expects 1 arg");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("atom?: no active VM context");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (!v) return PROTO_FALSE;
+    return (v->getPrototype(ctx) == cc->atomMarkerProto) ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_deref(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject*,
+                                     const proto::ParentLink*,
+                                     const proto::ProtoList* args,
+                                     const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("deref: expects 1 arg");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("deref: no active VM context");
+    const proto::ProtoObject* a = args->getAt(ctx, 0);
+    if (!a || a->getPrototype(ctx) != cc->atomMarkerProto)
+        throw std::runtime_error("deref: not an atom");
+    const proto::ProtoObject* v = a->getAttribute(ctx, cc->valueKey);
+    return v ? v : PROTO_NONE;
+}
+
+const proto::ProtoObject* prim_reset_bang(proto::ProtoContext* ctx,
+                                          const proto::ProtoObject*,
+                                          const proto::ParentLink*,
+                                          const proto::ProtoList* args,
+                                          const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 2)
+        throw std::runtime_error("reset!: expects (reset! atom new-value)");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("reset!: no active VM context");
+    const proto::ProtoObject* a = args->getAt(ctx, 0);
+    if (!a || a->getPrototype(ctx) != cc->atomMarkerProto)
+        throw std::runtime_error("reset!: not an atom");
+    const proto::ProtoObject* nv = args->getAt(ctx, 1);
+    const_cast<proto::ProtoObject*>(a)
+        ->setAttribute(ctx, cc->valueKey, nv);
+    return nv;
+}
+
+const proto::ProtoObject* prim_swap_bang(proto::ProtoContext* ctx,
+                                         const proto::ProtoObject*,
+                                         const proto::ParentLink*,
+                                         const proto::ProtoList* args,
+                                         const proto::ProtoSparseList*) {
+    unsigned long n = args ? args->getSize(ctx) : 0;
+    if (n < 2)
+        throw std::runtime_error("swap!: expects (swap! atom f & args)");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("swap!: no active VM context");
+    const proto::ProtoObject* a = args->getAt(ctx, 0);
+    if (!a || a->getPrototype(ctx) != cc->atomMarkerProto)
+        throw std::runtime_error("swap!: not an atom");
+    const proto::ProtoObject* f = args->getAt(ctx, 1);
+
+    // Build (old + extras) buffer once; old gets overwritten per attempt.
+    unsigned long extras = n - 2;
+    const proto::ProtoObject* buf[17];
+    if (extras > 15)
+        throw std::runtime_error("swap!: >15 extra args not supported");
+    for (unsigned long i = 0; i < extras; ++i) {
+        buf[i + 1] = args->getAt(ctx, static_cast<int>(2 + i));
+    }
+
+    // CAS retry loop. protoCore guarantees `getOwnAttributeDirect`
+    // observes the value through the current shard root; if a
+    // concurrent writer installs a new snapshot before our CAS
+    // completes, setAttributeIfEqual returns false and we recompute
+    // (f old ...) against the fresh `old`. Lock-free, no mutex.
+    for (;;) {
+        const proto::ProtoObject* old =
+            a->getOwnAttributeDirect(ctx, cc->valueKey);
+        buf[0] = old ? old : PROTO_NONE;
+        const proto::ProtoObject* neu =
+            cc->engine->invoke(ctx, f, buf, extras + 1);
+        if (a->setAttributeIfEqual(ctx, cc->valueKey, old, neu)) {
+            return neu;
+        }
+    }
+}
+
+const proto::ProtoObject* prim_compare_and_set_bang(
+        proto::ProtoContext* ctx,
+        const proto::ProtoObject*,
+        const proto::ParentLink*,
+        const proto::ProtoList* args,
+        const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 3)
+        throw std::runtime_error("compare-and-set!: expects (compare-and-set! atom old new)");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("compare-and-set!: no active VM context");
+    const proto::ProtoObject* a = args->getAt(ctx, 0);
+    if (!a || a->getPrototype(ctx) != cc->atomMarkerProto)
+        throw std::runtime_error("compare-and-set!: not an atom");
+    const proto::ProtoObject* expected = args->getAt(ctx, 1);
+    const proto::ProtoObject* nv       = args->getAt(ctx, 2);
+    return a->setAttributeIfEqual(ctx, cc->valueKey, expected, nv)
+        ? PROTO_TRUE : PROTO_FALSE;
+}
+
 } // namespace
 
 void installPrimitives(proto::ProtoContext* ctx,
@@ -1515,6 +1656,14 @@ void installPrimitives(proto::ProtoContext* ctx,
     install("triml",       &prim_triml);
     install("trimr",       &prim_trimr);
     install("blank?",      &prim_blank_p);
+
+    // Session 16 — atoms.
+    install("atom",             &prim_atom);
+    install("atom?",            &prim_atom_p);
+    install("deref",            &prim_deref);
+    install("reset!",           &prim_reset_bang);
+    install("swap!",            &prim_swap_bang);
+    install("compare-and-set!", &prim_compare_and_set_bang);
     install("first",   &prim_first);
     install("rest",    &prim_rest);
     install("cons",    &prim_cons);

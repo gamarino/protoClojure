@@ -80,6 +80,43 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
             return readList(parent, TokenKind::RParen,
                             tok.line, tok.column);
 
+        case TokenKind::At: {
+            // Session 16 — `@expr` desugars to `(deref expr)` at read
+            // time. Build a fresh list with two elements: the symbol
+            // `deref` and the next form read. The list is rooted
+            // immediately into a child scope so an allocation in the
+            // recursive readOne cannot reclaim it before it's wired
+            // into a parent slot by the caller.
+            proto::ProtoContext wrapScope(parent->space, parent);
+            wrapScope.resizeAutomaticLocals(2);
+            constexpr unsigned int kSlotList = 0;
+            constexpr unsigned int kSlotForm = 1;
+            // (deref ...)
+            const proto::ProtoString* derefSym =
+                proto::ProtoString::createSymbol(&wrapScope, "deref");
+            const proto::ProtoObject* lst =
+                wrapScope.newList()->asObject(&wrapScope);
+            lst = lst->asList(&wrapScope)
+                ->appendLast(&wrapScope,
+                    reinterpret_cast<const proto::ProtoObject*>(derefSym))
+                ->asObject(&wrapScope);
+            wrapScope.setAutomaticLocal(kSlotList, lst);
+            // Read the next form (could be a symbol, list, vector, ...).
+            Token next = lexer_.next();
+            if (next.kind == TokenKind::EndOfFile) {
+                throw ReaderError("`@` must be followed by a form",
+                                  tok.line, tok.column);
+            }
+            wrapScope.setAutomaticLocal(kSlotForm,
+                readFromToken(&wrapScope, next));
+            lst = wrapScope.getAutomaticLocal(kSlotList);
+            lst = lst->asList(&wrapScope)
+                ->appendLast(&wrapScope,
+                    wrapScope.getAutomaticLocal(kSlotForm))
+                ->asObject(&wrapScope);
+            return lst;
+        }
+
         case TokenKind::LBracket: {
             // Session 9 — `[..]` is now a tagged vector literal, distinct
             // from `(..)` lists. We still parse the items into a ProtoList

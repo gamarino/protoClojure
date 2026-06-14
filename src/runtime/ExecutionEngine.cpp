@@ -236,8 +236,9 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
                          const_cast<proto::ProtoObject*>(cc->fnSingleProto),
                          const_cast<proto::ProtoObject*>(cc->fnMultiProto),
                          const_cast<proto::ProtoObject*>(cc->mapMarkerProto),
+                         const_cast<proto::ProtoObject*>(cc->atomMarkerProto),
                          cc->bytecodeKey, cc->arityKey, cc->capturesKey,
-                         cc->aritiesKey, cc->entriesKey,
+                         cc->aritiesKey, cc->entriesKey, cc->valueKey,
                          callArgs, passArgc, capsVal,
                          kwBased ? kwVals : nullptr, kwCount,
                          kwBased ? kwArgsMap : nullptr);
@@ -274,11 +275,13 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                      const proto::ProtoObject* fnSingleProto,
                      const proto::ProtoObject* fnMultiProto,
                      const proto::ProtoObject* mapMarkerProto,
+                     const proto::ProtoObject* atomMarkerProto,
                      const proto::ProtoString* bytecodeKey,
                      const proto::ProtoString* arityKey,
                      const proto::ProtoString* capturesKey,
                      const proto::ProtoString* aritiesKey,
                      const proto::ProtoString* entriesKey,
+                     const proto::ProtoString* valueKey,
                      const proto::ProtoObject* const* args,
                      unsigned int argCount,
                      const proto::ProtoObject* captures,
@@ -293,8 +296,9 @@ ExecutionEngine::run(proto::ProtoContext* parent,
     ActiveCallContext saved = prior ? *prior : ActiveCallContext{};
     ActiveCallContext cc{this, globals,
                          fnSingleProto, fnMultiProto, mapMarkerProto,
+                         atomMarkerProto,
                          bytecodeKey, arityKey, capturesKey, aritiesKey,
-                         entriesKey};
+                         entriesKey, valueKey};
     setActiveCallContext(cc);
     struct Guard {
         const ActiveCallContext* prior; ActiveCallContext saved;
@@ -494,8 +498,9 @@ ExecutionEngine::run(proto::ProtoContext* parent,
             sp -= (argc + 1);
             const proto::ProtoObject* result = this->run(
                 &frame, *subMod, globals,
-                fnSingleProto, fnMultiProto, mapMarkerProto,
-                bytecodeKey, arityKey, capturesKey, aritiesKey, entriesKey,
+                fnSingleProto, fnMultiProto, mapMarkerProto, atomMarkerProto,
+                bytecodeKey, arityKey, capturesKey, aritiesKey,
+                entriesKey, valueKey,
                 callArgs, passArgc, capsVal,
                 kwBased ? kwVals : nullptr, kwCount,
                 kwBased ? kwArgsMap : nullptr);

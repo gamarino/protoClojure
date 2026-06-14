@@ -28,6 +28,7 @@ harness produces honest numbers vs Babashka 1.4.192 (see
 | 13 | Maps + `& {:keys [...]}` named-arg destructuring | 103 |
 | 14 | Dual call convention closed: trailing kv pairs + `:or` + `:as` | 113 |
 | 15 | clojure.string-shaped primitives (subs, upper/lower, join/split, trim, ...) | 126 |
+| 16 | Atoms (`atom`, `@`, `reset!`, `swap!`, `compare-and-set!`) on protoCore CAS | 136 |
 
 The dated design specs live under `docs/superpowers/specs/`; the
 memory entries for each session live under
@@ -132,7 +133,6 @@ does not yet support. Calling any of them raises a clear error.
 
 ### Reader (not yet)
 
-- [x] Maps `{...}` (session 13 — backed by `ProtoSparseList` keyed by `key->getHash`)
 - [ ] Sets `#{...}`
 - [ ] Quasiquote `` ` ``, unquote `~`, splice `~@`
 - [ ] Anonymous-fn shorthand `#(...)`
@@ -169,9 +169,10 @@ does not yet support. Calling any of them raises a clear error.
 - [ ] `^:dynamic` vars + `binding`
 - [ ] `alter-var-root`
 
-### State (not yet)
+### State
 
-- [ ] `atom`, `swap!`, `reset!`, `compare-and-set!`, `deref` / `@`
+- [x] `atom`, `swap!`, `reset!`, `compare-and-set!`, `deref` / `@` (session 16)
+- [x] `atom?` predicate
 - [ ] `add-watch`, `remove-watch`
 - [ ] `volatile!`, `vreset!`, `vswap!`
 - [ ] `delay`, `force`, `realized?`

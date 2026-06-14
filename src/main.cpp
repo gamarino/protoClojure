@@ -72,7 +72,7 @@ int runFile(const char* path) {
     //   1 : forms (the ProtoList readAll() returned).
     //   2 : stringMarkerProto — see ReaderMarkers / CompilerMarkers docs.
     //   3 : fnMarkerProto — wraps user-fn callables (session 5).
-    ctx->resizeAutomaticLocals(7);
+    ctx->resizeAutomaticLocals(8);
     constexpr unsigned int kSlotGlobals      = 0;
     constexpr unsigned int kSlotForms        = 1;
     constexpr unsigned int kSlotStringMarker = 2;
@@ -80,6 +80,7 @@ int runFile(const char* path) {
     constexpr unsigned int kSlotVectorMarker = 4;
     constexpr unsigned int kSlotFnMulti      = 5;
     constexpr unsigned int kSlotMapMarker    = 6;
+    constexpr unsigned int kSlotAtomMarker   = 7;
 
     const proto::ProtoObject* globalsObj =
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
@@ -112,6 +113,12 @@ int runFile(const char* path) {
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
     ctx->setAutomaticLocal(kSlotMapMarker, mapMarkerProto);
 
+    // Session 16 — atoms. Mutable child of atomMarkerProto carrying
+    // the current value under `__value__`. CAS via setAttributeIfEqual.
+    const proto::ProtoObject* atomMarkerProto =
+        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+    ctx->setAutomaticLocal(kSlotAtomMarker, atomMarkerProto);
+
     const proto::ProtoString* bytesKey =
         proto::ProtoString::createSymbol(ctx, "__bytes__");
     const proto::ProtoString* bytecodeKey =
@@ -126,6 +133,8 @@ int runFile(const char* path) {
         proto::ProtoString::createSymbol(ctx, "__items__");
     const proto::ProtoString* entriesKey =
         proto::ProtoString::createSymbol(ctx, "__entries__");
+    const proto::ProtoString* valueKey =
+        proto::ProtoString::createSymbol(ctx, "__value__");
 
     protoClojure::ReaderMarkers readerMarkers{
         ctx->getAutomaticLocal(kSlotStringMarker),
@@ -178,7 +187,9 @@ int runFile(const char* path) {
                 ctx->getAutomaticLocal(kSlotFnSingle),
                 ctx->getAutomaticLocal(kSlotFnMulti),
                 ctx->getAutomaticLocal(kSlotMapMarker),
-                bytecodeKey, arityKey, capturesKey, aritiesKey, entriesKey);
+                ctx->getAutomaticLocal(kSlotAtomMarker),
+                bytecodeKey, arityKey, capturesKey, aritiesKey,
+                entriesKey, valueKey);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s: runtime error: %s\n", path, e.what());
         return 1;

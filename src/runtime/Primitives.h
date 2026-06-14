@@ -54,11 +54,16 @@ struct ActiveCallContext {
     // entries list (k,v,k,v,...) under entriesKey. Primitives that
     // build / read maps fetch the proto from here.
     const proto::ProtoObject*  mapMarkerProto;
+    // Session 16 — atomMarkerProto identifies atoms; valueKey stores
+    // the current value as an attribute. swap! / reset! mutate via
+    // setAttribute / setAttributeIfEqual on the receiver atom.
+    const proto::ProtoObject*  atomMarkerProto;
     const proto::ProtoString*  bytecodeKey;
     const proto::ProtoString*  arityKey;
     const proto::ProtoString*  capturesKey;
     const proto::ProtoString*  aritiesKey;       // session 8
     const proto::ProtoString*  entriesKey;       // session 13
+    const proto::ProtoString*  valueKey;         // session 16
 };
 void setActiveCallContext(const ActiveCallContext& cc);
 void clearActiveCallContext();
