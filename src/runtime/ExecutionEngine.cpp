@@ -239,7 +239,8 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
                          cc->bytecodeKey, cc->arityKey, cc->capturesKey,
                          cc->aritiesKey, cc->entriesKey,
                          callArgs, passArgc, capsVal,
-                         kwBased ? kwVals : nullptr, kwCount);
+                         kwBased ? kwVals : nullptr, kwCount,
+                         kwBased ? kwArgsMap : nullptr);
     }
 
     // C++ primitive — wrap args into a fresh ProtoList and dispatch.
@@ -282,7 +283,8 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                      unsigned int argCount,
                      const proto::ProtoObject* captures,
                      const proto::ProtoObject* const* kwVals,
-                     unsigned int kwCount) {
+                     unsigned int kwCount,
+                     const proto::ProtoObject* kwMap) {
     // Snapshot any prior active call context (we're nested under another
     // run() invocation, e.g. a user fn called from a primitive that
     // itself called us). Restore on every exit path so deep primitive
@@ -323,12 +325,18 @@ ExecutionEngine::run(proto::ProtoContext* parent,
     // Session 13 — kw-based fn: populate the declared :keys slots from
     // the caller-supplied kwVals array (already extracted from the
     // trailing map at dispatch time). Missing keys → slot stays nil.
+    // Session 14 — also write the raw kwMap into the `:as` binding's
+    // slot when one was declared.
     if (mod.isKwBased()) {
         const auto& kkeys = mod.kwKeys();
         for (std::size_t i = 0; i < kkeys.size(); ++i) {
             const proto::ProtoObject* v =
                 (kwVals && i < kwCount) ? kwVals[i] : PROTO_NONE;
             frame.setAutomaticLocal(locBase + kkeys[i].localSlot, v);
+        }
+        if (mod.asSlot() >= 0) {
+            frame.setAutomaticLocal(locBase + mod.asSlot(),
+                kwMap ? kwMap : PROTO_NONE);
         }
     }
 
@@ -489,7 +497,8 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 fnSingleProto, fnMultiProto, mapMarkerProto,
                 bytecodeKey, arityKey, capturesKey, aritiesKey, entriesKey,
                 callArgs, passArgc, capsVal,
-                kwBased ? kwVals : nullptr, kwCount);
+                kwBased ? kwVals : nullptr, kwCount,
+                kwBased ? kwArgsMap : nullptr);
             pushVal(result);
             return;
         }
@@ -644,6 +653,75 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                     pushVal(argsList->getAt(&frame, static_cast<int>(i)));
                 }
                 dispatchCall(static_cast<unsigned int>(ln));
+                break;
+            }
+
+            case Op::CALL_KW: {
+                // Stack: [..., callable, pos1, ..., posK, kwMap].
+                // operand = K + 1 (positionals counting the kwMap).
+                // If callee is a user fn declaring isKwBased, keep the
+                // map and dispatch (session 13 path). Otherwise unpack
+                // the kwMap into k,v,k,v positionals so the call sees
+                // the literal `:k v` shape the source had — backwards
+                // compatibility for primitives + non-kw user fns.
+                unsigned int argc = operand;
+                if (sp < argc + 1u)
+                    throw std::runtime_error("VM: CALL_KW with insufficient stack");
+                const proto::ProtoObject* callable = peekAt(argc);
+                bool calleeIsKwBased = false;
+                if (callable->getPrototype(&frame) == fnSingleProto) {
+                    const proto::ProtoObject* ptrObj =
+                        callable->getAttribute(&frame, bytecodeKey);
+                    if (ptrObj && ptrObj->isInteger(&frame)) {
+                        const BytecodeModule* subMod =
+                            reinterpret_cast<const BytecodeModule*>(
+                                ptrObj->asLong(&frame));
+                        calleeIsKwBased = subMod->isKwBased();
+                    }
+                }
+                if (calleeIsKwBased) {
+                    dispatchCall(argc);
+                } else {
+                    // Pop the kwMap, walk all its (k,v) pairs into a
+                    // transient ProtoList, then push them as alternating
+                    // positionals and dispatch. The flat list lets us
+                    // count without coupling pushVal to the C callback.
+                    const proto::ProtoObject* kwMap = popVal();
+                    if (!kwMap || kwMap->getPrototype(&frame) != mapMarkerProto)
+                        throw std::runtime_error("VM: CALL_KW: kwMap not a map");
+                    const proto::ProtoObject* eRaw =
+                        kwMap->getAttribute(&frame, entriesKey);
+                    const proto::ProtoSparseList* sparse = eRaw
+                        ? reinterpret_cast<const proto::ProtoSparseList*>(eRaw)
+                        : frame.newSparseList();
+                    proto::ProtoContext tmp(frame.space, &frame);
+                    tmp.resizeAutomaticLocals(1);
+                    tmp.setAutomaticLocal(0, tmp.newList()->asObject(&tmp));
+                    struct Acc { proto::ProtoContext* tmp; } acc{&tmp};
+                    sparse->processElements(&tmp, &acc,
+                        [](proto::ProtoContext* /*c*/, void* self,
+                           unsigned long /*hash*/,
+                           const proto::ProtoObject* bucketObj) {
+                            auto* a = static_cast<Acc*>(self);
+                            if (!bucketObj) return;
+                            const proto::ProtoList* bucket = bucketObj->asList(a->tmp);
+                            const proto::ProtoObject* lst = a->tmp->getAutomaticLocal(0);
+                            unsigned long n = bucket->getSize(a->tmp);
+                            for (unsigned long i = 0; i < n; ++i) {
+                                lst = lst->asList(a->tmp)
+                                    ->appendLast(a->tmp, bucket->getAt(a->tmp, (int)i))
+                                    ->asObject(a->tmp);
+                            }
+                            a->tmp->setAutomaticLocal(0, lst);
+                        });
+                    const proto::ProtoList* flat =
+                        tmp.getAutomaticLocal(0)->asList(&tmp);
+                    unsigned long flatN = flat->getSize(&tmp);
+                    for (unsigned long i = 0; i < flatN; ++i) {
+                        pushVal(flat->getAt(&tmp, (int)i));
+                    }
+                    dispatchCall(argc - 1 + static_cast<unsigned int>(flatN));
+                }
                 break;
             }
 

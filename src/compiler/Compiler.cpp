@@ -103,6 +103,17 @@ static const proto::ProtoList* mapEntries(proto::ProtoContext* ctx,
     return raw->asList(ctx);
 }
 
+// Session 14 — true iff `form` is a stringy form whose UTF-8 starts
+// with `:`. That is exactly a Clojure keyword as the Reader produces
+// it (`:foo` → a Symbol whose first byte is `:`). Used to detect a
+// trailing kv-pair suffix at call sites.
+static bool isKeywordSymbol(proto::ProtoContext* ctx,
+                            const proto::ProtoObject* form) {
+    if (!isStringy(form)) return false;
+    std::string s = asUtf8(ctx, form);
+    return !s.empty() && s[0] == ':';
+}
+
 std::unique_ptr<BytecodeModule>
 Compiler::compileFnBody(proto::ProtoContext* ctx,
                         const proto::ProtoList* fnForm,
@@ -158,7 +169,14 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     bool isVariadic = false;
     bool isKwBased  = false;
     std::string restName;
-    std::vector<std::string> kwKeyNames;
+    std::string asBindName;  // session 14 — `:as` snapshot binding name
+    // Session 14 — each kw key may have an associated default form from
+    // `:or {key default}`. defaultForm = nullptr when no default.
+    struct KwKeyDecl {
+        std::string name;
+        const proto::ProtoObject* defaultForm;
+    };
+    std::vector<KwKeyDecl> kwKeyDecls;
     for (unsigned long i = 0; i < rawCount; ++i) {
         const proto::ProtoObject* p = params->getAt(ctx, (int)i);
         if (isStringy(p) && asUtf8(ctx, p) == "&") {
@@ -170,11 +188,16 @@ Compiler::compileArity(proto::ProtoContext* ctx,
             fixedArity = i;
 
             if (isWrappedMap(ctx, rp, markers)) {
-                // `& {:keys [k1 k2]}` — kw destructuring.
+                // `& {:keys [k1 k2] :or {k1 default} :as opts}` — kw
+                // destructuring.
                 isKwBased = true;
                 const proto::ProtoList* entries = mapEntries(ctx, rp, markers);
                 unsigned long ne = entries->getSize(ctx);
                 bool sawKeys = false;
+                // Defer reading :or until after :keys — so we can attach
+                // defaults to the right KwKeyDecl regardless of source
+                // order. Cache the :or entries list pointer.
+                const proto::ProtoList* orEntries = nullptr;
                 for (unsigned long j = 0; j < ne; j += 2) {
                     const proto::ProtoObject* mk = entries->getAt(ctx, (int)j);
                     if (!isStringy(mk))
@@ -193,16 +216,19 @@ Compiler::compileArity(proto::ProtoContext* ctx,
                             const proto::ProtoObject* sym = ks->getAt(ctx, (int)t);
                             if (!isStringy(sym))
                                 throw CompileError("fn/defn: `:keys` entry must be a symbol");
-                            kwKeyNames.push_back(asUtf8(ctx, sym));
+                            kwKeyDecls.push_back({asUtf8(ctx, sym), nullptr});
                         }
                         sawKeys = true;
                     } else if (mkName == ":or") {
-                        // :or defaults — accepted at parse time but not
-                        // honoured until session 14. Quietly accept the
-                        // map; missing kwArgs leave the slot nil today.
+                        if (!isWrappedMap(ctx, mv, markers)) {
+                            throw CompileError("fn/defn: `:or` must be a map");
+                        }
+                        orEntries = mapEntries(ctx, mv, markers);
                     } else if (mkName == ":as") {
-                        // :as binds a snapshot of the whole kwArgs map —
-                        // deferred to session 14.
+                        if (!isStringy(mv)) {
+                            throw CompileError("fn/defn: `:as` binding must be a symbol");
+                        }
+                        asBindName = asUtf8(ctx, mv);
                     } else {
                         throw CompileError(
                             std::string("fn/defn: unsupported entry in `& {...}`: ") + mkName);
@@ -210,6 +236,30 @@ Compiler::compileArity(proto::ProtoContext* ctx,
                 }
                 if (!sawKeys) {
                     throw CompileError("fn/defn: `& {...}` needs at least :keys");
+                }
+                // Attach :or defaults to the matching KwKeyDecl.
+                if (orEntries) {
+                    unsigned long nor = orEntries->getSize(ctx);
+                    for (unsigned long j = 0; j < nor; j += 2) {
+                        const proto::ProtoObject* ok = orEntries->getAt(ctx, (int)j);
+                        if (!isStringy(ok))
+                            throw CompileError("fn/defn: `:or` key must be a symbol");
+                        std::string okName = asUtf8(ctx, ok);
+                        const proto::ProtoObject* ov =
+                            orEntries->getAt(ctx, (int)(j + 1));
+                        bool matched = false;
+                        for (auto& d : kwKeyDecls) {
+                            if (d.name == okName) {
+                                d.defaultForm = ov;
+                                matched = true;
+                                break;
+                            }
+                        }
+                        if (!matched) {
+                            throw CompileError(
+                                "fn/defn: `:or` key not in :keys: " + okName);
+                        }
+                    }
                 }
             } else if (isStringy(rp)) {
                 // `& rest` — variadic, session-7 shape.
@@ -251,11 +301,47 @@ Compiler::compileArity(proto::ProtoContext* ctx,
             scope.nameToSlot[restName] = restSlot;
         }
         if (isKwBased) {
-            for (const auto& kn : kwKeyNames) {
+            for (const auto& d : kwKeyDecls) {
                 int slot = scope.nextSlot++;
-                scope.nameToSlot[kn] = slot;
-                body->addKwKey(kn, slot);
+                scope.nameToSlot[d.name] = slot;
+                body->addKwKey(d.name, slot);
             }
+            if (!asBindName.empty()) {
+                int slot = scope.nextSlot++;
+                scope.nameToSlot[asBindName] = slot;
+                body->setAsSlot(slot);
+            }
+        }
+    }
+
+    // Session 14 — `:or` default prologue. For each kw key with a
+    // declared default, emit:
+    //     PUSH_LOCAL <slot>
+    //     PUSH_NIL
+    //     EQ
+    //     JUMP_IF_FALSE skip
+    //     <compile default>
+    //     STORE_LOCAL <slot>
+    //     skip:
+    // The slot was populated by the dispatcher (or left nil if the key
+    // was missing). The `:or` default fires for either case; that
+    // collapses the "missing" / "explicit nil" distinction, which is a
+    // known v0.14 deviation from JVM-Clojure documented in STATUS.
+    if (isKwBased) {
+        for (std::size_t ki = 0; ki < kwKeyDecls.size(); ++ki) {
+            if (!kwKeyDecls[ki].defaultForm) continue;
+            int slot = body->kwKeys()[ki].localSlot;
+            body->emit(Op::PUSH_LOCAL, static_cast<std::uint8_t>(slot));
+            body->emit(Op::PUSH_NIL, 0);
+            body->emit(Op::EQ, 0);
+            std::size_t jifAt = body->emit(Op::JUMP_IF_FALSE, 0);
+            compileForm(ctx, kwKeyDecls[ki].defaultForm, *body, markers);
+            body->emit(Op::STORE_LOCAL, static_cast<std::uint8_t>(slot));
+            std::size_t after = body->pos();
+            std::size_t off = (after - (jifAt + kInstrSize)) / kInstrSize;
+            if (off > 255)
+                throw CompileError(":or default body too large");
+            body->patchOperand(jifAt, static_cast<std::uint8_t>(off));
         }
     }
 
@@ -959,17 +1045,56 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             compileForm(ctx, head, out, markers);
         }
 
-        // Push each argument.
-        for (unsigned long i = 1; i < n; ++i) {
+        // Session 14 — trailing kv-pair detection. Walking backwards
+        // from the last arg in steps of 2, every position that should
+        // host a key must be a keyword. The longest such suffix is
+        // packaged into a synthetic `(hash-map :k v :k v ...)` call and
+        // emitted as the LAST positional argument; the callee can then
+        // peel it off when isKwBased (session 13's path).
+        unsigned long kvStart = n;
+        for (long long i = (long long)n - 2; i >= 1; i -= 2) {
+            const proto::ProtoObject* arg =
+                lst->getAt(ctx, static_cast<int>(i));
+            if (isKeywordSymbol(ctx, arg)) {
+                kvStart = static_cast<unsigned long>(i);
+            } else {
+                break;
+            }
+        }
+        unsigned long posCount = kvStart - 1;
+        unsigned long kvCount  = n - kvStart;
+
+        // Push positionals.
+        for (unsigned long i = 1; i < kvStart; ++i) {
             compileForm(ctx, lst->getAt(ctx, static_cast<int>(i)), out, markers);
         }
 
-        // CALL with argc = n - 1.
-        unsigned long argc = n - 1;
-        if (argc > 255) {
-            throw CompileError("call with >255 args not supported in v0.0.x");
+        // If a kv suffix was detected, build the kw map at runtime by
+        // calling `hash-map` with all kv entries; the result becomes
+        // the extra trailing positional arg.
+        if (kvCount > 0) {
+            std::size_t hmIdx = out.addSymbol("hash-map");
+            if (hmIdx > 255) throw CompileError("hash-map: const-pool overflow");
+            out.emit(Op::PUSH_VAR, static_cast<std::uint8_t>(hmIdx));
+            for (unsigned long i = kvStart; i < n; ++i) {
+                compileForm(ctx, lst->getAt(ctx, static_cast<int>(i)), out, markers);
+            }
+            if (kvCount > 255) {
+                throw CompileError("kw suffix: >255 args not supported");
+            }
+            out.emit(Op::CALL, static_cast<std::uint8_t>(kvCount));
         }
-        out.emit(Op::CALL, static_cast<std::uint8_t>(argc));
+
+        unsigned long callArgc = posCount + (kvCount > 0 ? 1 : 0);
+        if (callArgc > 255) {
+            throw CompileError("call with >255 args not supported");
+        }
+        // CALL_KW when a kv suffix was packaged; CALL otherwise. The VM
+        // decides at runtime whether to keep the kwMap intact (kw-based
+        // callee) or unpack it back into positional k,v,k,v args
+        // (everyone else).
+        out.emit(kvCount > 0 ? Op::CALL_KW : Op::CALL,
+                 static_cast<std::uint8_t>(callArgc));
         return;
     }
 

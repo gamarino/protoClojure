@@ -74,7 +74,11 @@ public:
                                   // means the caller passed no kwArgs;
                                   // missing keys leave their slot as nil.
                                   const proto::ProtoObject* const* kwVals = nullptr,
-                                  unsigned int kwCount = 0);
+                                  unsigned int kwCount = 0,
+                                  // Session 14 — raw kwArgs map for the
+                                  // `:as` binding (nullptr/PROTO_NONE when
+                                  // none was supplied).
+                                  const proto::ProtoObject* kwMap = nullptr);
 };
 
 } // namespace protoClojure

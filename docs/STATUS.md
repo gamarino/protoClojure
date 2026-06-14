@@ -26,6 +26,7 @@ harness produces honest numbers vs Babashka 1.4.192 (see
 | 11 | SmallInt fast-path opcodes + LargeInteger promotion | 93 |
 | 12 | Fewer attribute lookups per CALL (perf cleanup) | 93 |
 | 13 | Maps + `& {:keys [...]}` named-arg destructuring | 103 |
+| 14 | Dual call convention closed: trailing kv pairs + `:or` + `:as` | 113 |
 
 The dated design specs live under `docs/superpowers/specs/`; the
 memory entries for each session live under
@@ -182,32 +183,35 @@ does not yet support. Calling any of them raises a clear error.
 - [ ] Conversion helpers `clj->py` `py->clj` `clj->js` `js->clj`
       `clj->pst` `pst->clj`
 
-### protoCore call convention — dual syntax (session 13 partial)
+### protoCore call convention — dual syntax (CLOSED, session 14)
 
 The dual syntax for **consuming AND generating** functions under the
-protoCore call convention is what makes UMD interop transparent.
-Session 13 shipped:
+protoCore call convention is what makes UMD interop transparent. All
+four shapes work end-to-end as of session 14:
 
 - [x] Positional consume — `(foo 1 2 3)` works for primitives and user fns.
 - [x] Positional generate — `defn` functions reachable from protoST /
       protoPython through the bare-name attribute on the namespace.
-- [x] **Named consume — trailing map literal**: `(area 3 4 {:unit :feet})`
-      reaches a user fn declared with `& {:keys [unit]}` via the
-      kwArgs dict; foreign callees see the map via their `kwArgs`
-      ProtoMethod slot.
-- [x] **Named generate** — `(defn foo [a b & {:keys [unit]}] ...)`
-      produces a wrapper whose body reads `:unit` from the caller's
-      kwArgs map.
+- [x] Named consume — trailing map literal `(area 3 4 {:unit :feet})`.
+- [x] Named consume — trailing kv pairs `(area 3 4 :unit :feet)` (the
+      Clojure idiom). Compiler detects the `:keyword value` suffix and
+      packages it into a kwArgs map via a `CALL_KW` opcode; the VM
+      keeps the map if the callee is kw-based, otherwise unpacks it
+      back into positional kv pairs so primitives like `assoc` and
+      `get` keep working unchanged.
+- [x] Named generate — `(defn foo [a b & {:keys [unit]}] ...)`.
+- [x] **`:or` defaults** — `(defn foo [& {:keys [unit] :or {unit :meters}}] ...)`.
+      Body prologue evaluates the default whenever the slot is nil
+      (covers both "missing" and "explicit nil" — a known v0.14
+      deviation from JVM-Clojure semantics).
+- [x] **`:as` snapshot** — `(defn foo [& {:keys [...] :as opts}] ...)`.
+      `opts` receives the raw kwArgs map (or PROTO_NONE when none was
+      supplied).
 - [x] Reader: map literals `{...}` (session 13).
-- [ ] **Trailing kv-pair detection** — `(area 3 4 :unit :feet)` (without
-      the `{}`) should be equivalent to the trailing-map form. The
-      compiler needs to detect a `:keyword value` suffix and pack it
-      into a map at the call site. Targeted for **session 14**.
-- [ ] `:or` defaults in destructuring — the parser accepts the syntax
-      today but defaults are not applied. Also session 14.
-- [ ] `:as` binding (snapshot of the kwArgs map) — same.
-- [ ] Keyword binding via shorthand `:strs` / `:syms` — not on the
-      immediate path.
+
+Still planned:
+- [ ] Keyword shorthand `:strs` / `:syms` — not on the immediate path.
+- [ ] Per-key destructuring outside the kwArgs map (`{x :x}` binding).
 
 See `docs/superpowers/specs/2026-06-14-protocore-call-convention.md`
 for the design.
@@ -266,6 +270,7 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D13 | `read-string` strict on unregistered reader literals       | core   |
 | D14 | LargeInteger promotion is automatic on `*` — no `*'` needed (CONTRA Clojure-JVM, by design) | (perm) |
 | D15 | `(= 1 1.0)` returns `true` in v0.x (CONTRA Clojure-JVM where `=` is type-strict) | (perm) |
+| D16 | `:or` defaults fire on **explicit nil** as well as missing keys (CONTRA JVM-Clojure where only missing keys take the default) | v0.2 |
 
 ## Known issues
 

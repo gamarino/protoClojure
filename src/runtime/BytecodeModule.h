@@ -90,6 +90,10 @@ public:
     }
     const std::vector<KwKey>& kwKeys() const { return kwKeys_; }
 
+    // Session 14 — `:as` binding slot (-1 when not declared).
+    int  asSlot() const { return asSlot_; }
+    void setAsSlot(int s) { asSlot_ = s; }
+
     // Closure capture specification (session 6). For each free variable
     // the body references through its enclosing scope, the compiler
     // records: parentSlot — the slot in the enclosing scope's frame to
@@ -142,6 +146,7 @@ private:
     int                                          localCount_ = 0;
     bool                                         isVariadic_ = false;
     bool                                         isKwBased_  = false;
+    int                                          asSlot_     = -1;
     std::vector<KwKey>                           kwKeys_;
 };
 

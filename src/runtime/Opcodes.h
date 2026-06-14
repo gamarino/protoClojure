@@ -76,6 +76,18 @@ enum class Op : uint8_t {
     GT              = 25,
     GE              = 26,
     EQ              = 27,
+
+    // Session 14 — trailing-kv-pair call. Stack: [callable, pos1,
+    // ..., posN, kwMap]. operand = N + 1 (counting kwMap as the last
+    // positional, same way CALL counts its args). The VM decides at
+    // runtime: when the callee declares `isKwBased` it keeps the
+    // kwMap and dispatches it like the session-13 trailing-map path;
+    // otherwise it unpacks the kwMap into `k1 v1 k2 v2 ...`
+    // positionals and dispatches with the expanded argc. This
+    // preserves call semantics for non-kw callees (`(println :a 1)`
+    // still prints `:a 1`) while letting kw-based callees get the
+    // map directly.
+    CALL_KW         = 28,
 };
 
 inline constexpr std::size_t kInstrSize = 2;

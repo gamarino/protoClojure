@@ -34,6 +34,7 @@ const char* opName(Op op) {
         case Op::GT:            return "GT";
         case Op::GE:            return "GE";
         case Op::EQ:            return "EQ";
+        case Op::CALL_KW:       return "CALL_KW";
     }
     return "?";
 }
