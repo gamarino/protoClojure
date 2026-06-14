@@ -26,11 +26,11 @@
 
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 namespace proto {
 class ProtoContext;
 class ProtoObject;
+class ProtoList;
 }
 
 namespace protoClojure {
@@ -54,13 +54,14 @@ public:
     // calling convention.
     const proto::ProtoObject* readOne();
 
-    // Read every form until EOF.
+    // Read every form until EOF. Returns a protoCore ProtoList of forms in
+    // source order — same representation a Clojure file's top-level forms
+    // would have. No std container is used; the protoCore GC traces the
+    // result and every element it holds.
     //
-    // The Reader internally keeps each form rooted in a slot of its own
-    // ProtoContext for the duration of the readAll() call. The returned
-    // vector's elements stay valid until the Reader is destroyed OR the
-    // next call into the Reader.
-    std::vector<const proto::ProtoObject*> readAll();
+    // The returned pointer is UNROOTED on return — caller must store
+    // immediately, same rule as readOne.
+    const proto::ProtoList* readAll();
 
 private:
     proto::ProtoContext* ctx_;

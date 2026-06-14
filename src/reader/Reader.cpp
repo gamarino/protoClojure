@@ -13,24 +13,30 @@ const proto::ProtoObject* Reader::readOne() {
     return readFromToken(ctx_, tok);
 }
 
-std::vector<const proto::ProtoObject*> Reader::readAll() {
-    // One child context for the whole readAll session. Each form is held in
-    // a slot so that an explosion of forms does not let the GC reclaim an
-    // earlier one mid-loop. We grow the slot region as we go.
+const proto::ProtoList* Reader::readAll() {
+    // One child context for the whole readAll session. Two slots: the
+    // accumulator ProtoList (slot 0) and the most recently read form
+    // (slot 1). Same shape as readList — the accumulator IS a ProtoList,
+    // the protoCore GC traces it, no std container in sight.
     proto::ProtoContext scope(ctx_->space, ctx_);
-    std::vector<const proto::ProtoObject*> out;
+    scope.resizeAutomaticLocals(2);
+    constexpr unsigned int kSlotAcc  = 0;
+    constexpr unsigned int kSlotForm = 1;
+    scope.setAutomaticLocal(kSlotAcc,
+                            scope.newList()->asObject(&scope));
+
     while (true) {
         Token tok = lexer_.next();
         if (tok.kind == TokenKind::EndOfFile) break;
-
-        // Reserve one slot per form we have accumulated so far. Each form,
-        // once read, lives in its slot until the Reader (and its scope) die.
-        unsigned int idx = static_cast<unsigned int>(out.size());
-        scope.resizeAutomaticLocals(idx + 1);
-        scope.setAutomaticLocal(idx, readFromToken(&scope, tok));
-        out.push_back(scope.getAutomaticLocal(idx));
+        scope.setAutomaticLocal(kSlotForm,
+                                readFromToken(&scope, tok));
+        const proto::ProtoList* cur =
+            scope.getAutomaticLocal(kSlotAcc)->asList(&scope);
+        const proto::ProtoList* updated =
+            cur->appendLast(&scope, scope.getAutomaticLocal(kSlotForm));
+        scope.setAutomaticLocal(kSlotAcc, updated->asObject(&scope));
     }
-    return out;
+    return scope.getAutomaticLocal(kSlotAcc)->asList(&scope);
 }
 
 const proto::ProtoObject*

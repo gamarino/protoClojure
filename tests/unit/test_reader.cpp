@@ -113,11 +113,12 @@ TEST_F(ReaderFixture, NestedLists) {
 
 TEST_F(ReaderFixture, MultipleTopLevelForms) {
     Reader r(ctx, "1 2 3");
-    auto forms = r.readAll();
-    ASSERT_EQ(forms.size(), 3u);
-    EXPECT_EQ(forms[0]->asLong(ctx), 1);
-    EXPECT_EQ(forms[1]->asLong(ctx), 2);
-    EXPECT_EQ(forms[2]->asLong(ctx), 3);
+    const proto::ProtoList* forms = r.readAll();
+    ASSERT_NE(forms, nullptr);
+    EXPECT_EQ(forms->getSize(ctx), 3u);
+    EXPECT_EQ(forms->getAt(ctx, 0)->asLong(ctx), 1);
+    EXPECT_EQ(forms->getAt(ctx, 1)->asLong(ctx), 2);
+    EXPECT_EQ(forms->getAt(ctx, 2)->asLong(ctx), 3);
 }
 
 TEST_F(ReaderFixture, EOFReturnsNullptr) {
