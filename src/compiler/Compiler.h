@@ -52,12 +52,14 @@ struct CompilerMarkers {
     // single-arity and multi-arity prototypes through ActiveCallContext.
     const proto::ProtoObject* stringMarkerProto;
     const proto::ProtoObject* vectorMarkerProto; // session 9 — `[..]` literal
+    const proto::ProtoObject* mapMarkerProto;    // session 13 — `{..}` literal
     const proto::ProtoString* bytesKey;
     const proto::ProtoString* bytecodeKey;       // session 5 — opaque ptr
     const proto::ProtoString* arityKey;          // session 5
     const proto::ProtoString* capturesKey;       // session 6 — closure captures list
     const proto::ProtoString* aritiesKey;        // session 8 — multi-arity dispatch list
     const proto::ProtoString* itemsKey;          // session 9 — vector items list
+    const proto::ProtoString* entriesKey;        // session 13 — map entries list
 };
 
 class Compiler {

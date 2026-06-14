@@ -107,6 +107,38 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
             return wrapScope.getAutomaticLocal(kSlotWrap);
         }
 
+        case TokenKind::LBrace: {
+            // Session 13 — `{k1 v1 k2 v2 ...}` map literal. Same wrapping
+            // pattern as vectors but under mapMarkerProto. The entries
+            // list stores k,v,k,v,... in source order; the compiler
+            // checks the even-count rule (odd → reader error). The
+            // compiler emits `(hash-map k1 v1 ...)` for the expression
+            // case and unwraps directly for fn `& {:keys ...}`
+            // destructuring.
+            proto::ProtoContext wrapScope(parent->space, parent);
+            wrapScope.resizeAutomaticLocals(2);
+            constexpr unsigned int kSlotEntries = 0;
+            constexpr unsigned int kSlotWrap    = 1;
+            const proto::ProtoObject* entries =
+                readList(&wrapScope, TokenKind::RBrace,
+                         tok.line, tok.column);
+            wrapScope.setAutomaticLocal(kSlotEntries, entries);
+            const proto::ProtoList* lst =
+                wrapScope.getAutomaticLocal(kSlotEntries)->asList(&wrapScope);
+            if (lst->getSize(&wrapScope) % 2 != 0) {
+                throw ReaderError("map literal: odd number of forms",
+                                  tok.line, tok.column);
+            }
+            wrapScope.setAutomaticLocal(kSlotWrap,
+                markers_.mapMarkerProto->newChild(&wrapScope,
+                                                   /*isMutable=*/true));
+            const_cast<proto::ProtoObject*>(
+                wrapScope.getAutomaticLocal(kSlotWrap))
+                ->setAttribute(&wrapScope, markers_.entriesKey,
+                               wrapScope.getAutomaticLocal(kSlotEntries));
+            return wrapScope.getAutomaticLocal(kSlotWrap);
+        }
+
         case TokenKind::Error:
             throw ReaderError(tok.text, tok.line, tok.column);
 
@@ -146,17 +178,17 @@ Reader::readList(proto::ProtoContext* parent, TokenKind closeKind,
     while (true) {
         Token tok = lexer_.next();
         if (tok.kind == TokenKind::EndOfFile) {
-            throw ReaderError(
-                closeKind == TokenKind::RParen
-                    ? "unterminated list — missing `)`"
-                    : "unterminated vector — missing `]`",
-                openLine, openColumn);
+            const char* what = "unterminated list — missing `)`";
+            if (closeKind == TokenKind::RBracket) what = "unterminated vector — missing `]`";
+            else if (closeKind == TokenKind::RBrace) what = "unterminated map — missing `}`";
+            throw ReaderError(what, openLine, openColumn);
         }
         if (tok.kind == closeKind) {
             return frame.getAutomaticLocal(kSlotList);
         }
         if (tok.kind == TokenKind::RParen ||
-            tok.kind == TokenKind::RBracket) {
+            tok.kind == TokenKind::RBracket ||
+            tok.kind == TokenKind::RBrace) {
             throw ReaderError(
                 std::string("mismatched ") + tokenKindName(tok.kind),
                 tok.line, tok.column);

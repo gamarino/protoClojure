@@ -87,6 +87,22 @@ static const proto::ProtoList* vectorItems(proto::ProtoContext* ctx,
     return raw->asList(ctx);
 }
 
+// Session 13 — true iff `form` is a Reader-wrapped `{..}` map literal.
+static bool isWrappedMap(proto::ProtoContext* ctx,
+                         const proto::ProtoObject* form,
+                         const CompilerMarkers& markers) {
+    if (!form) return false;
+    return form->getPrototype(ctx) == markers.mapMarkerProto;
+}
+
+static const proto::ProtoList* mapEntries(proto::ProtoContext* ctx,
+                                          const proto::ProtoObject* form,
+                                          const CompilerMarkers& markers) {
+    const proto::ProtoObject* raw =
+        form->getAttribute(ctx, markers.entriesKey);
+    return raw->asList(ctx);
+}
+
 std::unique_ptr<BytecodeModule>
 Compiler::compileFnBody(proto::ProtoContext* ctx,
                         const proto::ProtoList* fnForm,
@@ -127,27 +143,82 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     unsigned long n = arityForm->getSize(ctx);
     unsigned long rawCount = params->getSize(ctx);
 
-    // Session 7/8 — scan for variadic `& rest`. The token `&` is the
-    // literal ampersand symbol; the param that follows is the rest-
-    // binding (a list of leftover args). Only one rest-param allowed,
-    // only at the tail.
+    // Session 7/8/13 — scan for `& <rest>`. The rest can be:
+    //   - a symbol (`& rest`): variadic, collects leftover positionals as
+    //     a list — the session-7 shape, unchanged.
+    //   - a wrapped map (`& {:keys [k1 k2 ...]}`): kw-based, names each
+    //     declared key as a local slot whose value will be supplied by
+    //     the caller's kwArgs dict at CALL_KW time (session 13).
+    //
+    // The two shapes are mutually exclusive — JVM-Clojure shares the
+    // surface (`& {:keys}` is the kw form of variadic), but the
+    // dispatch path diverges entirely. We pick the path by inspecting
+    // the form after `&`.
     unsigned long fixedArity = rawCount;
     bool isVariadic = false;
+    bool isKwBased  = false;
     std::string restName;
+    std::vector<std::string> kwKeyNames;
     for (unsigned long i = 0; i < rawCount; ++i) {
         const proto::ProtoObject* p = params->getAt(ctx, (int)i);
         if (isStringy(p) && asUtf8(ctx, p) == "&") {
             if (i + 1 != rawCount - 1) {
                 throw CompileError(
-                    "fn/defn: `&` must be followed by exactly one rest-param");
+                    "fn/defn: `&` must be followed by exactly one form");
             }
             const proto::ProtoObject* rp = params->getAt(ctx, (int)(i + 1));
-            if (!isStringy(rp)) {
-                throw CompileError("fn/defn: rest-param name must be a symbol");
-            }
-            restName  = asUtf8(ctx, rp);
             fixedArity = i;
-            isVariadic = true;
+
+            if (isWrappedMap(ctx, rp, markers)) {
+                // `& {:keys [k1 k2]}` — kw destructuring.
+                isKwBased = true;
+                const proto::ProtoList* entries = mapEntries(ctx, rp, markers);
+                unsigned long ne = entries->getSize(ctx);
+                bool sawKeys = false;
+                for (unsigned long j = 0; j < ne; j += 2) {
+                    const proto::ProtoObject* mk = entries->getAt(ctx, (int)j);
+                    if (!isStringy(mk))
+                        throw CompileError("fn/defn: `& {...}` key must be a keyword");
+                    std::string mkName = asUtf8(ctx, mk);
+                    const proto::ProtoObject* mv =
+                        entries->getAt(ctx, (int)(j + 1));
+                    if (mkName == ":keys") {
+                        if (!isWrappedVector(ctx, mv, markers)) {
+                            throw CompileError(
+                                "fn/defn: `:keys` must be a vector of symbols");
+                        }
+                        const proto::ProtoList* ks = vectorItems(ctx, mv, markers);
+                        unsigned long nk = ks->getSize(ctx);
+                        for (unsigned long t = 0; t < nk; ++t) {
+                            const proto::ProtoObject* sym = ks->getAt(ctx, (int)t);
+                            if (!isStringy(sym))
+                                throw CompileError("fn/defn: `:keys` entry must be a symbol");
+                            kwKeyNames.push_back(asUtf8(ctx, sym));
+                        }
+                        sawKeys = true;
+                    } else if (mkName == ":or") {
+                        // :or defaults — accepted at parse time but not
+                        // honoured until session 14. Quietly accept the
+                        // map; missing kwArgs leave the slot nil today.
+                    } else if (mkName == ":as") {
+                        // :as binds a snapshot of the whole kwArgs map —
+                        // deferred to session 14.
+                    } else {
+                        throw CompileError(
+                            std::string("fn/defn: unsupported entry in `& {...}`: ") + mkName);
+                    }
+                }
+                if (!sawKeys) {
+                    throw CompileError("fn/defn: `& {...}` needs at least :keys");
+                }
+            } else if (isStringy(rp)) {
+                // `& rest` — variadic, session-7 shape.
+                restName   = asUtf8(ctx, rp);
+                isVariadic = true;
+            } else {
+                throw CompileError(
+                    "fn/defn: form after `&` must be a symbol (variadic) or a `{:keys [...]}` map");
+            }
             break;
         }
     }
@@ -155,6 +226,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     auto body = std::make_unique<BytecodeModule>();
     body->setArity(static_cast<int>(fixedArity));
     body->setVariadic(isVariadic);
+    body->setKwBased(isKwBased);
 
     // Push a fresh fn scope. Fixed params go in slots 0..fixedArity-1; the
     // rest-binding (if any) gets slot fixedArity. We never hold a Scope&
@@ -177,6 +249,13 @@ Compiler::compileArity(proto::ProtoContext* ctx,
         if (isVariadic) {
             int restSlot = scope.nextSlot++;
             scope.nameToSlot[restName] = restSlot;
+        }
+        if (isKwBased) {
+            for (const auto& kn : kwKeyNames) {
+                int slot = scope.nextSlot++;
+                scope.nameToSlot[kn] = slot;
+                body->addKwKey(kn, slot);
+            }
         }
     }
 
@@ -891,6 +970,24 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             throw CompileError("call with >255 args not supported in v0.0.x");
         }
         out.emit(Op::CALL, static_cast<std::uint8_t>(argc));
+        return;
+    }
+
+    // Session 13 — `{..}` map literal in expression position. Compile as
+    // a call to the `hash-map` primitive: emit PUSH_VAR hash-map, then
+    // each k,v in source order, then CALL 2*N. The wrapper marker stays
+    // out of the bytecode — purely a compile-time hint.
+    if (isWrappedMap(ctx, form, markers)) {
+        const proto::ProtoList* entries = mapEntries(ctx, form, markers);
+        unsigned long ne = entries->getSize(ctx);  // already validated even
+        std::size_t headIdx = out.addSymbol("hash-map");
+        if (headIdx > 255) throw CompileError("hash-map: const-pool overflow");
+        out.emit(Op::PUSH_VAR, static_cast<std::uint8_t>(headIdx));
+        for (unsigned long i = 0; i < ne; ++i) {
+            compileForm(ctx, entries->getAt(ctx, (int)i), out, markers);
+        }
+        if (ne > 255) throw CompileError("hash-map: >255 items in literal");
+        out.emit(Op::CALL, static_cast<std::uint8_t>(ne));
         return;
     }
 

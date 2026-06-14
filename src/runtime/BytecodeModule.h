@@ -73,6 +73,23 @@ public:
     void setLocalCount(int n)   { localCount_ = n; }
     void setVariadic(bool v)    { isVariadic_ = v; }
 
+    // Session 13 — named-arg destructuring. When a fn body is
+    // declared with `& {:keys [k1 k2 ...]}`, each key gets a local
+    // slot and the dispatcher reads it from the kwArgs dict at call
+    // time. The slot indices are stored parallel to the names so the
+    // VM can populate them in one pass. `isKwBased()` short-circuits
+    // the rest-arg path for kw fns.
+    struct KwKey {
+        std::string name;
+        int         localSlot;
+    };
+    bool isKwBased() const { return isKwBased_; }
+    void setKwBased(bool v) { isKwBased_ = v; }
+    void addKwKey(const std::string& name, int localSlot) {
+        kwKeys_.push_back({name, localSlot});
+    }
+    const std::vector<KwKey>& kwKeys() const { return kwKeys_; }
+
     // Closure capture specification (session 6). For each free variable
     // the body references through its enclosing scope, the compiler
     // records: parentSlot — the slot in the enclosing scope's frame to
@@ -124,6 +141,8 @@ private:
     int                                          arity_      = 0;
     int                                          localCount_ = 0;
     bool                                         isVariadic_ = false;
+    bool                                         isKwBased_  = false;
+    std::vector<KwKey>                           kwKeys_;
 };
 
 } // namespace protoClojure

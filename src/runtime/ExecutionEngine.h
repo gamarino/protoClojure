@@ -60,13 +60,21 @@ public:
                                   const proto::ProtoObject* globals,
                                   const proto::ProtoObject* fnSingleProto,
                                   const proto::ProtoObject* fnMultiProto,
+                                  const proto::ProtoObject* mapMarkerProto,
                                   const proto::ProtoString* bytecodeKey,
                                   const proto::ProtoString* arityKey,
                                   const proto::ProtoString* capturesKey,
                                   const proto::ProtoString* aritiesKey,
+                                  const proto::ProtoString* entriesKey,
                                   const proto::ProtoObject* const* args = nullptr,
                                   unsigned int argCount = 0,
-                                  const proto::ProtoObject* captures = nullptr);
+                                  const proto::ProtoObject* captures = nullptr,
+                                  // Session 13 — pre-extracted kwArg values
+                                  // in the order of mod.kwKeys(). nullptr
+                                  // means the caller passed no kwArgs;
+                                  // missing keys leave their slot as nil.
+                                  const proto::ProtoObject* const* kwVals = nullptr,
+                                  unsigned int kwCount = 0);
 };
 
 } // namespace protoClojure

@@ -144,11 +144,12 @@ TEST(Lexer, BracketsAreLexedAsTokens) {
     EXPECT_EQ(toks[4].kind, TokenKind::RBracket);
 }
 
-TEST(Lexer, ReservedBraceReportsError) {
-    // `{:a 1}` is still reserved-for-later in v0.0.x (maps land later).
+TEST(Lexer, BracesAreLexedAsTokens) {
+    // Maps land in session 13; `{...}` now tokenises to LBrace / RBrace.
     auto toks = tokenise("{:a 1}");
-    ASSERT_GE(toks.size(), 1u);
-    EXPECT_EQ(toks[0].kind, TokenKind::Error);
+    ASSERT_GE(toks.size(), 4u);
+    EXPECT_EQ(toks[0].kind, TokenKind::LBrace);
+    EXPECT_EQ(toks[3].kind, TokenKind::RBrace);
 }
 
 TEST(Lexer, LineColumnTracked) {

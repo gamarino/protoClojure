@@ -155,6 +155,36 @@ void printValue(proto::ProtoContext* ctx, std::FILE* out,
         std::fputs(s->toStdString(ctx).c_str(), out);
         return;
     }
+    // Session 13 — print maps. We check via ActiveCallContext rather
+    // than carrying mapMarkerProto through printValue everywhere.
+    const ActiveCallContext* cc = activeCallContext();
+    if (cc && v->getPrototype(ctx) == cc->mapMarkerProto) {
+        const proto::ProtoObject* eRaw =
+            v->getAttribute(ctx, cc->entriesKey);
+        const proto::ProtoSparseList* sparse = eRaw
+            ? reinterpret_cast<const proto::ProtoSparseList*>(eRaw)
+            : ctx->newSparseList();
+        std::fputc('{', out);
+        struct Acc { proto::ProtoContext* ctx; std::FILE* out; bool first; };
+        Acc acc{ctx, out, true};
+        sparse->processElements(ctx, &acc,
+            [](proto::ProtoContext* c, void* self, unsigned long /*hash*/,
+               const proto::ProtoObject* bucketObj) {
+                auto* a = static_cast<Acc*>(self);
+                if (!bucketObj) return;
+                const proto::ProtoList* bucket = bucketObj->asList(c);
+                unsigned long n = bucket->getSize(c);
+                for (unsigned long i = 0; i < n; i += 2) {
+                    if (!a->first) std::fputs(", ", a->out);
+                    a->first = false;
+                    printValue(c, a->out, bucket->getAt(c, (int)i));
+                    std::fputc(' ', a->out);
+                    printValue(c, a->out, bucket->getAt(c, (int)(i + 1)));
+                }
+            });
+        std::fputc('}', out);
+        return;
+    }
     std::fputs("#<unprintable>", out);
 }
 
@@ -627,6 +657,254 @@ const proto::ProtoObject* prim_list_p(proto::ProtoContext* ctx,
     return (v && isListTag(v)) ? PROTO_TRUE : PROTO_FALSE;
 }
 
+// Session 13 — map primitives. Wire shape: a map is a child of
+// `mapMarkerProto` with `__entries__` = a protoCore `ProtoSparseList`
+// indexed by `key->getHash(ctx)`. Each slot stores a small "bucket"
+// `ProtoList` of (k,v,k,v,...) alternating, so two keys with a hash
+// collision both land in the same bucket and a linear scan resolves
+// them. Most buckets hold exactly one (k,v) pair.
+//
+// Cost model: assoc / get / contains? = O(log N) for the SparseList
+// AVL walk + O(B) for the bucket where B is the collision count
+// (typically 1). keys / vals = O(N) iteration.
+//
+// Key equality uses `compare(ctx, other) == 0`, which handles
+// SmallInt / LargeInt / Float / Symbol / String identity AND value
+// equivalence per the kernel.
+//
+// Hash fast-path TODO (session 14): for interned symbols / keywords
+// the canonical pattern across protoCore (see ProtoObject::getAttribute,
+// THREAD_CACHE_DEPTH index) is `(reinterpret_cast<uintptr_t>(key) >> 6)`
+// directly — the symbol-table guarantees pointer-stability, and the
+// 64-byte cell alignment makes the low 6 bits zero. That avoids the
+// virtual `getHash` call entirely for the dominant case. Today we use
+// `getHash(ctx)` which is correct for every value type but slower for
+// symbols. Switch when the bench says it matters.
+
+const proto::ProtoObject* prim_map_p(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject*,
+                                     const proto::ParentLink*,
+                                     const proto::ProtoList* args,
+                                     const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("map?: expects 1 arg");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("map?: no active VM context");
+    if (!v) return PROTO_FALSE;
+    return (v->getPrototype(ctx) == cc->mapMarkerProto) ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// Returns the underlying ProtoSparseList of the map wrapper. The wrapper
+// stores it as a `__entries__` attribute pointing at a ProtoSparseList's
+// asObject form; we round-trip via newSparseList() when the map is fresh.
+static const proto::ProtoSparseList* mapEntriesSparse(proto::ProtoContext* ctx,
+                                                      const proto::ProtoObject* m,
+                                                      const proto::ProtoString* entriesKey) {
+    const proto::ProtoObject* raw = m->getAttribute(ctx, entriesKey);
+    if (!raw || raw == PROTO_NONE) return ctx->newSparseList();
+    return reinterpret_cast<const proto::ProtoSparseList*>(raw);
+}
+
+// Inside a hash bucket (a flat ProtoList of k,v,k,v,...), scan for `key`.
+// Returns the index of the K cell (always even) for which compare ==
+// 0, or -1 if not found.
+static long long bucketFindKey(proto::ProtoContext* ctx,
+                               const proto::ProtoList* bucket,
+                               const proto::ProtoObject* key) {
+    if (!bucket) return -1;
+    unsigned long n = bucket->getSize(ctx);
+    for (unsigned long i = 0; i < n; i += 2) {
+        const proto::ProtoObject* k = bucket->getAt(ctx, (int)i);
+        if (k->compare(ctx, key) == 0) return (long long)i;
+    }
+    return -1;
+}
+
+static const proto::ProtoObject* buildMap(proto::ProtoContext* ctx,
+                                          const ActiveCallContext* cc,
+                                          const proto::ProtoSparseList* sparse) {
+    proto::ProtoObject* wrap = const_cast<proto::ProtoObject*>(
+        cc->mapMarkerProto->newChild(ctx, /*isMutable=*/true));
+    wrap->setAttribute(ctx, cc->entriesKey, sparse->asObject(ctx));
+    return wrap;
+}
+
+// Insert / update (k,v) into a sparse list and return the new sparse.
+// Buckets are flat (k,v,k,v,...) ProtoLists keyed by k->getHash(ctx).
+static const proto::ProtoSparseList* sparseAssoc(proto::ProtoContext* ctx,
+                                                 const proto::ProtoSparseList* sparse,
+                                                 const proto::ProtoObject* k,
+                                                 const proto::ProtoObject* v) {
+    unsigned long h = k->getHash(ctx);
+    const proto::ProtoList* bucket = nullptr;
+    if (sparse->has(ctx, h)) {
+        const proto::ProtoObject* b = sparse->getAt(ctx, h);
+        if (b) bucket = b->asList(ctx);
+    }
+    if (!bucket) bucket = ctx->newList();
+    long long idx = bucketFindKey(ctx, bucket, k);
+    const proto::ProtoList* newBucket = nullptr;
+    if (idx >= 0) {
+        newBucket = bucket->setAt(ctx, (int)(idx + 1), v);
+    } else {
+        newBucket = bucket->appendLast(ctx, k)->appendLast(ctx, v);
+    }
+    return sparse->setAt(ctx, h, newBucket->asObject(ctx));
+}
+
+const proto::ProtoObject* prim_hash_map(proto::ProtoContext* ctx,
+                                        const proto::ProtoObject*,
+                                        const proto::ParentLink*,
+                                        const proto::ProtoList* args,
+                                        const proto::ProtoSparseList*) {
+    unsigned long n = args ? args->getSize(ctx) : 0;
+    if (n % 2 != 0)
+        throw std::runtime_error("hash-map: needs an even number of args");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("hash-map: no active VM context");
+    const proto::ProtoSparseList* sparse = ctx->newSparseList();
+    for (unsigned long i = 0; i < n; i += 2) {
+        sparse = sparseAssoc(ctx, sparse,
+                             args->getAt(ctx, (int)i),
+                             args->getAt(ctx, (int)(i + 1)));
+    }
+    return buildMap(ctx, cc, sparse);
+}
+
+const proto::ProtoObject* prim_assoc(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject*,
+                                     const proto::ParentLink*,
+                                     const proto::ProtoList* args,
+                                     const proto::ProtoSparseList*) {
+    unsigned long n = args ? args->getSize(ctx) : 0;
+    if (n < 3 || (n - 1) % 2 != 0)
+        throw std::runtime_error("assoc: expects (assoc m k v ...)");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("assoc: no active VM context");
+    const proto::ProtoObject* m = args->getAt(ctx, 0);
+    if (!m || m == PROTO_NONE || m->getPrototype(ctx) != cc->mapMarkerProto)
+        throw std::runtime_error("assoc: first arg must be a map");
+    const proto::ProtoSparseList* sparse =
+        mapEntriesSparse(ctx, m, cc->entriesKey);
+    for (unsigned long i = 1; i < n; i += 2) {
+        sparse = sparseAssoc(ctx, sparse,
+                             args->getAt(ctx, (int)i),
+                             args->getAt(ctx, (int)(i + 1)));
+    }
+    return buildMap(ctx, cc, sparse);
+}
+
+const proto::ProtoObject* prim_get(proto::ProtoContext* ctx,
+                                   const proto::ProtoObject*,
+                                   const proto::ParentLink*,
+                                   const proto::ProtoList* args,
+                                   const proto::ProtoSparseList*) {
+    unsigned long n = args ? args->getSize(ctx) : 0;
+    if (n != 2 && n != 3)
+        throw std::runtime_error("get: expects (get m k) or (get m k not-found)");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("get: no active VM context");
+    const proto::ProtoObject* m = args->getAt(ctx, 0);
+    const proto::ProtoObject* k = args->getAt(ctx, 1);
+    const proto::ProtoObject* nf = (n == 3) ? args->getAt(ctx, 2) : PROTO_NONE;
+    if (!m || m == PROTO_NONE) return nf;
+    if (m->getPrototype(ctx) != cc->mapMarkerProto) return nf;
+    const proto::ProtoSparseList* sparse =
+        mapEntriesSparse(ctx, m, cc->entriesKey);
+    unsigned long h = k->getHash(ctx);
+    if (!sparse->has(ctx, h)) return nf;
+    const proto::ProtoObject* b = sparse->getAt(ctx, h);
+    if (!b) return nf;
+    const proto::ProtoList* bucket = b->asList(ctx);
+    long long idx = bucketFindKey(ctx, bucket, k);
+    if (idx < 0) return nf;
+    return bucket->getAt(ctx, (int)(idx + 1));
+}
+
+const proto::ProtoObject* prim_contains_p(proto::ProtoContext* ctx,
+                                          const proto::ProtoObject*,
+                                          const proto::ParentLink*,
+                                          const proto::ProtoList* args,
+                                          const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 2)
+        throw std::runtime_error("contains?: expects (contains? coll k)");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("contains?: no active VM context");
+    const proto::ProtoObject* m = args->getAt(ctx, 0);
+    const proto::ProtoObject* k = args->getAt(ctx, 1);
+    if (!m || m == PROTO_NONE) return PROTO_FALSE;
+    if (m->getPrototype(ctx) != cc->mapMarkerProto) return PROTO_FALSE;
+    const proto::ProtoSparseList* sparse =
+        mapEntriesSparse(ctx, m, cc->entriesKey);
+    unsigned long h = k->getHash(ctx);
+    if (!sparse->has(ctx, h)) return PROTO_FALSE;
+    const proto::ProtoObject* b = sparse->getAt(ctx, h);
+    if (!b) return PROTO_FALSE;
+    return bucketFindKey(ctx, b->asList(ctx), k) >= 0 ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// Walk every (k,v) in every bucket of the sparse list; return a fresh
+// ProtoList of either keys or values depending on `wantValues`. Order
+// is sparse-list iteration order (sorted by hash key); within a bucket
+// it is insertion order.
+static const proto::ProtoObject* mapWalk(proto::ProtoContext* ctx,
+                                         const ActiveCallContext* cc,
+                                         const proto::ProtoObject* m,
+                                         bool wantValues) {
+    if (!m || m == PROTO_NONE || m->getPrototype(ctx) != cc->mapMarkerProto)
+        return ctx->newList()->asObject(ctx);
+    const proto::ProtoSparseList* sparse =
+        mapEntriesSparse(ctx, m, cc->entriesKey);
+
+    // protoCore's SparseList exposes processElements for ordered walk;
+    // each callback receives (key=hash, value=bucket-list-as-object).
+    struct Acc {
+        proto::ProtoContext* ctx;
+        const proto::ProtoObject* out;
+        bool wantValues;
+    } acc{ctx, ctx->newList()->asObject(ctx), wantValues};
+
+    sparse->processElements(ctx, &acc,
+        [](proto::ProtoContext* c, void* self, unsigned long /*hash*/,
+           const proto::ProtoObject* bucketObj) {
+            auto* a = static_cast<Acc*>(self);
+            if (!bucketObj) return;
+            const proto::ProtoList* bucket = bucketObj->asList(c);
+            unsigned long n = bucket->getSize(c);
+            for (unsigned long i = 0; i < n; i += 2) {
+                const proto::ProtoObject* x = bucket->getAt(c,
+                    (int)(a->wantValues ? i + 1 : i));
+                a->out = a->out->asList(c)->appendLast(c, x)->asObject(c);
+            }
+        });
+    return acc.out;
+}
+
+const proto::ProtoObject* prim_keys(proto::ProtoContext* ctx,
+                                    const proto::ProtoObject*,
+                                    const proto::ParentLink*,
+                                    const proto::ProtoList* args,
+                                    const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("keys: expects 1 arg");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("keys: no active VM context");
+    return mapWalk(ctx, cc, args->getAt(ctx, 0), /*wantValues=*/false);
+}
+
+const proto::ProtoObject* prim_vals(proto::ProtoContext* ctx,
+                                    const proto::ProtoObject*,
+                                    const proto::ParentLink*,
+                                    const proto::ProtoList* args,
+                                    const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("vals: expects 1 arg");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("vals: no active VM context");
+    return mapWalk(ctx, cc, args->getAt(ctx, 0), /*wantValues=*/true);
+}
+
 const proto::ProtoObject* prim_first(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
                                      const proto::ParentLink*,
@@ -860,6 +1138,15 @@ void installPrimitives(proto::ProtoContext* ctx,
     install("nth",     &prim_nth);
     install("vector?", &prim_vector_p);
     install("list?",   &prim_list_p);
+
+    // Session 13 — maps.
+    install("hash-map",  &prim_hash_map);
+    install("assoc",     &prim_assoc);
+    install("get",       &prim_get);
+    install("contains?", &prim_contains_p);
+    install("keys",      &prim_keys);
+    install("vals",      &prim_vals);
+    install("map?",      &prim_map_p);
     install("first",   &prim_first);
     install("rest",    &prim_rest);
     install("cons",    &prim_cons);

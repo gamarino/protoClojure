@@ -25,6 +25,7 @@ harness produces honest numbers vs Babashka 1.4.192 (see
 | 10 | First benchmark vs Babashka | 90 |
 | 11 | SmallInt fast-path opcodes + LargeInteger promotion | 93 |
 | 12 | Fewer attribute lookups per CALL (perf cleanup) | 93 |
+| 13 | Maps + `& {:keys [...]}` named-arg destructuring | 103 |
 
 The dated design specs live under `docs/superpowers/specs/`; the
 memory entries for each session live under
@@ -63,11 +64,15 @@ memory entries for each session live under
 - [x] `cond` (with `:else` / `else`)
 - [x] `and`, `or` (short-circuit via DUP + JUMP_IF_TRUE/FALSE)
 - [x] Variadic `& rest` in fn params
+- [x] Named-arg destructuring `& {:keys [...]}` (session 13)
 
 ### Data structures (live in the VM)
 
 - [x] Lists — protoCore `ProtoList`
 - [x] Vectors — protoCore `ProtoTuple` (O(log N) `nth`)
+- [x] Maps — protoCore `ProtoSparseList` keyed by `key->getHash`, with
+      `hash-map` / `assoc` / `get` / `contains?` / `keys` / `vals` /
+      `map?` (session 13)
 - [x] Strings — protoCore `ProtoString`
 - [x] Integers — `SmallInteger` tagged + auto-promoted `LargeInteger`
 - [x] Floats — `ProtoObject::fromDouble`
@@ -120,7 +125,7 @@ does not yet support. Calling any of them raises a clear error.
 
 ### Reader (not yet)
 
-- [ ] Maps `{...}`
+- [x] Maps `{...}` (session 13 — backed by `ProtoSparseList` keyed by `key->getHash`)
 - [ ] Sets `#{...}`
 - [ ] Quasiquote `` ` ``, unquote `~`, splice `~@`
 - [ ] Anonymous-fn shorthand `#(...)`
@@ -177,30 +182,32 @@ does not yet support. Calling any of them raises a clear error.
 - [ ] Conversion helpers `clj->py` `py->clj` `clj->js` `js->clj`
       `clj->pst` `pst->clj`
 
-### protoCore call convention — dual syntax (PROMOTED, not deferred)
+### protoCore call convention — dual syntax (session 13 partial)
 
 The dual syntax for **consuming AND generating** functions under the
-protoCore call convention (bare name + positional vector + named dict)
-is what makes UMD interop transparent. protoST already implements its
-side of this (see `protoST/docs/superpowers/specs/2026-06-13-protocore-call-syntax.md`);
-protoClojure ships only the positional half today. The named-arg half
-was previously marked "deferred to v0.2" — that was wrong, and is being
-revisited:
+protoCore call convention is what makes UMD interop transparent.
+Session 13 shipped:
 
-- [x] Positional consume — `(foo 1 2 3)` lands on a `ProtoMethod` with
-      `posArgs = [1,2,3]`, `kwArgs = nil`. Works today for primitives
-      and user fns.
-- [x] Positional generate — `defn`-produced functions are reachable from
-      protoST and protoPython via the same convention (bare attribute
-      name on the namespace).
-- [ ] **Named consume — `(foo 1 2 :unit :feet)` should reach a foreign
-      method's `kwArgs` dict.** Required for `(np/zeros [3 3] :dtype :float64)`
-      and the rest of the UMD interop story.
-- [ ] **Named generate — `(defn foo [a b & {:keys [unit] :or {unit :meters}}])`
-      should produce a function whose protoCore call signature
-      advertises `unit=:meters` to foreign callers.**
-- [ ] Keyword + map literals in the Reader (prerequisite for the named
-      half; partly there — keywords work, maps don't).
+- [x] Positional consume — `(foo 1 2 3)` works for primitives and user fns.
+- [x] Positional generate — `defn` functions reachable from protoST /
+      protoPython through the bare-name attribute on the namespace.
+- [x] **Named consume — trailing map literal**: `(area 3 4 {:unit :feet})`
+      reaches a user fn declared with `& {:keys [unit]}` via the
+      kwArgs dict; foreign callees see the map via their `kwArgs`
+      ProtoMethod slot.
+- [x] **Named generate** — `(defn foo [a b & {:keys [unit]}] ...)`
+      produces a wrapper whose body reads `:unit` from the caller's
+      kwArgs map.
+- [x] Reader: map literals `{...}` (session 13).
+- [ ] **Trailing kv-pair detection** — `(area 3 4 :unit :feet)` (without
+      the `{}`) should be equivalent to the trailing-map form. The
+      compiler needs to detect a `:keyword value` suffix and pack it
+      into a map at the call site. Targeted for **session 14**.
+- [ ] `:or` defaults in destructuring — the parser accepts the syntax
+      today but defaults are not applied. Also session 14.
+- [ ] `:as` binding (snapshot of the kwArgs map) — same.
+- [ ] Keyword binding via shorthand `:strs` / `:syms` — not on the
+      immediate path.
 
 See `docs/superpowers/specs/2026-06-14-protocore-call-convention.md`
 for the design.

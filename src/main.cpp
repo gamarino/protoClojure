@@ -72,13 +72,14 @@ int runFile(const char* path) {
     //   1 : forms (the ProtoList readAll() returned).
     //   2 : stringMarkerProto — see ReaderMarkers / CompilerMarkers docs.
     //   3 : fnMarkerProto — wraps user-fn callables (session 5).
-    ctx->resizeAutomaticLocals(6);
+    ctx->resizeAutomaticLocals(7);
     constexpr unsigned int kSlotGlobals      = 0;
     constexpr unsigned int kSlotForms        = 1;
     constexpr unsigned int kSlotStringMarker = 2;
     constexpr unsigned int kSlotFnSingle     = 3;
     constexpr unsigned int kSlotVectorMarker = 4;
     constexpr unsigned int kSlotFnMulti      = 5;
+    constexpr unsigned int kSlotMapMarker    = 6;
 
     const proto::ProtoObject* globalsObj =
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
@@ -107,6 +108,10 @@ int runFile(const char* path) {
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
     ctx->setAutomaticLocal(kSlotVectorMarker, vectorMarkerProto);
 
+    const proto::ProtoObject* mapMarkerProto =
+        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+    ctx->setAutomaticLocal(kSlotMapMarker, mapMarkerProto);
+
     const proto::ProtoString* bytesKey =
         proto::ProtoString::createSymbol(ctx, "__bytes__");
     const proto::ProtoString* bytecodeKey =
@@ -119,15 +124,20 @@ int runFile(const char* path) {
         proto::ProtoString::createSymbol(ctx, "__arities__");
     const proto::ProtoString* itemsKey =
         proto::ProtoString::createSymbol(ctx, "__items__");
+    const proto::ProtoString* entriesKey =
+        proto::ProtoString::createSymbol(ctx, "__entries__");
 
     protoClojure::ReaderMarkers readerMarkers{
         ctx->getAutomaticLocal(kSlotStringMarker),
         ctx->getAutomaticLocal(kSlotVectorMarker),
-        bytesKey, itemsKey};
+        ctx->getAutomaticLocal(kSlotMapMarker),
+        bytesKey, itemsKey, entriesKey};
     protoClojure::CompilerMarkers compilerMarkers{
         ctx->getAutomaticLocal(kSlotStringMarker),
         ctx->getAutomaticLocal(kSlotVectorMarker),
-        bytesKey, bytecodeKey, arityKey, capturesKey, aritiesKey, itemsKey};
+        ctx->getAutomaticLocal(kSlotMapMarker),
+        bytesKey, bytecodeKey, arityKey, capturesKey, aritiesKey,
+        itemsKey, entriesKey};
 
     // Read every form from the file.
     std::string source = slurp(path);
@@ -167,7 +177,8 @@ int runFile(const char* path) {
         eng.run(ctx, mod, ctx->getAutomaticLocal(kSlotGlobals),
                 ctx->getAutomaticLocal(kSlotFnSingle),
                 ctx->getAutomaticLocal(kSlotFnMulti),
-                bytecodeKey, arityKey, capturesKey, aritiesKey);
+                ctx->getAutomaticLocal(kSlotMapMarker),
+                bytecodeKey, arityKey, capturesKey, aritiesKey, entriesKey);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s: runtime error: %s\n", path, e.what());
         return 1;

@@ -50,10 +50,15 @@ struct ActiveCallContext {
     // arity-shape on every single-arity call.
     const proto::ProtoObject*  fnSingleProto;
     const proto::ProtoObject*  fnMultiProto;
+    // Session 13 — map runtime values use mapMarkerProto with the
+    // entries list (k,v,k,v,...) under entriesKey. Primitives that
+    // build / read maps fetch the proto from here.
+    const proto::ProtoObject*  mapMarkerProto;
     const proto::ProtoString*  bytecodeKey;
     const proto::ProtoString*  arityKey;
     const proto::ProtoString*  capturesKey;
     const proto::ProtoString*  aritiesKey;       // session 8
+    const proto::ProtoString*  entriesKey;       // session 13
 };
 void setActiveCallContext(const ActiveCallContext& cc);
 void clearActiveCallContext();

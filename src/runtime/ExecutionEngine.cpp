@@ -63,6 +63,56 @@ const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
 
 } // namespace
 
+// Session 13 — for a kw-based callee, extract the declared kwKey values
+// from the trailing map (if any) and write them into `out` in kwKey
+// order. Returns true if a trailing map was consumed (the caller must
+// then drop the last arg from the positional list); false if no map
+// was supplied and the slots stay nil.
+static bool extractKwVals(proto::ProtoContext* ctx,
+                          const BytecodeModule* subMod,
+                          const proto::ProtoObject* maybeMap,
+                          const proto::ProtoObject* mapMarkerProto,
+                          const proto::ProtoString* entriesKey,
+                          const proto::ProtoObject** out) {
+    const auto& kkeys = subMod->kwKeys();
+    if (!maybeMap || maybeMap == PROTO_NONE) {
+        for (std::size_t i = 0; i < kkeys.size(); ++i) out[i] = PROTO_NONE;
+        return false;
+    }
+    if (maybeMap->getPrototype(ctx) != mapMarkerProto) {
+        for (std::size_t i = 0; i < kkeys.size(); ++i) out[i] = PROTO_NONE;
+        return false;
+    }
+    const proto::ProtoObject* eRaw = maybeMap->getAttribute(ctx, entriesKey);
+    const proto::ProtoSparseList* sparse = eRaw
+        ? reinterpret_cast<const proto::ProtoSparseList*>(eRaw)
+        : ctx->newSparseList();
+    for (std::size_t i = 0; i < kkeys.size(); ++i) {
+        // Build the keyword key (`:name`) and probe the sparse map by
+        // hash + bucket linear scan, same shape as prim_get.
+        std::string kw = ":" + kkeys[i].name;
+        const proto::ProtoString* sym =
+            proto::ProtoString::createSymbol(ctx, kw.c_str());
+        const proto::ProtoObject* symObj =
+            reinterpret_cast<const proto::ProtoObject*>(sym);
+        unsigned long h = symObj->getHash(ctx);
+        out[i] = PROTO_NONE;
+        if (!sparse->has(ctx, h)) continue;
+        const proto::ProtoObject* b = sparse->getAt(ctx, h);
+        if (!b) continue;
+        const proto::ProtoList* bucket = b->asList(ctx);
+        unsigned long bn = bucket->getSize(ctx);
+        for (unsigned long j = 0; j < bn; j += 2) {
+            const proto::ProtoObject* k = bucket->getAt(ctx, (int)j);
+            if (k->compare(ctx, symObj) == 0) {
+                out[i] = bucket->getAt(ctx, (int)(j + 1));
+                break;
+            }
+        }
+    }
+    return true;
+}
+
 // Helper: pick which arity-spec inside a multi-arity wrapper to use for
 // a given argc. First pass: exact fixed match. Second pass: variadic with
 // argc >= minArity. Returns the index into the __arities__ list, or -1.
@@ -134,31 +184,62 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
 
         int fixed = subMod->arity();
         bool variadic = subMod->isVariadic();
-        if (!variadic && fixed != static_cast<int>(argc))
-            throw std::runtime_error("VM: invoke: fn arity mismatch");
-        if (variadic && static_cast<int>(argc) < fixed)
-            throw std::runtime_error("VM: invoke: variadic underflow");
+        bool kwBased  = subMod->isKwBased();
+
+        // kw-based callee: the optional last positional argument is the
+        // kwArgs map. Consume it before arity-checking.
+        const proto::ProtoObject* kwArgsMap = nullptr;
+        unsigned int posArgc = argc;
+        if (kwBased) {
+            if (static_cast<int>(posArgc) == fixed + 1) {
+                kwArgsMap = args[posArgc - 1];
+                posArgc -= 1;
+            } else if (static_cast<int>(posArgc) != fixed) {
+                throw std::runtime_error(
+                    "VM: invoke: kw-based fn expects " + std::to_string(fixed) +
+                    " positionals (+ optional trailing map), got " +
+                    std::to_string(argc));
+            }
+        } else {
+            if (!variadic && fixed != static_cast<int>(posArgc))
+                throw std::runtime_error("VM: invoke: fn arity mismatch");
+            if (variadic && static_cast<int>(posArgc) < fixed)
+                throw std::runtime_error("VM: invoke: variadic underflow");
+        }
         const proto::ProtoObject* callArgs[17];
-        unsigned int passArgc = argc;
+        unsigned int passArgc = posArgc;
         if (variadic) passArgc = static_cast<unsigned int>(fixed) + 1;
         for (int i = 0; i < fixed; ++i) callArgs[i] = args[i];
         if (variadic) {
             const proto::ProtoObject* rest = ctx->newList()->asObject(ctx);
-            for (unsigned int i = static_cast<unsigned int>(fixed); i < argc; ++i) {
+            for (unsigned int i = static_cast<unsigned int>(fixed); i < posArgc; ++i) {
                 rest = rest->asList(ctx)->appendLast(ctx, args[i])->asObject(ctx);
             }
             callArgs[fixed] = rest;
-        } else {
-            for (unsigned int i = static_cast<unsigned int>(fixed); i < argc; ++i) {
+        } else if (!kwBased) {
+            for (unsigned int i = static_cast<unsigned int>(fixed); i < posArgc; ++i) {
                 callArgs[i] = args[i];
             }
         }
+
+        const proto::ProtoObject* kwVals[16];
+        unsigned int kwCount = 0;
+        if (kwBased) {
+            kwCount = static_cast<unsigned int>(subMod->kwKeys().size());
+            if (kwCount > 16)
+                throw std::runtime_error("VM: invoke: >16 kw-args not supported in v0.13");
+            extractKwVals(ctx, subMod, kwArgsMap,
+                          cc->mapMarkerProto, cc->entriesKey, kwVals);
+        }
+
         return this->run(ctx, *subMod, cc->globals,
                          const_cast<proto::ProtoObject*>(cc->fnSingleProto),
                          const_cast<proto::ProtoObject*>(cc->fnMultiProto),
+                         const_cast<proto::ProtoObject*>(cc->mapMarkerProto),
                          cc->bytecodeKey, cc->arityKey, cc->capturesKey,
-                         cc->aritiesKey,
-                         callArgs, passArgc, capsVal);
+                         cc->aritiesKey, cc->entriesKey,
+                         callArgs, passArgc, capsVal,
+                         kwBased ? kwVals : nullptr, kwCount);
     }
 
     // C++ primitive — wrap args into a fresh ProtoList and dispatch.
@@ -191,13 +272,17 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                      const proto::ProtoObject* globals,
                      const proto::ProtoObject* fnSingleProto,
                      const proto::ProtoObject* fnMultiProto,
+                     const proto::ProtoObject* mapMarkerProto,
                      const proto::ProtoString* bytecodeKey,
                      const proto::ProtoString* arityKey,
                      const proto::ProtoString* capturesKey,
                      const proto::ProtoString* aritiesKey,
+                     const proto::ProtoString* entriesKey,
                      const proto::ProtoObject* const* args,
                      unsigned int argCount,
-                     const proto::ProtoObject* captures) {
+                     const proto::ProtoObject* captures,
+                     const proto::ProtoObject* const* kwVals,
+                     unsigned int kwCount) {
     // Snapshot any prior active call context (we're nested under another
     // run() invocation, e.g. a user fn called from a primitive that
     // itself called us). Restore on every exit path so deep primitive
@@ -205,8 +290,9 @@ ExecutionEngine::run(proto::ProtoContext* parent,
     const ActiveCallContext* prior = activeCallContext();
     ActiveCallContext saved = prior ? *prior : ActiveCallContext{};
     ActiveCallContext cc{this, globals,
-                         fnSingleProto, fnMultiProto,
-                         bytecodeKey, arityKey, capturesKey, aritiesKey};
+                         fnSingleProto, fnMultiProto, mapMarkerProto,
+                         bytecodeKey, arityKey, capturesKey, aritiesKey,
+                         entriesKey};
     setActiveCallContext(cc);
     struct Guard {
         const ActiveCallContext* prior; ActiveCallContext saved;
@@ -232,6 +318,18 @@ ExecutionEngine::run(proto::ProtoContext* parent,
     // Bind incoming args (call site is responsible for matching arity).
     for (unsigned int i = 0; i < argCount; ++i) {
         frame.setAutomaticLocal(locBase + i, args[i]);
+    }
+
+    // Session 13 — kw-based fn: populate the declared :keys slots from
+    // the caller-supplied kwVals array (already extracted from the
+    // trailing map at dispatch time). Missing keys → slot stays nil.
+    if (mod.isKwBased()) {
+        const auto& kkeys = mod.kwKeys();
+        for (std::size_t i = 0; i < kkeys.size(); ++i) {
+            const proto::ProtoObject* v =
+                (kwVals && i < kwCount) ? kwVals[i] : PROTO_NONE;
+            frame.setAutomaticLocal(locBase + kkeys[i].localSlot, v);
+        }
     }
 
     // Session 6 — closure captures. The wrapper passes its __captures__
@@ -319,23 +417,40 @@ ExecutionEngine::run(proto::ProtoContext* parent,
 
             int fixed = subMod->arity();
             bool variadic = subMod->isVariadic();
-            if (!variadic && fixed != static_cast<int>(argc)) {
-                throw std::runtime_error(
-                    "VM: fn arity mismatch (expected " +
-                    std::to_string(fixed) +
-                    ", got " + std::to_string(argc) + ")");
-            }
-            if (variadic && static_cast<int>(argc) < fixed) {
-                throw std::runtime_error(
-                    "VM: variadic fn needs at least " +
-                    std::to_string(fixed) + " args, got " +
-                    std::to_string(argc));
+            bool kwBased  = subMod->isKwBased();
+
+            const proto::ProtoObject* kwArgsMap = nullptr;
+            unsigned int posArgc = argc;
+            if (kwBased) {
+                if (static_cast<int>(posArgc) == fixed + 1) {
+                    kwArgsMap = frame.getAutomaticLocal(
+                        stackBase + sp - 1);
+                    posArgc -= 1;
+                } else if (static_cast<int>(posArgc) != fixed) {
+                    throw std::runtime_error(
+                        "VM: kw-based fn expects " + std::to_string(fixed) +
+                        " positionals (+ optional trailing map), got " +
+                        std::to_string(argc));
+                }
+            } else {
+                if (!variadic && fixed != static_cast<int>(posArgc)) {
+                    throw std::runtime_error(
+                        "VM: fn arity mismatch (expected " +
+                        std::to_string(fixed) +
+                        ", got " + std::to_string(argc) + ")");
+                }
+                if (variadic && static_cast<int>(posArgc) < fixed) {
+                    throw std::runtime_error(
+                        "VM: variadic fn needs at least " +
+                        std::to_string(fixed) + " args, got " +
+                        std::to_string(argc));
+                }
             }
             const proto::ProtoObject* callArgs[17];
-            unsigned int passArgc = argc;
+            unsigned int passArgc = posArgc;
             if (variadic) passArgc = static_cast<unsigned int>(fixed) + 1;
             if (passArgc > 17)
-                throw std::runtime_error("VM: >16 args not supported in v0.7.x");
+                throw std::runtime_error("VM: >16 args not supported in v0.13");
             for (int i = 0; i < fixed; ++i) {
                 callArgs[i] = frame.getAutomaticLocal(
                     stackBase + sp - argc + i);
@@ -343,26 +458,38 @@ ExecutionEngine::run(proto::ProtoContext* parent,
             if (variadic) {
                 const proto::ProtoObject* rest =
                     frame.newList()->asObject(&frame);
-                for (unsigned int i = static_cast<unsigned int>(fixed); i < argc; ++i) {
+                for (unsigned int i = static_cast<unsigned int>(fixed); i < posArgc; ++i) {
                     const proto::ProtoObject* v =
                         frame.getAutomaticLocal(stackBase + sp - argc + i);
                     rest = rest->asList(&frame)
                         ->appendLast(&frame, v)->asObject(&frame);
                 }
                 callArgs[fixed] = rest;
-            } else {
+            } else if (!kwBased) {
                 for (unsigned int i = static_cast<unsigned int>(fixed);
-                     i < argc; ++i) {
+                     i < posArgc; ++i) {
                     callArgs[i] = frame.getAutomaticLocal(
                         stackBase + sp - argc + i);
                 }
             }
+
+            const proto::ProtoObject* kwVals[16];
+            unsigned int kwCount = 0;
+            if (kwBased) {
+                kwCount = static_cast<unsigned int>(subMod->kwKeys().size());
+                if (kwCount > 16)
+                    throw std::runtime_error("VM: >16 kw-args not supported in v0.13");
+                extractKwVals(&frame, subMod, kwArgsMap,
+                              mapMarkerProto, entriesKey, kwVals);
+            }
+
             sp -= (argc + 1);
             const proto::ProtoObject* result = this->run(
                 &frame, *subMod, globals,
-                fnSingleProto, fnMultiProto,
-                bytecodeKey, arityKey, capturesKey, aritiesKey,
-                callArgs, passArgc, capsVal);
+                fnSingleProto, fnMultiProto, mapMarkerProto,
+                bytecodeKey, arityKey, capturesKey, aritiesKey, entriesKey,
+                callArgs, passArgc, capsVal,
+                kwBased ? kwVals : nullptr, kwCount);
             pushVal(result);
             return;
         }

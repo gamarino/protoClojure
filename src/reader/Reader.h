@@ -62,8 +62,10 @@ struct ReaderError : std::runtime_error {
 struct ReaderMarkers {
     const proto::ProtoObject* stringMarkerProto;
     const proto::ProtoObject* vectorMarkerProto;  // session 9 — `[..]` literals
+    const proto::ProtoObject* mapMarkerProto;     // session 13 — `{..}` literals
     const proto::ProtoString* bytesKey;
     const proto::ProtoString* itemsKey;           // session 9 — vector items list
+    const proto::ProtoString* entriesKey;         // session 13 — map (k,v,k,v) list
 };
 
 class Reader {
