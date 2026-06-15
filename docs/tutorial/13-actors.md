@@ -189,21 +189,42 @@ deliberately small.
 
 ## 13.7 Honest numbers
 
-On a 2026-06-14 measurement (Ryzen 5500U, 6 physical cores):
+On a 2026-06-14 measurement (Ryzen 5500U, 6 physical cores, SMT 8),
+running 1,000,000 messages per row, body = `(inc v)`:
 
-- **Single actor**, 100 000 trivial `inc` messages: **~5M msg/s**. The
-  worker count does not change this — the single-method invariant means
-  only one worker can process this actor at a time. The number is the
-  cost of `send` + mailbox enqueue + promise completion + dispatch.
-- **Fan-out**, 1000 actors × 100 trivial `inc` messages each: **~250K
-  msg/s**. The scheduler distributes across the pool, but at this work
-  per message the scheduling overhead dominates.
+| mode      | what it measures                                              | peak msg/s |
+|-----------|---------------------------------------------------------------|-----------:|
+| `single`  | 1 sender × 1 actor                                            |   215,100  |
+| `fan-out` | 1 sender × 1000 actors                                        |   218,341  |
+| `MPSC`    | 4 sender threads × 1 actor (multi-producer single-consumer)   |   171,851  |
+| `MPMC`    | 4 sender threads × 4 actors round-robin                       |   125,424  |
 
-The benchmark sources are in `benchmarks/actor-throughput.clj` and
-`benchmarks/actor-fanout.clj`; the runner is `benchmarks/actor-bench.sh`.
+A few things to read out of those numbers:
 
-These are bounds, not steady-state production numbers. Real message
-bodies do real work. Treat 5M msg/s as the ceiling, not the expectation.
+- **`single` and `fan-out` are essentially equal.** The per-actor
+  pipeline (send → mailbox → process → promise) costs the same whether
+  you keep hitting one actor or spread across thousands. The scheduler
+  overhead is not a separate visible cost in this regime.
+- **`MPSC` is slower than `single`** despite having more sender threads,
+  because the single actor processes serially and now also pays the
+  cost of cross-thread coordination on the lock-free mailbox.
+- **`MPMC` is slower again** because the workers also contend on a
+  global ready-queue mutex. That's the next optimisation target.
+- **Worker count scaling** peaks at 6 (the physical-core count of this
+  CPU) for `fan-out`, and falls off at 8/16 because the extra workers
+  go to SMT siblings — same pattern protoST documented.
+
+The benchmark sources are in `benchmarks/actor-{throughput,fanout,mpsc
+,mpmc}.clj`; the runner is `benchmarks/actor-bench.sh`. Treat these as
+**upper bounds for a single-opcode body**. Real message bodies do real
+work; a body of even a few hundred nanoseconds drops these into the
+30-100K msg/s range.
+
+> Note: prior versions of this document quoted "~5M msg/s single" and
+> "~250K msg/s fan-out". Those numbers were wrong — the bench was
+> silently failing to compile and the runner was measuring time-to-fail
+> instead of throughput. The numbers above are the first honest
+> measurement. Lesson recorded in MEMORY for next time.
 
 ## 13.8 Summary
 

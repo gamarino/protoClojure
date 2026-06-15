@@ -12,7 +12,7 @@
 
 (defn run []
   (let [ACTORS 1000
-        MSGS-EACH 100
+        MSGS-EACH 1000
         actors
         (loop [i 0 acc (list)]
           (if (>= i ACTORS)

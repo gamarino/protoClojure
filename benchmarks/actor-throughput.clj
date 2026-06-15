@@ -13,8 +13,10 @@
 ;; Default mode is "single". The companion `actor-bench.sh` runs both
 ;; modes across worker counts.
 
-(def MODE
-  (let [m :single] m))                  ;; overridden via env from the runner
+;; Mode chosen by which top-level call is in effect at the bottom of
+;; the file. The companion `actor-bench.sh` runs each .clj file
+;; separately, so we don't need a runtime switch.
+(def MODE :single)
 
 (defn drain [futures]
   (loop [fs futures]
@@ -24,7 +26,7 @@
           (recur (rest fs))))))
 
 (defn single-mode []
-  (let [N 100000
+  (let [N 1000000
         a (actor 0)
         last-f
         (loop [i 0 f nil]

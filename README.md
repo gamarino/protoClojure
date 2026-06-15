@@ -100,7 +100,22 @@ protoClojure exposes the GIL-free concurrency that protoCore already has underne
 
 Actors run on a configurable worker pool (`PROTOCLJ_ACTOR_WORKERS`, default `max(2, cores − 2)`, cap 16). The kernel enforces a **single-method invariant**: at most one message per actor is being processed at any instant, so the function body sees no concurrent access to the actor's state. Three priority bands (`send-h` / `send` / `send-l`) drain highest-priority-non-empty first.
 
-On a 2026-06-14 measurement (Ryzen 5500U), the upper bound on a single actor with a trivial `inc` body is **~5M msg/s** — the cost is the send path, the mailbox enqueue, and the promise completion. Adding workers does not raise the single-actor rate (the invariant forbids parallelism within one actor); under fan-out across 1000 actors the throughput is **~250K msg/s** with the same trivial body. The full numbers are in [`benchmarks/actor-bench.sh`](benchmarks/actor-bench.sh).
+The per-actor mailbox is **lock-free** (3 atomic-pointer MPSC stacks + one `claimed` flag), borrowed from protoST's mailbox pattern. Senders never take a per-actor mutex; the running worker drains each stack with one atomic exchange + reverse and processes the batch.
+
+#### Benchmark — actors
+
+Numbers below were taken on 2026-06-14 with a Ryzen 5500U (6 physical cores, SMT8). Each row is **1,000,000 messages**, runs of 4-10 seconds, body = trivial `(inc v)`. The bench is `./benchmarks/actor-bench.sh`.
+
+| mode      | what it measures                                              | peak msg/s |
+|-----------|---------------------------------------------------------------|-----------:|
+| `single`  | 1 sender × 1 actor — per-actor pipeline floor                 |   215,100  |
+| `fan-out` | 1 sender × 1000 actors (1000 msgs each) — ready queue stress  |   218,341  |
+| `MPSC`    | 4 senders × 1 actor — per-actor sender contention             |   171,851  |
+| `MPMC`    | 4 senders × 4 actors (round-robin) — both contention paths    |   125,424  |
+
+Worker-count scaling: **`fan-out` peaks at `PROTOCLJ_ACTOR_WORKERS=6`** (matches the physical-core count exactly), and degrades at `w=8`/`16` because the extra workers cross over into SMT siblings — same regression curve protoST documented. `single` and `MPSC` don't scale with workers (single-method invariant pins them to one worker at a time). `MPMC` *regresses* with more workers because the global ready-queue mutex becomes the bottleneck — that's the next optimisation.
+
+Compared with the pre-lock-free baseline (per-actor `std::mutex` + `std::deque`), the lock-free port wins by **+4% (single)**, **+30-41% (fan-out @ w=2-4)**, **+11-19% (MPSC @ w≥2)** and **+0-3% (MPMC)**. The MPMC near-zero delta confirms that MPMC's bottleneck is the global ready queue, not the per-actor mailbox.
 
 ## Performance — what is measured
 
