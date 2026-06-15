@@ -92,3 +92,91 @@ message(STATUS "protoClojure ${PROJECT_VERSION}")
 message(STATUS "protoCore lib: ${PROTOCORE_LIBRARY}")
 message(STATUS "protoCore includes: ${PROTOCORE_INCLUDE_DIRS}")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
+
+# --- Installation packaging (mirrors protoST Track 10) ---------------------
+# An installed `bin/protoclj` must find `libprotoCore.so` (or `.dylib`) under
+# `<prefix>/lib` without the user having to set LD_LIBRARY_PATH /
+# DYLD_LIBRARY_PATH. We do that with INSTALL_RPATH; on Windows the loader
+# searches the executable's own directory by default, so no RPATH is needed.
+if(UNIX)
+    if(APPLE)
+        set_target_properties(protoclj PROPERTIES
+            INSTALL_RPATH "@executable_path/../${CMAKE_INSTALL_LIBDIR}")
+    else()
+        set_target_properties(protoclj PROPERTIES
+            INSTALL_RPATH "\$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+    endif()
+endif()
+
+# The `protoclj` binary.
+install(TARGETS protoclj
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT protoClojure)
+
+# License and documentation (Markdown only — sources, specs, internal notes
+# stay in the repo).
+install(FILES LICENSE
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}
+    COMPONENT protoClojure)
+install(FILES README.md
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}
+    COMPONENT protoClojure)
+install(DIRECTORY docs/
+    DESTINATION ${CMAKE_INSTALL_DOCDIR}
+    COMPONENT protoClojure
+    FILES_MATCHING PATTERN "*.md")
+
+# Example `.clj` scripts (small, useful for users discovering the language
+# from a freshly installed package).
+install(DIRECTORY examples/
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/protoClojure/examples
+    COMPONENT protoClojure
+    FILES_MATCHING PATTERN "*.clj")
+
+# Benchmark scripts (so a user can reproduce the published numbers from a
+# package install, without cloning the repo).
+install(DIRECTORY benchmarks/
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/protoClojure/benchmarks
+    COMPONENT protoClojure
+    FILES_MATCHING
+    PATTERN "*.clj"
+    PATTERN "*.sh"
+    PATTERN "RESULTS.md")
+
+# --- CPack configuration ---------------------------------------------------
+set(CPACK_PACKAGE_NAME "protoclojure")
+set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY
+    "protoClojure - a Clojure-flavoured language on the protoCore runtime")
+set(CPACK_PACKAGE_VENDOR "numaes")
+set(CPACK_PACKAGE_CONTACT "gamarino@gmail.com")
+set(CPACK_RESOURCE_FILE_README  "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+set(CPACK_COMPONENTS_ALL protoClojure)
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "protoClojure")
+set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/gamarino/protoClojure")
+
+# Platform-specific generators. protoClojure links libprotoCore — every
+# generator's package metadata declares it as a runtime dependency on
+# protoCore's package (lowercased to "protocore" for DEB, kept as-is for
+# RPM, mentioned in NSIS' help link for Windows).
+if(APPLE)
+    # macOS drag-and-drop .dmg (unverified on a Linux build host).
+    set(CPACK_GENERATOR "DragNDrop")
+elseif(UNIX)
+    set(CPACK_GENERATOR "DEB;RPM;TGZ")
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "gamarino@gmail.com")
+    set(CPACK_DEBIAN_PACKAGE_SECTION "interpreters")
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS "protocore")
+    set(CPACK_RPM_PACKAGE_LICENSE "MIT")
+    set(CPACK_RPM_PACKAGE_GROUP "Development/Languages")
+    set(CPACK_RPM_PACKAGE_REQUIRES "protoCore")
+elseif(WIN32)
+    # Windows NSIS installer + plain ZIP (unverified on a Linux build host).
+    set(CPACK_GENERATOR "NSIS;ZIP")
+    set(CPACK_NSIS_HELP_LINK     "https://github.com/gamarino/protoClojure")
+    set(CPACK_NSIS_URL_INFO_ABOUT "https://github.com/gamarino/protoClojure")
+    set(CPACK_NSIS_PACKAGE_NAME  "protoClojure")
+endif()
+
+include(CPack)

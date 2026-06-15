@@ -233,6 +233,38 @@ The benchmark harness expects a Babashka binary at `/tmp/proto-bench/bb` by defa
 
 The single-threaded build constraint reflects a local DEV12-specific issue (see `MEMORY.md`); concurrent build is supported by the CMakeLists.
 
+### Packaging
+
+protoClojure ships installable packages on Linux, macOS, and Windows via CPack — the same machinery protoST uses. The platform-appropriate generator is selected automatically; you pick which artifact you want with `cpack -G`. All artifacts contain the `protoclj` binary, the documentation, the example `.clj` scripts under `share/protoClojure/examples`, and the benchmark scripts under `share/protoClojure/benchmarks`.
+
+```bash
+# (After a successful build of protoCore and protoClojure.)
+cd build_release
+
+# --- Linux ---------------------------------------------------------------
+cpack -G TGZ                # protoclojure-0.0.1-Linux.tar.gz (universal)
+cpack -G DEB                # protoclojure-0.0.1-Linux.deb   (Debian / Ubuntu)
+cpack -G RPM                # protoclojure-0.0.1-Linux.rpm   (Fedora / RHEL)
+
+# --- macOS ---------------------------------------------------------------
+cpack -G DragNDrop          # protoclojure-0.0.1-Darwin.dmg
+
+# --- Windows -------------------------------------------------------------
+cpack -G NSIS               # protoclojure-0.0.1-win64.exe   (NSIS installer)
+cpack -G ZIP                # protoclojure-0.0.1-win64.zip   (portable)
+```
+
+The DEB and RPM artifacts declare `protocore` as a runtime dependency, so the package manager will fail cleanly if libprotoCore is not installed. The TGZ / DMG / NSIS / ZIP artifacts do **not** carry libprotoCore — install it from its own package first, or build it side-by-side and add its install prefix to your loader path. The installed `protoclj` already has an `INSTALL_RPATH` of `$ORIGIN/../lib` (Linux) / `@executable_path/../lib` (macOS), so as long as protoCore lives under the same `<prefix>/lib` no environment variable is needed.
+
+```bash
+# Quick sanity check after installing the DEB:
+sudo dpkg -i protoclojure-0.0.1-Linux.deb
+protoclj --version
+protoclj /usr/share/protoClojure/examples/02-factorial.clj
+```
+
+The macOS and Windows generators are configured but **unverified on a Linux build host** — they will work where `cpack` recognises the platform; the in-tree CI to produce them on real Apple/Windows runners is a future-session item.
+
 ## Documentation
 
 | Document | What it covers |
