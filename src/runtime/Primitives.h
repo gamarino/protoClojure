@@ -94,4 +94,10 @@ void setActiveCallContext(const ActiveCallContext& cc);
 void clearActiveCallContext();
 const ActiveCallContext* activeCallContext();
 
+// Join every worker thread spawned by `(future …)` (and therefore by
+// `pmap`). Call this before ProtoSpace destructs — otherwise an in-
+// flight worker dereferencing a now-freed Cell crashes the process at
+// exit. Mirrors `ActorScheduler::shutdown`, idempotent.
+void shutdownFutures(proto::ProtoContext* ctx);
+
 } // namespace protoClojure

@@ -6,10 +6,12 @@
 
 #include <chrono>
 #include <cstdio>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace protoClojure {
 
@@ -1782,6 +1784,20 @@ const proto::ProtoObject* futureThreadMain(
     return value;
 }
 
+// Process-wide registry of every ProtoThread spawned by `(future …)`.
+// Joined en masse by `shutdownFutures` before ProtoSpace destructs —
+// the original session-17 implementation relied on the ProtoSpace
+// destructor cleaning up worker threads, but if a worker was still
+// dispatching VM code when the destructor ran it dereferenced
+// already-freed Cells and the process crashed (`exit=139` on a tight
+// `(future …)`-without-`@` loop; reproduced 10/10 with 50 in-flight
+// futures, 2026-06-14). Joining every worker before exit is the same
+// pattern `ActorScheduler::shutdown` uses.
+namespace {
+    std::mutex g_futureRegistryMtx;
+    std::vector<const proto::ProtoThread*> g_futureThreads;
+}
+
 // Build a future, store the thunk + parent context, spawn the
 // worker. The worker receives the future as its single positional
 // argument (newThread's `args` slot 0).
@@ -1806,7 +1822,29 @@ static const proto::ProtoObject* buildFuture(
                               targs, nullptr);
     fut->setAttribute(ctx, cc->threadKey,
         ctx->fromLong(reinterpret_cast<long long>(thread)));
+    {
+        std::lock_guard<std::mutex> g(g_futureRegistryMtx);
+        g_futureThreads.push_back(thread);
+    }
     return fut;
+}
+
+// shutdownFutures (the externally-visible entry point) is defined
+// below, *outside* the anonymous namespace this code is in.
+static void shutdownFuturesImpl(proto::ProtoContext* ctx) {
+    // Move the registry contents out under the lock so we don't hold
+    // the mutex while joining (the worker thread will not register
+    // anything new at exit time, but a slow `(future …)` invocation
+    // racing against shutdown might — taking the lock here makes
+    // shutdownFutures safe to call from any thread).
+    std::vector<const proto::ProtoThread*> snapshot;
+    {
+        std::lock_guard<std::mutex> g(g_futureRegistryMtx);
+        snapshot.swap(g_futureThreads);
+    }
+    for (const proto::ProtoThread* t : snapshot) {
+        if (t) const_cast<proto::ProtoThread*>(t)->join(ctx);
+    }
 }
 
 const proto::ProtoObject* prim_make_future(proto::ProtoContext* ctx,
@@ -2305,6 +2343,14 @@ const proto::ProtoObject* prim_remove_watch(proto::ProtoContext* ctx,
 }
 
 } // namespace
+
+// Externally-visible shutdownFutures — declared in Primitives.h, lives
+// outside the anonymous namespace so the linker can find it from
+// main.cpp. Delegates to the static impl above which has access to the
+// registry inside the anonymous namespace.
+void shutdownFutures(proto::ProtoContext* ctx) {
+    shutdownFuturesImpl(ctx);
+}
 
 void installPrimitives(proto::ProtoContext* ctx,
                        proto::ProtoObject* globals) {

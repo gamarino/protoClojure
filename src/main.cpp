@@ -237,13 +237,16 @@ int runFile(const char* path) {
         std::fprintf(stderr, "%s: runtime error: %s\n", path, e.what());
         // Drain the actor scheduler before unwinding so worker
         // threads don't outlive the ProtoSpace.
+        protoClojure::shutdownFutures(ctx);
         protoClojure::ActorScheduler::instance().shutdown(ctx);
         return 1;
     }
-    // Graceful shutdown — wait for actor workers to drain pending
-    // messages, then join. Without this, a script that fires off
-    // actor sends without explicit @ may segfault at exit when the
-    // ProtoSpace destructor runs while workers still hold pointers.
+    // Graceful shutdown — wait for future + actor workers to drain
+    // pending work, then join. Without this, a script that fires off
+    // futures or actor sends without explicit @ may segfault at exit
+    // when the ProtoSpace destructor runs while workers still hold
+    // pointers. Same root cause for both, same fix: join first.
+    protoClojure::shutdownFutures(ctx);
     protoClojure::ActorScheduler::instance().shutdown(ctx);
     return 0;
 }
