@@ -931,6 +931,46 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             return;
         }
 
+        // Session 17 — (future body...) is sugar for
+        // (make-future (fn [] body...)). The thunk is a zero-arity
+        // closure that captures the surrounding lexical scope, so the
+        // body sees the same locals the future was spawned under.
+        if (headName == "future") {
+            // Build a synthetic `fn [] body...` form by reusing
+            // compileFnBody-style emission. The cheapest path is to
+            // construct the call directly: emit PUSH_VAR make-future +
+            // an inline fn body that wraps the user code.
+            //
+            // We re-route through the (fn [] body...) compilation by
+            // building a small helper: emit a Fn whose body is the
+            // remaining `(future ...)` forms.
+            std::size_t hmIdx = out.addSymbol("make-future");
+            if (hmIdx > 255) throw CompileError("future: const-pool overflow");
+            out.emit(Op::PUSH_VAR, static_cast<std::uint8_t>(hmIdx));
+
+            // Compile an inline (fn [] body...). compileArity expects
+            // a params ProtoList; we pass an empty new ProtoList for
+            // the params and reuse the `lst` itself as the arity form,
+            // with bodyStartIdx=1 (skip the `future` head).
+            const proto::ProtoList* emptyParams = ctx->newList();
+            std::unique_ptr<BytecodeModule> body =
+                compileArity(ctx, emptyParams, lst, /*bodyStartIdx=*/1,
+                             markers);
+            std::size_t blockIdx = out.addBlock(std::move(body));
+            if (blockIdx > 255)
+                throw CompileError("future: too many fn bodies");
+            const auto& caps = out.block(blockIdx).captureSpecs();
+            for (const auto& c : caps) {
+                if (c.parentSlot < 0 || c.parentSlot > 255)
+                    throw CompileError("future: capture parent-slot overflow");
+                out.emit(Op::PUSH_LOCAL,
+                    static_cast<std::uint8_t>(c.parentSlot));
+            }
+            out.emit(Op::MAKE_FN, static_cast<std::uint8_t>(blockIdx));
+            out.emit(Op::CALL, 1);
+            return;
+        }
+
         // (apply f args-list) — special form. Compile f, compile the
         // args-list (any expression that yields a list), emit CALL_APPLY.
         // v0.7.x supports only the two-arg shape; the JVM-Clojure variadic

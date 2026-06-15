@@ -29,6 +29,7 @@ harness produces honest numbers vs Babashka 1.4.192 (see
 | 14 | Dual call convention closed: trailing kv pairs + `:or` + `:as` | 113 |
 | 15 | clojure.string-shaped primitives (subs, upper/lower, join/split, trim, ...) | 126 |
 | 16 | Atoms (`atom`, `@`, `reset!`, `swap!`, `compare-and-set!`) on protoCore CAS | 136 |
+| 17 | Futures (`future`, `deref` on future, `realized?`, `future?`) on real OS threads — 4× wall-clock speedup demoed | 145 |
 
 The dated design specs live under `docs/superpowers/specs/`; the
 memory entries for each session live under
@@ -173,11 +174,14 @@ does not yet support. Calling any of them raises a clear error.
 
 - [x] `atom`, `swap!`, `reset!`, `compare-and-set!`, `deref` / `@` (session 16)
 - [x] `atom?` predicate
+- [x] `future`, `future?`, `realized?` on real OS threads (session 17)
+- [x] `deref` extended to block on a pending future
+- [x] `pmap` surface (sequential semantics; per-element parallelism is a follow-up — wire shape matches Clojure so user code is forward-compat)
 - [ ] `add-watch`, `remove-watch`
 - [ ] `volatile!`, `vreset!`, `vswap!`
-- [ ] `delay`, `force`, `realized?`
+- [ ] `delay`, `force`
 - [ ] `promise`, `deliver`
-- [ ] `future`, `pmap`, `agent`
+- [ ] `agent`
 
 ### Module system / UMD (not yet)
 

@@ -58,12 +58,25 @@ struct ActiveCallContext {
     // the current value as an attribute. swap! / reset! mutate via
     // setAttribute / setAttributeIfEqual on the receiver atom.
     const proto::ProtoObject*  atomMarkerProto;
+    // Session 17 — futureMarkerProto identifies futures. Wire shape:
+    //   __thunk__   the 0-arg fn that produces the result.
+    //   __cc_blob__ pointer (as long) to the parent's ActiveCallContext.
+    //   __thread__  pointer (as long) to the running ProtoThread.
+    //   __result__  the value, once computed.
+    //   __done__    PROTO_TRUE when realized, otherwise PROTO_FALSE.
+    const proto::ProtoObject*  futureMarkerProto;
     const proto::ProtoString*  bytecodeKey;
     const proto::ProtoString*  arityKey;
     const proto::ProtoString*  capturesKey;
     const proto::ProtoString*  aritiesKey;       // session 8
     const proto::ProtoString*  entriesKey;       // session 13
     const proto::ProtoString*  valueKey;         // session 16
+    // Session 17 keys.
+    const proto::ProtoString*  thunkKey;
+    const proto::ProtoString*  ccBlobKey;
+    const proto::ProtoString*  threadKey;
+    const proto::ProtoString*  resultKey;
+    const proto::ProtoString*  doneKey;
 };
 void setActiveCallContext(const ActiveCallContext& cc);
 void clearActiveCallContext();

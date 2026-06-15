@@ -72,7 +72,7 @@ int runFile(const char* path) {
     //   1 : forms (the ProtoList readAll() returned).
     //   2 : stringMarkerProto — see ReaderMarkers / CompilerMarkers docs.
     //   3 : fnMarkerProto — wraps user-fn callables (session 5).
-    ctx->resizeAutomaticLocals(8);
+    ctx->resizeAutomaticLocals(9);
     constexpr unsigned int kSlotGlobals      = 0;
     constexpr unsigned int kSlotForms        = 1;
     constexpr unsigned int kSlotStringMarker = 2;
@@ -81,6 +81,7 @@ int runFile(const char* path) {
     constexpr unsigned int kSlotFnMulti      = 5;
     constexpr unsigned int kSlotMapMarker    = 6;
     constexpr unsigned int kSlotAtomMarker   = 7;
+    constexpr unsigned int kSlotFutureMarker = 8;
 
     const proto::ProtoObject* globalsObj =
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
@@ -119,6 +120,12 @@ int runFile(const char* path) {
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
     ctx->setAutomaticLocal(kSlotAtomMarker, atomMarkerProto);
 
+    // Session 17 — futures. Mutable child carrying the thunk, the
+    // running thread, and the eventually-realised result.
+    const proto::ProtoObject* futureMarkerProto =
+        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+    ctx->setAutomaticLocal(kSlotFutureMarker, futureMarkerProto);
+
     const proto::ProtoString* bytesKey =
         proto::ProtoString::createSymbol(ctx, "__bytes__");
     const proto::ProtoString* bytecodeKey =
@@ -135,6 +142,16 @@ int runFile(const char* path) {
         proto::ProtoString::createSymbol(ctx, "__entries__");
     const proto::ProtoString* valueKey =
         proto::ProtoString::createSymbol(ctx, "__value__");
+    const proto::ProtoString* thunkKey =
+        proto::ProtoString::createSymbol(ctx, "__thunk__");
+    const proto::ProtoString* ccBlobKey =
+        proto::ProtoString::createSymbol(ctx, "__cc_blob__");
+    const proto::ProtoString* threadKey =
+        proto::ProtoString::createSymbol(ctx, "__thread__");
+    const proto::ProtoString* resultKey =
+        proto::ProtoString::createSymbol(ctx, "__result__");
+    const proto::ProtoString* doneKey =
+        proto::ProtoString::createSymbol(ctx, "__done__");
 
     protoClojure::ReaderMarkers readerMarkers{
         ctx->getAutomaticLocal(kSlotStringMarker),
@@ -188,8 +205,10 @@ int runFile(const char* path) {
                 ctx->getAutomaticLocal(kSlotFnMulti),
                 ctx->getAutomaticLocal(kSlotMapMarker),
                 ctx->getAutomaticLocal(kSlotAtomMarker),
+                ctx->getAutomaticLocal(kSlotFutureMarker),
                 bytecodeKey, arityKey, capturesKey, aritiesKey,
-                entriesKey, valueKey);
+                entriesKey, valueKey,
+                thunkKey, ccBlobKey, threadKey, resultKey, doneKey);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s: runtime error: %s\n", path, e.what());
         return 1;

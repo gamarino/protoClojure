@@ -166,6 +166,19 @@ void printValue(proto::ProtoContext* ctx, std::FILE* out,
         std::fputc('>', out);
         return;
     }
+    if (cc && v->getPrototype(ctx) == cc->futureMarkerProto) {
+        const proto::ProtoObject* done =
+            v->getAttribute(ctx, cc->doneKey);
+        if (done == PROTO_TRUE) {
+            std::fputs("#<future ", out);
+            printValue(ctx, out,
+                v->getAttribute(ctx, cc->resultKey));
+            std::fputc('>', out);
+        } else {
+            std::fputs("#<future pending>", out);
+        }
+        return;
+    }
     if (cc && v->getPrototype(ctx) == cc->mapMarkerProto) {
         const proto::ProtoObject* eRaw =
             v->getAttribute(ctx, cc->entriesKey);
@@ -1509,10 +1522,31 @@ const proto::ProtoObject* prim_deref(proto::ProtoContext* ctx,
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("deref: no active VM context");
     const proto::ProtoObject* a = args->getAt(ctx, 0);
-    if (!a || a->getPrototype(ctx) != cc->atomMarkerProto)
-        throw std::runtime_error("deref: not an atom");
-    const proto::ProtoObject* v = a->getAttribute(ctx, cc->valueKey);
-    return v ? v : PROTO_NONE;
+    if (!a) throw std::runtime_error("deref: nil");
+    const proto::ProtoObject* proto = a->getPrototype(ctx);
+    if (proto == cc->atomMarkerProto) {
+        const proto::ProtoObject* v = a->getAttribute(ctx, cc->valueKey);
+        return v ? v : PROTO_NONE;
+    }
+    if (proto == cc->futureMarkerProto) {
+        // Block on the worker if it hasn't completed yet; then read
+        // the realised value.
+        const proto::ProtoObject* done =
+            a->getAttribute(ctx, cc->doneKey);
+        if (done != PROTO_TRUE) {
+            const proto::ProtoObject* tObj =
+                a->getAttribute(ctx, cc->threadKey);
+            if (tObj && tObj->isInteger(ctx)) {
+                proto::ProtoThread* t =
+                    reinterpret_cast<proto::ProtoThread*>(tObj->asLong(ctx));
+                if (t) t->join(ctx);
+            }
+        }
+        const proto::ProtoObject* r =
+            a->getAttribute(ctx, cc->resultKey);
+        return r ? r : PROTO_NONE;
+    }
+    throw std::runtime_error("deref: not an atom or a future");
 }
 
 const proto::ProtoObject* prim_reset_bang(proto::ProtoContext* ctx,
@@ -1572,6 +1606,196 @@ const proto::ProtoObject* prim_swap_bang(proto::ProtoContext* ctx,
             return neu;
         }
     }
+}
+
+// Session 17 — futures + pmap.
+//
+// The wire shape of a future:
+//   getPrototype()           == futureMarkerProto
+//   __thunk__                the 0-arg fn that produces the result.
+//   __cc_blob__              long-encoded pointer to the parent's
+//                            ActiveCallContext (the ExecutionEngine
+//                            handle + every marker / key the worker
+//                            thread needs to resume execution).
+//   __thread__               long-encoded pointer to the ProtoThread.
+//   __result__               the eventual value (initially nil).
+//   __done__                 PROTO_FALSE until realized; then PROTO_TRUE.
+//
+// The thread main runs `futureThreadMain` below. It re-installs the
+// parent's ActiveCallContext on its own TLS, invokes the thunk, and
+// stores the result on the future via setAttribute. The compiler
+// rewrites `(future body...)` into `(make-future (fn [] body...))`,
+// so the thunk is just a regular user fn — it captures the
+// surrounding lexical scope and the engine knows how to dispatch it.
+
+// The worker reads its target future from args[0]: protoCore's
+// newThread takes a ProtoList of "positional arguments for the
+// target method", so the make-future caller stores the freshly
+// allocated future as the single arg, and the worker pulls it back
+// out of args via getAt.
+const proto::ProtoObject* futureThreadMain(
+        proto::ProtoContext* ctx,
+        const proto::ProtoObject* /*self*/,
+        const proto::ParentLink*,
+        const proto::ProtoList* args,
+        const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) == 0) return PROTO_NONE;
+    const proto::ProtoObject* fut = args->getAt(ctx, 0);
+    if (!fut) return PROTO_NONE;
+
+    // Re-acquire the keys via createSymbol — cheap, interned.
+    const proto::ProtoString* thunkKey  =
+        proto::ProtoString::createSymbol(ctx, "__thunk__");
+    const proto::ProtoString* ccBlobKey =
+        proto::ProtoString::createSymbol(ctx, "__cc_blob__");
+    const proto::ProtoString* resultKey =
+        proto::ProtoString::createSymbol(ctx, "__result__");
+    const proto::ProtoString* doneKey   =
+        proto::ProtoString::createSymbol(ctx, "__done__");
+
+    const proto::ProtoObject* thunk =
+        fut->getAttribute(ctx, thunkKey);
+    const proto::ProtoObject* blobObj =
+        fut->getAttribute(ctx, ccBlobKey);
+    if (!thunk || !blobObj || !blobObj->isInteger(ctx)) return PROTO_NONE;
+
+    const ActiveCallContext* parentCc =
+        reinterpret_cast<const ActiveCallContext*>(blobObj->asLong(ctx));
+    if (!parentCc) return PROTO_NONE;
+
+    // Install the parent's ActiveCallContext on this thread's TLS so
+    // engine->invoke can dispatch through the same shared
+    // ExecutionEngine + same globals + markers as the spawning thread.
+    setActiveCallContext(*parentCc);
+
+    const proto::ProtoObject* value = PROTO_NONE;
+    try {
+        value = parentCc->engine->invoke(ctx, thunk, nullptr, 0);
+    } catch (...) {
+        // v0.17: swallow exceptions, the future's result stays nil.
+        // Capturing the throwable and re-raising on deref lands later.
+        value = PROTO_NONE;
+    }
+
+    proto::ProtoObject* futMut =
+        const_cast<proto::ProtoObject*>(fut);
+    futMut->setAttribute(ctx, resultKey, value);
+    futMut->setAttribute(ctx, doneKey, PROTO_TRUE);
+
+    clearActiveCallContext();
+    return value;
+}
+
+// Build a future, store the thunk + parent context, spawn the
+// worker. The worker receives the future as its single positional
+// argument (newThread's `args` slot 0).
+static const proto::ProtoObject* buildFuture(
+        proto::ProtoContext* ctx,
+        const ActiveCallContext* cc,
+        const proto::ProtoObject* thunk) {
+    proto::ProtoObject* fut = const_cast<proto::ProtoObject*>(
+        cc->futureMarkerProto->newChild(ctx, /*isMutable=*/true));
+    fut->setAttribute(ctx, cc->thunkKey, thunk);
+    fut->setAttribute(ctx, cc->ccBlobKey,
+        ctx->fromLong(reinterpret_cast<long long>(cc)));
+    fut->setAttribute(ctx, cc->doneKey, PROTO_FALSE);
+    fut->setAttribute(ctx, cc->resultKey, PROTO_NONE);
+
+    const proto::ProtoString* threadName =
+        proto::ProtoString::createSymbol(ctx, "protoclj-future");
+    const proto::ProtoList* targs =
+        ctx->newList()->appendLast(ctx, fut);
+    const proto::ProtoThread* thread =
+        ctx->space->newThread(ctx, threadName, &futureThreadMain,
+                              targs, nullptr);
+    fut->setAttribute(ctx, cc->threadKey,
+        ctx->fromLong(reinterpret_cast<long long>(thread)));
+    return fut;
+}
+
+const proto::ProtoObject* prim_make_future(proto::ProtoContext* ctx,
+                                           const proto::ProtoObject*,
+                                           const proto::ParentLink*,
+                                           const proto::ProtoList* args,
+                                           const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("future: expects 1 thunk");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("future: no active VM context");
+    return buildFuture(ctx, cc, args->getAt(ctx, 0));
+}
+
+const proto::ProtoObject* prim_future_p(proto::ProtoContext* ctx,
+                                        const proto::ProtoObject*,
+                                        const proto::ParentLink*,
+                                        const proto::ProtoList* args,
+                                        const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("future?: expects 1 arg");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("future?: no active VM context");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (!v) return PROTO_FALSE;
+    return (v->getPrototype(ctx) == cc->futureMarkerProto) ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_realized_p(proto::ProtoContext* ctx,
+                                          const proto::ProtoObject*,
+                                          const proto::ParentLink*,
+                                          const proto::ProtoList* args,
+                                          const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("realized?: expects 1 arg");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("realized?: no active VM context");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (!v || v->getPrototype(ctx) != cc->futureMarkerProto) return PROTO_FALSE;
+    const proto::ProtoObject* done = v->getAttribute(ctx, cc->doneKey);
+    return done == PROTO_TRUE ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// (pmap f coll). Today this is semantically map — sequential — with
+// the same return shape. Real parallel execution requires building
+// a 0-arity thunk per element at runtime that captures `f` and the
+// element, and there's no clean way to synthesise bytecode-side
+// closures from C++ at the moment. The proper fix lands in a later
+// session via either:
+//   (a) a tiny C++ shim ProtoMethod that takes (f, x) and dispatches
+//       (f x), used as the thread main with args=[f, x]; or
+//   (b) a `(pmap f coll)` macro / surface form that the compiler
+//       expands into N `(future (f x_i))` calls.
+//
+// For v0.17 the *paradigm* is what users want: write `(pmap f coll)`
+// and your code stays the same when parallelism lands. The
+// equivalent end-to-end-parallel idiom users can already write today
+// is explicit per-element futures:
+//
+//   (def fs (map (fn [x] (future (f x))) coll))
+//   (map deref fs)
+//
+// That hits real OS threads.
+const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
+                                    const proto::ProtoObject*,
+                                    const proto::ParentLink*,
+                                    const proto::ProtoList* args,
+                                    const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 2)
+        throw std::runtime_error("pmap: expects (pmap f coll)");
+    const proto::ProtoObject* f    = args->getAt(ctx, 0);
+    const proto::ProtoObject* coll = args->getAt(ctx, 1);
+    const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
+    const proto::ProtoObject* out = ctx->newList()->asObject(ctx);
+    if (!lst) return out;
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("pmap: no active VM context");
+    unsigned long n = lst->getSize(ctx);
+    for (unsigned long i = 0; i < n; ++i) {
+        const proto::ProtoObject* x = lst->getAt(ctx, static_cast<int>(i));
+        const proto::ProtoObject* one[1] = { x };
+        const proto::ProtoObject* y = cc->engine->invoke(ctx, f, one, 1);
+        out = out->asList(ctx)->appendLast(ctx, y)->asObject(ctx);
+    }
+    return out;
 }
 
 const proto::ProtoObject* prim_compare_and_set_bang(
@@ -1664,6 +1888,12 @@ void installPrimitives(proto::ProtoContext* ctx,
     install("reset!",           &prim_reset_bang);
     install("swap!",            &prim_swap_bang);
     install("compare-and-set!", &prim_compare_and_set_bang);
+
+    // Session 17 — futures + pmap.
+    install("make-future",      &prim_make_future);
+    install("future?",          &prim_future_p);
+    install("realized?",        &prim_realized_p);
+    install("pmap",             &prim_pmap);
     install("first",   &prim_first);
     install("rest",    &prim_rest);
     install("cons",    &prim_cons);
