@@ -6,8 +6,19 @@
  * actor has its own mailbox, drained one message at a time (the
  * single-method invariant — same actor never runs concurrently with
  * itself). Workers are protoCore threads (`ProtoSpace::newThread`)
- * so they participate in the GC quorum; mailboxes + ready queues
- * are C++ structures protected by std::mutex.
+ * so they participate in the GC quorum.
+ *
+ * Per-actor mailbox: lock-free MPSC stack per priority band. Senders
+ * push with a relaxed CAS on `head[band]`; the running worker pops
+ * the entire stack with a single atomic exchange, reverses to FIFO
+ * order, and processes. A `claimed` atomic bool replaces the old
+ * `running`/`scheduled` booleans and per-actor std::mutex: it is the
+ * single source of truth for "this actor is being handled (queued or
+ * running) — do not re-enqueue". Borrowed from protoST's lock-free
+ * mailbox (`76ae764`); see project memory.
+ *
+ * Global ready queues remain mutex-protected — only touched once per
+ * actor activation, not once per message.
  *
  * Worker count is configured via the `PROTOCLJ_ACTOR_WORKERS` env
  * var. Default: `max(2, hardware_concurrency() - 2)`, capped at 16.
@@ -20,6 +31,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstddef>
 #include <deque>
 #include <memory>
 #include <mutex>
@@ -43,25 +55,40 @@ enum class ActorPriority {
     Low    = 2,
 };
 
-// One enqueued send. The promise will be delivered the result of
-// `(f current-state args...)` once the message is processed.
+// One enqueued send. Each lives on the heap; the running worker is
+// responsible for deleting it once processed. The `next` link makes
+// these intrusive nodes in the per-priority lock-free stacks below.
 struct ActorMessage {
     const proto::ProtoObject* fn;
     const proto::ProtoObject* args;     // ProtoList (may be nil)
     const proto::ProtoObject* promise;  // Promise to deliver into
     ActorPriority             priority;
+    ActorMessage*             next = nullptr;
 };
 
 // One actor's runtime state. Pinned by the wrapper ProtoObject's
 // `__actor_state__` attribute (long pointer). The scheduler owns
 // these via unique_ptr; they live for the process lifetime.
+//
+// Lock-free model:
+//   * Senders push onto `head[band]` with a CAS-retry loop. No mutex,
+//     no allocator contention on the actor itself.
+//   * The running worker (guaranteed unique by `claimed`) exchanges
+//     each head to nullptr in turn, reverses each stack to recover
+//     FIFO order, and processes the messages.
+//   * `claimed` toggles 0→1 when an actor enters the ready queue
+//     (whether the trigger is a sender or the running worker at
+//     end-of-batch) and 1→0 when a worker finishes its batch with
+//     nothing more to do. Senders that observe `claimed == 1` skip
+//     the schedule path — the running/queued worker will see their
+//     message at end-of-batch.
 struct ActorState {
-    std::mutex                  mtx;
-    std::deque<ActorMessage>    mailbox;
-    bool                        running    = false;
-    bool                        scheduled  = false;
+    std::atomic<ActorMessage*>  head[3]{{nullptr}, {nullptr}, {nullptr}};
+    std::atomic<bool>           claimed{false};
     const proto::ProtoObject*   value      = nullptr;  // mirrored under wrapper __value__
     const proto::ProtoObject*   wrapper    = nullptr;
+
+    ~ActorState();
 };
 
 class ActorScheduler {

@@ -80,6 +80,20 @@ void ActorScheduler::shutdown(proto::ProtoContext* ctx) {
     workers_.clear();
 }
 
+// Free any messages still in flight when an actor is dropped at
+// shutdown (typically none — the scheduler drains workers first —
+// but during a forced shutdown a sender might race with the join).
+ActorState::~ActorState() {
+    for (int band = 0; band < 3; ++band) {
+        ActorMessage* m = head[band].load(std::memory_order_acquire);
+        while (m) {
+            ActorMessage* next = m->next;
+            delete m;
+            m = next;
+        }
+    }
+}
+
 ActorState* ActorScheduler::newActor(const proto::ProtoObject* wrapper,
                                       const proto::ProtoObject* initialValue) {
     auto state = std::make_unique<ActorState>();
@@ -97,15 +111,41 @@ void ActorScheduler::enqueueReady_(ActorState* actor, ActorPriority p) {
     queueCv_.notify_one();
 }
 
+// Pick the highest non-empty priority among the actor's three heads.
+// Used both by the running worker at end-of-batch (to decide where to
+// re-enqueue an actor whose mailbox grew during the drain) and by
+// senders that lost the claim race but want their priority known.
+// Cheap: at most 3 atomic loads.
+static ActorPriority highestPendingBand(const ActorState* actor) {
+    if (actor->head[0].load(std::memory_order_acquire)) return ActorPriority::High;
+    if (actor->head[1].load(std::memory_order_acquire)) return ActorPriority::Medium;
+    return ActorPriority::Low;
+}
+
 void ActorScheduler::send(ActorState* actor, ActorMessage&& msg) {
-    ActorPriority schedPriority = msg.priority;
-    {
-        std::lock_guard<std::mutex> g(actor->mtx);
-        actor->mailbox.push_back(std::move(msg));
-        if (actor->running || actor->scheduled) return;
-        actor->scheduled = true;
+    ActorPriority band = msg.priority;
+    ActorMessage* node = new ActorMessage(std::move(msg));
+    // CAS-push onto the per-band stack. node->next captures the current
+    // head; the CAS retries on contention. Release on success so the
+    // worker sees the fully-initialised node via its acquire-exchange.
+    ActorMessage* expected = actor->head[(int)band]
+                                   .load(std::memory_order_relaxed);
+    do {
+        node->next = expected;
+    } while (!actor->head[(int)band].compare_exchange_weak(
+                expected, node,
+                std::memory_order_release,
+                std::memory_order_relaxed));
+
+    // Claim the actor for scheduling. If we win the CAS, we own the
+    // ready-queue insertion; otherwise the currently-running or
+    // already-queued handler will see our node when it drains.
+    bool expectedClaim = false;
+    if (actor->claimed.compare_exchange_strong(
+                expectedClaim, true,
+                std::memory_order_acq_rel)) {
+        enqueueReady_(actor, band);
     }
-    enqueueReady_(actor, schedPriority);
 }
 
 ActorState* ActorScheduler::popReady_() {
@@ -125,6 +165,22 @@ ActorState* ActorScheduler::popReady_() {
     return nullptr;  // shutting down with empty queues
 }
 
+// Drain one priority band's mailbox: atomically pluck the whole stack,
+// reverse it (LIFO → FIFO), and return the head of the reversed list.
+// Caller owns the freed nodes.
+static ActorMessage* drainBand(ActorState* actor, int band) {
+    ActorMessage* lifo =
+        actor->head[band].exchange(nullptr, std::memory_order_acquire);
+    ActorMessage* fifo = nullptr;
+    while (lifo) {
+        ActorMessage* next = lifo->next;
+        lifo->next = fifo;
+        fifo = lifo;
+        lifo = next;
+    }
+    return fifo;
+}
+
 void ActorScheduler::workerLoop(proto::ProtoContext* ctx) {
     setActiveCallContext(*ccBlueprint_);
 
@@ -135,87 +191,90 @@ void ActorScheduler::workerLoop(proto::ProtoContext* ctx) {
             return;
         }
 
-        // SINGLE-METHOD INVARIANT: while `running` is true, no other
-        // worker will pick this actor up — senders that arrive during
-        // a drain see `running=true` and skip the schedule branch.
-        // We clear `running` once at the end of the batch, in the
-        // same lock-acquire that decides whether to re-enqueue. If we
-        // cleared it after each message, a sender could observe
-        // running=false / scheduled=false in the gap between two
-        // messages and schedule the actor on a second worker — a
-        // race we hit and fixed in v0.19.
-        {
-            std::lock_guard<std::mutex> g(actor->mtx);
-            actor->running = true;
-            actor->scheduled = false;
-        }
+        // SINGLE-METHOD INVARIANT: `claimed` was set to true by the
+        // sender (or by the previous turn's end-of-batch re-enqueue)
+        // and stays true for as long as this worker holds the actor.
+        // Concurrent senders observe `claimed == true`, push their
+        // node onto the per-band stack, and skip the ready-queue
+        // insertion — we will see their message when we drain again
+        // below, or at end-of-batch.
 
-        constexpr int kDrainBatch = 8;
-        for (int k = 0; k < kDrainBatch; ++k) {
-            ActorMessage msg;
-            bool haveMsg = false;
-            {
-                std::lock_guard<std::mutex> g(actor->mtx);
-                if (!actor->mailbox.empty()) {
-                    msg = std::move(actor->mailbox.front());
-                    actor->mailbox.pop_front();
-                    haveMsg = true;
+        // Drain in strict priority order: High first, then Medium, then
+        // Low. Within a band, FIFO. A new High-priority message that
+        // arrives mid-drain will be picked up either at end-of-batch
+        // re-enqueue, or — if it arrives BEFORE we drain its band on
+        // this turn — folded into the same batch.
+        ActorMessage* head[3] = {
+            drainBand(actor, 0),
+            drainBand(actor, 1),
+            drainBand(actor, 2),
+        };
+
+        for (int band = 0; band < 3; ++band) {
+            while (head[band]) {
+                ActorMessage* msg = head[band];
+                head[band] = msg->next;
+
+                const proto::ProtoObject* result = PROTO_NONE;
+                try {
+                    const proto::ProtoObject* buf[17];
+                    unsigned int total = 1;
+                    buf[0] = actor->value ? actor->value : PROTO_NONE;
+                    if (msg->args) {
+                        const proto::ProtoList* alist = msg->args->asList(ctx);
+                        unsigned long an = alist->getSize(ctx);
+                        if (an > 15) an = 15;
+                        for (unsigned long i = 0; i < an; ++i) {
+                            buf[total++] = alist->getAt(ctx, (int)i);
+                        }
+                    }
+                    result = ccBlueprint_->engine->invoke(
+                        ctx, msg->fn, buf, total);
+                } catch (...) {
+                    result = PROTO_NONE;
                 }
-            }
-            if (!haveMsg) break;
 
-            const proto::ProtoObject* result = PROTO_NONE;
-            try {
-                const proto::ProtoObject* buf[17];
-                unsigned int total = 1;
-                buf[0] = actor->value ? actor->value : PROTO_NONE;
-                if (msg.args) {
-                    const proto::ProtoList* alist = msg.args->asList(ctx);
-                    unsigned long an = alist->getSize(ctx);
-                    if (an > 15) an = 15;
-                    for (unsigned long i = 0; i < an; ++i) {
-                        buf[total++] = alist->getAt(ctx, (int)i);
+                actor->value = result;
+                if (actor->wrapper) {
+                    const_cast<proto::ProtoObject*>(actor->wrapper)
+                        ->setAttribute(ctx, ccBlueprint_->valueKey, result);
+                }
+                if (msg->promise) {
+                    proto::ProtoObject* p =
+                        const_cast<proto::ProtoObject*>(msg->promise);
+                    bool first = p->setAttributeIfEqual(
+                        ctx, ccBlueprint_->doneKey,
+                        PROTO_FALSE, PROTO_TRUE);
+                    if (first) {
+                        p->setAttribute(ctx, ccBlueprint_->valueKey, result);
                     }
                 }
-                result = ccBlueprint_->engine->invoke(ctx, msg.fn, buf, total);
-            } catch (...) {
-                result = PROTO_NONE;
-            }
 
-            actor->value = result;
-            if (actor->wrapper) {
-                const_cast<proto::ProtoObject*>(actor->wrapper)
-                    ->setAttribute(ctx, ccBlueprint_->valueKey, result);
+                messagesProcessed_.fetch_add(1, std::memory_order_relaxed);
+                delete msg;
             }
-            if (msg.promise) {
-                proto::ProtoObject* p =
-                    const_cast<proto::ProtoObject*>(msg.promise);
-                bool first = p->setAttributeIfEqual(
-                    ctx, ccBlueprint_->doneKey, PROTO_FALSE, PROTO_TRUE);
-                if (first) {
-                    p->setAttribute(ctx, ccBlueprint_->valueKey, result);
-                }
-            }
-
-            messagesProcessed_.fetch_add(1, std::memory_order_relaxed);
         }
 
-        // End of batch — atomically clear running and re-enqueue if
-        // more messages arrived during the drain. Holding the mutex
-        // here closes the window for a concurrent sender to schedule
-        // a second worker on this actor.
-        ActorPriority reschedAt = ActorPriority::Medium;
-        bool reschedule = false;
-        {
-            std::lock_guard<std::mutex> g(actor->mtx);
-            actor->running = false;
-            if (!actor->mailbox.empty()) {
-                reschedAt = actor->mailbox.front().priority;
-                actor->scheduled = true;
-                reschedule = true;
+        // End of batch — drop the claim. A sender that pushes BEFORE
+        // this store will see claimed==true and skip the schedule;
+        // their message will be observed by the head.load below. A
+        // sender that pushes AFTER this store will race for the claim;
+        // if they win, they enqueue; if we win, we re-enqueue here.
+        actor->claimed.store(false, std::memory_order_release);
+
+        // Did anything arrive while we were draining? Check all three
+        // bands so a late high-priority send is re-enqueued at the
+        // right priority. The CAS races the sender's CAS-claim — at
+        // most one of us wins.
+        if (actor->head[0].load(std::memory_order_acquire) != nullptr
+                || actor->head[1].load(std::memory_order_acquire) != nullptr
+                || actor->head[2].load(std::memory_order_acquire) != nullptr) {
+            bool expected = false;
+            if (actor->claimed.compare_exchange_strong(
+                        expected, true, std::memory_order_acq_rel)) {
+                enqueueReady_(actor, highestPendingBand(actor));
             }
         }
-        if (reschedule) enqueueReady_(actor, reschedAt);
     }
 }
 
