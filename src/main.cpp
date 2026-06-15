@@ -10,6 +10,7 @@
 
 #include "reader/Reader.h"
 #include "compiler/Compiler.h"
+#include "runtime/ActorScheduler.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/ExecutionEngine.h"
 #include "runtime/Primitives.h"
@@ -72,7 +73,7 @@ int runFile(const char* path) {
     //   1 : forms (the ProtoList readAll() returned).
     //   2 : stringMarkerProto — see ReaderMarkers / CompilerMarkers docs.
     //   3 : fnMarkerProto — wraps user-fn callables (session 5).
-    ctx->resizeAutomaticLocals(10);
+    ctx->resizeAutomaticLocals(11);
     constexpr unsigned int kSlotGlobals       = 0;
     constexpr unsigned int kSlotForms         = 1;
     constexpr unsigned int kSlotStringMarker  = 2;
@@ -83,6 +84,7 @@ int runFile(const char* path) {
     constexpr unsigned int kSlotAtomMarker    = 7;
     constexpr unsigned int kSlotFutureMarker  = 8;
     constexpr unsigned int kSlotPromiseMarker = 9;
+    constexpr unsigned int kSlotActorMarker   = 10;
 
     const proto::ProtoObject* globalsObj =
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
@@ -133,6 +135,14 @@ int runFile(const char* path) {
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
     ctx->setAutomaticLocal(kSlotPromiseMarker, promiseMarkerProto);
 
+    // Session 19 — actors. Mutable wrapper child carrying the
+    // current value and an opaque handle to the C++ ActorState owned
+    // by the global ActorScheduler. Worker pool spawns on the first
+    // (actor ...) call.
+    const proto::ProtoObject* actorMarkerProto =
+        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+    ctx->setAutomaticLocal(kSlotActorMarker, actorMarkerProto);
+
     const proto::ProtoString* bytesKey =
         proto::ProtoString::createSymbol(ctx, "__bytes__");
     const proto::ProtoString* bytecodeKey =
@@ -161,6 +171,8 @@ int runFile(const char* path) {
         proto::ProtoString::createSymbol(ctx, "__result__");
     const proto::ProtoString* doneKey =
         proto::ProtoString::createSymbol(ctx, "__done__");
+    const proto::ProtoString* actorStateKey =
+        proto::ProtoString::createSymbol(ctx, "__actor_state__");
 
     protoClojure::ReaderMarkers readerMarkers{
         ctx->getAutomaticLocal(kSlotStringMarker),
@@ -216,13 +228,23 @@ int runFile(const char* path) {
                 ctx->getAutomaticLocal(kSlotAtomMarker),
                 ctx->getAutomaticLocal(kSlotFutureMarker),
                 ctx->getAutomaticLocal(kSlotPromiseMarker),
+                ctx->getAutomaticLocal(kSlotActorMarker),
                 bytecodeKey, arityKey, capturesKey, aritiesKey,
                 entriesKey, valueKey, watchesKey,
-                thunkKey, ccBlobKey, threadKey, resultKey, doneKey);
+                thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
+                actorStateKey);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s: runtime error: %s\n", path, e.what());
+        // Drain the actor scheduler before unwinding so worker
+        // threads don't outlive the ProtoSpace.
+        protoClojure::ActorScheduler::instance().shutdown(ctx);
         return 1;
     }
+    // Graceful shutdown — wait for actor workers to drain pending
+    // messages, then join. Without this, a script that fires off
+    // actor sends without explicit @ may segfault at exit when the
+    // ProtoSpace destructor runs while workers still hold pointers.
+    protoClojure::ActorScheduler::instance().shutdown(ctx);
     return 0;
 }
 

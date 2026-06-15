@@ -31,6 +31,7 @@ harness produces honest numbers vs Babashka 1.4.192 (see
 | 16 | Atoms (`atom`, `@`, `reset!`, `swap!`, `compare-and-set!`) on protoCore CAS | 136 |
 | 17 | Futures (`future`, `deref` on future, `realized?`, `future?`) on real OS threads — 4× wall-clock speedup demoed | 145 |
 | 18 | Watches (`add-watch`/`remove-watch`), promises (`promise`/`deliver`/`promise?`), real parallel `pmap`, named anon fn surface | 152 |
+| 19 | Actor system: worker pool, 3 priority levels, single-method invariant, ~5M msg/s single-actor upper bound | 160 |
 
 The dated design specs live under `docs/superpowers/specs/`; the
 memory entries for each session live under
@@ -180,9 +181,10 @@ does not yet support. Calling any of them raises a clear error.
 - [x] **`pmap` runs each element on its own OS thread (session 18)** — 3.25× wall-clock speedup measured on `pmap fib` over a 4-element list
 - [x] `add-watch`, `remove-watch` (session 18)
 - [x] `promise`, `deliver`, `promise?` (session 18 — busy-wait deref in goUnmanaged scope)
+- [x] **Actors** (`actor`, `send`, `send-h`/`send-m`/`send-l`, `actor?`, `actor-stats`) on a configurable worker pool (`PROTOCLJ_ACTOR_WORKERS` env var, default `max(2, cores-2)`, cap 16). Three priority levels. Single-method invariant. ~5M msg/s upper bound on trivial workload (session 19).
 - [ ] `volatile!`, `vreset!`, `vswap!`
 - [ ] `delay`, `force`
-- [ ] `agent`
+- [ ] `agent` (the Clojure-JVM family — different semantics from our actor)
 
 ### Module system / UMD (not yet)
 

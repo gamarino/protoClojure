@@ -1,5 +1,6 @@
 #include "Primitives.h"
 #include "ExecutionEngine.h"
+#include "ActorScheduler.h"
 
 #include "protoCore.h"
 
@@ -179,6 +180,12 @@ void printValue(proto::ProtoContext* ctx, std::FILE* out,
         } else {
             std::fputs("#<future pending>", out);
         }
+        return;
+    }
+    if (cc && v->getPrototype(ctx) == cc->actorMarkerProto) {
+        std::fputs("#<actor ", out);
+        printValue(ctx, out, v->getAttribute(ctx, cc->valueKey));
+        std::fputc('>', out);
         return;
     }
     if (cc && v->getPrototype(ctx) == cc->promiseMarkerProto) {
@@ -1558,6 +1565,13 @@ const proto::ProtoObject* prim_deref(proto::ProtoContext* ctx,
             a->getAttribute(ctx, cc->resultKey);
         return r ? r : PROTO_NONE;
     }
+    if (proto == cc->actorMarkerProto) {
+        // Read the current state mirror. Same key as atoms, so the
+        // ordinary attribute-cache path picks it up after the first
+        // hit on a long-lived actor.
+        const proto::ProtoObject* v = a->getAttribute(ctx, cc->valueKey);
+        return v ? v : PROTO_NONE;
+    }
     if (proto == cc->promiseMarkerProto) {
         // Busy-wait. protoCore's goUnmanaged tells the GC this thread
         // is parked on an OS-level wait so a STW can proceed without
@@ -2007,6 +2021,161 @@ const proto::ProtoObject* prim_promise_p(proto::ProtoContext* ctx,
     return (v->getPrototype(ctx) == cc->promiseMarkerProto) ? PROTO_TRUE : PROTO_FALSE;
 }
 
+// Session 19 — actors.
+//
+// (actor initial-state) builds a mutable wrapper child of
+// actorMarkerProto with `__value__` = initial-state and
+// `__actor_state__` = long-encoded pointer to an ActorState struct
+// owned by the global ActorScheduler. The scheduler is started
+// lazily on the first actor allocation.
+//
+// (send actor f & args) enqueues `(f current-state args...)` on the
+// actor's mailbox at MEDIUM priority and returns a promise that
+// resolves to the new state when the message is processed.
+//
+// (send-h …) / (send-m …) / (send-l …) — explicit High / Medium /
+// Low priority.
+//
+// (actor? x) — prototype check.
+// @actor — read the current state through the standard deref path.
+
+static ActorState* actorStateFrom(proto::ProtoContext* ctx,
+                                  const ActiveCallContext* cc,
+                                  const proto::ProtoObject* v,
+                                  const char* primName) {
+    if (!v || v->getPrototype(ctx) != cc->actorMarkerProto)
+        throw std::runtime_error(std::string(primName) + ": not an actor");
+    const proto::ProtoObject* h = v->getAttribute(ctx, cc->actorStateKey);
+    if (!h || !h->isInteger(ctx))
+        throw std::runtime_error(std::string(primName) + ": broken actor handle");
+    return reinterpret_cast<ActorState*>(h->asLong(ctx));
+}
+
+const proto::ProtoObject* prim_actor(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject*,
+                                     const proto::ParentLink*,
+                                     const proto::ProtoList* args,
+                                     const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("actor: expects (actor initial-state)");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("actor: no active VM context");
+
+    auto& sched = ActorScheduler::instance();
+    sched.ensureStarted(ctx->space, ctx, *cc);
+
+    const proto::ProtoObject* init = args->getAt(ctx, 0);
+    proto::ProtoObject* wrap = const_cast<proto::ProtoObject*>(
+        cc->actorMarkerProto->newChild(ctx, /*isMutable=*/true));
+    wrap->setAttribute(ctx, cc->valueKey, init);
+
+    ActorState* state = sched.newActor(wrap, init);
+    wrap->setAttribute(ctx, cc->actorStateKey,
+        ctx->fromLong(reinterpret_cast<long long>(state)));
+    return wrap;
+}
+
+const proto::ProtoObject* prim_actor_p(proto::ProtoContext* ctx,
+                                       const proto::ProtoObject*,
+                                       const proto::ParentLink*,
+                                       const proto::ProtoList* args,
+                                       const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("actor?: expects 1 arg");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("actor?: no active VM context");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (!v) return PROTO_FALSE;
+    return (v->getPrototype(ctx) == cc->actorMarkerProto)
+           ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// Shared core for send / send-h / send-m / send-l.
+static const proto::ProtoObject* sendCore(proto::ProtoContext* ctx,
+                                           const proto::ProtoList* args,
+                                           const char* primName,
+                                           ActorPriority priority) {
+    if (!args || args->getSize(ctx) < 2)
+        throw std::runtime_error(std::string(primName) + ": expects (… actor f & args)");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error(std::string(primName) + ": no active VM context");
+    ActorState* state = actorStateFrom(ctx, cc, args->getAt(ctx, 0), primName);
+    const proto::ProtoObject* f = args->getAt(ctx, 1);
+
+    // Pack the extra args (positions 2..N-1) into a fresh ProtoList.
+    const proto::ProtoObject* extras = ctx->newList()->asObject(ctx);
+    unsigned long n = args->getSize(ctx);
+    for (unsigned long i = 2; i < n; ++i) {
+        extras = extras->asList(ctx)
+            ->appendLast(ctx, args->getAt(ctx, (int)i))->asObject(ctx);
+    }
+
+    // Build the per-send promise — same wire shape as session 18.
+    proto::ProtoObject* p = const_cast<proto::ProtoObject*>(
+        cc->promiseMarkerProto->newChild(ctx, /*isMutable=*/true));
+    p->setAttribute(ctx, cc->valueKey, PROTO_NONE);
+    p->setAttribute(ctx, cc->doneKey, PROTO_FALSE);
+
+    ActorMessage msg{f, extras, p, priority};
+    ActorScheduler::instance().send(state, std::move(msg));
+    return p;
+}
+
+const proto::ProtoObject* prim_send(proto::ProtoContext* ctx,
+                                    const proto::ProtoObject*,
+                                    const proto::ParentLink*,
+                                    const proto::ProtoList* args,
+                                    const proto::ProtoSparseList*) {
+    return sendCore(ctx, args, "send", ActorPriority::Medium);
+}
+
+const proto::ProtoObject* prim_send_h(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject*,
+                                      const proto::ParentLink*,
+                                      const proto::ProtoList* args,
+                                      const proto::ProtoSparseList*) {
+    return sendCore(ctx, args, "send-h", ActorPriority::High);
+}
+
+const proto::ProtoObject* prim_send_m(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject*,
+                                      const proto::ParentLink*,
+                                      const proto::ProtoList* args,
+                                      const proto::ProtoSparseList*) {
+    return sendCore(ctx, args, "send-m", ActorPriority::Medium);
+}
+
+const proto::ProtoObject* prim_send_l(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject*,
+                                      const proto::ParentLink*,
+                                      const proto::ProtoList* args,
+                                      const proto::ProtoSparseList*) {
+    return sendCore(ctx, args, "send-l", ActorPriority::Low);
+}
+
+// (actor-stats) — diagnostics, returns a small map.
+const proto::ProtoObject* prim_actor_stats(proto::ProtoContext* ctx,
+                                           const proto::ProtoObject*,
+                                           const proto::ParentLink*,
+                                           const proto::ProtoList*,
+                                           const proto::ProtoSparseList*) {
+    auto s = ActorScheduler::instance().stats();
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("actor-stats: no active VM context");
+    const proto::ProtoSparseList* sparse = ctx->newSparseList();
+    const proto::ProtoString* wk =
+        proto::ProtoString::createSymbol(ctx, ":workers");
+    const proto::ProtoString* mk =
+        proto::ProtoString::createSymbol(ctx, ":messages-processed");
+    sparse = sparseAssoc(ctx, sparse,
+        reinterpret_cast<const proto::ProtoObject*>(wk),
+        ctx->fromLong(s.numWorkers));
+    sparse = sparseAssoc(ctx, sparse,
+        reinterpret_cast<const proto::ProtoObject*>(mk),
+        ctx->fromLong(s.messagesProcessed));
+    return buildMap(ctx, cc, sparse);
+}
+
 const proto::ProtoObject* prim_deliver(proto::ProtoContext* ctx,
                                        const proto::ProtoObject*,
                                        const proto::ParentLink*,
@@ -2219,6 +2388,15 @@ void installPrimitives(proto::ProtoContext* ctx,
     install("promise",          &prim_promise);
     install("promise?",         &prim_promise_p);
     install("deliver",          &prim_deliver);
+
+    // Session 19 — actors.
+    install("actor",            &prim_actor);
+    install("actor?",           &prim_actor_p);
+    install("send",             &prim_send);
+    install("send-h",           &prim_send_h);
+    install("send-m",           &prim_send_m);
+    install("send-l",           &prim_send_l);
+    install("actor-stats",      &prim_actor_stats);
     install("first",   &prim_first);
     install("rest",    &prim_rest);
     install("cons",    &prim_cons);

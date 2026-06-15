@@ -58,6 +58,7 @@ target_compile_options(protoclj_reader PRIVATE -Wall -Wextra -Wpedantic)
 
 # --- protoClojure runtime library (bytecode, VM, primitives) ---
 add_library(protoclj_runtime STATIC
+    src/runtime/ActorScheduler.cpp
     src/runtime/BytecodeModule.cpp
     src/runtime/ExecutionEngine.cpp
     src/runtime/Primitives.cpp

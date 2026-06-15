@@ -69,6 +69,11 @@ struct ActiveCallContext {
     // family. deliver does a single-shot CAS on the value attribute;
     // deref busy-waits in goUnmanaged-protected sleeps.
     const proto::ProtoObject*  promiseMarkerProto;
+    // Session 19 — actors. The wrapper carries `__actor_state__`
+    // (long handle to ActorState) and mirrors the current value
+    // under `__value__` so `@actor` reads work via the standard
+    // deref path.
+    const proto::ProtoObject*  actorMarkerProto;
     const proto::ProtoString*  bytecodeKey;
     const proto::ProtoString*  arityKey;
     const proto::ProtoString*  capturesKey;
@@ -82,6 +87,8 @@ struct ActiveCallContext {
     const proto::ProtoString*  threadKey;
     const proto::ProtoString*  resultKey;
     const proto::ProtoString*  doneKey;
+    // Session 19.
+    const proto::ProtoString*  actorStateKey;
 };
 void setActiveCallContext(const ActiveCallContext& cc);
 void clearActiveCallContext();

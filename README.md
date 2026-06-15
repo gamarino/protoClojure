@@ -63,7 +63,44 @@ Multi-arity, variadic, the higher-order pipeline:
 (println (my-reduce + 100 (list 1 2 3)))   ;; => 106
 ```
 
-The 90+ conformance fixtures under `tests/conformance/` cover everything the language supports today.
+The 160 conformance fixtures under `tests/conformance/` cover everything the language supports today.
+
+## Concurrency — atoms, futures, actors
+
+protoClojure exposes the GIL-free concurrency that protoCore already has underneath. There is no global interpreter lock; threads are real OS threads, tracked by the kernel's GC quorum.
+
+```clojure
+;; --- atoms: CAS-backed shared state ------------------------------------
+(def counter (atom 0))
+(swap! counter inc)               ;; lock-free retry on protoCore CAS
+@counter                          ;; => 1
+(add-watch counter :log
+  (fn [k r old new] (println k old "->" new)))
+
+;; --- futures: a real OS thread per future, value materialises on @ -----
+(def f (future (slow-compute)))
+@f                                ;; blocks (goUnmanaged) until done
+
+;; --- pmap: fan out over the worker pool, gather in input order ---------
+(pmap slow-compute [1 2 3 4 5])
+
+;; --- promises: hand off a value across threads -------------------------
+(def p (promise))
+(future (deliver p 42))
+@p                                ;; => 42
+
+;; --- actors: serialised mailbox, three priority bands ------------------
+(def acc (actor 0))
+(send acc inc)                    ;; medium-priority enqueue
+(send-h acc + 100)                ;; high-priority enqueue
+(send-l acc - 5)                  ;; low-priority enqueue
+@(send acc inc)                   ;; the send returns a promise; deref waits
+@acc                              ;; current value, no message round-trip
+```
+
+Actors run on a configurable worker pool (`PROTOCLJ_ACTOR_WORKERS`, default `max(2, cores − 2)`, cap 16). The kernel enforces a **single-method invariant**: at most one message per actor is being processed at any instant, so the function body sees no concurrent access to the actor's state. Three priority bands (`send-h` / `send` / `send-l`) drain highest-priority-non-empty first.
+
+On a 2026-06-14 measurement (Ryzen 5500U), the upper bound on a single actor with a trivial `inc` body is **~5M msg/s** — the cost is the send path, the mailbox enqueue, and the promise completion. Adding workers does not raise the single-actor rate (the invariant forbids parallelism within one actor); under fan-out across 1000 actors the throughput is **~250K msg/s** with the same trivial body. The full numbers are in [`benchmarks/actor-bench.sh`](benchmarks/actor-bench.sh).
 
 ## Performance — what is measured
 
@@ -126,7 +163,7 @@ The interesting property that this membership confers: a value materialised in a
 
 ## Project status
 
-protoClojure runs. Twelve development sessions have landed (each numbered, dated, and traced in the commit log on `main`):
+protoClojure runs. Nineteen development sessions have landed (each numbered, dated, and traced in the commit log on `main`):
 
 | Session | What it shipped | Conformance count |
 |---:|---|---:|
@@ -140,8 +177,15 @@ protoClojure runs. Twelve development sessions have landed (each numbered, dated
 | 10 | First benchmark vs Babashka | 90 |
 | 11 | SmallInt fast-path opcodes + LargeInteger promotion | 93 |
 | 12 | Fewer attribute lookups per CALL | 93 |
+| 13 | Maps `{:a 1}` + named-arg destructuring `& {:keys [...]}` | 108 |
+| 14 | Trailing kv pairs + `:or` + `:as` — dual call convention closed | 117 |
+| 15 | `clojure.string`-shaped surface (15 string primitives) | 132 |
+| 16 | `atom`, `swap!`, `reset!`, `deref`, `@` — CAS on protoCore | 138 |
+| 17 | `future` on real OS threads (4× wall-clock on parallel workload) | 144 |
+| 18 | `add-watch`/`remove-watch`, `promise`/`deliver`, parallel `pmap`, named anon fn | 152 |
+| 19 | Actor system: worker pool, 3 priority bands, ~5M msg/s upper bound | 160 |
 
-The suite stands at **93 conformance fixtures + the unit tests** (`ctest`, single-threaded). The benchmark numbers above are reproduced by `./benchmarks/bench.sh` on the same build.
+The suite stands at **160 conformance fixtures + the unit tests** (`ctest`, single-threaded). The benchmark numbers above are reproduced by `./benchmarks/bench.sh` on the same build; the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
 What is implemented and stable:
 
@@ -155,9 +199,8 @@ What is implemented and stable:
 
 What is **not yet** implemented (and tracked):
 
-- **Maps**: `{:a 1 :b 2}` literal and the `assoc` / `get` / `contains?` primitive set.
-- **Strings as a first-class collection**: `count` / `upper-case` / `subs` / `split` / `join`.
-- **Concurrency primitives**: `atom`, `future`, `pmap`, `agent`. The protoCore kernel already has the substrate.
+- **Clojure-style `agent`** with its specific send/await semantics (the in-tree `actor` is the protoCore-native variant — different surface, see [docs/tutorial/13-actors.md](docs/tutorial/13-actors.md)).
+- **`delay` / `force`** and `volatile!` / `vreset!` / `vswap!`.
 - **The UMD module system**: `(:require [py/numpy :as np])` and the foreign-dispatch protocol layer.
 - **A real REPL** with nREPL compatibility (CIDER, Calva, Conjure).
 - **A `core.clj`** evaluated at startup so we stop installing primitives in C++ and start composing them in Clojure.
@@ -177,8 +220,9 @@ cmake --build build_release
 ./build_release/protoclj script.clj          # run a .clj file
 ./build_release/protoclj --version           # version
 
-cd build_release && ctest -j1                # run the conformance suite (93/93)
+cd build_release && ctest -j1                # run the conformance suite (160/160)
 cd .. && ./benchmarks/bench.sh               # run the benchmark vs Babashka
+./benchmarks/actor-bench.sh                  # actor throughput, varied worker counts
 ```
 
 The benchmark harness expects a Babashka binary at `/tmp/proto-bench/bb` by default; pass the path as the second argument to override:

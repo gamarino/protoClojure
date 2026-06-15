@@ -53,6 +53,7 @@ of the underlying object model, the protoCore concurrency primitives.
 | 10 | [The REPL](tutorial/10-repl.md)                                               | Interactive `protoclj`. nREPL. Connecting CIDER / Calva / Conjure.                                        |
 | 11 | [Macros](tutorial/11-macros.md)                                               | Code as data. `defmacro`. Why this is the language's leverage point.                                      |
 | 12 | [A worked example](tutorial/12-worked-example.md)                             | The tri-runtime demo from `INTEROP.md`, walked through one line at a time.                                |
+| 13 | [Actors](tutorial/13-actors.md)                                               | `actor` / `send` / `send-h` / `send-l` / `actor?` / `actor-stats`. Single-method invariant, priority bands, worker pool. |
 
 ## A note on running the examples
 
