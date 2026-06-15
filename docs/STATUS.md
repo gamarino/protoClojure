@@ -245,11 +245,12 @@ for the design.
 - [ ] `pr-str print prn pr`
 - [ ] `clojure.string` — count chars, upper, lower, split, join, subs, replace, trim
 
-### REPL (not yet)
+### REPL
 
-- [ ] Interactive `protoclj` REPL
-- [ ] `*1` `*2` `*3` `*e`
-- [ ] `(doc symbol)`, `(source symbol)`
+- [x] Interactive `protoclj` REPL on libreadline (history persisted to `~/.protoclj_history`, multi-line continuation prompt `#_=>`, `:help`/`:quit`/`:load`/`:time` meta-commands)
+- [x] `*1` `*2` `*3` bindings to the last three evaluation results
+- [ ] `*e` (last exception) — needs exception objects with a stable surface, scheduled with `try`/`catch`
+- [ ] `(doc symbol)`, `(source symbol)` — needs docstring storage on `defn`
 - [ ] nREPL server (CIDER / Calva / Conjure compatible)
 
 ### Macros (not yet)

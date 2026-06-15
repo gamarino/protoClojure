@@ -73,11 +73,32 @@ add_library(protoclj_compiler STATIC
 target_link_libraries(protoclj_compiler PUBLIC protoclj_runtime)
 target_compile_options(protoclj_compiler PRIVATE -Wall -Wextra -Wpedantic)
 
+# --- protoClojure REPL library ---
+# libreadline is a hard requirement of the REPL (history, arrow-key
+# editing, multi-line continuation prompt). System libreadline-dev is
+# present on every modern Linux + macOS Homebrew distribution.
+find_library(READLINE_LIBRARY NAMES readline)
+find_path(READLINE_INCLUDE_DIR NAMES readline/readline.h)
+if(NOT READLINE_LIBRARY OR NOT READLINE_INCLUDE_DIR)
+    message(FATAL_ERROR
+        "libreadline not found. Install it (Debian/Ubuntu: libreadline-dev; "
+        "Fedora/RHEL: readline-devel; macOS: brew install readline).")
+endif()
+add_library(protoclj_repl STATIC
+    src/repl/Repl.cpp
+)
+target_include_directories(protoclj_repl PRIVATE "${READLINE_INCLUDE_DIR}")
+target_link_libraries(protoclj_repl
+    PUBLIC  protoclj_compiler protoclj_reader protoclj_runtime
+    PRIVATE "${READLINE_LIBRARY}")
+target_compile_options(protoclj_repl PRIVATE -Wall -Wextra -Wpedantic)
+
 # --- protoClojure binary ---
 add_executable(protoclj
     src/main.cpp
 )
 target_link_libraries(protoclj PRIVATE
+    protoclj_repl
     protoclj_reader
     protoclj_compiler
     protoclj_runtime)

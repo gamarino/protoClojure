@@ -202,7 +202,7 @@ What is **not yet** implemented (and tracked):
 - **Clojure-style `agent`** with its specific send/await semantics (the in-tree `actor` is the protoCore-native variant — different surface, see [docs/tutorial/13-actors.md](docs/tutorial/13-actors.md)).
 - **`delay` / `force`** and `volatile!` / `vreset!` / `vswap!`.
 - **The UMD module system**: `(:require [py/numpy :as np])` and the foreign-dispatch protocol layer.
-- **A real REPL** with nREPL compatibility (CIDER, Calva, Conjure).
+- **An nREPL server** for CIDER / Calva / Conjure editor integration. The local interactive REPL on libreadline ships today (see [docs/tutorial/10-repl.md](docs/tutorial/10-repl.md)); editor wiring is the v0.2 step.
 - **A `core.clj`** evaluated at startup so we stop installing primitives in C++ and start composing them in Clojure.
 - **JIT or threaded-dispatch**. The current bytecode VM is a clean switch loop and runs surprisingly well on a modern CPU; both are upgrade paths, neither is queued yet.
 
@@ -217,6 +217,7 @@ cd protoClojure
 cmake -B build_release -S .
 cmake --build build_release
 
+./build_release/protoclj                     # interactive REPL
 ./build_release/protoclj script.clj          # run a .clj file
 ./build_release/protoclj --version           # version
 

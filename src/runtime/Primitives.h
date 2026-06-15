@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include <cstdio>
+
 namespace proto {
 class ProtoContext;
 class ProtoObject;
@@ -99,5 +101,11 @@ const ActiveCallContext* activeCallContext();
 // flight worker dereferencing a now-freed Cell crashes the process at
 // exit. Mirrors `ActorScheduler::shutdown`, idempotent.
 void shutdownFutures(proto::ProtoContext* ctx);
+
+// Same value-formatter `println` / `prn` use. Exposed so the REPL can
+// echo evaluated results in the canonical Clojure shape without
+// rebuilding the printer. Falls back to "nil" on a null pointer.
+void replPrintValue(proto::ProtoContext* ctx, std::FILE* out,
+                    const proto::ProtoObject* v);
 
 } // namespace protoClojure

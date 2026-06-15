@@ -17,8 +17,8 @@ Launch `protoclj` with no arguments:
 
 ```
 $ protoclj
-protoClojure 0.1.0
-Type :help for help. Ctrl-D to exit.
+protoClojure 0.0.1
+REPL — :help for commands, :quit or Ctrl-D to exit
 user=>
 ```
 
@@ -27,16 +27,35 @@ Type a form, press enter, see the result:
 ```
 user=> (+ 1 2)
 3
-user=> (defn square [x] (* x x))
-#'user/square
+user=> (defn square [n] (* n n))
+#<fn>
 user=> (square 7)
 49
-user=> (def people [{:name "alice" :age 30} {:name "bob" :age 25}])
-#'user/people
-user=> (->> people (map :name) sort)
-("alice" "bob")
+user=> (map square [1 2 3 4 5])
+(1 4 9 16 25)
+user=> (def acc (atom 0))
+#<atom 0>
+user=> (swap! acc inc)
+1
+user=> @(future (* 100 100))
+10000
 user=>
 ```
+
+A few things to know up front:
+
+- **Multi-line forms work.** Open a `(`, `[`, or `{` and keep typing —
+  the prompt changes to `  #_=>` and the REPL keeps reading until the
+  delimiters balance. A blank line at the continuation prompt forces
+  evaluation (useful escape hatch if you got the count wrong).
+- **History.** Arrow keys recall earlier lines. The history is
+  persisted across sessions in `~/.protoclj_history`.
+- **Error recovery.** A parse / compile / runtime error is printed and
+  the loop continues at the next prompt. The REPL does not crash on
+  bad input.
+- **Definitions persist.** Every `def` / `defn` lands in the same
+  globals namespace, so the next form sees everything you have defined
+  so far.
 
 Two things that distinguish this from Python's or Node's REPL:
 
@@ -49,72 +68,44 @@ Two things that distinguish this from Python's or Node's REPL:
 
 ### 10.1.1 REPL helpers
 
-A handful of built-ins make navigating the REPL pleasant:
+The three special vars `*1`, `*2`, `*3` hold the last three results.
+Useful for reaching back without retyping the form that produced
+them:
 
 ```
-user=> (doc square)
--------------------------
-user/square
-([x])
-  nil
-nil
-
-user=> (doc map)
--------------------------
-clojure.core/map
-([f] [f coll] [f c1 c2] [f c1 c2 c3] [f c1 c2 c3 & colls])
-  Returns a lazy sequence consisting of the result of applying f to
-  the set of first items of each coll, followed by applying f to the
-  set of second items in each coll, until any one of the colls is
-  exhausted.  Any remaining items in other colls are ignored. Function
-  f should accept number-of-colls arguments.
-nil
-
-user=> (source square)
-(defn square [x] (* x x))
-nil
-
-user=> (find-doc "regular expression")
-;; lists everything whose docstring mentions "regular expression"
+user=> (* 7 6)
+42
+user=> *1
+42
+user=> (+ *1 100)
+142
+user=> *2
+42
 ```
 
-The three special vars `*1`, `*2`, `*3` hold the last three results,
-useful for reaching back without retyping:
-
-```
-user=> (range 10)
-(0 1 2 3 4 5 6 7 8 9)
-user=> (reduce + *1)
-45
-```
-
-`*e` holds the most recent exception:
-
-```
-user=> (/ 1 0)
-ArithmeticException: divide by zero
-user=> (ex-message *e)
-"divide by zero"
-```
+`(doc fn)` / `(source fn)` / `(find-doc "regex")` are tutorial-only
+today — they are planned for v0.2 alongside docstring storage on
+`defn`. `*e` (last exception) is also v0.2.
 
 ### 10.1.2 REPL meta-commands
 
-Commands beginning with `:` are REPL-only — they do not work in
-files. The minimum useful set:
+Commands beginning with `:` are REPL-only — they are not legal in
+`.clj` files. What ships today:
 
-| Command         | What it does                                            |
-|-----------------|---------------------------------------------------------|
-| `:help`         | Show this list                                          |
-| `:exit`         | Leave the REPL (Ctrl-D works too)                       |
-| `:reload <ns>`  | Re-load the file for namespace `<ns>`                   |
-| `:cd <path>`    | Change working directory                                |
-| `:pwd`          | Print working directory                                 |
-| `:cp <path>`    | Add a directory to the CLOJURE_PATH                     |
-| `:in-ns <ns>`   | Switch the current namespace                            |
-| `:set <var> <v>`| Set a `*var*` (printing controls, etc.)                 |
+| Command          | What it does                                            |
+|------------------|---------------------------------------------------------|
+| `:help`, `:h`    | Show the in-REPL command list                           |
+| `:quit`, `:q`    | Leave the REPL (Ctrl-D works too)                       |
+| `:load <path>`   | Read and evaluate a `.clj` file in this session         |
+| `:time <expr>`   | Evaluate `<expr>`, report wall-clock time alongside     |
 
-The prompt shows the current namespace: `user=>`, `my.app=>`. After
-`:in-ns my.app`, your `def`s land in `my.app`.
+`:reload`, `:cd`, `:pwd`, `:cp`, `:in-ns`, `:set` are v0.2 territory:
+they depend on the namespace machinery (`:in-ns`, `:reload`) and a
+classpath search abstraction (`:cp`) that are not in v0.1.
+
+The prompt is plain `user=>` — once protoClojure gets real
+namespaces, it will switch by namespace the way JVM Clojure does
+(`my.app=>`).
 
 ### 10.1.3 What gets printed
 

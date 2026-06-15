@@ -10,6 +10,7 @@
 
 #include "reader/Reader.h"
 #include "compiler/Compiler.h"
+#include "repl/Repl.h"
 #include "runtime/ActorScheduler.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/ExecutionEngine.h"
@@ -47,9 +48,11 @@ void printHelp() {
         "  --version       Print version and exit.\n"
         "  --help, -h      Print this help and exit.\n"
         "\n"
+        "Interactive:\n"
+        "  (no args)       Start the interactive REPL (libreadline).\n"
+        "\n"
         "Not yet implemented:\n"
-        "  -e <expr>       Evaluate one expression (Phase 1 — Week 1+).\n"
-        "  (no args)       Start the interactive REPL (Phase 1 — Week 4).\n"
+        "  -e <expr>       Evaluate one expression (next milestone).\n"
         "  --nrepl PORT    Start the nREPL server (Phase 5).\n");
 }
 
@@ -255,11 +258,8 @@ int runFile(const char* path) {
 
 int main(int argc, char** argv) {
     if (argc < 2) {
-        printVersion();
-        std::printf(
-            "(interactive REPL not yet implemented — Phase 1 Week 4)\n"
-            "Run with --help to see the planned surface.\n");
-        return 0;
+        // No arguments → drop into the interactive REPL.
+        return protoClojure::runRepl();
     }
 
     // Walk argv. A non-flag argument is treated as a .clj file to run.

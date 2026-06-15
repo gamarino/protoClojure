@@ -190,6 +190,15 @@ void printValue(proto::ProtoContext* ctx, std::FILE* out,
         std::fputc('>', out);
         return;
     }
+    // User functions — both single-arity and multi-arity wrappers. The
+    // REPL needs these because a top-level `(defn sq …)` returns the
+    // fn object itself (`#'user/sq` in JVM Clojure; protoClojure does
+    // not have a Var indirection yet so we print `#<fn>`).
+    if (cc && (v->getPrototype(ctx) == cc->fnSingleProto
+            || v->getPrototype(ctx) == cc->fnMultiProto)) {
+        std::fputs("#<fn>", out);
+        return;
+    }
     if (cc && v->getPrototype(ctx) == cc->promiseMarkerProto) {
         const proto::ProtoObject* done =
             v->getAttribute(ctx, cc->doneKey);
@@ -2350,6 +2359,16 @@ const proto::ProtoObject* prim_remove_watch(proto::ProtoContext* ctx,
 // registry inside the anonymous namespace.
 void shutdownFutures(proto::ProtoContext* ctx) {
     shutdownFuturesImpl(ctx);
+}
+
+// Externally-visible Clojure-shape value printer. Same TU as the
+// anonymous-namespace `printValue`; the implicit using-directive that
+// `namespace {}` introduces makes that symbol reachable from here
+// (it has internal linkage but is in scope within this TU), so we can
+// just delegate.
+void replPrintValue(proto::ProtoContext* ctx, std::FILE* out,
+                    const proto::ProtoObject* v) {
+    printValue(ctx, out, v);
 }
 
 void installPrimitives(proto::ProtoContext* ctx,
