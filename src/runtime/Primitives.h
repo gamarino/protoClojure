@@ -65,12 +65,17 @@ struct ActiveCallContext {
     //   __result__  the value, once computed.
     //   __done__    PROTO_TRUE when realized, otherwise PROTO_FALSE.
     const proto::ProtoObject*  futureMarkerProto;
+    // Session 18 — promises. Same valueKey/doneKey as the rest of the
+    // family. deliver does a single-shot CAS on the value attribute;
+    // deref busy-waits in goUnmanaged-protected sleeps.
+    const proto::ProtoObject*  promiseMarkerProto;
     const proto::ProtoString*  bytecodeKey;
     const proto::ProtoString*  arityKey;
     const proto::ProtoString*  capturesKey;
     const proto::ProtoString*  aritiesKey;       // session 8
     const proto::ProtoString*  entriesKey;       // session 13
     const proto::ProtoString*  valueKey;         // session 16
+    const proto::ProtoString*  watchesKey;       // session 18 — atom watches
     // Session 17 keys.
     const proto::ProtoString*  thunkKey;
     const proto::ProtoString*  ccBlobKey;

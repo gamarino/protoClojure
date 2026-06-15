@@ -12,6 +12,37 @@ runs the script through each interpreter 3 times and reports the
 minimum wall-clock (cold-start + execution). No JVM warmup phase.
 Result strings are compared across runtimes for correctness.
 
+## Session-18 numbers (after sessions 13-18 surface additions)
+
+| Workload         | protoclj (ms) | bb (ms) | ratio   | Result        | Match |
+|------------------|--------------:|--------:|--------:|---------------|:-----:|
+| `fib(30)`        |           712 |     524 | 1.36×   | 832040        | ✓ |
+| `tak(18,12,6)`   |            52 |      43 | 1.21×   | 7             | ✓ |
+| `sum-loop(1M)`   |            79 |     219 | 0.36×   | 500000500000  | ✓ |
+| `reduce-list(10K)` |          27 |      36 | 0.75×   | 49995000      | ✓ |
+| `sum-squares(1K)` |           19 |      31 | 0.61×   | 332833500     | ✓ |
+
+vs session 12 (the perf high-water mark): fib 620→712 (+15%),
+tak 45→52 (+16%), sum-loop 66→79 (+20%). Honest regression — sessions
+13-18 added five new prototype pointers and ten new key pointers to
+the `run()` signature, threaded through every recursive call. The
+cost is measurable but small in absolute terms (~10 ns/call on fib),
+and we still beat Babashka on 3 of 5 workloads. A future perf-only
+session could collapse the run() params into a single struct and
+claw back most of this; not blocking real workloads.
+
+**New in session 18 — parallel pmap on real OS threads:**
+
+  $ time protoclj /tmp/map_perf.clj    # 4× fib(30) via sequential map
+    real    0m2.800s   user    0m2.790s
+
+  $ time protoclj /tmp/pmap_perf.clj   # 4× fib(30) via pmap
+    real    0m0.862s   user    0m3.323s
+
+  Wall-clock speedup: 3.25×. Same pattern as session 17's explicit
+  futures, but the surface is now `(pmap f coll)` — drop-in for
+  JVM-Clojure code.
+
 ## Session-12 numbers (after split fn prototypes + captures-only-if-needed)
 
 | Workload         | protoclj (ms) | bb (ms) | ratio   | Result        | Match |

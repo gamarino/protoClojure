@@ -1,2 +1,4 @@
 ;; EXPECT: true false false
-(println (future? (future 1)) (future? 42) (future? "x"))
+(def f (future 1))
+@f                       ;; force completion so the worker exits before main does
+(println (future? f) (future? 42) (future? "x"))

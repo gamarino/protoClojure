@@ -72,16 +72,17 @@ int runFile(const char* path) {
     //   1 : forms (the ProtoList readAll() returned).
     //   2 : stringMarkerProto — see ReaderMarkers / CompilerMarkers docs.
     //   3 : fnMarkerProto — wraps user-fn callables (session 5).
-    ctx->resizeAutomaticLocals(9);
-    constexpr unsigned int kSlotGlobals      = 0;
-    constexpr unsigned int kSlotForms        = 1;
-    constexpr unsigned int kSlotStringMarker = 2;
-    constexpr unsigned int kSlotFnSingle     = 3;
-    constexpr unsigned int kSlotVectorMarker = 4;
-    constexpr unsigned int kSlotFnMulti      = 5;
-    constexpr unsigned int kSlotMapMarker    = 6;
-    constexpr unsigned int kSlotAtomMarker   = 7;
-    constexpr unsigned int kSlotFutureMarker = 8;
+    ctx->resizeAutomaticLocals(10);
+    constexpr unsigned int kSlotGlobals       = 0;
+    constexpr unsigned int kSlotForms         = 1;
+    constexpr unsigned int kSlotStringMarker  = 2;
+    constexpr unsigned int kSlotFnSingle      = 3;
+    constexpr unsigned int kSlotVectorMarker  = 4;
+    constexpr unsigned int kSlotFnMulti       = 5;
+    constexpr unsigned int kSlotMapMarker     = 6;
+    constexpr unsigned int kSlotAtomMarker    = 7;
+    constexpr unsigned int kSlotFutureMarker  = 8;
+    constexpr unsigned int kSlotPromiseMarker = 9;
 
     const proto::ProtoObject* globalsObj =
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
@@ -126,6 +127,12 @@ int runFile(const char* path) {
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
     ctx->setAutomaticLocal(kSlotFutureMarker, futureMarkerProto);
 
+    // Session 18 — promises. Same shape as a small atom, with a
+    // single-shot CAS deliver and a busy-wait deref.
+    const proto::ProtoObject* promiseMarkerProto =
+        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+    ctx->setAutomaticLocal(kSlotPromiseMarker, promiseMarkerProto);
+
     const proto::ProtoString* bytesKey =
         proto::ProtoString::createSymbol(ctx, "__bytes__");
     const proto::ProtoString* bytecodeKey =
@@ -142,6 +149,8 @@ int runFile(const char* path) {
         proto::ProtoString::createSymbol(ctx, "__entries__");
     const proto::ProtoString* valueKey =
         proto::ProtoString::createSymbol(ctx, "__value__");
+    const proto::ProtoString* watchesKey =
+        proto::ProtoString::createSymbol(ctx, "__watches__");
     const proto::ProtoString* thunkKey =
         proto::ProtoString::createSymbol(ctx, "__thunk__");
     const proto::ProtoString* ccBlobKey =
@@ -206,8 +215,9 @@ int runFile(const char* path) {
                 ctx->getAutomaticLocal(kSlotMapMarker),
                 ctx->getAutomaticLocal(kSlotAtomMarker),
                 ctx->getAutomaticLocal(kSlotFutureMarker),
+                ctx->getAutomaticLocal(kSlotPromiseMarker),
                 bytecodeKey, arityKey, capturesKey, aritiesKey,
-                entriesKey, valueKey,
+                entriesKey, valueKey, watchesKey,
                 thunkKey, ccBlobKey, threadKey, resultKey, doneKey);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s: runtime error: %s\n", path, e.what());

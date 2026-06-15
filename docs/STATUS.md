@@ -30,6 +30,7 @@ harness produces honest numbers vs Babashka 1.4.192 (see
 | 15 | clojure.string-shaped primitives (subs, upper/lower, join/split, trim, ...) | 126 |
 | 16 | Atoms (`atom`, `@`, `reset!`, `swap!`, `compare-and-set!`) on protoCore CAS | 136 |
 | 17 | Futures (`future`, `deref` on future, `realized?`, `future?`) on real OS threads — 4× wall-clock speedup demoed | 145 |
+| 18 | Watches (`add-watch`/`remove-watch`), promises (`promise`/`deliver`/`promise?`), real parallel `pmap`, named anon fn surface | 152 |
 
 The dated design specs live under `docs/superpowers/specs/`; the
 memory entries for each session live under
@@ -175,12 +176,12 @@ does not yet support. Calling any of them raises a clear error.
 - [x] `atom`, `swap!`, `reset!`, `compare-and-set!`, `deref` / `@` (session 16)
 - [x] `atom?` predicate
 - [x] `future`, `future?`, `realized?` on real OS threads (session 17)
-- [x] `deref` extended to block on a pending future
-- [x] `pmap` surface (sequential semantics; per-element parallelism is a follow-up — wire shape matches Clojure so user code is forward-compat)
-- [ ] `add-watch`, `remove-watch`
+- [x] `deref` extended to block on a pending future + promise
+- [x] **`pmap` runs each element on its own OS thread (session 18)** — 3.25× wall-clock speedup measured on `pmap fib` over a 4-element list
+- [x] `add-watch`, `remove-watch` (session 18)
+- [x] `promise`, `deliver`, `promise?` (session 18 — busy-wait deref in goUnmanaged scope)
 - [ ] `volatile!`, `vreset!`, `vswap!`
 - [ ] `delay`, `force`
-- [ ] `promise`, `deliver`
 - [ ] `agent`
 
 ### Module system / UMD (not yet)
@@ -284,6 +285,7 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D15 | `(= 1 1.0)` returns `true` in v0.x (CONTRA Clojure-JVM where `=` is type-strict) | (perm) |
 | D16 | `:or` defaults fire on **explicit nil** as well as missing keys (CONTRA JVM-Clojure where only missing keys take the default) | v0.2 |
 | D17 | String ops (`upper-case`, `lower-case`, `split`, `reverse`, `trim`, `index-of`) are byte-level / ASCII-correct only; multi-byte UTF-8 codepoints traverse as bytes (CONTRA JVM-Clojure which is codepoint-aware) | v0.2 |
+| D18 | `(fn name [args] body)` — name is accepted by the reader/compiler but currently dropped; self-reference via `name` inside the body is not supported (use `defn` for self-recursion). Lift in v0.2 via wrapper-into-slot capture. | v0.2 |
 
 ## Known issues
 

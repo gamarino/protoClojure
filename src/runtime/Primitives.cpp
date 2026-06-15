@@ -3,10 +3,12 @@
 
 #include "protoCore.h"
 
+#include <chrono>
 #include <cstdio>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 
 namespace protoClojure {
 
@@ -176,6 +178,18 @@ void printValue(proto::ProtoContext* ctx, std::FILE* out,
             std::fputc('>', out);
         } else {
             std::fputs("#<future pending>", out);
+        }
+        return;
+    }
+    if (cc && v->getPrototype(ctx) == cc->promiseMarkerProto) {
+        const proto::ProtoObject* done =
+            v->getAttribute(ctx, cc->doneKey);
+        if (done == PROTO_TRUE) {
+            std::fputs("#<promise ", out);
+            printValue(ctx, out, v->getAttribute(ctx, cc->valueKey));
+            std::fputc('>', out);
+        } else {
+            std::fputs("#<promise pending>", out);
         }
         return;
     }
@@ -1529,8 +1543,6 @@ const proto::ProtoObject* prim_deref(proto::ProtoContext* ctx,
         return v ? v : PROTO_NONE;
     }
     if (proto == cc->futureMarkerProto) {
-        // Block on the worker if it hasn't completed yet; then read
-        // the realised value.
         const proto::ProtoObject* done =
             a->getAttribute(ctx, cc->doneKey);
         if (done != PROTO_TRUE) {
@@ -1546,7 +1558,74 @@ const proto::ProtoObject* prim_deref(proto::ProtoContext* ctx,
             a->getAttribute(ctx, cc->resultKey);
         return r ? r : PROTO_NONE;
     }
-    throw std::runtime_error("deref: not an atom or a future");
+    if (proto == cc->promiseMarkerProto) {
+        // Busy-wait. protoCore's goUnmanaged tells the GC this thread
+        // is parked on an OS-level wait so a STW can proceed without
+        // it. Pair with returnFromUnmanaged before touching any
+        // ProtoObject* again. The 1ms sleep amortises wake-up under
+        // realistic deliver latencies.
+        proto::ProtoThread* th = ctx->thread;
+        for (;;) {
+            const proto::ProtoObject* done =
+                a->getAttribute(ctx, cc->doneKey);
+            if (done == PROTO_TRUE) break;
+            if (th) th->goUnmanaged();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            if (th) th->returnFromUnmanaged();
+        }
+        return a->getAttribute(ctx, cc->valueKey);
+    }
+    throw std::runtime_error("deref: not an atom, future, or promise");
+}
+
+// Session 18 — fire all registered watches on a successful atom
+// mutation. The watches map lives under cc->watchesKey; each entry is
+// `key → fn`. JVM-Clojure calls `(f key atom old-val new-val)` —
+// same signature.
+static void fireWatches(proto::ProtoContext* ctx,
+                        const ActiveCallContext* cc,
+                        const proto::ProtoObject* atomObj,
+                        const proto::ProtoObject* oldV,
+                        const proto::ProtoObject* newV) {
+    const proto::ProtoObject* watchesObj =
+        atomObj->getAttribute(ctx, cc->watchesKey);
+    if (!watchesObj || watchesObj == PROTO_NONE) return;
+    if (watchesObj->getPrototype(ctx) != cc->mapMarkerProto) return;
+    const proto::ProtoObject* entriesRaw =
+        watchesObj->getAttribute(ctx, cc->entriesKey);
+    if (!entriesRaw || entriesRaw == PROTO_NONE) return;
+    const proto::ProtoSparseList* sparse =
+        reinterpret_cast<const proto::ProtoSparseList*>(entriesRaw);
+    struct Acc {
+        proto::ProtoContext* ctx;
+        const ActiveCallContext* cc;
+        const proto::ProtoObject* atomObj;
+        const proto::ProtoObject* oldV;
+        const proto::ProtoObject* newV;
+    } acc{ctx, cc, atomObj, oldV, newV};
+    sparse->processElements(ctx, &acc,
+        [](proto::ProtoContext* c, void* self, unsigned long /*h*/,
+           const proto::ProtoObject* bucketObj) {
+            auto* a = static_cast<Acc*>(self);
+            if (!bucketObj) return;
+            const proto::ProtoList* bucket = bucketObj->asList(c);
+            unsigned long n = bucket->getSize(c);
+            for (unsigned long i = 0; i < n; i += 2) {
+                const proto::ProtoObject* k = bucket->getAt(c, (int)i);
+                const proto::ProtoObject* f = bucket->getAt(c, (int)(i + 1));
+                const proto::ProtoObject* four[4] = {
+                    k, a->atomObj,
+                    a->oldV ? a->oldV : PROTO_NONE,
+                    a->newV ? a->newV : PROTO_NONE
+                };
+                try {
+                    a->cc->engine->invoke(c, f, four, 4);
+                } catch (...) {
+                    // v0.18: swallow exceptions in a watcher; capturing
+                    // them is a follow-up.
+                }
+            }
+        });
 }
 
 const proto::ProtoObject* prim_reset_bang(proto::ProtoContext* ctx,
@@ -1562,8 +1641,10 @@ const proto::ProtoObject* prim_reset_bang(proto::ProtoContext* ctx,
     if (!a || a->getPrototype(ctx) != cc->atomMarkerProto)
         throw std::runtime_error("reset!: not an atom");
     const proto::ProtoObject* nv = args->getAt(ctx, 1);
+    const proto::ProtoObject* old = a->getAttribute(ctx, cc->valueKey);
     const_cast<proto::ProtoObject*>(a)
         ->setAttribute(ctx, cc->valueKey, nv);
+    fireWatches(ctx, cc, a, old, nv);
     return nv;
 }
 
@@ -1603,6 +1684,7 @@ const proto::ProtoObject* prim_swap_bang(proto::ProtoContext* ctx,
         const proto::ProtoObject* neu =
             cc->engine->invoke(ctx, f, buf, extras + 1);
         if (a->setAttributeIfEqual(ctx, cc->valueKey, old, neu)) {
+            fireWatches(ctx, cc, a, old, neu);
             return neu;
         }
     }
@@ -1749,31 +1831,69 @@ const proto::ProtoObject* prim_realized_p(proto::ProtoContext* ctx,
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("realized?: no active VM context");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
-    if (!v || v->getPrototype(ctx) != cc->futureMarkerProto) return PROTO_FALSE;
+    if (!v) return PROTO_FALSE;
+    const proto::ProtoObject* proto = v->getPrototype(ctx);
+    if (proto != cc->futureMarkerProto && proto != cc->promiseMarkerProto)
+        return PROTO_FALSE;
     const proto::ProtoObject* done = v->getAttribute(ctx, cc->doneKey);
     return done == PROTO_TRUE ? PROTO_TRUE : PROTO_FALSE;
 }
 
-// (pmap f coll). Today this is semantically map — sequential — with
-// the same return shape. Real parallel execution requires building
-// a 0-arity thunk per element at runtime that captures `f` and the
-// element, and there's no clean way to synthesise bytecode-side
-// closures from C++ at the moment. The proper fix lands in a later
-// session via either:
-//   (a) a tiny C++ shim ProtoMethod that takes (f, x) and dispatches
-//       (f x), used as the thread main with args=[f, x]; or
-//   (b) a `(pmap f coll)` macro / surface form that the compiler
-//       expands into N `(future (f x_i))` calls.
+// Session 18 — real parallel pmap.
 //
-// For v0.17 the *paradigm* is what users want: write `(pmap f coll)`
-// and your code stays the same when parallelism lands. The
-// equivalent end-to-end-parallel idiom users can already write today
-// is explicit per-element futures:
-//
-//   (def fs (map (fn [x] (future (f x))) coll))
-//   (map deref fs)
-//
-// That hits real OS threads.
+// For each x in coll we build a future-shaped wrapper carrying f, x,
+// and the parent's ActiveCallContext. The worker thread reads those
+// from the wrapper, installs the cc on its TLS, and computes (f x)
+// via engine->invoke. After spawning all N workers, the main thread
+// joins each in order and collects results.
+
+// Symbols used by pmapWorkerMain. Interned at first call; the
+// SymbolTable caches them.
+const proto::ProtoObject* pmapWorkerMain(
+        proto::ProtoContext* ctx,
+        const proto::ProtoObject* /*self*/,
+        const proto::ParentLink*,
+        const proto::ProtoList* args,
+        const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) == 0) return PROTO_NONE;
+    const proto::ProtoObject* fut = args->getAt(ctx, 0);
+    if (!fut) return PROTO_NONE;
+
+    const proto::ProtoString* fKey =
+        proto::ProtoString::createSymbol(ctx, "__pmap_f__");
+    const proto::ProtoString* xKey =
+        proto::ProtoString::createSymbol(ctx, "__pmap_x__");
+    const proto::ProtoString* ccBlobKey =
+        proto::ProtoString::createSymbol(ctx, "__cc_blob__");
+    const proto::ProtoString* resultKey =
+        proto::ProtoString::createSymbol(ctx, "__result__");
+    const proto::ProtoString* doneKey =
+        proto::ProtoString::createSymbol(ctx, "__done__");
+
+    const proto::ProtoObject* f = fut->getAttribute(ctx, fKey);
+    const proto::ProtoObject* x = fut->getAttribute(ctx, xKey);
+    const proto::ProtoObject* blobObj = fut->getAttribute(ctx, ccBlobKey);
+    if (!f || !blobObj || !blobObj->isInteger(ctx)) return PROTO_NONE;
+    const ActiveCallContext* parentCc =
+        reinterpret_cast<const ActiveCallContext*>(blobObj->asLong(ctx));
+    if (!parentCc) return PROTO_NONE;
+
+    setActiveCallContext(*parentCc);
+
+    const proto::ProtoObject* value = PROTO_NONE;
+    try {
+        const proto::ProtoObject* one[1] = { x };
+        value = parentCc->engine->invoke(ctx, f, one, 1);
+    } catch (...) {
+        value = PROTO_NONE;
+    }
+    proto::ProtoObject* futMut = const_cast<proto::ProtoObject*>(fut);
+    futMut->setAttribute(ctx, resultKey, value);
+    futMut->setAttribute(ctx, doneKey, PROTO_TRUE);
+    clearActiveCallContext();
+    return value;
+}
+
 const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
                                     const proto::ProtoObject*,
                                     const proto::ParentLink*,
@@ -1784,18 +1904,127 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
     const proto::ProtoObject* f    = args->getAt(ctx, 0);
     const proto::ProtoObject* coll = args->getAt(ctx, 1);
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
-    const proto::ProtoObject* out = ctx->newList()->asObject(ctx);
-    if (!lst) return out;
+    if (!lst) return ctx->newList()->asObject(ctx);
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("pmap: no active VM context");
     unsigned long n = lst->getSize(ctx);
+
+    const proto::ProtoString* fKey =
+        proto::ProtoString::createSymbol(ctx, "__pmap_f__");
+    const proto::ProtoString* xKey =
+        proto::ProtoString::createSymbol(ctx, "__pmap_x__");
+    const proto::ProtoString* threadName =
+        proto::ProtoString::createSymbol(ctx, "protoclj-pmap");
+
+    // Phase 1 — spawn all N workers. Collect the future wrappers
+    // into a transient ProtoList so the GC can trace them.
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    constexpr unsigned int kSlotFs = 0;
+    scope.setAutomaticLocal(kSlotFs,
+        scope.newList()->asObject(&scope));
+
     for (unsigned long i = 0; i < n; ++i) {
-        const proto::ProtoObject* x = lst->getAt(ctx, static_cast<int>(i));
-        const proto::ProtoObject* one[1] = { x };
-        const proto::ProtoObject* y = cc->engine->invoke(ctx, f, one, 1);
-        out = out->asList(ctx)->appendLast(ctx, y)->asObject(ctx);
+        const proto::ProtoObject* x = lst->getAt(ctx, (int)i);
+        proto::ProtoObject* fut = const_cast<proto::ProtoObject*>(
+            cc->futureMarkerProto->newChild(ctx, /*isMutable=*/true));
+        fut->setAttribute(ctx, fKey, f);
+        fut->setAttribute(ctx, xKey, x);
+        fut->setAttribute(ctx, cc->ccBlobKey,
+            ctx->fromLong(reinterpret_cast<long long>(cc)));
+        fut->setAttribute(ctx, cc->doneKey, PROTO_FALSE);
+        fut->setAttribute(ctx, cc->resultKey, PROTO_NONE);
+
+        const proto::ProtoList* targs =
+            ctx->newList()->appendLast(ctx, fut);
+        const proto::ProtoThread* t =
+            ctx->space->newThread(ctx, threadName, &pmapWorkerMain,
+                                  targs, nullptr);
+        fut->setAttribute(ctx, cc->threadKey,
+            ctx->fromLong(reinterpret_cast<long long>(t)));
+        scope.setAutomaticLocal(kSlotFs,
+            scope.getAutomaticLocal(kSlotFs)->asList(&scope)
+                ->appendLast(&scope, fut)->asObject(&scope));
+    }
+
+    // Phase 2 — join in order, collect results.
+    const proto::ProtoObject* out = ctx->newList()->asObject(ctx);
+    const proto::ProtoList* fs =
+        scope.getAutomaticLocal(kSlotFs)->asList(&scope);
+    for (unsigned long i = 0; i < n; ++i) {
+        const proto::ProtoObject* fut = fs->getAt(&scope, (int)i);
+        const proto::ProtoObject* done =
+            fut->getAttribute(ctx, cc->doneKey);
+        if (done != PROTO_TRUE) {
+            const proto::ProtoObject* tObj =
+                fut->getAttribute(ctx, cc->threadKey);
+            if (tObj && tObj->isInteger(ctx)) {
+                proto::ProtoThread* t =
+                    reinterpret_cast<proto::ProtoThread*>(tObj->asLong(ctx));
+                if (t) t->join(ctx);
+            }
+        }
+        const proto::ProtoObject* r =
+            fut->getAttribute(ctx, cc->resultKey);
+        out = out->asList(ctx)->appendLast(ctx,
+            r ? r : PROTO_NONE)->asObject(ctx);
     }
     return out;
+}
+
+// Session 18 — promises. A promise is a child of promiseMarkerProto
+// with `__value__` initially nil and `__done__` PROTO_FALSE. deliver
+// CAS-installs the value once; subsequent delivers are no-ops and
+// return nil. deref busy-waits on __done__ — see prim_deref above.
+
+const proto::ProtoObject* prim_promise(proto::ProtoContext* ctx,
+                                       const proto::ProtoObject*,
+                                       const proto::ParentLink*,
+                                       const proto::ProtoList* args,
+                                       const proto::ProtoSparseList*) {
+    if (args && args->getSize(ctx) != 0)
+        throw std::runtime_error("promise: takes no arguments");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("promise: no active VM context");
+    proto::ProtoObject* p = const_cast<proto::ProtoObject*>(
+        cc->promiseMarkerProto->newChild(ctx, /*isMutable=*/true));
+    p->setAttribute(ctx, cc->valueKey, PROTO_NONE);
+    p->setAttribute(ctx, cc->doneKey, PROTO_FALSE);
+    return p;
+}
+
+const proto::ProtoObject* prim_promise_p(proto::ProtoContext* ctx,
+                                         const proto::ProtoObject*,
+                                         const proto::ParentLink*,
+                                         const proto::ProtoList* args,
+                                         const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 1)
+        throw std::runtime_error("promise?: expects 1 arg");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("promise?: no active VM context");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (!v) return PROTO_FALSE;
+    return (v->getPrototype(ctx) == cc->promiseMarkerProto) ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_deliver(proto::ProtoContext* ctx,
+                                       const proto::ProtoObject*,
+                                       const proto::ParentLink*,
+                                       const proto::ProtoList* args,
+                                       const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 2)
+        throw std::runtime_error("deliver: expects (deliver promise value)");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("deliver: no active VM context");
+    const proto::ProtoObject* p = args->getAt(ctx, 0);
+    if (!p || p->getPrototype(ctx) != cc->promiseMarkerProto)
+        throw std::runtime_error("deliver: not a promise");
+    const proto::ProtoObject* v = args->getAt(ctx, 1);
+    // Single-shot CAS on doneKey: succeed only when still PROTO_FALSE.
+    bool first = p->setAttributeIfEqual(ctx, cc->doneKey, PROTO_FALSE, PROTO_TRUE);
+    if (!first) return PROTO_NONE;
+    const_cast<proto::ProtoObject*>(p)->setAttribute(ctx, cc->valueKey, v);
+    return p;
 }
 
 const proto::ProtoObject* prim_compare_and_set_bang(
@@ -1813,8 +2042,97 @@ const proto::ProtoObject* prim_compare_and_set_bang(
         throw std::runtime_error("compare-and-set!: not an atom");
     const proto::ProtoObject* expected = args->getAt(ctx, 1);
     const proto::ProtoObject* nv       = args->getAt(ctx, 2);
-    return a->setAttributeIfEqual(ctx, cc->valueKey, expected, nv)
-        ? PROTO_TRUE : PROTO_FALSE;
+    bool ok = a->setAttributeIfEqual(ctx, cc->valueKey, expected, nv);
+    if (ok) fireWatches(ctx, cc, a, expected, nv);
+    return ok ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_add_watch(proto::ProtoContext* ctx,
+                                         const proto::ProtoObject*,
+                                         const proto::ParentLink*,
+                                         const proto::ProtoList* args,
+                                         const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 3)
+        throw std::runtime_error("add-watch: expects (add-watch atom key fn)");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("add-watch: no active VM context");
+    const proto::ProtoObject* a = args->getAt(ctx, 0);
+    if (!a || a->getPrototype(ctx) != cc->atomMarkerProto)
+        throw std::runtime_error("add-watch: not an atom");
+    const proto::ProtoObject* k = args->getAt(ctx, 1);
+    const proto::ProtoObject* f = args->getAt(ctx, 2);
+
+    // CAS the watches map. The map is a child of mapMarkerProto with
+    // entries as a sparse list; reuse `sparseAssoc` to insert the
+    // (key, fn) pair.
+    for (;;) {
+        const proto::ProtoObject* old =
+            a->getOwnAttributeDirect(ctx, cc->watchesKey);
+        const proto::ProtoSparseList* sparse = nullptr;
+        if (old && old != PROTO_NONE &&
+            old->getPrototype(ctx) == cc->mapMarkerProto) {
+            const proto::ProtoObject* eRaw =
+                old->getAttribute(ctx, cc->entriesKey);
+            sparse = eRaw
+                ? reinterpret_cast<const proto::ProtoSparseList*>(eRaw)
+                : ctx->newSparseList();
+        } else {
+            sparse = ctx->newSparseList();
+        }
+        sparse = sparseAssoc(ctx, sparse, k, f);
+        const proto::ProtoObject* neu = buildMap(ctx, cc, sparse);
+        if (a->setAttributeIfEqual(ctx, cc->watchesKey, old, neu)) break;
+    }
+    return a;
+}
+
+const proto::ProtoObject* prim_remove_watch(proto::ProtoContext* ctx,
+                                            const proto::ProtoObject*,
+                                            const proto::ParentLink*,
+                                            const proto::ProtoList* args,
+                                            const proto::ProtoSparseList*) {
+    if (!args || args->getSize(ctx) != 2)
+        throw std::runtime_error("remove-watch: expects (remove-watch atom key)");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("remove-watch: no active VM context");
+    const proto::ProtoObject* a = args->getAt(ctx, 0);
+    if (!a || a->getPrototype(ctx) != cc->atomMarkerProto)
+        throw std::runtime_error("remove-watch: not an atom");
+    const proto::ProtoObject* k = args->getAt(ctx, 1);
+
+    for (;;) {
+        const proto::ProtoObject* old =
+            a->getOwnAttributeDirect(ctx, cc->watchesKey);
+        if (!old || old == PROTO_NONE) return a;
+        if (old->getPrototype(ctx) != cc->mapMarkerProto) return a;
+        const proto::ProtoObject* eRaw =
+            old->getAttribute(ctx, cc->entriesKey);
+        if (!eRaw) return a;
+        const proto::ProtoSparseList* sparse =
+            reinterpret_cast<const proto::ProtoSparseList*>(eRaw);
+        // Find and drop k from its bucket.
+        unsigned long h = k->getHash(ctx);
+        const proto::ProtoSparseList* newSparse = sparse;
+        if (sparse->has(ctx, h)) {
+            const proto::ProtoObject* b = sparse->getAt(ctx, h);
+            if (b) {
+                const proto::ProtoList* bucket = b->asList(ctx);
+                long long idx = bucketFindKey(ctx, bucket, k);
+                if (idx >= 0) {
+                    const proto::ProtoList* newBucket =
+                        bucket->removeAt(ctx, (int)idx)->removeAt(ctx, (int)idx);
+                    if (newBucket->getSize(ctx) == 0) {
+                        newSparse = sparse->removeAt(ctx, h);
+                    } else {
+                        newSparse = sparse->setAt(ctx, h, newBucket->asObject(ctx));
+                    }
+                }
+            }
+        }
+        const proto::ProtoObject* neu = buildMap(ctx, cc, newSparse);
+        if (a->setAttributeIfEqual(ctx, cc->watchesKey, old, neu)) break;
+    }
+    return a;
 }
 
 } // namespace
@@ -1894,6 +2212,13 @@ void installPrimitives(proto::ProtoContext* ctx,
     install("future?",          &prim_future_p);
     install("realized?",        &prim_realized_p);
     install("pmap",             &prim_pmap);
+
+    // Session 18.
+    install("add-watch",        &prim_add_watch);
+    install("remove-watch",     &prim_remove_watch);
+    install("promise",          &prim_promise);
+    install("promise?",         &prim_promise_p);
+    install("deliver",          &prim_deliver);
     install("first",   &prim_first);
     install("rest",    &prim_rest);
     install("cons",    &prim_cons);

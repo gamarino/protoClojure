@@ -131,13 +131,20 @@ Compiler::compileFnBody(proto::ProtoContext* ctx,
 
     if (n <= paramsAt) throw CompileError("fn/defn: missing parameter vector");
     const proto::ProtoObject* paramsForm = fnForm->getAt(ctx, (int)paramsAt);
+    // Session 18 — accept `(fn name [params] body...)`: a symbol where
+    // the params vector should be. The name itself is currently
+    // dropped (self-reference via `name` inside the body is a v0.2
+    // follow-up — needs a wrapper-into-slot capture). Shifting
+    // paramsAt by one is enough to make the surface parse.
+    if (headName == "fn" && isStringy(paramsForm)) {
+        paramsAt += 1;
+        if (n <= paramsAt) throw CompileError("fn: missing parameter vector after name");
+        paramsForm = fnForm->getAt(ctx, (int)paramsAt);
+    }
     const proto::ProtoList* params = nullptr;
     if (isWrappedVector(ctx, paramsForm, markers)) {
         params = vectorItems(ctx, paramsForm, markers);
     } else if (isList(paramsForm)) {
-        // Pre-session-9 legacy: bare ProtoList counts as a params vector.
-        // Multi-arity inner arities also reach here via compileArity's
-        // direct call path; keep accepting raw lists for that.
         params = paramsForm->asList(ctx);
     } else {
         throw CompileError("fn/defn: parameter list must be a vector");
