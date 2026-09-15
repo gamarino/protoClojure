@@ -5,7 +5,7 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 255 test cases: 193
+scripts and an interactive REPL. `ctest` registers 259 test cases: 197
 conformance fixtures under `tests/conformance/`, 61 GoogleTest unit
 tests for the lexer, the reader, the runtime map and value equality and
 hashing (`tests/unit/`), and a CLI check of `--help` (`tests/cli/`); all
@@ -28,11 +28,11 @@ directories that cover them.
 | Closures with N-level lexical capture | `06-closures` | 6 |
 | Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 22 |
 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 19 |
-| IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 11 |
+| IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 13 |
 | LargeInteger promotion | `15-bigint` | 3 |
 | Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 40 |
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 16 |
-| `clojure.string`-shaped string functions | `20-strings` | 14 |
+| `clojure.string`-shaped string functions | `20-strings` | 16 |
 | Atoms | `21-atoms` | 11 |
 | Futures and `pmap` on OS threads | `22-futures` | 14 |
 | Watches, promises | `23-watches`, `24-promises` | 9 |
@@ -144,8 +144,12 @@ The design specifications written during development are archived under
 - [x] Arithmetic and comparison: `+ - * / inc dec < <= > >= = not=`
 - [x] Output: `println str` — one printer (`printTo` in
       `src/runtime/Primitives.cpp`) renders values for `println`, `str`,
-      `join` and the REPL: `(str {:a 1})` is `"{:a 1}"`, `(str (atom 1))` is
-      `"#<atom 1>"` (D20)
+      `join` and the REPL, with a readable flag: `println` prints strings
+      bare at every depth (`(println ["a"])` prints `[a]`); the REPL prints
+      readably (`"a"`, `["a"]`); `str` and `join` insert nil as `""` and a
+      string argument as is, and render any other value readably, so
+      `(str "a" nil ["b"])` is `"a[\"b\"]"`, `(str {:a 1})` is `"{:a 1}"`
+      and `(str (atom 1))` is `"#<atom 1>"` (D20)
 - [x] Lists and vectors: `list vector vec nth first rest cons count empty? reverse`
 - [x] Higher-order: `map filter reduce pmap`
 - [x] Predicates: `nil? not vector? list? map? string?`
@@ -371,7 +375,7 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D17 | String ops (`upper-case`, `lower-case`, `split`, `reverse`, `trim`, `index-of`) are byte-level / ASCII-correct only; multi-byte UTF-8 codepoints traverse as bytes (CONTRA JVM-Clojure which is codepoint-aware) | v0.2 |
 | D18 | `(fn name [args] body)` — the name is accepted by the compiler but dropped; self-reference via `name` inside the body is not supported (use `defn` for self-recursion). Planned for v0.2 via wrapper-into-slot capture. | v0.2 |
 | D19 | Maps iterate and print in insertion order at every size, including maps built with `hash-map` (JVM Clojure guarantees insertion order only for array maps of at most 8 entries and leaves it unspecified beyond that and for `hash-map`) | (perm) |
-| D20 | `str` renders a value exactly as `println` prints it: strings nested in a collection print without quotes (`(str ["a"])` is `"[a]"`, where JVM Clojure gives `"[\"a\"]"`), and atoms, futures, promises, actors and fns render as tags such as `#<atom 1>` (JVM Clojure: `#object[...]`) | v0.x |
+| D20 | Atoms, futures, promises, actors and fns print as tags such as `#<atom 1>` and `#<fn>` in `println`, `str` and the REPL (JVM Clojure: `#object[clojure.lang.Atom 0x... {:status :ready, :val 1}]` when printed, and `clojure.lang.Atom@...` or the class name under `str`) | v0.x |
 | D21 | Beyond ASCII, symbols and keywords accept only Unicode letters, combining marks and decimal digits: `a→b`, or a symbol containing a no-break space, is a read error (CONTRA JVM-Clojure, whose reader accepts any character that is neither whitespace nor a macro character) | v0.x |
 
 ## Known issues

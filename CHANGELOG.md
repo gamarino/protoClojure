@@ -150,6 +150,16 @@ The project has no tagged releases yet; the version declared in
   `println` and the REPL used their own. There is now one printer, so
   `(str {:a 1})` is `"{:a 1}"` and `(str (atom 1))` is `"#<atom 1>"`, exactly
   as `println` prints them, and `println` writes each line with one call.
+- `str`, `join` and the REPL follow Clojure's printing modes. `(str nil)`
+  returned `"nil"` and `(str "a" nil "b")` `"anilb"`; `join` rendered a nil
+  element as `nil`; `(str ["a"])` returned `"[a]"`; and the REPL echoed the
+  string `"a"` as `a`, indistinguishable from the symbol. The printer had a
+  single mode, Clojure's `print`. It now takes a readable flag: `str` and
+  `join` insert nil as the empty string and a string argument as is, and
+  render every other value readably, so `(str "a" nil ["b" "c\n"])` is
+  `a["b" "c\n"]` with the nested strings quoted and escaped; the REPL echoes
+  readably; `println` still prints strings bare at every depth. Deviation
+  D20 is narrowed to the `#<atom 1>`-style tags of reference types.
 - Symbols and keywords may contain non-ASCII letters. `:ñandú` or
   `(defn año [x] ...)` failed with "unexpected character: �": the lexer
   classified source bytes with `isalnum`, which rejects every byte of a

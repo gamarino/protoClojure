@@ -120,18 +120,16 @@ unknown command. Wrap it in an expression instead, for example
 
 ### 10.1.3 What gets printed
 
-The REPL prints each result with the same printer `println` and `str` use.
-Numbers, keywords and collections print as you would write them, but
-strings print without their quotes (`"hi"` prints `hi`), functions
-print as `#<fn>`, and atoms and actors print as tags such as
-`#<atom 0>` and `#<actor 102>`.
+The REPL prints each result in the *readable* form, as JVM Clojure's
+REPL does: numbers, keywords and collections print as you would write
+them, and strings keep their quotes and escapes at every depth (`"hi"`
+prints `"hi"`, `["a\nb"]` prints `["a\nb"]`), so a printed string or
+collection of strings reads back as the same value. `(println x)` is the
+human-readable output and prints strings bare. Functions print as `#<fn>`,
+and atoms and actors print as tags such as `#<atom 0>` and `#<actor 102>`.
 
-The v0.1 design prints REPL results with `pr-str`, the *readable* form
-— strings keep their quotes, so the printed form is round-trippable
-through the reader — and keeps `(println x)` for human-readable output.
-That printer is planned, as is `(pprint x)` for pretty-printing nested
-data (a minimal one-pass printer first, the full `clojure.pprint` in
-v0.2).
+`(pprint x)` for pretty-printing nested data is planned (a minimal
+one-pass printer first, the full `clojure.pprint` in v0.2).
 
 ## 10.2 nREPL — your editor connects to a running program
 

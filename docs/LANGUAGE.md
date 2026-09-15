@@ -172,14 +172,28 @@ strings are written across newlines:
 line two"
 ```
 
-`(str x ...)` concatenates its arguments rendered exactly as `println`
-prints them; `str`, `println`, `join` and the REPL share one printer.
-`(str 1 :a "b")` is `"1:ab"`, `(str {:a 1 :b [2]})` is `"{:a 1, :b [2]}"`,
-and a reference type renders as a tag: `(str (atom 1))` is `"#<atom 1>"`,
+`str`, `println`, `join` and the REPL share one printer, which renders a
+value in one of two modes, as Clojure's `print` and `pr` do. In the
+*readable* mode a string, at any depth, is quoted and its `"`, `\`,
+newline, tab, return, form-feed and backspace characters are escaped; in
+the plain mode it is written as its characters. Everything else prints the
+same in both modes.
+
+`(str x ...)` concatenates its arguments: `nil` contributes nothing, a
+string argument is inserted as is, and any other value is rendered
+readably, so the strings nested in a collection keep their quotes.
+`(str nil)` is `""`, `(str "a" nil "b")` is `"ab"`, `(str 1 :a "b")` is
+`"1:ab"`, `(str ["a"])` is `"[\"a\"]"` and `(str {:a 1 :b [2]})` is
+`"{:a 1, :b [2]}"`. `join` renders each element the same way:
+`(join "," ["a" nil "b"])` is `"a,,b"`. `println` uses the plain mode at
+every depth (`(println "a" ["b"])` prints `a [b]`) and prints `nil` as
+`nil`; the REPL uses the readable mode.
+
+A reference type renders as a tag: `(str (atom 1))` is `"#<atom 1>"`,
 likewise `#<future ...>`, `#<promise ...>`, `#<actor ...>` and `#<fn>`
-(JVM Clojure renders `#object[clojure.lang.Atom 0x... {:status :ready, :val 1}]`).
-Strings nested in a collection render without quotes: `(str ["a"])` is
-`"[a]"` (deviation D20 in `STATUS.md`).
+(JVM Clojure renders `#object[clojure.lang.Atom 0x... {:status :ready, :val 1}]`;
+deviation D20 in `STATUS.md`). The value inside the tag is printed in the
+same mode as the tag.
 
 ### 2.4 Characters
 
@@ -788,11 +802,11 @@ nREPL operations planned for v0.1:
 - `eval`, `interrupt`, `clone`, `close`, `describe`, `load-file`
 - `info`, `complete` — **[v0.1 stretch]**
 
-The v0.1 design prints REPL values using `pr-str`-style formatting
-(quotes on strings, `:keyword` for keywords, etc.), not `print-str`. In
-0.0.1 the REPL, `println` and `str` share one printer, so strings print
-without quotes. `*1` `*2` `*3` hold the last three results (implemented); `*e`
-will hold the last exception (planned).
+The REPL prints values in the readable, `pr-str`-style form (quotes and
+escapes on strings at every depth, `:keyword` for keywords), not
+`print-str`: `"a"` echoes as `"a"` and `["a"]` as `["a"]` (§2.3). `*1` `*2`
+`*3` hold the last three results (implemented); `*e` will hold the last
+exception (planned).
 
 ---
 

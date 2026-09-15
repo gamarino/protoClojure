@@ -160,8 +160,10 @@ const ActiveCallContext* activeCallContext();
 void shutdownFutures(proto::ProtoContext* ctx);
 
 // The value printer `println`, `str` and `join` use (printTo in
-// Primitives.cpp), writing to `out`. Exposed so the REPL echoes evaluated
-// results exactly as `println` prints them. A null pointer prints "nil".
+// Primitives.cpp), in its readable mode, writing to `out`. Exposed so the
+// REPL echoes evaluated results the way Clojure's REPL does: strings are
+// quoted and escaped at every depth (`"a"`, `["a"]`), while `println`
+// prints them bare. A null pointer prints "nil".
 void replPrintValue(proto::ProtoContext* ctx, std::FILE* out,
                     const proto::ProtoObject* v);
 

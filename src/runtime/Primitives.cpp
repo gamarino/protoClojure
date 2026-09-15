@@ -102,20 +102,41 @@ inline MapLayout mapLayoutOf(const ActiveCallContext* cc) {
     return MapLayout{cc->mapMarkerProto, cc->mapStateKey};
 }
 
+// A string in its readable form: quoted, with the characters Clojure's
+// printer escapes (", \, newline, tab, return, form feed, backspace) written
+// as escape sequences. Every other byte, UTF-8 included, is copied as is.
+void appendReadableString(std::string& out, const std::string& bytes) {
+    out += '"';
+    for (char c : bytes) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\t': out += "\\t";  break;
+            case '\r': out += "\\r";  break;
+            case '\f': out += "\\f";  break;
+            case '\b': out += "\\b";  break;
+            default:   out += c;      break;
+        }
+    }
+    out += '"';
+}
+
 // The value printer. `println`, `str`, `join` and the REPL all render values
 // through printTo, so a value reads the same wherever it is printed. It
-// appends the println form of `v` to `out`:
+// appends the printed form of `v` to `out`:
 //   - nil, booleans and numbers as literals; an integer-valued float with
 //     a trailing `.0`;
-//   - strings as their characters, without quotes at any depth (readable
-//     `pr`-style printing is not implemented);
+//   - strings as their characters when `readable` is false (Clojure's
+//     `print`), or quoted and escaped when it is true (Clojure's `pr`); the
+//     mode applies at every depth;
 //   - keywords and symbols as their spelling;
 //   - lists `(1 2)`, vectors `[1 2]` and maps `{:a 1, :b 2}` (insertion
 //     order), recursively;
 //   - atoms `#<atom 1>`, futures `#<future 1>` / `#<future pending>`,
 //     promises `#<promise 1>` / `#<promise pending>`, actors `#<actor 1>`
-//     (the current state) and user fns `#<fn>`;
-//   - anything else, primitive fns included, as `#<unprintable>`.
+//     (the current state, printed in the same mode) and user fns `#<fn>`;
+//   - anything else as `#<unprintable>`.
 // Runtime objects are recognised by the prototypes in the ActiveCallContext;
 // without one only the literal kinds and collections render.
 //
@@ -125,7 +146,7 @@ inline MapLayout mapLayoutOf(const ActiveCallContext* cc) {
 // GC: allocates only to render a LargeInteger. `v` must be rooted by the
 // caller; every nested value is reachable from it.
 void printTo(proto::ProtoContext* ctx, std::string& out,
-             const proto::ProtoObject* v) {
+             const proto::ProtoObject* v, bool readable) {
     if (!v || v == PROTO_NONE) { out += "nil"; return; }
     if (v == PROTO_TRUE)        { out += "true"; return; }
     if (v == PROTO_FALSE)       { out += "false"; return; }
@@ -161,7 +182,7 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
         unsigned long n = lst->getSize(ctx);
         for (unsigned long i = 0; i < n; ++i) {
             if (i > 0) out += ' ';
-            printTo(ctx, out, lst->getAt(ctx, static_cast<int>(i)));
+            printTo(ctx, out, lst->getAt(ctx, static_cast<int>(i)), readable);
         }
         out += ')';
         return;
@@ -173,13 +194,16 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
         unsigned long n = t->getSize(ctx);
         for (unsigned long i = 0; i < n; ++i) {
             if (i > 0) out += ' ';
-            printTo(ctx, out, t->getAt(ctx, static_cast<int>(i)));
+            printTo(ctx, out, t->getAt(ctx, static_cast<int>(i)), readable);
         }
         out += ']';
         return;
     }
     if (proto::ProtoObject::isStringTagFast(v)) {
-        out += reinterpret_cast<const proto::ProtoString*>(v)->toStdString(ctx);
+        const std::string bytes =
+            reinterpret_cast<const proto::ProtoString*>(v)->toStdString(ctx);
+        if (readable) appendReadableString(out, bytes);
+        else          out += bytes;
         return;
     }
     const ActiveCallContext* cc = activeCallContext();
@@ -191,16 +215,17 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
     const proto::ProtoObject* prototype = v->getPrototype(ctx);
     if (prototype == cc->mapMarkerProto) {
         out += '{';
-        struct Acc { std::string* out; bool first; } acc{&out, true};
+        struct Acc { std::string* out; bool readable; bool first; }
+            acc{&out, readable, true};
         mapForEach(ctx, mapLayoutOf(cc), v, &acc,
             [](proto::ProtoContext* c, void* self,
                const proto::ProtoObject* k, const proto::ProtoObject* val) {
                 auto* a = static_cast<Acc*>(self);
                 if (!a->first) *a->out += ", ";
                 a->first = false;
-                printTo(c, *a->out, k);
+                printTo(c, *a->out, k, a->readable);
                 *a->out += ' ';
-                printTo(c, *a->out, val);
+                printTo(c, *a->out, val, a->readable);
             });
         out += '}';
         return;
@@ -208,14 +233,14 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
     if (prototype == cc->atomMarkerProto) {
         const proto::ProtoObject* inner = v->getAttribute(ctx, cc->valueKey);
         out += "#<atom ";
-        printTo(ctx, out, inner ? inner : PROTO_NONE);
+        printTo(ctx, out, inner ? inner : PROTO_NONE, readable);
         out += '>';
         return;
     }
     if (prototype == cc->futureMarkerProto) {
         if (v->getAttribute(ctx, cc->doneKey) == PROTO_TRUE) {
             out += "#<future ";
-            printTo(ctx, out, v->getAttribute(ctx, cc->resultKey));
+            printTo(ctx, out, v->getAttribute(ctx, cc->resultKey), readable);
             out += '>';
         } else {
             out += "#<future pending>";
@@ -225,7 +250,7 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
     if (prototype == cc->promiseMarkerProto) {
         if (v->getAttribute(ctx, cc->doneKey) == PROTO_TRUE) {
             out += "#<promise ";
-            printTo(ctx, out, v->getAttribute(ctx, cc->valueKey));
+            printTo(ctx, out, v->getAttribute(ctx, cc->valueKey), readable);
             out += '>';
         } else {
             out += "#<promise pending>";
@@ -234,7 +259,7 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
     }
     if (prototype == cc->actorMarkerProto) {
         out += "#<actor ";
-        printTo(ctx, out, v->getAttribute(ctx, cc->valueKey));
+        printTo(ctx, out, v->getAttribute(ctx, cc->valueKey), readable);
         out += '>';
         return;
     }
@@ -250,10 +275,24 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
 
 // printTo, written to `stream` in one call.
 void printValue(proto::ProtoContext* ctx, std::FILE* stream,
-                const proto::ProtoObject* v) {
+                const proto::ProtoObject* v, bool readable) {
     std::string text;
-    printTo(ctx, text, v);
+    printTo(ctx, text, v, readable);
     std::fwrite(text.data(), 1, text.size(), stream);
+}
+
+// Appends `v` as `str` renders one argument: nil as nothing, a string as its
+// characters, and any other value in its readable form, so the strings
+// nested in a collection keep their quotes (`(str "a" ["b"])` is `a["b"]`).
+// `join` renders each element the same way.
+void appendStr(proto::ProtoContext* ctx, std::string& out,
+               const proto::ProtoObject* v) {
+    if (!v || v == PROTO_NONE) return;
+    if (proto::ProtoObject::isStringTagFast(v)) {
+        out += reinterpret_cast<const proto::ProtoString*>(v)->toStdString(ctx);
+        return;
+    }
+    printTo(ctx, out, v, /*readable=*/true);
 }
 
 // println — print each positional arg, space-separated, followed by \n.
@@ -275,7 +314,8 @@ const proto::ProtoObject* prim_println(proto::ProtoContext* ctx,
     std::string line;
     for (unsigned long i = 0; i < n; ++i) {
         if (i > 0) line += ' ';
-        printTo(ctx, line, args->getAt(ctx, static_cast<int>(i)));
+        printTo(ctx, line, args->getAt(ctx, static_cast<int>(i)),
+                /*readable=*/false);
     }
     line += '\n';
     std::fwrite(line.data(), 1, line.size(), stdout);
@@ -534,8 +574,9 @@ const proto::ProtoObject* prim_not_eq(proto::ProtoContext* ctx,
 
 // str ----------------------------------------------------------------------
 
-// (str x y z) → the println form of every argument (printTo), concatenated,
-// so `(str {:a 1})` is "{:a 1}" and `(str (atom 1))` is "#<atom 1>".
+// (str x y z) → every argument rendered by appendStr, concatenated: nil is
+// "", a string is inserted as is, and any other value is printed readably,
+// so `(str {:a "b"})` is "{:a \"b\"}" and `(str (atom 1))` is "#<atom 1>".
 const proto::ProtoObject* prim_str(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
                                    const proto::ParentLink*,
@@ -544,7 +585,7 @@ const proto::ProtoObject* prim_str(proto::ProtoContext* ctx,
     unsigned long n = args ? args->getSize(ctx) : 0;
     std::string text;
     for (unsigned long i = 0; i < n; ++i) {
-        printTo(ctx, text, args->getAt(ctx, (int)i));
+        appendStr(ctx, text, args->getAt(ctx, (int)i));
     }
     return ctx->fromUTF8String(text.c_str());
 }
@@ -1240,7 +1281,7 @@ const proto::ProtoObject* prim_join(proto::ProtoContext* ctx,
         unsigned long n = lst->getSize(ctx);
         for (unsigned long i = 0; i < n; ++i) {
             if (i > 0) text += sep;
-            printTo(ctx, text, lst->getAt(ctx, static_cast<int>(i)));
+            appendStr(ctx, text, lst->getAt(ctx, static_cast<int>(i)));
         }
     }
     return reinterpret_cast<const proto::ProtoObject*>(
@@ -2209,7 +2250,7 @@ void shutdownFutures(proto::ProtoContext* ctx) {
 // just delegate.
 void replPrintValue(proto::ProtoContext* ctx, std::FILE* out,
                     const proto::ProtoObject* v) {
-    printValue(ctx, out, v);
+    printValue(ctx, out, v, /*readable=*/true);
 }
 
 namespace {
