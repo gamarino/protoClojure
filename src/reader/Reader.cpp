@@ -79,16 +79,14 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
             // a same-bytes inline symbol (protoCore inlines short bytes into
             // the pointer and loses the symbol/string distinction at that
             // representation; see ReaderMarkers doc). The raw ProtoString
-            // is stashed under bytesKey on a fresh mutable child of
-            // stringMarkerProto.
+            // is stashed under bytesKey on an immutable child of
+            // stringMarkerProto: the wrapper is never mutated, and
+            // setAttribute returns the child that carries the string. `raw`
+            // and the intermediate child are young cells of `parent`.
             const proto::ProtoObject* raw =
                 parent->fromUTF8String(tok.text.c_str());
-            const proto::ProtoObject* wrap =
-                markers_.stringMarkerProto->newChild(parent,
-                                                      /*isMutable=*/true);
-            const_cast<proto::ProtoObject*>(wrap)
+            return markers_.stringMarkerProto->newChild(parent)
                 ->setAttribute(parent, markers_.bytesKey, raw);
-            return wrap;
         }
 
         case TokenKind::Symbol: {
@@ -157,13 +155,12 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
                 readList(&wrapScope, TokenKind::RBracket,
                          tok.line, tok.column);
             wrapScope.setAutomaticLocal(kSlotItems, items);
+            // An immutable wrapper: setAttribute returns the child that
+            // carries the items.
             wrapScope.setAutomaticLocal(kSlotWrap,
-                markers_.vectorMarkerProto->newChild(&wrapScope,
-                                                      /*isMutable=*/true));
-            const_cast<proto::ProtoObject*>(
-                wrapScope.getAutomaticLocal(kSlotWrap))
-                ->setAttribute(&wrapScope, markers_.itemsKey,
-                               wrapScope.getAutomaticLocal(kSlotItems));
+                markers_.vectorMarkerProto->newChild(&wrapScope)
+                    ->setAttribute(&wrapScope, markers_.itemsKey,
+                                   wrapScope.getAutomaticLocal(kSlotItems)));
             return wrapScope.getAutomaticLocal(kSlotWrap);
         }
 
@@ -189,13 +186,11 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
                 throw ReaderError("map literal: odd number of forms",
                                   tok.line, tok.column);
             }
+            // An immutable wrapper, like the vector one.
             wrapScope.setAutomaticLocal(kSlotWrap,
-                markers_.mapMarkerProto->newChild(&wrapScope,
-                                                   /*isMutable=*/true));
-            const_cast<proto::ProtoObject*>(
-                wrapScope.getAutomaticLocal(kSlotWrap))
-                ->setAttribute(&wrapScope, markers_.entriesKey,
-                               wrapScope.getAutomaticLocal(kSlotEntries));
+                markers_.mapMarkerProto->newChild(&wrapScope)
+                    ->setAttribute(&wrapScope, markers_.entriesKey,
+                                   wrapScope.getAutomaticLocal(kSlotEntries)));
             return wrapScope.getAutomaticLocal(kSlotWrap);
         }
 

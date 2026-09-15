@@ -21,7 +21,7 @@ struct MapOpsFixture : ::testing::Test {
     proto::ProtoSpace space;
     proto::ProtoContext* ctx = space.rootContext;
     const proto::ProtoObject* marker =
-        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+        space.objectPrototype->newChild(ctx);  // immutable, as in src/main.cpp
     const proto::ProtoString* stateKey =
         proto::ProtoString::createSymbol(ctx, "__map__");
     MapLayout layout{marker, stateKey};

@@ -202,15 +202,17 @@ struct Session {
 
         protoClojure::installPrimitives(ctx, globals);
 
-        stringMarker   = space.objectPrototype->newChild(ctx, true);
-        fnSingleProto  = space.objectPrototype->newChild(ctx, true);
-        fnMultiProto   = space.objectPrototype->newChild(ctx, true);
-        vectorMarker   = space.objectPrototype->newChild(ctx, true);
-        mapMarker      = space.objectPrototype->newChild(ctx, true);
-        atomMarker     = space.objectPrototype->newChild(ctx, true);
-        futureMarker   = space.objectPrototype->newChild(ctx, true);
-        promiseMarker  = space.objectPrototype->newChild(ctx, true);
-        actorMarker    = space.objectPrototype->newChild(ctx, true);
+        // Prototype markers are never mutated, so they are immutable
+        // objects; only the globals and the Named table are mutable.
+        stringMarker   = space.objectPrototype->newChild(ctx);
+        fnSingleProto  = space.objectPrototype->newChild(ctx);
+        fnMultiProto   = space.objectPrototype->newChild(ctx);
+        vectorMarker   = space.objectPrototype->newChild(ctx);
+        mapMarker      = space.objectPrototype->newChild(ctx);
+        atomMarker     = space.objectPrototype->newChild(ctx);
+        futureMarker   = space.objectPrototype->newChild(ctx);
+        promiseMarker  = space.objectPrototype->newChild(ctx);
+        actorMarker    = space.objectPrototype->newChild(ctx);
 
         // Pin the markers in slots so the GC sees them; main.cpp does
         // the same per session-3 engineering principles (P1 / P2).
@@ -226,7 +228,7 @@ struct Session {
 
         // Keywords and symbols: the prototype of every named value and the
         // table that interns them by spelling, pinned like the markers.
-        named.marker = space.objectPrototype->newChild(ctx, true);
+        named.marker = space.objectPrototype->newChild(ctx);
         ctx->setAutomaticLocal(11, named.marker);
         named.table = space.objectPrototype->newChild(ctx, true);
         ctx->setAutomaticLocal(12, named.table);

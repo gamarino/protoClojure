@@ -17,12 +17,13 @@ struct ReaderFixture : ::testing::Test {
     proto::ProtoSpace space;
     proto::ProtoContext* ctx = space.rootContext;
 
+    // Immutable markers, as the runtime creates them (src/main.cpp).
     const proto::ProtoObject* stringMarker =
-        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+        space.objectPrototype->newChild(ctx);
     const proto::ProtoObject* vectorMarker =
-        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+        space.objectPrototype->newChild(ctx);
     const proto::ProtoObject* mapMarker =
-        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+        space.objectPrototype->newChild(ctx);
     const proto::ProtoString* bytesKey =
         proto::ProtoString::createSymbol(ctx, "__bytes__");
     const proto::ProtoString* itemsKey =

@@ -25,13 +25,15 @@ namespace {
 struct ValuesFixture : ::testing::Test {
     proto::ProtoSpace space;
     proto::ProtoContext* ctx = space.rootContext;
+    // Markers are immutable, as in src/main.cpp; the Named intern table is
+    // mutated and stays mutable.
     const proto::ProtoObject* marker =
-        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+        space.objectPrototype->newChild(ctx);
     const proto::ProtoString* stateKey =
         proto::ProtoString::createSymbol(ctx, "__map__");
     MapLayout layout{marker, stateKey};
     protoClojure::NamedLayout named{
-        space.objectPrototype->newChild(ctx, /*isMutable=*/true),
+        space.objectPrototype->newChild(ctx),
         space.objectPrototype->newChild(ctx, /*isMutable=*/true),
         proto::ProtoString::createSymbol(ctx, "__spelling__")};
 

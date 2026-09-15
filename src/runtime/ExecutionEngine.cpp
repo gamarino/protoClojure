@@ -763,17 +763,20 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
                     sp -= static_cast<unsigned int>(nCaps);
                 }
 
-                // Single-arity wrapper — fnSingleProto carries
-                // __bytecode__ always and __captures__ only when the
-                // body has captures. arityKey was vestigial (the
-                // dispatcher reads arity directly from subMod) and is
-                // no longer set on the wrapper.
-                proto::ProtoObject* wrap = const_cast<proto::ProtoObject*>(
-                    env.fnSingleProto->newChild(&frame, /*isMutable=*/true));
-                wrap->setAttribute(&frame, env.bytecodeKey,
-                    frame.fromLong(reinterpret_cast<long long>(&subMod)));
+                // Single-arity wrapper — a child of fnSingleProto carrying
+                // __bytecode__ always and __captures__ only when the body
+                // has captures. A wrapper is never mutated once built, so
+                // it is an immutable object: each setAttribute returns a
+                // new object with the same prototype, and no wrapper enters
+                // protoCore's mutables tree. The intermediates are young
+                // cells of this frame's context until pushVal roots the
+                // result.
+                const proto::ProtoObject* wrap =
+                    env.fnSingleProto->newChild(&frame)->setAttribute(
+                        &frame, env.bytecodeKey,
+                        frame.fromLong(reinterpret_cast<long long>(&subMod)));
                 if (nCaps > 0) {
-                    wrap->setAttribute(&frame, env.capturesKey, capsList);
+                    wrap = wrap->setAttribute(&frame, env.capturesKey, capsList);
                 }
                 pushVal(wrap);
                 break;
@@ -979,10 +982,9 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
                 }
                 sp = baseSp;
 
-                proto::ProtoObject* wrap = const_cast<proto::ProtoObject*>(
-                    env.fnMultiProto->newChild(&frame, /*isMutable=*/true));
-                wrap->setAttribute(&frame, env.aritiesKey, aritiesList);
-                pushVal(wrap);
+                // Immutable, like the single-arity wrapper (MAKE_FN).
+                pushVal(env.fnMultiProto->newChild(&frame)
+                            ->setAttribute(&frame, env.aritiesKey, aritiesList));
                 break;
             }
 

@@ -101,45 +101,50 @@ int runFile(const char* path) {
         ctx, const_cast<proto::ProtoObject*>(
             ctx->getAutomaticLocal(kSlotGlobals)));
 
+    // The prototype markers below are never mutated, so they are immutable
+    // objects. Only the globals namespace and the Named intern table are
+    // mutated in place, and only they are mutable; the atoms, futures,
+    // promises and actors created later are mutable children of immutable
+    // markers.
     const proto::ProtoObject* stringMarkerProto =
-        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+        space.objectPrototype->newChild(ctx);
     ctx->setAutomaticLocal(kSlotStringMarker, stringMarkerProto);
 
     // Session 12 — single-arity and multi-arity wrappers use DIFFERENT
     // prototypes so the CALL dispatcher picks the path via getPrototype
     // alone, without an `__arities__` probe per call.
     const proto::ProtoObject* fnSingleProto =
-        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+        space.objectPrototype->newChild(ctx);
     ctx->setAutomaticLocal(kSlotFnSingle, fnSingleProto);
 
     const proto::ProtoObject* fnMultiProto =
-        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+        space.objectPrototype->newChild(ctx);
     ctx->setAutomaticLocal(kSlotFnMulti, fnMultiProto);
 
     const proto::ProtoObject* vectorMarkerProto =
-        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+        space.objectPrototype->newChild(ctx);
     ctx->setAutomaticLocal(kSlotVectorMarker, vectorMarkerProto);
 
     const proto::ProtoObject* mapMarkerProto =
-        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+        space.objectPrototype->newChild(ctx);
     ctx->setAutomaticLocal(kSlotMapMarker, mapMarkerProto);
 
     // Session 16 — atoms. Mutable child of atomMarkerProto carrying
     // the current value under `__value__`. CAS via setAttributeIfEqual.
     const proto::ProtoObject* atomMarkerProto =
-        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+        space.objectPrototype->newChild(ctx);
     ctx->setAutomaticLocal(kSlotAtomMarker, atomMarkerProto);
 
     // Session 17 — futures. Mutable child carrying the thunk, the
     // running thread, and the eventually-realised result.
     const proto::ProtoObject* futureMarkerProto =
-        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+        space.objectPrototype->newChild(ctx);
     ctx->setAutomaticLocal(kSlotFutureMarker, futureMarkerProto);
 
     // Session 18 — promises. Same shape as a small atom, with a
     // single-shot CAS deliver and a busy-wait deref.
     const proto::ProtoObject* promiseMarkerProto =
-        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+        space.objectPrototype->newChild(ctx);
     ctx->setAutomaticLocal(kSlotPromiseMarker, promiseMarkerProto);
 
     // Session 19 — actors. Mutable wrapper child carrying the
@@ -147,13 +152,13 @@ int runFile(const char* path) {
     // by the global ActorScheduler. Worker pool spawns on the first
     // (actor ...) call.
     const proto::ProtoObject* actorMarkerProto =
-        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+        space.objectPrototype->newChild(ctx);
     ctx->setAutomaticLocal(kSlotActorMarker, actorMarkerProto);
 
     // Keywords and symbols: the prototype of every named value and the
     // table that interns them by spelling (src/runtime/Named.h).
     const proto::ProtoObject* namedMarkerProto =
-        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+        space.objectPrototype->newChild(ctx);
     ctx->setAutomaticLocal(kSlotNamedMarker, namedMarkerProto);
     const proto::ProtoObject* namedTable =
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);

@@ -67,6 +67,14 @@ The project has no tagged releases yet; the version declared in
 - Function wrappers use separate single-arity and multi-arity prototypes, and
   the captures attribute is read only when a body has captures, reducing the
   attribute lookups per call.
+- Objects that are never mutated after construction are immutable protoCore
+  objects: function wrappers (`fn`, `defn`, multi-arity), the reader's string,
+  vector and map literal wrappers, and the prototype markers. A mutable object
+  registers permanently in protoCore's mutables tree and pays a
+  compare-and-set on a shared shard for every attribute it receives, so every
+  closure created used to leave a permanent entry behind. Only values
+  mutated in place stay mutable: the globals namespace, the keyword and
+  symbol intern table, atoms, futures, promises and actors.
 
 ### Fixed
 
