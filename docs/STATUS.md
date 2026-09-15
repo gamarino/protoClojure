@@ -5,10 +5,10 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 161 test cases: 130
+scripts and an interactive REPL. `ctest` registers 164 test cases: 133
 conformance fixtures under `tests/conformance/` and 31 GoogleTest unit
 tests for the lexer and reader (`tests/unit/`). Against the current
-protoCore, 158 pass; the three failures are described under
+protoCore, 161 pass; the three failures are described under
 [Known issues](#known-issues). Benchmark numbers against Babashka 1.4.192
 are in [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md). Shipped changes
 are listed in [`CHANGELOG.md`](../CHANGELOG.md).
@@ -34,9 +34,9 @@ directories that cover them.
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 10 |
 | `clojure.string`-shaped string functions | `20-strings` | 13 |
 | Atoms | `21-atoms` | 10 |
-| Futures and `pmap` on OS threads | `22-futures` | 10 |
+| Futures and `pmap` on OS threads | `22-futures` | 12 |
 | Watches, promises | `23-watches`, `24-promises` | 7 |
-| Actors | `25-actors` | 8 |
+| Actors | `25-actors` | 9 |
 | Interactive REPL | — (no conformance fixtures) | — |
 
 The design specifications written during development are archived under

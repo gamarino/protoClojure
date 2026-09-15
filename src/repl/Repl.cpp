@@ -100,9 +100,14 @@ std::string historyPath() {
 // Read one logical input line. Wraps libreadline on an interactive tty;
 // falls back to std::getline-shaped `getc` on a piped stdin so the REPL
 // is scriptable (`echo '(+ 1 2)' | protoclj`) and testable.
-bool readLine(const char* prompt, bool interactive,
+bool readLine(proto::ProtoContext* ctx, const char* prompt, bool interactive,
               std::string& out, bool* eof) {
     *eof = false;
+    // Waiting for input can take arbitrarily long while futures or actors
+    // keep running. A thread blocked in read() cannot reach a GC
+    // safepoint, so the read runs unmanaged; nothing below touches a
+    // ProtoObject.
+    proto::ProtoContext::UnmanagedScope unmanaged(ctx);
     if (interactive) {
         char* line = ::readline(prompt);
         if (!line) { *eof = true; return false; }
@@ -473,7 +478,7 @@ int runRepl() {
         std::string line;
         bool eof = false;
         const char* prompt = inMultiline ? continuation : primary;
-        if (!readLine(prompt, interactive, line, &eof)) {
+        if (!readLine(session.ctx, prompt, interactive, line, &eof)) {
             if (eof) {
                 std::puts(interactive ? "\nBye for now." : "Bye for now.");
                 break;

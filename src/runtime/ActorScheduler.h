@@ -135,7 +135,10 @@ private:
     ActorScheduler& operator=(const ActorScheduler&) = delete;
 
     void enqueueReady_(ActorState* actor, ActorPriority p);
-    ActorState* popReady_();
+    // Blocks until an actor is ready (or shutdown starts). The wait runs
+    // in an unmanaged region of `ctx`'s thread so an idle worker never
+    // holds up a stop-the-world GC phase requested by another thread.
+    ActorState* popReady_(proto::ProtoContext* ctx);
 
     std::once_flag startFlag_;
     std::atomic<bool> started_{false};
