@@ -5,7 +5,7 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 259 test cases: 197
+scripts and an interactive REPL. `ctest` registers 260 test cases: 198
 conformance fixtures under `tests/conformance/`, 61 GoogleTest unit
 tests for the lexer, the reader, the runtime map and value equality and
 hashing (`tests/unit/`), and a CLI check of `--help` (`tests/cli/`); all
@@ -24,7 +24,7 @@ directories that cover them.
 |---|---|---:|
 | Binary, lexer, reader, bytecode VM, `println` | `00-binary`, `01-literals` | 2 |
 | `def`, `if`, `do`, integer arithmetic, comparisons, `str` | `02-special-forms`, `03-arithmetic` | 10 |
-| `fn`, `defn`, `let`, `loop`, `recur` | `04-functions`, `05-recursion` | 7 |
+| `fn`, `defn`, `let`, `loop`, `recur` | `04-functions`, `05-recursion` | 8 |
 | Closures with N-level lexical capture | `06-closures` | 6 |
 | Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 22 |
 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 19 |
@@ -149,7 +149,9 @@ The design specifications written during development are archived under
       readably (`"a"`, `["a"]`); `str` and `join` insert nil as `""` and a
       string argument as is, and render any other value readably, so
       `(str "a" nil ["b"])` is `"a[\"b\"]"`, `(str {:a 1})` is `"{:a 1}"`
-      and `(str (atom 1))` is `"#<atom 1>"` (D20)
+      and `(str (atom 1))` is `"#<atom 1>"` (D20); a user fn prints as
+      `#<fn>` and a built-in function as `#<fn NAME>` (`(str println)` is
+      `"#<fn println>"`)
 - [x] Lists and vectors: `list vector vec nth first rest cons count empty? reverse`
 - [x] Higher-order: `map filter reduce pmap`
 - [x] Predicates: `nil? not vector? list? map? string?`
@@ -375,7 +377,7 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D17 | String ops (`upper-case`, `lower-case`, `split`, `reverse`, `trim`, `index-of`) are byte-level / ASCII-correct only; multi-byte UTF-8 codepoints traverse as bytes (CONTRA JVM-Clojure which is codepoint-aware) | v0.2 |
 | D18 | `(fn name [args] body)` — the name is accepted by the compiler but dropped; self-reference via `name` inside the body is not supported (use `defn` for self-recursion). Planned for v0.2 via wrapper-into-slot capture. | v0.2 |
 | D19 | Maps iterate and print in insertion order at every size, including maps built with `hash-map` (JVM Clojure guarantees insertion order only for array maps of at most 8 entries and leaves it unspecified beyond that and for `hash-map`) | (perm) |
-| D20 | Atoms, futures, promises, actors and fns print as tags such as `#<atom 1>` and `#<fn>` in `println`, `str` and the REPL (JVM Clojure: `#object[clojure.lang.Atom 0x... {:status :ready, :val 1}]` when printed, and `clojure.lang.Atom@...` or the class name under `str`) | v0.x |
+| D20 | Atoms, futures, promises, actors and fns print as tags such as `#<atom 1>`, `#<fn>` and `#<fn println>` in `println`, `str` and the REPL (JVM Clojure: `#object[clojure.lang.Atom 0x... {:status :ready, :val 1}]` when printed, and `clojure.lang.Atom@...` or the class name under `str`) | v0.x |
 | D21 | Beyond ASCII, symbols and keywords accept only Unicode letters, combining marks and decimal digits: `a→b`, or a symbol containing a no-break space, is a read error (CONTRA JVM-Clojure, whose reader accepts any character that is neither whitespace nor a macro character) | v0.x |
 
 ## Known issues

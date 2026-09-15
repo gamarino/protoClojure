@@ -160,6 +160,11 @@ The project has no tagged releases yet; the version declared in
   `a["b" "c\n"]` with the nested strings quoted and escaped; the REPL echoes
   readably; `println` still prints strings bare at every depth. Deviation
   D20 is narrowed to the `#<atom 1>`-style tags of reference types.
+- Built-in functions print with their name. `(str println)`, `(println map)`
+  and a REPL echo of `+` gave `#<unprintable>`, because the printer
+  recognised only user fns. A built-in function now prints as
+  `#<fn NAME>` (`#<fn println>`), next to the `#<fn>` of a user fn; the name
+  comes from the table that also installs the primitives.
 - Symbols and keywords may contain non-ASCII letters. `:ñandú` or
   `(defn año [x] ...)` failed with "unexpected character: �": the lexer
   classified source bytes with `isalnum`, which rejects every byte of a

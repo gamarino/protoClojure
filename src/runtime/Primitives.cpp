@@ -102,6 +102,10 @@ inline MapLayout mapLayoutOf(const ActiveCallContext* cc) {
     return MapLayout{cc->mapMarkerProto, cc->mapStateKey};
 }
 
+// The name a built-in function is installed under, or nullptr when `fn` is
+// not one of the primitives in kPrimitives (defined after the primitives).
+const char* primitiveName(proto::ProtoMethod fn);
+
 // A string in its readable form: quoted, with the characters Clojure's
 // printer escapes (", \, newline, tab, return, form feed, backspace) written
 // as escape sequences. Every other byte, UTF-8 included, is copied as is.
@@ -135,7 +139,8 @@ void appendReadableString(std::string& out, const std::string& bytes) {
 //     order), recursively;
 //   - atoms `#<atom 1>`, futures `#<future 1>` / `#<future pending>`,
 //     promises `#<promise 1>` / `#<promise pending>`, actors `#<actor 1>`
-//     (the current state, printed in the same mode) and user fns `#<fn>`;
+//     (the current state, printed in the same mode), user fns `#<fn>` and
+//     built-in functions `#<fn NAME>` (`#<fn println>`);
 //   - anything else as `#<unprintable>`.
 // Runtime objects are recognised by the prototypes in the ActiveCallContext;
 // without one only the literal kinds and collections render.
@@ -204,6 +209,14 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
             reinterpret_cast<const proto::ProtoString*>(v)->toStdString(ctx);
         if (readable) appendReadableString(out, bytes);
         else          out += bytes;
+        return;
+    }
+    // Built-in functions are protoCore method cells (a pointer-tag check).
+    if (v->isMethod(ctx)) {
+        const char* name = primitiveName(v->asMethod(ctx));
+        out += "#<fn";
+        if (name) { out += ' '; out += name; }
+        out += '>';
         return;
     }
     const ActiveCallContext* cc = activeCallContext();
@@ -2233,6 +2246,116 @@ const proto::ProtoObject* prim_remove_watch(proto::ProtoContext* ctx,
     return a;
 }
 
+// Every built-in function and the global name it is installed under. The
+// single source for installPrimitives and for the printer's `#<fn NAME>`.
+struct PrimitiveEntry {
+    const char*       name;
+    proto::ProtoMethod fn;
+};
+
+constexpr PrimitiveEntry kPrimitives[] = {
+    {"println", &prim_println},
+    {"+",       &prim_plus},
+    {"-",       &prim_minus},
+    {"*",       &prim_mul},
+    {"inc",     &prim_inc},
+    {"dec",     &prim_dec},
+    {"<",       &prim_lt},
+    {"<=",      &prim_le},
+    {">",       &prim_gt},
+    {">=",      &prim_ge},
+    {"=",       &prim_eq},
+    {"not=",    &prim_not_eq},
+    {"str",     &prim_str},
+    {"/",       &prim_div},
+
+    // Lists, vectors and predicates.
+    {"list",    &prim_list},
+    {"vector",  &prim_vector},
+    {"vec",     &prim_vec},
+    {"nth",     &prim_nth},
+    {"vector?", &prim_vector_p},
+    {"list?",   &prim_list_p},
+
+    // Maps.
+    {"hash-map",  &prim_hash_map},
+    {"assoc",     &prim_assoc},
+    {"get",       &prim_get},
+    {"contains?", &prim_contains_p},
+    {"keys",      &prim_keys},
+    {"vals",      &prim_vals},
+    {"map?",      &prim_map_p},
+
+    // String ops (clojure.string-shaped, in the global namespace since
+    // `ns` does not exist yet).
+    {"string?",      &prim_string_p},
+    {"subs",         &prim_subs},
+    {"upper-case",   &prim_upper_case},
+    {"lower-case",   &prim_lower_case},
+    {"starts-with?", &prim_starts_with_p},
+    {"ends-with?",   &prim_ends_with_p},
+    {"includes?",    &prim_includes_p},
+    {"index-of",     &prim_index_of},
+    {"replace",      &prim_replace},
+    {"join",         &prim_join},
+    {"split",        &prim_split},
+    {"trim",         &prim_trim},
+    {"triml",        &prim_triml},
+    {"trimr",        &prim_trimr},
+    {"blank?",       &prim_blank_p},
+
+    // Atoms.
+    {"atom",             &prim_atom},
+    {"atom?",            &prim_atom_p},
+    {"deref",            &prim_deref},
+    {"reset!",           &prim_reset_bang},
+    {"swap!",            &prim_swap_bang},
+    {"compare-and-set!", &prim_compare_and_set_bang},
+
+    // Futures and pmap.
+    {"make-future", &prim_make_future},
+    {"future?",     &prim_future_p},
+    {"realized?",   &prim_realized_p},
+    {"pmap",        &prim_pmap},
+
+    // Watches and promises.
+    {"add-watch",    &prim_add_watch},
+    {"remove-watch", &prim_remove_watch},
+    {"promise",      &prim_promise},
+    {"promise?",     &prim_promise_p},
+    {"deliver",      &prim_deliver},
+
+    // Actors.
+    {"actor",       &prim_actor},
+    {"actor?",      &prim_actor_p},
+    {"send",        &prim_send},
+    {"send-h",      &prim_send_h},
+    {"send-m",      &prim_send_m},
+    {"send-l",      &prim_send_l},
+    {"actor-stats", &prim_actor_stats},
+
+    // Sequences and higher-order functions.
+    {"first",   &prim_first},
+    {"rest",    &prim_rest},
+    {"cons",    &prim_cons},
+    {"count",   &prim_count},
+    {"empty?",  &prim_empty_p},
+    {"nil?",    &prim_nil_p},
+    {"not",     &prim_not},
+    {"reverse", &prim_reverse},
+    {"map",     &prim_map},
+    {"filter",  &prim_filter},
+    {"reduce",  &prim_reduce},
+};
+
+// A linear scan of the 75 entries; printing a function is not a hot path.
+const char* primitiveName(proto::ProtoMethod fn) {
+    for (const PrimitiveEntry& p : kPrimitives) {
+        if (p.fn == fn) return p.name;
+    }
+    return nullptr;
+}
+
 } // namespace
 
 // Externally-visible shutdownFutures — declared in Primitives.h, lives
@@ -2482,104 +2605,13 @@ void installPrimitives(proto::ProtoContext* ctx,
     // Install each primitive: wrap the C function pointer in a callable
     // ProtoObject via fromMethod, store on the globals under the symbol key.
     // setAttribute on a mutable receiver mutates in place.
-    auto install = [&](const char* name, proto::ProtoMethod fn) {
+    for (const PrimitiveEntry& p : kPrimitives) {
         const proto::ProtoString* key =
-            proto::ProtoString::createSymbol(ctx, name);
+            proto::ProtoString::createSymbol(ctx, p.name);
         const proto::ProtoObject* callable =
-            ctx->fromMethod(nullptr /* self */, fn);
+            ctx->fromMethod(nullptr /* self */, p.fn);
         globals->setAttribute(ctx, key, callable);
-    };
-
-    install("println", &prim_println);
-    install("+",       &prim_plus);
-    install("-",       &prim_minus);
-    install("*",       &prim_mul);
-    install("inc",     &prim_inc);
-    install("dec",     &prim_dec);
-    install("<",       &prim_lt);
-    install("<=",      &prim_le);
-    install(">",       &prim_gt);
-    install(">=",      &prim_ge);
-    install("=",       &prim_eq);
-    install("not=",    &prim_not_eq);
-    install("str",     &prim_str);
-    install("/",       &prim_div);
-
-    // Session 7 — collection + higher-order.
-    install("list",    &prim_list);
-    install("vector",  &prim_vector);
-    install("vec",     &prim_vec);
-    install("nth",     &prim_nth);
-    install("vector?", &prim_vector_p);
-    install("list?",   &prim_list_p);
-
-    // Session 13 — maps.
-    install("hash-map",  &prim_hash_map);
-    install("assoc",     &prim_assoc);
-    install("get",       &prim_get);
-    install("contains?", &prim_contains_p);
-    install("keys",      &prim_keys);
-    install("vals",      &prim_vals);
-    install("map?",      &prim_map_p);
-
-    // Session 15 — string ops (clojure.string-shaped, in the global
-    // namespace since `ns` does not exist yet).
-    install("string?",     &prim_string_p);
-    install("subs",        &prim_subs);
-    install("upper-case",  &prim_upper_case);
-    install("lower-case",  &prim_lower_case);
-    install("starts-with?",&prim_starts_with_p);
-    install("ends-with?",  &prim_ends_with_p);
-    install("includes?",   &prim_includes_p);
-    install("index-of",    &prim_index_of);
-    install("replace",     &prim_replace);
-    install("join",        &prim_join);
-    install("split",       &prim_split);
-    install("trim",        &prim_trim);
-    install("triml",       &prim_triml);
-    install("trimr",       &prim_trimr);
-    install("blank?",      &prim_blank_p);
-
-    // Session 16 — atoms.
-    install("atom",             &prim_atom);
-    install("atom?",            &prim_atom_p);
-    install("deref",            &prim_deref);
-    install("reset!",           &prim_reset_bang);
-    install("swap!",            &prim_swap_bang);
-    install("compare-and-set!", &prim_compare_and_set_bang);
-
-    // Session 17 — futures + pmap.
-    install("make-future",      &prim_make_future);
-    install("future?",          &prim_future_p);
-    install("realized?",        &prim_realized_p);
-    install("pmap",             &prim_pmap);
-
-    // Session 18.
-    install("add-watch",        &prim_add_watch);
-    install("remove-watch",     &prim_remove_watch);
-    install("promise",          &prim_promise);
-    install("promise?",         &prim_promise_p);
-    install("deliver",          &prim_deliver);
-
-    // Session 19 — actors.
-    install("actor",            &prim_actor);
-    install("actor?",           &prim_actor_p);
-    install("send",             &prim_send);
-    install("send-h",           &prim_send_h);
-    install("send-m",           &prim_send_m);
-    install("send-l",           &prim_send_l);
-    install("actor-stats",      &prim_actor_stats);
-    install("first",   &prim_first);
-    install("rest",    &prim_rest);
-    install("cons",    &prim_cons);
-    install("count",   &prim_count);
-    install("empty?",  &prim_empty_p);
-    install("nil?",    &prim_nil_p);
-    install("not",     &prim_not);
-    install("reverse", &prim_reverse);
-    install("map",     &prim_map);
-    install("filter",  &prim_filter);
-    install("reduce",  &prim_reduce);
+    }
 }
 
 } // namespace protoClojure

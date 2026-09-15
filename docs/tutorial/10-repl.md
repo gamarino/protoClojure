@@ -125,8 +125,10 @@ REPL does: numbers, keywords and collections print as you would write
 them, and strings keep their quotes and escapes at every depth (`"hi"`
 prints `"hi"`, `["a\nb"]` prints `["a\nb"]`), so a printed string or
 collection of strings reads back as the same value. `(println x)` is the
-human-readable output and prints strings bare. Functions print as `#<fn>`,
-and atoms and actors print as tags such as `#<atom 0>` and `#<actor 102>`.
+human-readable output and prints strings bare. Functions you define print
+as `#<fn>` and built-in functions with their name, such as
+`#<fn println>`; atoms and actors print as tags such as `#<atom 0>` and
+`#<actor 102>`.
 
 `(pprint x)` for pretty-printing nested data is planned (a minimal
 one-pass printer first, the full `clojure.pprint` in v0.2).

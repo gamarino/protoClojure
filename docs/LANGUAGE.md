@@ -190,8 +190,9 @@ every depth (`(println "a" ["b"])` prints `a [b]`) and prints `nil` as
 `nil`; the REPL uses the readable mode.
 
 A reference type renders as a tag: `(str (atom 1))` is `"#<atom 1>"`,
-likewise `#<future ...>`, `#<promise ...>`, `#<actor ...>` and `#<fn>`
-(JVM Clojure renders `#object[clojure.lang.Atom 0x... {:status :ready, :val 1}]`;
+likewise `#<future ...>`, `#<promise ...>`, `#<actor ...>` and `#<fn>`;
+a built-in function renders with its name, `(str println)` being
+`"#<fn println>"` (JVM Clojure renders `#object[clojure.lang.Atom 0x... {:status :ready, :val 1}]`;
 deviation D20 in `STATUS.md`). The value inside the tag is printed in the
 same mode as the tag.
 
