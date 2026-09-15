@@ -123,10 +123,36 @@ and metadata are rejected with a "reserved-for-later token" error.
 Every reader output is a protoCore object. In the implementation, a
 list is a `ProtoList`, a vector is a `ProtoTuple`, and a map literal is a
 map-marker child holding its entries as a source-order `ProtoList`. The
-compiler turns that literal into a `hash-map` call; the runtime map it
-builds keeps insertion order with two `ProtoSparseList`s: keys indexed by
-a per-map sequence number, and a hash index holding each key's value and
-sequence number (`src/runtime/MapOps.h`). Symbols are interned
+compiler turns that literal into a `hash-map` call. The runtime map it builds
+is an immutable `ProtoSparseList`, with no wrapper object and no mutable
+state (`src/runtime/MapOps.h`):
+
+- **Index.** Each entry is indexed by the address of its key's canonical
+  key, and it holds a two-element `ProtoList` of the original key and the
+  value.
+- **Canonical keys.** Every key is canonicalized so that equal keys share
+  one pointer:
+  - SmallIntegers, booleans, `nil`, keywords, symbols and other objects
+    stand for themselves;
+  - strings become protoCore symbols;
+  - lists and vectors become the tuple of their elements' canonical keys
+    (protoCore interns every tuple);
+  - doubles, big integers and maps become tuples headed by one of three
+    private marker objects: the double's 64-bit pattern, the big integer's
+    sign and 52-bit limbs, or the map's canonical entries.
+- **Private markers.** The markers are immutable children of
+  `objectPrototype`, rooted with the runtime markers and never keywords. No
+  user vector can equal a marker tuple, and canonical keys never reach user
+  code.
+- **Costs.** `count` is `getSize`; `get` is a `getAt` after
+  canonicalization; `assoc` and `dissoc` are `setAt` and `removeAt`.
+- **Order and equality.** Walks follow the ascending index order, which
+  depends on addresses, so iteration order is unspecified and varies between
+  runs. Map `=` walks one map and probes the other by index.
+- **Memory.** Interned symbols and tuples are never freed, so canonical keys
+  stay alive until the program ends.
+
+The user-facing rules are in `LANGUAGE.md` §4.3. Symbols are interned
 `ProtoString`s.
 
 The reader is the place where "code is data" becomes literal: the result

@@ -49,10 +49,10 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (279 fixtures under
+- **Tests.** A glob-discovered conformance suite (289 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
   the bytecode module, the runtime map, value equality and hashing, the
-  native stack guard and the double printer (82 tests), and five CLI checks (`--help`, a
+  native stack guard and the double printer (86 tests), and five CLI checks (`--help`, a
   generated program with 70,000 distinct literals of each kind, a
   stack overflow in the REPL, globals bound to nil in the REPL, and
   deeply nested source).
@@ -104,13 +104,37 @@ The project has no tagged releases yet; the version declared in
   positionals, in order, with the last duplicate winning, so keywords passed
   to its positional parameters (`(f :p 1 :x 10)` for `[a b & {:keys [x]}]`)
   no longer raise an arity error.
-- Maps keep insertion order at every size. Iteration order used to be the
-  ascending order of key hashes, so after protoCore switched string hashing
-  to FNV-1a `{:a 1 :b 2 :c 3}` printed as `{:a 1, :c 3, :b 2}` and three
-  conformance fixtures failed. `assoc` of an existing key keeps its position,
-  `remove-watch` keeps the order of the remaining watches, and `keys`, `vals`,
-  printing, `:as` maps, watches and `actor-stats` all follow insertion order.
-  All map operations now live in `src/runtime/MapOps.{h,cpp}`.
+- Maps are immutable protoCore `ProtoSparseList`s indexed by canonical keys.
+  A map used to be a mutable wrapper object around two sparse lists (an
+  insertion-order store and a hash index with collision buckets). Every map
+  version registered permanently in protoCore's mutables tree, iteration
+  looked each key up again, and the insertion order was a guarantee
+  Clojure does not make.
+  - A map is now the sparse list itself, indexed by the address of each
+    key's interned canonical key and holding the original key and the
+    value. `count` is O(1).
+  - Iteration and print order are unspecified and can change between runs.
+  - `assoc` of an equal key keeps the stored key object and replaces the
+    value, returning the same map for an identical value.
+  - Watches fire in unspecified order, as on the JVM.
+  - Canonical keys:
+    - strings are interned symbols, so a string built at run time finds a
+      literal key;
+    - a list and a vector with equal elements are one key;
+    - a map key is matched by its entries;
+    - doubles match by bit pattern: `-0.0` and `0.0` are different keys, and
+      `##NaN` finds itself (deviation D22);
+    - big integers match by exact value;
+    - numbers of different types are different keys, as in JVM Clojure,
+      although `(= 1 1.0)` stays `true` (deviation D15), so
+      `(= {1 :a} {1.0 :a})` is now `false`;
+    - doubles, big integers and maps are keyed by tuples headed by private
+      marker objects, so no user vector collides with them.
+  - Canonical keys are interned and stay in memory until the program ends
+    (deviation D23).
+  - The map value hash (`valueHash`) and the `__map__` state attribute are
+    removed.
+  - All map operations live in `src/runtime/MapOps.{h,cpp}`.
 - `=` compares maps by value. `(= {:a 1 :b 2} {:b 2 :a 1})` returned `false`:
   the `EQ` opcode compared maps by identity, and the `=` primitive (used with
   more than two arguments or as a function value) accepted only numbers. Both
@@ -125,15 +149,10 @@ The project has no tagged releases yet; the version declared in
   whatever their concrete types, so `(= [1 2] (list 1 2))` and
   `(= [] (list))` are `true`. Nested collections compare recursively, and a
   sequential collection is never equal to a map, a string or `nil`.
-- Map keys are hashed by value. A map or a list used as a map key was hashed
-  and matched by identity, so `(get {{:a 1} :x} {:a 1})` returned `nil`, and
-  an integer key was not found with an equal float although `(= 1 1.0)` is
-  `true`. Keys are now hashed with a value hash consistent with `=` and
-  matched with `=`: maps hash independently of insertion order, lists and
-  vectors share one order-dependent hash, and numbers hash by value modulo
-  2^61 − 1 across SmallInteger, LargeInteger and double. Keys that are `=`
-  are one key (`(hash-map 1 :a 1.0 :b)` is `{1 :b}`), and maps whose keys
-  are collections compare by value.
+- Map keys match by value. A map or a list used as a map key was matched by
+  identity, so `(get {{:a 1} :x} {:a 1})` returned `nil`. Keys now match
+  through their canonical keys (see the map representation entry above), and
+  maps whose keys are collections compare by value.
 - A keyword is no longer `=` to the string of its spelling. `(= :a ":a")`
   returned `true`, `(get {:a 1} ":a")` returned `1`, `(hash-map :a 1 ":a" 2)`
   held one entry, `(string? :a)` returned `true`, and a quoted symbol was
@@ -319,8 +338,8 @@ The project has no tagged releases yet; the version declared in
 - Comparisons follow IEEE 754 for NaN. protoCore's numeric compare reports
   NaN equal to every number, so `(<= ##NaN 1)`, `(>= ##NaN 1)`, `(= ##NaN 1)`
   and `(= ##NaN ##NaN)` were `true`, and a NaN map key was found with `0`,
-  `0.0` or any other NaN. The ordering opcodes and `=` (which map keys share)
-  now use protoCore's `partialCompare`: every ordering and `=` with a NaN is
+  `0.0` or any other NaN. The ordering opcodes and `=` now use protoCore's
+  `partialCompare`: every ordering and `=` with a NaN is
   `false`, `not=` is `true`, and a NaN is `=` only to the identical object,
   as in JVM Clojure. Numbers still compare exactly across integer and float
   representations, and `-0.0` is still `=` to `0.0`.

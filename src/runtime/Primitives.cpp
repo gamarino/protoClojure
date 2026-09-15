@@ -130,8 +130,9 @@ const proto::ProtoObject* promiseValue(proto::ProtoContext* ctx,
     return box ? box->asList(ctx)->getAt(ctx, 0) : nullptr;
 }
 
-inline MapLayout mapLayoutOf(const ActiveCallContext* cc) {
-    return MapLayout{cc->mapMarkerProto, cc->mapStateKey};
+// The canonical-key markers maps are built with (MapOps.h).
+inline const MapKeyMarkers& mapKeysOf(const ActiveCallContext* cc) {
+    return cc->mapKeys;
 }
 
 // The name a built-in function is installed under, or nullptr when `fn` is
@@ -168,8 +169,8 @@ void appendReadableString(std::string& out, const std::string& bytes) {
 //     `print`), or quoted and escaped when it is true (Clojure's `pr`); the
 //     mode applies at every depth;
 //   - keywords and symbols as their spelling;
-//   - lists `(1 2)`, vectors `[1 2]` and maps `{:a 1, :b 2}` (insertion
-//     order), recursively;
+//   - lists `(1 2)`, vectors `[1 2]` and maps `{:a 1, :b 2}` (each entry's
+//     original key, in the map's unspecified walk order), recursively;
 //   - atoms `#<atom 1>`, futures `#<future 1>` / `#<future pending>`,
 //     promises `#<promise 1>` / `#<promise pending>`, actors `#<actor 1>`
 //     (the current state, printed in the same mode), user fns `#<fn>` and
@@ -231,6 +232,25 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
         out += ']';
         return;
     }
+    // A map, `{k v, k v}`: each entry's original key, in the map's
+    // unspecified walk order (MapOps.h).
+    if (isMap(v)) {
+        out += '{';
+        struct Acc { std::string* out; bool readable; bool first; }
+            acc{&out, readable, true};
+        mapForEach(ctx, v, &acc,
+            [](proto::ProtoContext* c, void* self,
+               const proto::ProtoObject* k, const proto::ProtoObject* val) {
+                auto* a = static_cast<Acc*>(self);
+                if (!a->first) *a->out += ", ";
+                a->first = false;
+                printTo(c, *a->out, k, a->readable);
+                *a->out += ' ';
+                printTo(c, *a->out, val, a->readable);
+            });
+        out += '}';
+        return;
+    }
     if (proto::ProtoObject::isStringTagFast(v)) {
         const std::string bytes =
             reinterpret_cast<const proto::ProtoString*>(v)->toStdString(ctx);
@@ -253,23 +273,6 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
         return;
     }
     const proto::ProtoObject* prototype = v->getPrototype(ctx);
-    if (prototype == cc->mapMarkerProto) {
-        out += '{';
-        struct Acc { std::string* out; bool readable; bool first; }
-            acc{&out, readable, true};
-        mapForEach(ctx, mapLayoutOf(cc), v, &acc,
-            [](proto::ProtoContext* c, void* self,
-               const proto::ProtoObject* k, const proto::ProtoObject* val) {
-                auto* a = static_cast<Acc*>(self);
-                if (!a->first) *a->out += ", ";
-                a->first = false;
-                printTo(c, *a->out, k, a->readable);
-                *a->out += ' ';
-                printTo(c, *a->out, val, a->readable);
-            });
-        out += '}';
-        return;
-    }
     if (prototype == cc->atomMarkerProto) {
         const proto::ProtoObject* inner = v->getAttribute(ctx, cc->valueKey);
         out += "#<atom ";
@@ -584,11 +587,8 @@ const proto::ProtoObject* prim_eq(proto::ProtoContext* ctx,
     // variadic =. The 0- and 1-argument forms are true.
     unsigned long n = args ? args->getSize(ctx) : 0;
     if (n < 2) return PROTO_TRUE;
-    const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("=: no active VM context");
-    const MapLayout layout = mapLayoutOf(cc);
     for (unsigned long i = 1; i < n; ++i) {
-        if (!valuesEqual(ctx, layout, args->getAt(ctx, static_cast<int>(i - 1)),
+        if (!valuesEqual(ctx, args->getAt(ctx, static_cast<int>(i - 1)),
                          args->getAt(ctx, static_cast<int>(i))))
             return PROTO_FALSE;
     }
@@ -806,12 +806,11 @@ const proto::ProtoObject* prim_list_p(proto::ProtoContext* ctx,
     return (v && isListTag(v)) ? PROTO_TRUE : PROTO_FALSE;
 }
 
-// Session 13 — map primitives. The representation (insertion-ordered
-// entries plus a hash index), its cost model and its GC-rooting rules
-// live in src/runtime/MapOps.h; the primitives below only validate
-// arguments and delegate. Keys are hashed with valueHash and matched with
-// valuesEqual, so keys match by value. Map equality under `=` is mapEquals,
-// reached through valuesEqual.
+// Session 13 — map primitives. The representation (a ProtoSparseList
+// indexed by canonical keys), its cost model and its GC-rooting rules live
+// in src/runtime/MapOps.h; the primitives below only validate arguments and
+// delegate. Keys match by canonical key; map equality under `=` is
+// mapEquals, reached through valuesEqual.
 
 const proto::ProtoObject* prim_map_p(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
@@ -820,11 +819,7 @@ const proto::ProtoObject* prim_map_p(proto::ProtoContext* ctx,
                                      const proto::ProtoSparseList*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("map?: expects 1 arg");
-    const proto::ProtoObject* v = args->getAt(ctx, 0);
-    const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("map?: no active VM context");
-    if (!v) return PROTO_FALSE;
-    return (v->getPrototype(ctx) == cc->mapMarkerProto) ? PROTO_TRUE : PROTO_FALSE;
+    return isMap(args->getAt(ctx, 0)) ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // Also the target of every `{...}` literal, whose entries the compiler
@@ -839,7 +834,7 @@ const proto::ProtoObject* prim_hash_map(proto::ProtoContext* ctx,
         throw std::runtime_error("hash-map: needs an even number of args");
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("hash-map: no active VM context");
-    return mapAssocPairs(ctx, mapLayoutOf(cc), nullptr, args, 0, n);
+    return mapAssocPairs(ctx, mapKeysOf(cc), nullptr, args, 0, n);
 }
 
 const proto::ProtoObject* prim_assoc(proto::ProtoContext* ctx,
@@ -853,9 +848,9 @@ const proto::ProtoObject* prim_assoc(proto::ProtoContext* ctx,
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("assoc: no active VM context");
     const proto::ProtoObject* m = args->getAt(ctx, 0);
-    if (!isMap(ctx, mapLayoutOf(cc), m))
+    if (!isMap(m))
         throw std::runtime_error("assoc: first arg must be a map");
-    return mapAssocPairs(ctx, mapLayoutOf(cc), m, args, 1, n - 1);
+    return mapAssocPairs(ctx, mapKeysOf(cc), m, args, 1, n - 1);
 }
 
 // (dissoc m) / (dissoc m k & ks) — `m` without the given keys, matched by
@@ -874,7 +869,7 @@ const proto::ProtoObject* prim_dissoc(proto::ProtoContext* ctx,
     if (!cc) throw std::runtime_error("dissoc: no active VM context");
     const proto::ProtoObject* m = args->getAt(ctx, 0);
     if (!m || m == PROTO_NONE) return PROTO_NONE;
-    if (!isMap(ctx, mapLayoutOf(cc), m)) {
+    if (!isMap(m)) {
         throw std::runtime_error(std::string("ClassCastException: dissoc expects a map, got ") +
                                  valueTypeName(ctx, m));
     }
@@ -885,7 +880,7 @@ const proto::ProtoObject* prim_dissoc(proto::ProtoContext* ctx,
     scope.setAutomaticLocal(0, m);
     for (unsigned long i = 1; i < n; ++i) {
         scope.setAutomaticLocal(0,
-            mapDissoc(&scope, mapLayoutOf(cc), scope.getAutomaticLocal(0),
+            mapDissoc(&scope, mapKeysOf(cc), scope.getAutomaticLocal(0),
                       args->getAt(&scope, static_cast<int>(i))));
     }
     return scope.getAutomaticLocal(0);
@@ -904,9 +899,9 @@ const proto::ProtoObject* prim_get(proto::ProtoContext* ctx,
     const proto::ProtoObject* m = args->getAt(ctx, 0);
     const proto::ProtoObject* k = args->getAt(ctx, 1);
     const proto::ProtoObject* nf = (n == 3) ? args->getAt(ctx, 2) : PROTO_NONE;
-    if (!isMap(ctx, mapLayoutOf(cc), m)) return nf;
+    if (!isMap(m)) return nf;
     bool found = false;
-    const proto::ProtoObject* v = mapGet(ctx, mapLayoutOf(cc), m, k, &found);
+    const proto::ProtoObject* v = mapGet(ctx, mapKeysOf(cc), m, k, &found);
     return found ? v : nf;
 }
 
@@ -921,26 +916,27 @@ const proto::ProtoObject* prim_contains_p(proto::ProtoContext* ctx,
     if (!cc) throw std::runtime_error("contains?: no active VM context");
     const proto::ProtoObject* m = args->getAt(ctx, 0);
     const proto::ProtoObject* k = args->getAt(ctx, 1);
-    if (!isMap(ctx, mapLayoutOf(cc), m)) return PROTO_FALSE;
+    if (!isMap(m)) return PROTO_FALSE;
     bool found = false;
-    mapGet(ctx, mapLayoutOf(cc), m, k, &found);
+    mapGet(ctx, mapKeysOf(cc), m, k, &found);
     return found ? PROTO_TRUE : PROTO_FALSE;
 }
 
-// Return a fresh ProtoList of the keys or the values of `m`, in insertion
-// order. The list under construction lives in an automatic local (P1).
+// Return a fresh ProtoList of the original keys or of the values of `m`, in
+// the map's unspecified walk order, which is the same for keys and vals of
+// one map value. The list under construction lives in an automatic local
+// (P1).
 static const proto::ProtoObject* mapWalk(proto::ProtoContext* ctx,
-                                         const ActiveCallContext* cc,
                                          const proto::ProtoObject* m,
                                          bool wantValues) {
-    if (!isMap(ctx, mapLayoutOf(cc), m))
+    if (!isMap(m))
         return ctx->newList()->asObject(ctx);
     proto::ProtoContext scope(ctx->space, ctx);
     scope.resizeAutomaticLocals(1);
     scope.setAutomaticLocal(0, scope.newList()->asObject(&scope));
     struct Acc { proto::ProtoContext* scope; bool wantValues; }
         acc{&scope, wantValues};
-    mapForEach(&scope, mapLayoutOf(cc), m, &acc,
+    mapForEach(&scope, m, &acc,
         [](proto::ProtoContext* c, void* self,
            const proto::ProtoObject* k, const proto::ProtoObject* v) {
             auto* a = static_cast<Acc*>(self);
@@ -961,7 +957,7 @@ const proto::ProtoObject* prim_keys(proto::ProtoContext* ctx,
         throw std::runtime_error("keys: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("keys: no active VM context");
-    return mapWalk(ctx, cc, args->getAt(ctx, 0), /*wantValues=*/false);
+    return mapWalk(ctx, args->getAt(ctx, 0), /*wantValues=*/false);
 }
 
 const proto::ProtoObject* prim_vals(proto::ProtoContext* ctx,
@@ -973,7 +969,7 @@ const proto::ProtoObject* prim_vals(proto::ProtoContext* ctx,
         throw std::runtime_error("vals: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("vals: no active VM context");
-    return mapWalk(ctx, cc, args->getAt(ctx, 0), /*wantValues=*/true);
+    return mapWalk(ctx, args->getAt(ctx, 0), /*wantValues=*/true);
 }
 
 const proto::ProtoObject* prim_first(proto::ProtoContext* ctx,
@@ -1038,13 +1034,8 @@ const proto::ProtoObject* prim_count(proto::ProtoContext* ctx,
     if (isStringLike(v)) {
         return ctx->fromLong(static_cast<long long>(asProtoString(v)->getSize(ctx)));
     }
-    // A map: its number of entries, O(1). Only object cells can be maps, so
-    // lists, vectors and strings skip the prototype check.
-    if (isObjectTag(v)) {
-        const ActiveCallContext* cc = activeCallContext();
-        if (cc && isMap(ctx, mapLayoutOf(cc), v))
-            return ctx->fromLong(static_cast<long long>(mapCount(ctx, mapLayoutOf(cc), v)));
-    }
+    // A map: its number of entries, O(1).
+    if (isMap(v)) return ctx->fromLong(static_cast<long long>(mapCount(ctx, v)));
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     return ctx->fromLong(lst ? static_cast<long long>(lst->getSize(ctx)) : 0);
 }
@@ -1061,11 +1052,7 @@ const proto::ProtoObject* prim_empty_p(proto::ProtoContext* ctx,
     if (isStringLike(v)) {
         return asProtoString(v)->getSize(ctx) == 0 ? PROTO_TRUE : PROTO_FALSE;
     }
-    if (isObjectTag(v)) {
-        const ActiveCallContext* cc = activeCallContext();
-        if (cc && isMap(ctx, mapLayoutOf(cc), v))
-            return mapCount(ctx, mapLayoutOf(cc), v) == 0 ? PROTO_TRUE : PROTO_FALSE;
-    }
+    if (isMap(v)) return mapCount(ctx, v) == 0 ? PROTO_TRUE : PROTO_FALSE;
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     return (!lst || lst->getSize(ctx) == 0) ? PROTO_TRUE : PROTO_FALSE;
 }
@@ -1702,15 +1689,15 @@ static void fireWatches(proto::ProtoContext* ctx,
     const proto::ProtoObject* watchesObj =
         atomObj->getAttribute(ctx, cc->watchesKey);
     if (!watchesObj || watchesObj == PROTO_NONE) return;
-    if (!isMap(ctx, mapLayoutOf(cc), watchesObj)) return;
-    // Watches fire in the order they were added (map insertion order).
+    if (!isMap(watchesObj)) return;
+    // Watch order is unspecified, as on the JVM (the map's walk order).
     struct Acc {
         const ActiveCallContext* cc;
         const proto::ProtoObject* atomObj;
         const proto::ProtoObject* oldV;
         const proto::ProtoObject* newV;
     } acc{cc, atomObj, oldV, newV};
-    mapForEach(ctx, mapLayoutOf(cc), watchesObj, &acc,
+    mapForEach(ctx, watchesObj, &acc,
         [](proto::ProtoContext* c, void* self,
            const proto::ProtoObject* k, const proto::ProtoObject* f) {
             auto* a = static_cast<Acc*>(self);
@@ -2339,7 +2326,7 @@ const proto::ProtoObject* prim_actor_stats(proto::ProtoContext* ctx,
         ctx->fromLong(s.numWorkers),
         internNamed(ctx, cc->named, ":messages-processed"),
         ctx->fromLong(static_cast<long long>(s.messagesProcessed))};
-    return mapAssocPairs(ctx, mapLayoutOf(cc), nullptr, kv, 4);
+    return mapAssocPairs(ctx, mapKeysOf(cc), nullptr, kv, 4);
 }
 
 const proto::ProtoObject* prim_deliver(proto::ProtoContext* ctx,
@@ -2404,9 +2391,9 @@ const proto::ProtoObject* prim_add_watch(proto::ProtoContext* ctx,
         const proto::ProtoObject* old =
             a->getOwnAttributeDirect(&scope, cc->watchesKey);
         const proto::ProtoObject* base =
-            isMap(&scope, mapLayoutOf(cc), old) ? old : nullptr;
+            isMap(old) ? old : nullptr;
         scope.setAutomaticLocal(0,
-            mapAssocPairs(&scope, mapLayoutOf(cc), base, kf, 2));
+            mapAssocPairs(&scope, mapKeysOf(cc), base, kf, 2));
         if (a->setAttributeIfEqual(&scope, cc->watchesKey, old,
                                    scope.getAutomaticLocal(0))) break;
     }
@@ -2427,15 +2414,15 @@ const proto::ProtoObject* prim_remove_watch(proto::ProtoContext* ctx,
         throw std::runtime_error("remove-watch: not an atom");
     const proto::ProtoObject* k = args->getAt(ctx, 1);
 
-    // CAS the watches map without `k`. mapDissoc keeps the order of the
-    // remaining watches; `neu` is rooted across the CAS, which allocates.
+    // CAS the watches map without `k`; `neu` is rooted across the CAS, which
+    // allocates.
     proto::ProtoContext scope(ctx->space, ctx);
     scope.resizeAutomaticLocals(1);
     for (;;) {
         const proto::ProtoObject* old =
             a->getOwnAttributeDirect(&scope, cc->watchesKey);
-        if (!isMap(&scope, mapLayoutOf(cc), old)) return a;
-        scope.setAutomaticLocal(0, mapDissoc(&scope, mapLayoutOf(cc), old, k));
+        if (!isMap(old)) return a;
+        scope.setAutomaticLocal(0, mapDissoc(&scope, mapKeysOf(cc), old, k));
         if (scope.getAutomaticLocal(0) == old) return a;   // key absent
         if (a->setAttributeIfEqual(&scope, cc->watchesKey, old,
                                    scope.getAutomaticLocal(0))) break;
@@ -2618,104 +2605,6 @@ SequentialView sequentialView(proto::ProtoContext* ctx,
     return s;
 }
 
-// --- valueHash helpers --------------------------------------------------
-//
-// A number hashes to its value modulo the Mersenne prime 2^61 - 1, the
-// scheme CPython uses for int and float. protoCore compare equates an
-// integer and a double only when they are mathematically equal, and equal
-// values have equal residues, so 1 and 1.0, or 2^70 as a LargeInteger and
-// as a double, hash equally (deviation D15). A negative value hashes to the
-// two's complement of its magnitude's residue.
-
-constexpr unsigned kHashBits = 61;
-constexpr unsigned long long kHashModulus = (1ULL << kHashBits) - 1;
-constexpr unsigned long long kHashInfinity = 314159;
-constexpr unsigned long long kHashNaN = 0;
-constexpr unsigned long long kSequentialSeed = 0x6A09E667F3BCC909ULL;
-constexpr unsigned long long kMapSeed = 0xBB67AE8584CAA73BULL;
-
-// splitmix64 finalizer: a bijective mix used to combine element hashes.
-inline unsigned long long mix64(unsigned long long z) {
-    z ^= z >> 30;
-    z *= 0xBF58476D1CE4E5B9ULL;
-    z ^= z >> 27;
-    z *= 0x94D049BB133111EBULL;
-    return z ^ (z >> 31);
-}
-
-inline unsigned long long withSign(bool negative, unsigned long long residue) {
-    return negative ? 0ULL - residue : residue;
-}
-
-// residue * 2^shift mod (2^61 - 1), for residue < 2^61 and shift < 61.
-inline unsigned long long rotateResidue(unsigned long long residue,
-                                        unsigned shift) {
-    if (shift == 0) return residue;
-    return ((residue << shift) & kHashModulus) |
-           (residue >> (kHashBits - shift));
-}
-
-unsigned long long hashLong(long long v) {
-    const bool negative = v < 0;
-    const unsigned long long magnitude =
-        negative ? 0ULL - static_cast<unsigned long long>(v)
-                 : static_cast<unsigned long long>(v);
-    return withSign(negative, magnitude % kHashModulus);
-}
-
-// Integers beyond the long long range: the residue of the hexadecimal
-// digits. The digit string is protoCore's allocation (made under its own
-// critical section) and is consumed before anything else allocates.
-unsigned long long hashIntegerDigits(proto::ProtoContext* ctx,
-                                     const proto::ProtoObject* v) {
-    const std::string digits = v->asIntegerString(ctx, 16)->toStdString(ctx);
-    bool negative = false;
-    unsigned long long residue = 0;
-    for (char c : digits) {
-        if (c == '-') { negative = true; continue; }
-        const unsigned long long digit = (c >= '0' && c <= '9')
-            ? static_cast<unsigned long long>(c - '0')
-            : static_cast<unsigned long long>(c - 'a' + 10);
-        residue = rotateResidue(residue, 4) + digit;
-        if (residue >= kHashModulus) residue -= kHashModulus;
-    }
-    return withSign(negative, residue);
-}
-
-unsigned long long hashInteger(proto::ProtoContext* ctx,
-                               const proto::ProtoObject* v) {
-    try {
-        return hashLong(v->asLong(ctx));
-    } catch (const std::overflow_error&) {
-        return hashIntegerDigits(ctx, v);
-    }
-}
-
-// The residue of mantissa * 2^exponent, taking the mantissa 28 bits at a
-// time; 2^61 = 1 (mod 2^61 - 1), so the exponent only rotates the residue.
-unsigned long long hashDouble(double v) {
-    if (std::isnan(v)) return kHashNaN;
-    if (std::isinf(v)) return withSign(v < 0, kHashInfinity);
-    int exponent = 0;
-    double mantissa = std::frexp(v, &exponent);
-    const bool negative = mantissa < 0;
-    if (negative) mantissa = -mantissa;
-    unsigned long long residue = 0;
-    while (mantissa != 0.0) {
-        residue = rotateResidue(residue, 28);
-        mantissa *= 268435456.0;  // 2^28
-        exponent -= 28;
-        const auto chunk = static_cast<unsigned long long>(mantissa);
-        mantissa -= static_cast<double>(chunk);
-        residue += chunk;
-        if (residue >= kHashModulus) residue -= kHashModulus;
-    }
-    const int bits = static_cast<int>(kHashBits);
-    const int shift = exponent >= 0 ? exponent % bits
-                                    : bits - 1 - ((-1 - exponent) % bits);
-    return withSign(negative, rotateResidue(residue, static_cast<unsigned>(shift)));
-}
-
 } // namespace
 
 const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
@@ -2726,6 +2615,7 @@ const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v)
     if (proto::ProtoObject::isStringTagFast(v)) return "a string";
     if (isListTag(v))                       return "a list";
     if (v->isTuple(ctx))                    return "a vector";
+    if (isMap(v))                           return "a map";
     if (v->isMethod(ctx))                   return "a fn";
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) return "an object";
@@ -2736,7 +2626,6 @@ const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v)
         return (!spelling.empty() && spelling[0] == ':') ? "a keyword" : "a symbol";
     }
     const proto::ProtoObject* prototype = v->getPrototype(ctx);
-    if (prototype == cc->mapMarkerProto)     return "a map";
     if (prototype == cc->atomMarkerProto)    return "an atom";
     if (prototype == cc->futureMarkerProto)  return "a future";
     if (prototype == cc->promiseMarkerProto) return "a promise";
@@ -2832,7 +2721,7 @@ std::string formatDouble(double d) {
 
 // Externally-visible value equality, declared in Primitives.h; shared by
 // `=` / `not=` and the VM's EQ opcode.
-bool valuesEqual(proto::ProtoContext* ctx, const MapLayout& layout,
+bool valuesEqual(proto::ProtoContext* ctx,
                  const proto::ProtoObject* a, const proto::ProtoObject* b) {
     if (!a) a = PROTO_NONE;
     if (!b) b = PROTO_NONE;
@@ -2840,16 +2729,15 @@ bool valuesEqual(proto::ProtoContext* ctx, const MapLayout& layout,
     // Recurses once per level of nesting (StackGuard.h).
     checkNativeStack();
 
-    const bool aMap = isMap(ctx, layout, a);
-    const bool bMap = isMap(ctx, layout, b);
+    // Maps: the same canonical keys, with `=` values (MapOps.h).
+    const bool aMap = isMap(a);
+    const bool bMap = isMap(b);
     if (aMap || bMap) {
         return aMap && bMap &&
-            mapEquals(ctx, layout, a, b,
-                const_cast<void*>(static_cast<const void*>(&layout)),
-                [](proto::ProtoContext* c, void* self,
+            mapEquals(ctx, a, b, nullptr,
+                [](proto::ProtoContext* c, void*,
                    const proto::ProtoObject* x, const proto::ProtoObject* y) {
-                    return valuesEqual(c, *static_cast<const MapLayout*>(self),
-                                       x, y);
+                    return valuesEqual(c, x, y);
                 });
     }
 
@@ -2871,7 +2759,7 @@ bool valuesEqual(proto::ProtoContext* ctx, const MapLayout& layout,
         const unsigned long n = sa.size(ctx);
         if (n != sb.size(ctx)) return false;
         for (unsigned long i = 0; i < n; ++i) {
-            if (!valuesEqual(ctx, layout, sa.at(ctx, i), sb.at(ctx, i)))
+            if (!valuesEqual(ctx, sa.at(ctx, i), sb.at(ctx, i)))
                 return false;
         }
         return true;
@@ -2882,55 +2770,6 @@ bool valuesEqual(proto::ProtoContext* ctx, const MapLayout& layout,
     // NaN object `=` to itself, as JVM Clojure's Util.equiv does); strings by
     // content; any other pair only when identical.
     return a->partialCompare(ctx, b) == 0;
-}
-
-// Externally-visible value hash, declared in Primitives.h; the key hash of
-// every map. Its categories mirror valuesEqual's.
-unsigned long valueHash(proto::ProtoContext* ctx, const MapLayout& layout,
-                        const proto::ProtoObject* v) {
-    if (!v) v = PROTO_NONE;
-    if (v->isInteger(ctx)) return hashInteger(ctx, v);
-    if (v->isDouble(ctx))  return hashDouble(v->asDouble(ctx));
-    if (proto::ProtoObject::isStringTagFast(v)) return v->getHash(ctx);
-    // Recurses once per level of nesting (StackGuard.h).
-    checkNativeStack();
-
-    if (isMap(ctx, layout, v)) {
-        // Order-independent: a sum of per-entry mixes. The key hashes are
-        // the ones stored in the map's hash index (valueHash of each key).
-        struct Acc {
-            const MapLayout*   layout;
-            unsigned long long sum;
-            unsigned long long count;
-        } acc{&layout, 0, 0};
-        mapForEachHashedEntry(ctx, layout, v, &acc,
-            [](proto::ProtoContext* c, void* self, unsigned long keyHash,
-               const proto::ProtoObject* value) {
-                auto* a = static_cast<Acc*>(self);
-                a->sum += mix64(keyHash ^ mix64(valueHash(c, *a->layout, value)));
-                ++a->count;
-            });
-        return mix64(acc.sum ^ mix64(kMapSeed + acc.count));
-    }
-
-    // Any other object is equal only to itself (valuesEqual): hash its
-    // address, without the `__data__` probes of protoCore getHash.
-    if (isObjectTag(v)) return mix64(reinterpret_cast<uintptr_t>(v));
-
-    // Lists and vectors share one order-dependent combination, so equal
-    // sequential collections hash equally whatever their concrete types.
-    const SequentialView s = sequentialView(ctx, v);
-    if (s) {
-        const unsigned long n = s.size(ctx);
-        unsigned long long h = kSequentialSeed;
-        for (unsigned long i = 0; i < n; ++i)
-            h = mix64(h + valueHash(ctx, layout, s.at(ctx, i)));
-        return mix64(h ^ n);
-    }
-
-    // nil, booleans and primitive functions: protoCore's identity-based
-    // hash, matching the identity comparison valuesEqual falls back to.
-    return v->getHash(ctx);
 }
 
 void installPrimitives(proto::ProtoContext* ctx,

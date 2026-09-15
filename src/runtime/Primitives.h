@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include "MapOps.h"
 #include "Named.h"
 
 #include <cstdio>
@@ -30,11 +31,11 @@ class ProtoList;
 namespace protoClojure {
 
 class ExecutionEngine;
-struct MapLayout;
 
 // Value equality as `=` defines it, shared by the `=` / `not=` primitives
-// and the VM's EQ opcode. Maps are equal when they hold the same keys mapped
-// to equal values, whatever the insertion order (mapEquals). Sequential
+// and the VM's EQ opcode. Maps are equal when they have the same number of
+// entries and every key of one has an entry in the other under the same
+// canonical key (MapOps.h) with an equal value (mapEquals). Sequential
 // collections — lists and vectors, and so every sequence the runtime
 // produces — are equal when they hold equal elements in the same order,
 // whatever their concrete types: `[1 2]` equals `(1 2)` and `[]` equals
@@ -51,38 +52,8 @@ struct MapLayout;
 //
 // Cost: one pass over the elements of a sequential pair, stopping at the
 // first mismatch; each element is read by index in O(log n).
-bool valuesEqual(proto::ProtoContext* ctx, const MapLayout& layout,
+bool valuesEqual(proto::ProtoContext* ctx,
                  const proto::ProtoObject* a, const proto::ProtoObject* b);
-
-// Value hash consistent with valuesEqual, used by MapOps as the hash of
-// every map key: valuesEqual(a, b) implies valueHash(a) == valueHash(b).
-//
-//   - Numbers hash to their value modulo 2^61 - 1 (the CPython scheme), so
-//     equal numbers hash equally whatever their representation — SmallInteger,
-//     LargeInteger or double (deviation D15): 1 and 1.0, or 2^70 as a
-//     LargeInteger and as a double; -0.0 hashes like 0. The infinities hash to
-//     fixed values.
-//   - NaN hashes to 0. It is equal only to the identical object, so any
-//     fixed hash is consistent; as a map key it is matched only by that
-//     object.
-//   - Strings use protoCore's content hash.
-//   - Maps combine a mix of each entry's key hash and value hash with a sum,
-//     so the hash ignores insertion order.
-//   - Lists and vectors share one order-dependent combination of their
-//     element hashes, so `[1 2]` and `(1 2)` hash equally.
-//   - Every other object (keywords, symbols, atoms, functions, ...) hashes
-//     its address, and nil and booleans use protoCore's identity-based
-//     hash, matching identity equality; for keywords and symbols, interning
-//     makes identity equivalent to equality of spelling.
-//
-// Collections hash recursively. Nothing is cached: a collection is hashed
-// in full on every call — O(1) for numbers in the long long range, strings
-// and keywords; linear in the number of nested elements for collections
-// (list and vector elements are read by index in O(log n)). An integer
-// beyond the long long range renders its digits, which allocates; `v` must
-// be rooted by the caller. nullptr is nil.
-unsigned long valueHash(proto::ProtoContext* ctx, const MapLayout& layout,
-                        const proto::ProtoObject* v);
 
 // Install all v0.0.x primitives on the supplied globals object. The globals
 // object must be a mutable protoCore object (typically a child of
@@ -152,10 +123,6 @@ struct ActiveCallContext {
     // arity-shape on every single-arity call.
     const proto::ProtoObject*  fnSingleProto;
     const proto::ProtoObject*  fnMultiProto;
-    // Session 13 — map runtime values are children of mapMarkerProto
-    // carrying their state under mapStateKey. Only src/runtime/MapOps
-    // reads or writes that state (layout documented in MapOps.h).
-    const proto::ProtoObject*  mapMarkerProto;
     // Session 16 — atomMarkerProto identifies atoms; valueKey stores
     // the current value as an attribute. swap! / reset! mutate via
     // setAttribute / setAttributeIfEqual on the receiver atom.
@@ -182,7 +149,6 @@ struct ActiveCallContext {
     const proto::ProtoString*  arityKey;
     const proto::ProtoString*  capturesKey;
     const proto::ProtoString*  aritiesKey;       // multi-arity dispatch list
-    const proto::ProtoString*  mapStateKey;      // map state (MapOps.h)
     const proto::ProtoString*  valueKey;         // atom value
     const proto::ProtoString*  watchesKey;       // atom watches
     // Session 17 keys.
@@ -193,6 +159,9 @@ struct ActiveCallContext {
     const proto::ProtoString*  doneKey;
     // Session 19.
     const proto::ProtoString*  actorStateKey;
+    // The private markers of canonical map keys. A map is a protoCore sparse
+    // list recognised by its pointer tag (MapOps.h).
+    MapKeyMarkers              mapKeys;
     // Keyword and symbol values (Named.h).
     NamedLayout                named;
 };

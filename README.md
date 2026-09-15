@@ -65,7 +65,7 @@ Multi-arity, variadic, the higher-order pipeline:
 (println (my-reduce + 100 (list 1 2 3)))   ;; => 106
 ```
 
-The 279 conformance fixtures under `tests/conformance/` are the executable reference for what the language accepts today.
+The 289 conformance fixtures under `tests/conformance/` are the executable reference for what the language accepts today.
 
 ## Concurrency — atoms, futures, actors
 
@@ -197,7 +197,7 @@ protoClojure runs scripts and an interactive REPL. Version 0.0.1; no tagged rele
 | Namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **366 test cases: 279 conformance fixtures, 82 unit tests** (lexer, reader, bytecode module, runtime map, value equality and hashing, native stack guard, double printer) **and 5 CLI checks** (`--help`, a generated program with 70,000 distinct literals of each kind, a stack overflow in the REPL, nil-valued globals in the REPL, and deeply nested source). All of them pass. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **380 test cases: 289 conformance fixtures, 86 unit tests** (lexer, reader, bytecode module, runtime map, value equality and hashing, native stack guard, double printer) **and 5 CLI checks** (`--help`, a generated program with 70,000 distinct literals of each kind, a stack overflow in the REPL, nil-valued globals in the REPL, and deeply nested source). All of them pass. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 
@@ -210,7 +210,7 @@ What is implemented:
   - lists and vectors: `list vector vec nth first rest cons count empty? reverse`
   - higher-order: `map filter reduce pmap`
   - predicates: `nil? not vector? list? map? string?`
-  - maps: `hash-map assoc dissoc get contains? keys vals`, and `count` / `empty?` on maps (keys are hashed and matched by value, so a map or vector key is found with an equal map, vector or list)
+  - maps: `hash-map assoc dissoc get contains? keys vals`, and `count` / `empty?` on maps. A map is an immutable protoCore `ProtoSparseList` indexed by interned canonical keys: keys match by value (a map or vector key is found with an equal map, vector or list, a string key with an equal string built at run time), numbers of different types are different keys, iteration order is unspecified, and keys stay in memory until the program ends ([LANGUAGE.md §4.3](docs/LANGUAGE.md))
   - strings: `subs upper-case lower-case starts-with? ends-with? includes? index-of replace join split trim triml trimr blank?`
   - atoms and watches: `atom atom? deref reset! swap! compare-and-set! add-watch remove-watch`
   - futures and promises: `make-future future? realized? promise promise? deliver`
@@ -243,7 +243,7 @@ cmake --build build_release
 ./build_release/protoclj script.clj          # run a .clj file
 ./build_release/protoclj --version           # version
 
-ctest --test-dir build_release -j1           # 366 cases: 279 fixtures + 82 unit tests + 5 CLI checks
+ctest --test-dir build_release -j1           # 380 cases: 289 fixtures + 86 unit tests + 5 CLI checks
 ./benchmarks/bench.sh                        # benchmark against Babashka
 ./benchmarks/actor-bench.sh                  # actor throughput, varied worker counts
 ```

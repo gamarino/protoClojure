@@ -156,7 +156,7 @@ struct Session {
     const proto::ProtoString* aritiesKey;
     const proto::ProtoString* itemsKey;
     const proto::ProtoString* entriesKey;     // Reader map-literal entries
-    const proto::ProtoString* mapStateKey;    // runtime map state (MapOps.h)
+    MapKeyMarkers             mapKeys;        // canonical-key markers (MapOps.h)
     const proto::ProtoString* valueKey;
     const proto::ProtoString* watchesKey;
     const proto::ProtoString* thunkKey;
@@ -194,7 +194,7 @@ struct Session {
 
     Session()
         : ctx(space.rootContext) {
-        ctx->resizeAutomaticLocals(13);
+        ctx->resizeAutomaticLocals(16);
 
         globals = const_cast<proto::ProtoObject*>(
             space.objectPrototype->newChild(ctx, /*isMutable=*/true));
@@ -232,6 +232,15 @@ struct Session {
         ctx->setAutomaticLocal(11, named.marker);
         named.table = space.objectPrototype->newChild(ctx, true);
         ctx->setAutomaticLocal(12, named.table);
+
+        // The private first slots of the canonical map keys of doubles, big
+        // integers and maps (MapOps.h): immutable, never keywords.
+        mapKeys.doubleKey = space.objectPrototype->newChild(ctx);
+        ctx->setAutomaticLocal(13, mapKeys.doubleKey);
+        mapKeys.bigIntegerKey = space.objectPrototype->newChild(ctx);
+        ctx->setAutomaticLocal(14, mapKeys.bigIntegerKey);
+        mapKeys.mapKey = space.objectPrototype->newChild(ctx);
+        ctx->setAutomaticLocal(15, mapKeys.mapKey);
         named.spellingKey = proto::ProtoString::createSymbol(ctx, "__spelling__");
 
         bytesKey      = proto::ProtoString::createSymbol(ctx, "__bytes__");
@@ -241,7 +250,6 @@ struct Session {
         aritiesKey    = proto::ProtoString::createSymbol(ctx, "__arities__");
         itemsKey      = proto::ProtoString::createSymbol(ctx, "__items__");
         entriesKey    = proto::ProtoString::createSymbol(ctx, "__entries__");
-        mapStateKey   = proto::ProtoString::createSymbol(ctx, "__map__");
         valueKey      = proto::ProtoString::createSymbol(ctx, "__value__");
         watchesKey    = proto::ProtoString::createSymbol(ctx, "__watches__");
         thunkKey      = proto::ProtoString::createSymbol(ctx, "__thunk__");
@@ -276,12 +284,12 @@ struct Session {
         // instead of `#<unprintable>`.
         printerCc = ActiveCallContext{
             &printerEngine, globals,
-            fnSingleProto, fnMultiProto, mapMarker, atomMarker,
+            fnSingleProto, fnMultiProto, atomMarker,
             futureMarker, promiseMarker, actorMarker,
             bytecodeKey, arityKey, capturesKey, aritiesKey,
-            mapStateKey, valueKey, watchesKey,
+            valueKey, watchesKey,
             thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-            actorStateKey, named};
+            actorStateKey, mapKeys, named};
         setActiveCallContext(printerCc);
     }
 
@@ -329,12 +337,12 @@ struct Session {
         const proto::ProtoObject* result = nullptr;
         try {
             result = eng.run(ctx, mod, globals,
-                fnSingleProto, fnMultiProto, mapMarker, atomMarker,
+                fnSingleProto, fnMultiProto, atomMarker,
                 futureMarker, promiseMarker, actorMarker,
                 bytecodeKey, arityKey, capturesKey, aritiesKey,
-                mapStateKey, valueKey, watchesKey,
+                valueKey, watchesKey,
                 thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-                actorStateKey, named);
+                actorStateKey, mapKeys, named);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "error: %s\n", e.what());
             return false;
@@ -414,12 +422,12 @@ void cmdLoad(Session& s, const std::string& path) {
         ExecutionEngine eng;
         try {
             eng.run(&formsScope, mod, s.globals,
-                s.fnSingleProto, s.fnMultiProto, s.mapMarker, s.atomMarker,
+                s.fnSingleProto, s.fnMultiProto, s.atomMarker,
                 s.futureMarker, s.promiseMarker, s.actorMarker,
                 s.bytecodeKey, s.arityKey, s.capturesKey, s.aritiesKey,
-                s.mapStateKey, s.valueKey, s.watchesKey,
+                s.valueKey, s.watchesKey,
                 s.thunkKey, s.ccBlobKey, s.threadKey, s.resultKey, s.doneKey,
-                s.actorStateKey, s.named);
+                s.actorStateKey, s.mapKeys, s.named);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "%s: runtime error: %s\n",
                          path.c_str(), e.what());

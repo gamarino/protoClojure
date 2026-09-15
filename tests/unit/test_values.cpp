@@ -1,8 +1,9 @@
-// Unit tests for value equality (valuesEqual in src/runtime/Primitives.h).
-// The conformance fixtures under tests/conformance/08-collections and
-// tests/conformance/16-maps cover the Clojure-visible behaviour; these
-// tests exercise collections built directly with protoCore, past the
-// small inline forms of lists and tuples.
+// Unit tests for value equality (valuesEqual in src/runtime/Primitives.h)
+// and its relation to canonical map keys (src/runtime/MapOps.h). The
+// conformance fixtures under tests/conformance/08-collections and
+// tests/conformance/16-maps cover the Clojure-visible behaviour; these tests
+// exercise collections built directly with protoCore, past the small inline
+// forms of lists and tuples.
 
 #include "runtime/MapOps.h"
 #include "runtime/Named.h"
@@ -15,9 +16,8 @@
 #include <cmath>
 #include <cstddef>
 
-using protoClojure::MapLayout;
+using protoClojure::MapKeyMarkers;
 using protoClojure::valueTypeName;
-using protoClojure::valueHash;
 using protoClojure::valuesEqual;
 
 namespace {
@@ -27,11 +27,9 @@ struct ValuesFixture : ::testing::Test {
     proto::ProtoContext* ctx = space.rootContext;
     // Markers are immutable, as in src/main.cpp; the Named intern table is
     // mutated and stays mutable.
-    const proto::ProtoObject* marker =
-        space.objectPrototype->newChild(ctx);
-    const proto::ProtoString* stateKey =
-        proto::ProtoString::createSymbol(ctx, "__map__");
-    MapLayout layout{marker, stateKey};
+    MapKeyMarkers markers{space.objectPrototype->newChild(ctx),
+                          space.objectPrototype->newChild(ctx),
+                          space.objectPrototype->newChild(ctx)};
     protoClojure::NamedLayout named{
         space.objectPrototype->newChild(ctx),
         space.objectPrototype->newChild(ctx, /*isMutable=*/true),
@@ -59,8 +57,13 @@ struct ValuesFixture : ::testing::Test {
     const proto::ProtoObject* tuple(const proto::ProtoList* l) const {
         return ctx->newTupleFromList(l)->asObject(ctx);
     }
+    const proto::ProtoObject* assoc(const proto::ProtoObject* m, const proto::ProtoObject* k,
+                                    const proto::ProtoObject* v) const {
+        const proto::ProtoObject* kv[2] = {k, v};
+        return protoClojure::mapAssocPairs(ctx, markers, m, kv, 2);
+    }
     bool eq(const proto::ProtoObject* a, const proto::ProtoObject* b) const {
-        return valuesEqual(ctx, layout, a, b);
+        return valuesEqual(ctx, a, b);
     }
 };
 
@@ -116,9 +119,7 @@ TEST_F(ValuesFixture, NestedSequentialCollectionsCompareByValue) {
 TEST_F(ValuesFixture, SequentialNeverEqualsMapsStringsOrNumbers) {
     const proto::ProtoObject* pairs = obj(ctx->newList()
         ->appendLast(ctx, kw(":a"))->appendLast(ctx, num(1)));
-    const proto::ProtoObject* kv[2] = {kw(":a"), num(1)};
-    const proto::ProtoObject* m =
-        protoClojure::mapAssocPairs(ctx, layout, nullptr, kv, 2);
+    const proto::ProtoObject* m = assoc(nullptr, kw(":a"), num(1));
     EXPECT_FALSE(eq(pairs, m));
     EXPECT_FALSE(eq(m, tuple(pairs->asList(ctx))));
 
@@ -156,15 +157,15 @@ TEST_F(ValuesFixture, KeywordsAndSymbolsAreInternedAndNeverEqualStrings) {
     const proto::ProtoObject* kv[4] = {
         kw(":a"), num(1), ctx->fromUTF8String(":a"), num(2)};
     const proto::ProtoObject* m =
-        protoClojure::mapAssocPairs(ctx, layout, nullptr, kv, 4);
-    EXPECT_EQ(protoClojure::mapCount(ctx, layout, m), 2u);
+        protoClojure::mapAssocPairs(ctx, markers, nullptr, kv, 4);
+    EXPECT_EQ(protoClojure::mapCount(ctx, m), 2u);
     bool found = false;
-    EXPECT_EQ(protoClojure::mapGet(ctx, layout, m, kw(":a"), &found), num(1));
+    EXPECT_EQ(protoClojure::mapGet(ctx, markers, m, kw(":a"), &found), num(1));
     EXPECT_TRUE(found);
-    EXPECT_EQ(protoClojure::mapGet(ctx, layout, m, ctx->fromUTF8String(":a"), &found),
+    EXPECT_EQ(protoClojure::mapGet(ctx, markers, m, ctx->fromUTF8String(":a"), &found),
               num(2));
     EXPECT_TRUE(found);
-    protoClojure::mapGet(ctx, layout, m, kw("a"), &found);
+    protoClojure::mapGet(ctx, markers, m, kw("a"), &found);
     EXPECT_FALSE(found);
 }
 
@@ -175,47 +176,6 @@ TEST_F(ValuesFixture, SequentialElementsUseNumericCrossTypeEquality) {
         ->appendLast(ctx, ctx->fromDouble(1.0))
         ->appendLast(ctx, ctx->fromDouble(2.0)));
     EXPECT_TRUE(eq(ints, floats));
-}
-
-// --- valueHash ----------------------------------------------------------
-
-TEST_F(ValuesFixture, EqualNumbersHashEquallyAcrossRepresentations) {
-    auto h = [&](const proto::ProtoObject* v) { return valueHash(ctx, layout, v); };
-    auto dbl = [&](double d) { return ctx->fromDouble(d); };
-    const proto::ProtoObject* two35 = num(1LL << 35);
-    const proto::ProtoObject* two70 = two35->multiply(ctx, two35);
-    const proto::ProtoObject* two100 = two70->multiply(ctx, num(1LL << 30));
-    // 3 * 2^80 + 2^30: a LargeInteger whose double mantissa spans several
-    // 28-bit chunks of the hash loop.
-    const proto::ProtoObject* spread =
-        two70->multiply(ctx, num(3 * 1024))->add(ctx, num(1LL << 30));
-    struct Pair { const proto::ProtoObject* a; const proto::ProtoObject* b; };
-    const Pair equalPairs[] = {
-        {num(1), dbl(1.0)},
-        {num(-7), dbl(-7.0)},
-        {num(0), dbl(-0.0)},
-        {num((1LL << 60) + 256), dbl(std::ldexp(1.0, 60) + 256.0)},
-        {num(LLONG_MIN), dbl(-std::ldexp(1.0, 63))},
-        {two70, dbl(std::ldexp(1.0, 70))},
-        {num(0)->subtract(ctx, two70), dbl(-std::ldexp(1.0, 70))},
-        {two100, dbl(std::ldexp(1.0, 100))},
-        {spread, dbl(std::ldexp(3.0, 80) + std::ldexp(1.0, 30))},
-        {dbl(0.1), dbl(0.1)},
-        {dbl(-2.75), dbl(-2.75)},
-        {dbl(1e300), dbl(1e300)},
-        {dbl(HUGE_VAL), dbl(HUGE_VAL)},
-    };
-    for (std::size_t i = 0; i < sizeof(equalPairs) / sizeof(equalPairs[0]); ++i) {
-        ASSERT_TRUE(eq(equalPairs[i].a, equalPairs[i].b)) << "pair " << i;
-        EXPECT_EQ(h(equalPairs[i].a), h(equalPairs[i].b)) << "pair " << i;
-    }
-    // Not required by the contract, but a constant hash would pass the loop
-    // above: distinct values must spread.
-    EXPECT_NE(h(num(1)), h(num(2)));
-    EXPECT_NE(h(num(1)), h(num(-1)));
-    EXPECT_NE(h(two70), h(two70->add(ctx, num(1))));
-    EXPECT_NE(h(dbl(0.5)), h(dbl(0.25)));
-    EXPECT_NE(h(dbl(HUGE_VAL)), h(dbl(-HUGE_VAL)));
 }
 
 TEST_F(ValuesFixture, NaNIsEqualOnlyToItself) {
@@ -233,102 +193,78 @@ TEST_F(ValuesFixture, NaNIsEqualOnlyToItself) {
     EXPECT_FALSE(eq(nan, dbl(-0.0)));
     EXPECT_FALSE(eq(nan, num(1)));
     EXPECT_FALSE(eq(nan, dbl(HUGE_VAL)));
-    // Equal only to itself, a NaN key needs no particular hash; it must just
-    // be stable.
-    EXPECT_EQ(valueHash(ctx, layout, nan), valueHash(ctx, layout, nan));
-    // -0.0 stays equal to 0.0 and to 0, with the same hash.
+    // -0.0 stays equal to 0.0 and to 0.
     EXPECT_TRUE(eq(dbl(-0.0), dbl(0.0)));
     EXPECT_TRUE(eq(dbl(-0.0), num(0)));
-    EXPECT_EQ(valueHash(ctx, layout, dbl(-0.0)), valueHash(ctx, layout, num(0)));
 }
 
-TEST_F(ValuesFixture, SequentialHashIsSharedByListsAndTuplesAndOrdered) {
-    auto h = [&](const proto::ProtoObject* v) { return valueHash(ctx, layout, v); };
-    EXPECT_EQ(h(obj(list(0, 300))), h(tuple(list(0, 300))));
-    EXPECT_EQ(h(obj(ctx->newList())), h(ctx->newTuple()->asObject(ctx)));
-    EXPECT_NE(h(obj(list(1, 2))), h(obj(ctx->newList()
-        ->appendLast(ctx, num(2))->appendLast(ctx, num(1)))));
-    EXPECT_NE(h(obj(list(0, 300))), h(obj(list(0, 299))));
-
-    const proto::ProtoObject* floats = tuple(ctx->newList()
-        ->appendLast(ctx, ctx->fromDouble(1.0))
-        ->appendLast(ctx, ctx->fromDouble(2.0)));
-    EXPECT_EQ(h(obj(list(1, 2))), h(floats));
-}
-
-TEST_F(ValuesFixture, MapHashIgnoresInsertionOrder) {
-    auto h = [&](const proto::ProtoObject* v) { return valueHash(ctx, layout, v); };
-    auto assoc = [&](const proto::ProtoObject* m, const proto::ProtoObject* k,
-                     const proto::ProtoObject* v) {
-        const proto::ProtoObject* kv[2] = {k, v};
-        return protoClojure::mapAssocPairs(ctx, layout, m, kv, 2);
-    };
-    // 200 entries with vector values, inserted in ascending and scrambled
-    // order ((i * 73) % 200 is a permutation of 0..199).
-    const proto::ProtoObject* ascending = nullptr;
-    const proto::ProtoObject* scrambled = nullptr;
-    for (long long i = 0; i < 200; ++i) {
-        long long k = (i * 73) % 200;
-        ascending = assoc(ascending, num(i), tuple(list(i, 2)));
-        scrambled = assoc(scrambled, num(k), obj(list(k, 2)));
-    }
-    ASSERT_TRUE(eq(ascending, scrambled));
-    EXPECT_EQ(h(ascending), h(scrambled));
-    EXPECT_NE(h(ascending), h(assoc(scrambled, num(117), num(0))));
-
-    // Keys and values are not interchangeable: {1 2} and {2 1} differ.
-    EXPECT_NE(h(assoc(nullptr, num(1), num(2))), h(assoc(nullptr, num(2), num(1))));
-    // The empty map built from no pairs and a map emptied by dissoc.
-    const proto::ProtoObject* built = protoClojure::mapAssocPairs(
-        ctx, layout, nullptr, static_cast<const proto::ProtoObject* const*>(nullptr), 0);
-    const proto::ProtoObject* emptied =
-        protoClojure::mapDissoc(ctx, layout, assoc(nullptr, kw(":a"), num(1)), kw(":a"));
-    EXPECT_EQ(h(built), h(emptied));
-}
-
-TEST_F(ValuesFixture, EqualValuesHashEqually) {
-    // Every pair of values in the pool that valuesEqual accepts must hash
-    // equally: numbers of both types, strings and keywords, lists, vectors
-    // and maps, nested.
-    auto assoc = [&](const proto::ProtoObject* m, const proto::ProtoObject* k,
-                     const proto::ProtoObject* v) {
-        const proto::ProtoObject* kv[2] = {k, v};
-        return protoClojure::mapAssocPairs(ctx, layout, m, kv, 2);
-    };
+TEST_F(ValuesFixture, EqualValuesShareACanonicalKeyExceptAcrossNumericTypes) {
+    // Every value carries a group number: two values must have the same
+    // canonical map key exactly when their groups are equal. Values equal
+    // under `=` share a group, except numbers of different types (1 and 1.0,
+    // D15), which are different keys at every depth of a collection key.
     const proto::ProtoObject* list12 = obj(list(1, 2));
     const proto::ProtoObject* floats12 = obj(ctx->newList()
         ->appendLast(ctx, ctx->fromDouble(1.0))->appendLast(ctx, ctx->fromDouble(2.0)));
-    const proto::ProtoObject* pool[] = {
-        num(1), ctx->fromDouble(1.0), num(2), PROTO_NONE, PROTO_TRUE,
-        kw(":a"), ctx->fromUTF8String(":a"), ctx->fromUTF8String("ab"),
-        list12, tuple(list(1, 2)), floats12, tuple(floats12->asList(ctx)),
-        obj(ctx->newList()), ctx->newTuple()->asObject(ctx),
-        assoc(nullptr, num(1), list12),
-        assoc(nullptr, ctx->fromDouble(1.0), tuple(list(1, 2))),
-        assoc(assoc(nullptr, kw(":a"), num(1)), list12, kw(":b")),
-        assoc(assoc(nullptr, tuple(floats12->asList(ctx)), kw(":b")),
-              ctx->fromUTF8String(":a"), ctx->fromDouble(1.0)),
+    const proto::ProtoObject* longString = ctx->fromUTF8String("a-long-string-key");
+    const proto::ProtoObject* builtString = reinterpret_cast<const proto::ProtoObject*>(
+        reinterpret_cast<const proto::ProtoString*>(ctx->fromUTF8String("a-long-"))
+            ->appendLast(ctx, reinterpret_cast<const proto::ProtoString*>(
+                                  ctx->fromUTF8String("string-key"))));
+    struct Entry {
+        const proto::ProtoObject* value;
+        int group;
+    };
+    const Entry pool[] = {
+        {num(1), 1},
+        {ctx->fromDouble(1.0), 2},
+        {num(2), 3},
+        {PROTO_NONE, 4},
+        {PROTO_TRUE, 5},
+        {kw(":a"), 6},
+        {ctx->fromUTF8String(":a"), 7},
+        {ctx->fromUTF8String("ab"), 8},
+        {longString, 9},
+        {builtString, 9},
+        {list12, 10},
+        {tuple(list(1, 2)), 10},
+        {floats12, 11},
+        {tuple(floats12->asList(ctx)), 11},
+        {obj(ctx->newList()), 12},
+        {ctx->newTuple()->asObject(ctx), 12},
+        {assoc(nullptr, num(1), list12), 13},
+        {assoc(nullptr, num(1), tuple(list(1, 2))), 13},
+        {assoc(nullptr, ctx->fromDouble(1.0), tuple(list(1, 2))), 14},
+        {assoc(nullptr, num(1), floats12), 15},
+        {assoc(assoc(nullptr, kw(":a"), num(1)), list12, kw(":b")), 16},
+        {assoc(assoc(nullptr, tuple(list(1, 2)), kw(":b")), kw(":a"), num(1)), 16},
     };
     const std::size_t n = sizeof(pool) / sizeof(pool[0]);
-    std::size_t equalPairs = 0;
+    std::size_t equalAcrossKeys = 0;
     for (std::size_t i = 0; i < n; ++i) {
         for (std::size_t j = 0; j < n; ++j) {
-            if (!eq(pool[i], pool[j])) continue;
-            ++equalPairs;
-            EXPECT_EQ(valueHash(ctx, layout, pool[i]),
-                      valueHash(ctx, layout, pool[j]))
+            const bool sameKey =
+                protoClojure::canonicalKey(ctx, markers, pool[i].value) ==
+                protoClojure::canonicalKey(ctx, markers, pool[j].value);
+            EXPECT_EQ(sameKey, pool[i].group == pool[j].group)
                 << "pool[" << i << "] and pool[" << j << "]";
+            // One canonical key implies `=`.
+            if (sameKey) {
+                EXPECT_TRUE(eq(pool[i].value, pool[j].value))
+                    << "pool[" << i << "] and pool[" << j << "]";
+            }
+            if (!sameKey && eq(pool[i].value, pool[j].value)) ++equalAcrossKeys;
         }
     }
-    // Reflexive pairs plus the cross-type ones: the pool is not trivially
-    // all-distinct.
-    EXPECT_GT(equalPairs, n + 10);
+    // Equal under `=` but different keys, counted in both directions:
+    // 1 and 1.0 (2 pairs), the two integer and the two float sequences of
+    // 1 2 (8 pairs), and {1 (1 2)} / {1 [1 2]} against {1 (1.0 2.0)} (4 pairs).
+    EXPECT_EQ(equalAcrossKeys, 14u);
 }
 
 // The type names the ClassCastException analogue reports
 // (throwNotANumber). Without an installed ActiveCallContext, runtime objects
-// such as maps and keywords are "an object"; the conformance fixtures
-// 03-arithmetic/type-error-* cover them through the VM.
+// such as keywords are "an object"; maps are recognised by their tag.
 TEST_F(ValuesFixture, ValueTypeNamesForErrorMessages) {
     EXPECT_STREQ(valueTypeName(ctx, nullptr), "nil");
     EXPECT_STREQ(valueTypeName(ctx, PROTO_NONE), "nil");
@@ -343,7 +279,8 @@ TEST_F(ValuesFixture, ValueTypeNamesForErrorMessages) {
     EXPECT_STREQ(valueTypeName(ctx, obj(list(0, 3))), "a list");
     EXPECT_STREQ(valueTypeName(ctx, obj(list(0, 300))), "a list");
     EXPECT_STREQ(valueTypeName(ctx, tuple(list(0, 3))), "a vector");
-    EXPECT_STREQ(valueTypeName(ctx, marker), "an object");
+    EXPECT_STREQ(valueTypeName(ctx, assoc(nullptr, num(1), num(2))), "a map");
+    EXPECT_STREQ(valueTypeName(ctx, space.objectPrototype->newChild(ctx)), "an object");
 
     EXPECT_TRUE(protoClojure::isNumber(ctx, num(7)));
     EXPECT_TRUE(protoClojure::isNumber(ctx, ctx->fromDouble(0.5)));

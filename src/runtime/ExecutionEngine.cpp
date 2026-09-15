@@ -104,11 +104,10 @@ const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
 // when `coll` is not a map. `callableIsMap` tells the two shapes apart; the
 // caller has checked that `callable` is a named value or a map.
 //
-// Cost: one mapGet. Allocates nothing, except when hashing an integer key
-// beyond the long long range; `callable` and `args` must be rooted by the
-// caller.
+// Cost: one mapGet, which canonicalizes the key (MapOps.h); `callable` and
+// `args` must be rooted by the caller.
 const proto::ProtoObject* callLookup(proto::ProtoContext* ctx,
-                                     const MapLayout& layout,
+                                     const MapKeyMarkers& mapKeys,
                                      const NamedLayout& named,
                                      const proto::ProtoObject* callable,
                                      bool callableIsMap,
@@ -128,9 +127,9 @@ const proto::ProtoObject* callLookup(proto::ProtoContext* ctx,
     const proto::ProtoObject* m   = callableIsMap ? callable : args[0];
     const proto::ProtoObject* key = callableIsMap ? args[0] : callable;
     const proto::ProtoObject* notFound = (argc == 2) ? args[1] : PROTO_NONE;
-    if (!callableIsMap && !isMap(ctx, layout, m)) return notFound;
+    if (!callableIsMap && !isMap(m)) return notFound;
     bool found = false;
-    const proto::ProtoObject* v = mapGet(ctx, layout, m, key, &found);
+    const proto::ProtoObject* v = mapGet(ctx, mapKeys, m, key, &found);
     return found ? v : notFound;
 }
 
@@ -143,7 +142,7 @@ const proto::ProtoObject* callLookup(proto::ProtoContext* ctx,
 // does not enlarge the native frame of every call (StackGuard.h).
 [[gnu::noinline]]
 const proto::ProtoObject* foldKeywordPairs(proto::ProtoContext* frame,
-                                           const MapLayout& layout,
+                                           const MapKeyMarkers& mapKeys,
                                            unsigned int firstPairSlot,
                                            unsigned int kvItems) {
     constexpr unsigned int kChunkItems = 256;  // even
@@ -154,7 +153,7 @@ const proto::ProtoObject* foldKeywordPairs(proto::ProtoContext* frame,
         for (unsigned int i = 0; i < items; ++i) {
             kv[i] = frame->getAutomaticLocal(firstPairSlot + done + i);
         }
-        kwMap = mapAssocPairs(frame, layout, kwMap, kv, items);
+        kwMap = mapAssocPairs(frame, mapKeys, kwMap, kv, items);
         frame->setAutomaticLocal(firstPairSlot, kwMap);
     }
     return kwMap;
@@ -170,25 +169,19 @@ const proto::ProtoObject* foldKeywordPairs(proto::ProtoContext* frame,
 static bool extractKwVals(proto::ProtoContext* ctx,
                           const BytecodeModule* subMod,
                           const proto::ProtoObject* maybeMap,
-                          const proto::ProtoObject* mapMarkerProto,
-                          const proto::ProtoString* mapStateKey,
+                          const MapKeyMarkers& mapKeys,
                           const proto::ProtoObject** out) {
     const auto& kkeys = subMod->kwKeys();
-    if (!maybeMap || maybeMap == PROTO_NONE) {
+    if (!isMap(maybeMap)) {
         for (std::size_t i = 0; i < kkeys.size(); ++i) out[i] = PROTO_NONE;
         return false;
     }
-    if (maybeMap->getPrototype(ctx) != mapMarkerProto) {
-        for (std::size_t i = 0; i < kkeys.size(); ++i) out[i] = PROTO_NONE;
-        return false;
-    }
-    const MapLayout layout{mapMarkerProto, mapStateKey};
     for (std::size_t i = 0; i < kkeys.size(); ++i) {
         // Look the keyword `:name` (interned by the compiler) up, as
         // prim_get does.
         bool found = false;
         const proto::ProtoObject* v =
-            mapGet(ctx, layout, maybeMap, kkeys[i].keyword, &found);
+            mapGet(ctx, mapKeys, maybeMap, kkeys[i].keyword, &found);
         out[i] = found ? v : PROTO_NONE;
     }
     return true;
@@ -313,8 +306,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
             kwCount = static_cast<unsigned int>(subMod->kwKeys().size());
             if (kwCount > 16)
                 throw std::runtime_error("VM: a function may declare at most 16 :keys parameters");
-            extractKwVals(ctx, subMod, kwArgsMap,
-                          cc->mapMarkerProto, cc->mapStateKey, kwVals);
+            extractKwVals(ctx, subMod, kwArgsMap, cc->mapKeys, kwVals);
         }
 
         return execute(ctx, *subMod, *cc, callArgs, passArgc, capsVal,
@@ -323,10 +315,9 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
     }
 
     // Keywords, quoted symbols and maps are functions: a map lookup.
-    if (proto == cc->named.marker || proto == cc->mapMarkerProto) {
-        return callLookup(ctx, MapLayout{cc->mapMarkerProto, cc->mapStateKey},
-                          cc->named, callable, proto == cc->mapMarkerProto,
-                          args, argc);
+    if (proto == cc->named.marker || isMap(callable)) {
+        return callLookup(ctx, cc->mapKeys, cc->named, callable,
+                          isMap(callable), args, argc);
     }
 
     // C++ primitive — wrap args into a fresh ProtoList and dispatch.
@@ -359,7 +350,6 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                      const proto::ProtoObject* globals,
                      const proto::ProtoObject* fnSingleProto,
                      const proto::ProtoObject* fnMultiProto,
-                     const proto::ProtoObject* mapMarkerProto,
                      const proto::ProtoObject* atomMarkerProto,
                      const proto::ProtoObject* futureMarkerProto,
                      const proto::ProtoObject* promiseMarkerProto,
@@ -368,7 +358,6 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                      const proto::ProtoString* arityKey,
                      const proto::ProtoString* capturesKey,
                      const proto::ProtoString* aritiesKey,
-                     const proto::ProtoString* mapStateKey,
                      const proto::ProtoString* valueKey,
                      const proto::ProtoString* watchesKey,
                      const proto::ProtoString* thunkKey,
@@ -377,6 +366,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                      const proto::ProtoString* resultKey,
                      const proto::ProtoString* doneKey,
                      const proto::ProtoString* actorStateKey,
+                     const MapKeyMarkers& mapKeys,
                      const NamedLayout& named,
                      const proto::ProtoObject* const* args,
                      unsigned int argCount,
@@ -392,13 +382,13 @@ ExecutionEngine::run(proto::ProtoContext* parent,
     const ActiveCallContext* prior = activeCallContext();
     ActiveCallContext saved = prior ? *prior : ActiveCallContext{};
     const ActiveCallContext cc{this, globals,
-                         fnSingleProto, fnMultiProto, mapMarkerProto,
+                         fnSingleProto, fnMultiProto,
                          atomMarkerProto, futureMarkerProto, promiseMarkerProto,
                          actorMarkerProto,
                          bytecodeKey, arityKey, capturesKey, aritiesKey,
-                         mapStateKey, valueKey, watchesKey,
+                         valueKey, watchesKey,
                          thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-                         actorStateKey, named};
+                         actorStateKey, mapKeys, named};
     setActiveCallContext(cc);
     struct Guard {
         const ActiveCallContext* prior; ActiveCallContext saved;
@@ -617,8 +607,7 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
                 kwCount = static_cast<unsigned int>(subMod->kwKeys().size());
                 if (kwCount > 16)
                     throw std::runtime_error("VM: a function may declare at most 16 :keys parameters");
-                extractKwVals(&frame, subMod, kwArgsMap,
-                              env.mapMarkerProto, env.mapStateKey, kwVals);
+                extractKwVals(&frame, subMod, kwArgsMap, env.mapKeys, kwVals);
             }
 
             sp -= (argc + 1);
@@ -633,14 +622,15 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
         // A keyword, a quoted symbol or a map in call position looks a key
         // up, as `get` does (callLookup). The arguments stay rooted in their
         // stack slots until the lookup returns.
-        if (proto == env.named.marker || proto == env.mapMarkerProto) {
+        const bool callableIsMap = isMap(callable);
+        if (proto == env.named.marker || callableIsMap) {
             const proto::ProtoObject* lookupArgs[2] = {nullptr, nullptr};
             for (unsigned int i = 0; i < argc && i < 2; ++i) {
                 lookupArgs[i] = frame.getAutomaticLocal(stackBase + sp - argc + i);
             }
             const proto::ProtoObject* result = callLookup(
-                &frame, MapLayout{env.mapMarkerProto, env.mapStateKey}, env.named,
-                callable, proto == env.mapMarkerProto, lookupArgs, argc);
+                &frame, env.mapKeys, env.named, callable, callableIsMap,
+                lookupArgs, argc);
             sp -= (argc + 1);
             pushVal(result);
             return;
@@ -858,8 +848,7 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
                 const unsigned int kvItems = argc - fixed;
                 if (kvItems > 0) {
                     const proto::ProtoObject* kwMap = foldKeywordPairs(
-                        &frame, MapLayout{env.mapMarkerProto, env.mapStateKey},
-                        stackBase + sp - kvItems, kvItems);
+                        &frame, env.mapKeys, stackBase + sp - kvItems, kvItems);
                     sp -= kvItems;
                     pushVal(kwMap);
                     dispatchCall(fixed + 1);
@@ -1098,7 +1087,7 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
                     case Op::GT:  r = a->partialCompare(&frame, b) >  0 ? PROTO_TRUE : PROTO_FALSE; break;
                     case Op::GE:  r = a->partialCompare(&frame, b) >= 0 ? PROTO_TRUE : PROTO_FALSE; break;
                     case Op::EQ:
-                        r = valuesEqual(&frame, MapLayout{env.mapMarkerProto, env.mapStateKey}, a, b)
+                        r = valuesEqual(&frame, a, b)
                                 ? PROTO_TRUE : PROTO_FALSE;
                         break;
                     default: break;

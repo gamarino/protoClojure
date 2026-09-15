@@ -5,8 +5,8 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 366 test cases: 279
-conformance fixtures under `tests/conformance/`, 82 GoogleTest unit
+scripts and an interactive REPL. `ctest` registers 380 test cases: 289
+conformance fixtures under `tests/conformance/`, 86 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 value equality and hashing, the native stack guard and the double printer
 (`tests/unit/`), and
@@ -34,7 +34,7 @@ directories that cover them.
 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 21 |
 | IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 26 |
 | LargeInteger promotion, big integer literals | `15-bigint` | 9 |
-| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 45 |
+| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 55 |
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 16 |
 | `clojure.string`-shaped string functions | `20-strings` | 20 |
 | Atoms | `21-atoms` | 12 |
@@ -108,27 +108,31 @@ The design specifications written during development are archived under
 
 - [x] Lists — protoCore `ProtoList`
 - [x] Vectors — protoCore `ProtoTuple` (O(log N) `nth`)
-- [x] Maps — insertion-ordered at every size: a protoCore `ProtoSparseList`
-      of keys indexed by a per-map sequence number plus a hash index holding
-      values (`src/runtime/MapOps.h`), with `hash-map` / `assoc` / `dissoc` /
+- [x] Maps — an immutable protoCore `ProtoSparseList` indexed by the
+      interned canonical key of each key, holding the original key and the
+      value (`src/runtime/MapOps.h`), with `hash-map` / `assoc` / `dissoc` /
       `get` / `contains?` / `keys` / `vals` / `map?`; `count` (O(1)) and
-      `empty?` accept maps
-- [x] Map equality — `=` / `not=` compare maps by value, ignoring insertion
-      order (`mapEquals` in `src/runtime/MapOps.h`); values compare
-      recursively, so nested collections compare by value; a map is never
-      `=` to a vector or a list
+      `empty?` accept maps. Iteration and print order are unspecified and can
+      change between runs. `assoc` of an equal key keeps the stored key
+      object and replaces the value
+- [x] Map equality — `=` / `not=` compare maps by value, whatever the order
+      (`mapEquals` in `src/runtime/MapOps.h`): the same canonical keys with
+      `=` values; values compare recursively, so nested collections compare
+      by value; a map is never `=` to a vector or a list
 - [x] Sequential equality — `=` / `not=` compare lists and vectors element
       by element, whatever their concrete types: `(= [1 2] (list 1 2))` and
       `(= [] (list))` are true, nested collections compare by value, and a
       list or vector is never `=` to a map, a string or `nil`
       (`valuesEqual` in `src/runtime/Primitives.h`)
-- [x] Value hashing of map keys — keys are hashed consistently with `=` and
-      matched with `=` (`valueHash` in `src/runtime/Primitives.h`): maps
-      hash independently of insertion order, lists and vectors hash alike,
-      numbers hash by value across SmallInteger, LargeInteger and double, so
-      `(get {{:a 1} :x} {:a 1})`, `(get {[1 2] :x} (list 1 2))` and
-      `(get {1 :x} 1.0)` return `:x`; hashes are not cached; a NaN key is
-      found only with the identical NaN object
+- [x] Canonical map keys — every key is reduced to an interned canonical
+      key (`canonicalKey` in `src/runtime/MapOps.h`; table in LANGUAGE.md
+      §4.3): strings by content, a list and a vector with equal elements as
+      one key, maps by their entries in any order, doubles by bit pattern,
+      big integers by exact value, keywords, symbols and other objects by
+      identity; so `(get {{:a 1} :x} {:a 1})`, `(get {[1 2] :x} (list 1 2))`
+      and `(get {"ab-cd-ef" 1} (str "ab-" "cd-ef"))` find their entries.
+      Numbers of different types are different keys (D15), `##NaN` finds
+      itself (D22), and canonical keys are never freed (D23)
 - [x] Strings — protoCore `ProtoString`
 - [x] Keywords and symbols — interned runtime values distinct from strings
       (`src/runtime/Named.h`): `(= :a ":a")` and `(= (quote a) "a")` are
@@ -337,9 +341,8 @@ raises a read, compile or runtime error.
 
 - [ ] Sets — `ProtoSparseList` based, with `conj` / `disj`
 - [ ] Lazy seqs — `LazySeq` wrapper
-- [ ] `hash` as a function (the value hash is used internally for map keys)
+- [ ] `hash` as a function
 - [ ] Vectors as functions (`(v 0)`)
-- [ ] `count` on maps
 
 ### Namespaces & vars (not yet)
 
@@ -455,15 +458,28 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D12 | `clojure.java.*` namespaces do not exist                   | (perm) |
 | D13 | `read-string` strict on unregistered reader literals       | core   |
 | D14 | LargeInteger promotion is automatic in `+ - * / inc dec`, so `(* 9223372036854775807 2)` is `18446744073709551614` where JVM Clojure throws `ArithmeticException: integer overflow` — no `+'` / `*'` needed; big integers are not a separate type, so the `N` suffix is accepted but does not change the value or how it prints (CONTRA Clojure-JVM, by design) | (perm) |
-| D15 | `(= 1 1.0)` returns `true` in v0.x (CONTRA Clojure-JVM where `=` is type-strict); map keys follow it, so `1` and `1.0` are one key and `(hash-map 1 :a 1.0 :b)` is `{1 :b}` | (perm) |
+| D15 | `(= 1 1.0)` returns `true` in v0.x (CONTRA Clojure-JVM where `=` is type-strict). Map keys do **not** follow `=` across numeric types: `1`, `1.0`, an equal big integer, and `0` / `-0.0` are different keys, as in JVM Clojure, so `(hash-map 1 :a 1.0 :b)` has two entries and `(= {1 :a} {1.0 :a})` is `false` | (perm) |
 | D16 | `:or` defaults fire on **explicit nil** as well as missing keys (CONTRA JVM-Clojure where only missing keys take the default) | v0.2 |
 | D17 | String ops (`upper-case`, `lower-case`, `split`, `reverse`, `trim`, `index-of`) are byte-level / ASCII-correct only; multi-byte UTF-8 codepoints traverse as bytes (CONTRA JVM-Clojure which is codepoint-aware) | v0.2 |
 | D18 | `(fn name [args] body)` — the name is accepted by the compiler but dropped; self-reference via `name` inside the body is not supported (use `defn` for self-recursion). Planned for v0.2 via wrapper-into-slot capture. | v0.2 |
-| D19 | Maps iterate and print in insertion order at every size, including maps built with `hash-map` (JVM Clojure guarantees insertion order only for array maps of at most 8 entries and leaves it unspecified beyond that and for `hash-map`) | (perm) |
 | D20 | Atoms, futures, promises, actors and fns print as tags such as `#<atom 1>`, `#<fn>` and `#<fn println>` in `println`, `str` and the REPL (JVM Clojure: `#object[clojure.lang.Atom 0x... {:status :ready, :val 1}]` when printed, and `clojure.lang.Atom@...` or the class name under `str`) | v0.x |
 | D21 | Beyond ASCII, symbols and keywords accept only Unicode letters, combining marks and decimal digits: `a→b`, or a symbol containing a no-break space, is a read error (CONTRA JVM-Clojure, whose reader accepts any character that is neither whitespace nor a macro character) | v0.x |
+| D22 | A NaN map key is found by a NaN with exactly the same 64-bit pattern: `(get {##NaN :n} ##NaN)` is `:n` (CONTRA JVM-Clojure, which never finds a NaN key). A NaN produced by arithmetic can have a different bit pattern and then does not find a `##NaN` key: on x86-64, `(/ 0 0.0)` has its sign bit set | (perm) |
+| D23 | Map keys are interned and never freed: every distinct string, double, big integer or collection used as a map key, including keys only looked up and keys of removed entries, stays in memory until the program ends (keywords, symbols, SmallIntegers, booleans, `nil` and ASCII strings of up to 6 bytes cost nothing). Long-running programs should not use unbounded run-time-generated values as keys (CONTRA JVM-Clojure, where keys are ordinary garbage-collected objects) | (perm) |
+| D24 | Map iteration and print order is unspecified for maps of every size and can change between runs of the same program (JVM Clojure keeps insertion order for array maps of up to 8 entries) | (perm) |
 
 ## Known issues
+
+- **String map keys leak memory in this version.** An operation that takes
+  a string key of more than 6 bytes, or a non-ASCII one, interns it with
+  protoCore's `createSymbol`. When the symbol already exists, `createSymbol`
+  still builds two permanent copies of the string and drops them: about
+  500 bytes per call for a 25-byte string (200,000 lookups of one existing
+  key grow memory by 100 MB). String literals are re-created on every
+  execution, so `(get m "username")` in a loop leaks too. The fix belongs in
+  protoCore (look the symbol up before building the permanent copy). Until
+  then, prefer keywords as map keys in loops. The same `createSymbol` call
+  runs on every access to a global whose name is longer than 6 bytes.
 
 - **Errors on actor threads are silent.** An actor message whose handler
   throws (a `StackOverflowError` included) sets the actor's value to `nil`

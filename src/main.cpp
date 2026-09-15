@@ -78,7 +78,7 @@ int runFile(const char* path) {
     //   1 : forms (the ProtoList readAll() returned).
     //   2 : stringMarkerProto — see ReaderMarkers / CompilerMarkers docs.
     //   3 : fnMarkerProto — wraps user-fn callables.
-    ctx->resizeAutomaticLocals(13);
+    ctx->resizeAutomaticLocals(16);
     constexpr unsigned int kSlotGlobals       = 0;
     constexpr unsigned int kSlotForms         = 1;
     constexpr unsigned int kSlotStringMarker  = 2;
@@ -92,6 +92,9 @@ int runFile(const char* path) {
     constexpr unsigned int kSlotActorMarker   = 10;
     constexpr unsigned int kSlotNamedMarker   = 11;
     constexpr unsigned int kSlotNamedTable    = 12;
+    constexpr unsigned int kSlotDoubleKey     = 13;
+    constexpr unsigned int kSlotBigIntegerKey = 14;
+    constexpr unsigned int kSlotMapKey        = 15;
 
     const proto::ProtoObject* globalsObj =
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
@@ -164,6 +167,16 @@ int runFile(const char* path) {
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
     ctx->setAutomaticLocal(kSlotNamedTable, namedTable);
 
+    // The private first slots of the canonical map keys of doubles, big
+    // integers and maps (src/runtime/MapOps.h): immutable, never keywords.
+    ctx->setAutomaticLocal(kSlotDoubleKey, space.objectPrototype->newChild(ctx));
+    ctx->setAutomaticLocal(kSlotBigIntegerKey, space.objectPrototype->newChild(ctx));
+    ctx->setAutomaticLocal(kSlotMapKey, space.objectPrototype->newChild(ctx));
+    const protoClojure::MapKeyMarkers mapKeys{
+        ctx->getAutomaticLocal(kSlotDoubleKey),
+        ctx->getAutomaticLocal(kSlotBigIntegerKey),
+        ctx->getAutomaticLocal(kSlotMapKey)};
+
     const proto::ProtoString* bytesKey =
         proto::ProtoString::createSymbol(ctx, "__bytes__");
     const proto::ProtoString* bytecodeKey =
@@ -177,12 +190,10 @@ int runFile(const char* path) {
     const proto::ProtoString* itemsKey =
         proto::ProtoString::createSymbol(ctx, "__items__");
     // `__entries__` holds the source-order entries of a map literal between
-    // the Reader and the Compiler; `__map__` holds the state of a runtime
-    // map (src/runtime/MapOps.h). Distinct names keep the two shapes apart.
+    // the Reader and the Compiler. A runtime map is a ProtoSparseList with
+    // no attributes (src/runtime/MapOps.h).
     const proto::ProtoString* entriesKey =
         proto::ProtoString::createSymbol(ctx, "__entries__");
-    const proto::ProtoString* mapStateKey =
-        proto::ProtoString::createSymbol(ctx, "__map__");
     const proto::ProtoString* valueKey =
         proto::ProtoString::createSymbol(ctx, "__value__");
     const proto::ProtoString* watchesKey =
@@ -256,15 +267,14 @@ int runFile(const char* path) {
         eng.run(ctx, mod, ctx->getAutomaticLocal(kSlotGlobals),
                 ctx->getAutomaticLocal(kSlotFnSingle),
                 ctx->getAutomaticLocal(kSlotFnMulti),
-                ctx->getAutomaticLocal(kSlotMapMarker),
                 ctx->getAutomaticLocal(kSlotAtomMarker),
                 ctx->getAutomaticLocal(kSlotFutureMarker),
                 ctx->getAutomaticLocal(kSlotPromiseMarker),
                 ctx->getAutomaticLocal(kSlotActorMarker),
                 bytecodeKey, arityKey, capturesKey, aritiesKey,
-                mapStateKey, valueKey, watchesKey,
+                valueKey, watchesKey,
                 thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-                actorStateKey, namedLayout);
+                actorStateKey, mapKeys, namedLayout);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s: runtime error: %s\n", path, e.what());
         // Drain the actor scheduler before unwinding so worker

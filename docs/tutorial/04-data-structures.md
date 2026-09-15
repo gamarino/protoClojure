@@ -25,7 +25,7 @@ the substrate rather than from an adapter layer.
 |------------|-------------------|------------|------------|---------------|-------------------------------------|
 | List       | `'(1 2 3)`        | sequential | yes        | `O(log n)`    | code-as-data, head-add accumulators |
 | Vector     | `[1 2 3]`         | sequential | yes        | `O(log n)`    | the workhorse — almost everything   |
-| Map        | `{:a 1 :b 2}`     | insertion  | keys no    | `O(log n)`    | structured records, lookups         |
+| Map        | `{:a 1 :b 2}`     | unspecified | keys no   | `O(log n)`    | structured records, lookups         |
 | Set        | `#{1 2 3}`        | unordered  | no         | `O(log n)`    | membership, deduplication           |
 
 The fast version of "which one do I reach for?":
@@ -159,6 +159,62 @@ Nested access and update — the deep-`*-in` family:
 These are how you "modify deeply nested data" in Clojure without
 mutating anything.
 
+### Keys, order and memory in protoClojure
+
+Five things to know about protoClojure maps. The full rules, with a table
+per key type, are in [LANGUAGE.md §4.3](../LANGUAGE.md).
+
+**1. Order is unspecified, and it can change from one run to the next.**
+Printing, `keys` and `vals` visit the entries in an order that depends on
+memory addresses:
+
+```clojure
+(println {:b 1 :a 2})    ;; {:b 1, :a 2} on one run, {:a 2, :b 1} on another
+(keys {:b 1 :a 2})       ;; the same order as vals of the same map, in this run
+```
+
+Treat a map as unordered. When output has to be stable, sort the keys first.
+
+**2. Keys match by value.** A string built at run time finds a literal key.
+A list finds a vector key. A map key is found by an equal map built in any
+order:
+
+```clojure
+(get {"user-1" :alice} (str "user-" 1))    ;; => :alice
+(get {[1 2] :point} (list 1 2))            ;; => :point
+(get {{:x 1 :y 2} :p} {:y 2 :x 1})         ;; => :p
+(get {:a 1} ":a")                          ;; => nil — a keyword is not a string
+```
+
+**3. Numbers of different types are different keys, as in JVM Clojure.**
+In protoClojure `(= 1 1.0)` is `true`, but `1` and `1.0` are two different
+keys, and so are `0` and `-0.0`:
+
+```clojure
+(get {1 :one} 1.0)             ;; => nil
+(count (hash-map 1 :a 1.0 :b)) ;; => 2
+(= {1 :a} {1.0 :a})            ;; => false
+(= {:a 1} {:a 1.0})            ;; => true — values still compare with =
+```
+
+**4. `##NaN` finds itself as a key, but a NaN computed by arithmetic may
+not.** A NaN key matches only a NaN with the same bit pattern. `(/ 0 0.0)`
+can produce a NaN with a different pattern (it does on x86-64):
+
+```clojure
+(get {##NaN :n} ##NaN)         ;; => :n (JVM Clojure never finds a NaN key)
+(get {##NaN :n} (/ 0 0.0))     ;; => nil on x86-64
+```
+
+**5. Keys stay in memory until the program ends.** Every distinct string,
+double, big integer or collection used as a key, even only to look it up,
+is kept by the runtime until the program exits. Keywords, symbols, small
+integers and short ASCII strings cost nothing. In a long-running program,
+do not turn an unbounded stream of values into keys, such as a new
+`(str "session-" id)` for every request; use keywords, integers or a
+bounded set of keys instead. Using a large collection as a key also costs
+time proportional to its size on every lookup.
+
 ## 4.5 Sets
 
 Unordered, deduplicated. Constructed with `#{...}` or `hash-set`:
@@ -267,9 +323,11 @@ defines a cross-type equivalence:
 
 > **In protoClojure 0.0.1** the vector, list and map lines hold, including
 > nested collections (`(= {:a [{:b 1 :c 2}]} {:a [{:c 2 :b 1}]})` and
-> `(= [1 [2]] (list 1 (list 2)))` are `true`), and so does `not=`. Write
-> the list with `(list 1 2 3)`: the `'` reader macro, sets and `seq` are
-> not implemented.
+> `(= [1 [2]] (list 1 (list 2)))` are `true`), and so does `not=`. Maps
+> whose keys differ only in numeric type are not `=`: `(= {1 :a} {1.0 :a})`
+> is `false`, because `1` and `1.0` are different keys (§4.4). Write the list
+> with `(list 1 2 3)`: the `'` reader macro, sets and `seq` are not
+> implemented.
 
 `==` is the *numeric* equality across number types, with no cross-type
 equivalence for collections:
@@ -298,11 +356,13 @@ In practice, this matters if you put your own types (records, when v0.2
 adds them) into sets and as map keys. Implement structural hash properly
 and equality / set membership just work.
 
-> **In protoClojure 0.0.1** `hash` is not available as a function, but map
-> keys are hashed consistently with `=`: `(get {{:a 1} :x} {:a 1})` and
-> `(get {[1 2] :x} (list 1 2))` return `:x`. Because `(= 1 1.0)` is true in
-> protoClojure (deviation D15), `1` and `1.0` hash equally too and are the
-> same map key. Sets are not implemented.
+> **In protoClojure 0.0.1** `hash` is not available as a function, and maps
+> do not hash their keys. Each key is reduced to an interned *canonical key*
+> shared by every equal key (§4.4, "Keys, order and memory"), so
+> `(get {{:a 1} :x} {:a 1})` and `(get {[1 2] :x} (list 1 2))` return `:x`.
+> Numbers of different types have different canonical keys: although
+> `(= 1 1.0)` is true in protoClojure (deviation D15), `1` and `1.0` are
+> different map keys, as in JVM Clojure. Sets are not implemented.
 
 ## 4.10 The substrate underneath
 
@@ -312,9 +372,9 @@ Brief, because it matters when you are debugging or profiling:
   adds at the head).
 - **Vector** → protoCore `ProtoTuple` (an immutable tree of four-slot
   nodes; `nth` is `O(log n)`).
-- **Map** → a map object whose entries are a protoCore `ProtoSparseList`
-  (a balanced tree keyed by the hash of each key; each entry holds the
-  key/value pairs that share that hash).
+- **Map** → a protoCore `ProtoSparseList`, with no wrapper (an immutable
+  balanced tree indexed by the address of each key's interned canonical
+  key; each entry holds the original key and the value).
 - **Set** → not implemented yet.
 - **String** → protoCore `ProtoString` (rope-backed UTF-8, structurally
   shared on concatenation).
