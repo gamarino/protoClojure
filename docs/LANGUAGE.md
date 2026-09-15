@@ -328,10 +328,19 @@ deviation D19 in `docs/STATUS.md`.)
 of entries and every key of one is mapped to an `=` value in the other;
 insertion order is irrelevant, and values are compared recursively, so
 nested maps, vectors and lists compare by value (§4.5). A map is never `=`
-to a vector or a list. Map hashing is not implemented in 0.0.1: a map used as a
-key of another map is hashed and matched by identity, so
-`(get {{:a 1} :x} {:a 1})` returns `nil`; only the same map object finds
-the entry.
+to a vector or a list. Keys are hashed with a value hash consistent with `=`
+and matched with `=`, so a key matches by value: `(get {{:a 1} :x} {:a 1})`
+is `:x`, a vector key is found with an equal list, and an integer key is
+found with an equal float (`(get {1 :x} 1.0)` is `:x`, deviation D15). Keys
+that are `=` are one key: `(hash-map 1 :a 1.0 :b)` is `{1 :b}`, keeping the
+first key and the last value. The hash ignores map insertion order, is the
+same for a list and a vector with equal elements, and hashes numbers by
+value modulo 2^61 − 1, so equal numbers hash equally whatever their
+representation (SmallInteger, LargeInteger, double). Hashes are not cached:
+a collection key is hashed in full on every lookup. NaN is the exception:
+protoCore's numeric comparison reports NaN `=` to every number, which no
+hash can agree with; NaN hashes like `0`, so a NaN key is matched only by
+`0`, `0.0`, `-0.0`, NaN and integers that are multiples of 2^61 − 1.
 
 **Representation.** A map holds a protoCore `ProtoSparseList` of keys
 indexed by a per-map sequence number (the insertion-order store) and a
@@ -383,9 +392,10 @@ or a vector and compares the same way. Lists are written with `list`,
 since the `'` reader macro is not implemented. The departures are:
 
 - `=` compares numbers across types: `(= 1 1.0)` is true (deviation D15
-  in `STATUS.md`).
-- Maps are not hashed by value: a map used as a map key matches by
-  identity (§4.3).
+  in `STATUS.md`), and map keys follow it: `1` and `1.0` are the same key
+  (§4.3).
+- NaN is `=` to every number (protoCore's numeric comparison), so NaN map
+  keys cannot be hashed consistently with `=` (§4.3).
 - `==`, `identical?` and `hash` are not implemented.
 
 ---

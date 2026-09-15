@@ -16,7 +16,8 @@
  * ascending order, and a new key receives `nextSeq`, so iteration and
  * printing follow insertion order at every size. `index` holds each key's
  * value and sequence number; a bucket holds more than one triple only on a
- * hash collision, and keys are compared with `compare(ctx, other) == 0`.
+ * hash collision. Keys are hashed with valueHash and compared with
+ * valuesEqual (src/runtime/Primitives.h), the hash and the equality of `=`.
  *
  * Semantics:
  *   - assoc of a new key appends it at the end;
@@ -24,15 +25,19 @@
  *     and its position (array-map behaviour on the JVM);
  *   - dissoc keeps the relative order of the remaining keys;
  *   - sequence numbers are an implementation detail: map equality
- *     (mapEquals) ignores them and entry order;
- *   - map hashing is not implemented: a map used as a key of another map
- *     is hashed and compared by identity, not by value.
+ *     (mapEquals) and map hashing (valueHash, through
+ *     mapForEachHashedEntry) ignore them and entry order;
+ *   - keys match by value: an equal map, vector or list built separately,
+ *     or an equal number of another type (deviation D15), finds, replaces
+ *     and removes the entry; a repeated key keeps its first key object.
  *
- * Cost: get is one sparse-list walk plus the bucket scan; assoc of a new
- * key and dissoc update both sparse lists, O(log N); assoc of an existing
- * key updates the index only. Iteration walks `order` and looks each value
- * up in `index`, O(N log N). The layout favours lookups and construction
- * over iteration: a first version that also kept (key value) pairs in the
+ * Cost: every operation taking a key hashes it once — O(1) for numbers,
+ * strings and keywords, linear in its size for a collection key (hashes are
+ * not cached). Beyond that, get is one sparse-list walk plus the bucket
+ * scan; assoc of a new key and dissoc update both sparse lists, O(log N);
+ * assoc of an existing key updates the index only. Iteration walks `order`
+ * and looks each value up in `index`, rehashing each key, O(N log N) for
+ * scalar keys. The layout favours lookups and construction over iteration: a first version that also kept (key value) pairs in the
  * order store made construction ~37% and `get` ~10% more expensive in CPU
  * cycles on microbenchmarks.
  *
@@ -58,9 +63,9 @@ namespace protoClojure {
 struct MapLayout {
     const proto::ProtoObject* marker;    // prototype of every map wrapper
     const proto::ProtoString* stateKey;  // attribute holding the map state
-    // Key hash function; nullptr means `key->getHash(ctx)`. Only unit tests
-    // override it (to force hash collisions); a map must always be used
-    // with the hash function it was built with.
+    // Key hash function; nullptr means valueHash (Primitives.h). Only unit
+    // tests override it (to force hash collisions); a map must always be
+    // used with the hash function it was built with.
     unsigned long (*hash)(proto::ProtoContext*, const proto::ProtoObject*) = nullptr;
 };
 
@@ -92,7 +97,8 @@ const proto::ProtoObject* mapDissoc(proto::ProtoContext* ctx,
                                     const proto::ProtoObject* key);
 
 // Look `key` up in map `m`. Sets `*found` and returns the value, or
-// PROTO_NONE when absent. Allocates nothing.
+// PROTO_NONE when absent. Allocates nothing, except when hashing an integer
+// beyond the long long range (valueHash).
 const proto::ProtoObject* mapGet(proto::ProtoContext* ctx,
                                  const MapLayout& layout,
                                  const proto::ProtoObject* m,
@@ -115,8 +121,8 @@ unsigned long mapCount(proto::ProtoContext* ctx, const MapLayout& layout,
 // Value equality of two maps, as used by `=`: true when both hold the same
 // number of entries and every key of `a` is present in `b` with a value for
 // which `valueEq(ctx, self, valueInA, valueInB)` holds. Insertion order and
-// sequence numbers are ignored. Keys are matched as in mapGet (hash, then
-// `compare(ctx, other) == 0`). nullptr is the empty map.
+// sequence numbers are ignored. Keys are matched as in mapGet (key hash,
+// then valuesEqual). nullptr is the empty map.
 //
 // Cost: O(N log N) — each key of `a` is probed in `b` by the hash already
 // stored in `a`'s index, without rehashing; the walk stops calling
@@ -128,5 +134,19 @@ using MapValueEqFn = bool (*)(proto::ProtoContext* ctx, void* self,
 bool mapEquals(proto::ProtoContext* ctx, const MapLayout& layout,
                const proto::ProtoObject* a, const proto::ProtoObject* b,
                void* self, MapValueEqFn valueEq);
+
+// Call `fn(ctx, self, keyHash, value)` for every entry of map `m`, where
+// `keyHash` is the key's hash as stored in the hash index (the layout's key
+// hash; no rehashing). The order is unspecified (hash-index order). Used by
+// valueHash to hash a map independently of insertion order.
+//
+// Cost: O(N). Allocates nothing itself; `m` must be rooted by the caller if
+// `fn` allocates.
+using MapHashedEntryFn = void (*)(proto::ProtoContext* ctx, void* self,
+                                  unsigned long keyHash,
+                                  const proto::ProtoObject* value);
+void mapForEachHashedEntry(proto::ProtoContext* ctx, const MapLayout& layout,
+                           const proto::ProtoObject* m, void* self,
+                           MapHashedEntryFn fn);
 
 } // namespace protoClojure

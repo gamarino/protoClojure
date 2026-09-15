@@ -302,4 +302,81 @@ TEST_F(MapOpsFixture, RepeatedKeyInOnePairListKeepsLastValueAndFirstPosition) {
     EXPECT_EQ(e[2], kw(":b"));
 }
 
+TEST_F(MapOpsFixture, MapKeysMatchByValue) {
+    // Two equal maps built in different insertion orders: distinct objects.
+    const proto::ProtoObject* k1 = assoc(assoc(nullptr, kw(":a"), num(1)),
+                                         kw(":b"), num(2));
+    const proto::ProtoObject* k2 = assoc(assoc(nullptr, kw(":b"), num(2)),
+                                         kw(":a"), num(1));
+    ASSERT_NE(k1, k2);
+    const proto::ProtoObject* outer = assoc(nullptr, k1, kw(":x"));
+    bool found = false;
+    EXPECT_EQ(protoClojure::mapGet(ctx, layout, outer, k2, &found), kw(":x"));
+    EXPECT_TRUE(found);
+
+    // assoc under an equal key replaces the value and keeps the stored key;
+    // dissoc under an equal key removes the entry.
+    auto e = walk(assoc(outer, k2, kw(":y")));
+    ASSERT_EQ(e.size(), 2u);
+    EXPECT_EQ(e[0], k1);
+    EXPECT_EQ(e[1], kw(":y"));
+    EXPECT_EQ(protoClojure::mapCount(
+                  ctx, layout, protoClojure::mapDissoc(ctx, layout, outer, k2)),
+              0u);
+}
+
+TEST_F(MapOpsFixture, SequentialKeysMatchAcrossListsAndTuples) {
+    // 200-element keys, past the small inline forms.
+    const proto::ProtoList* l = ctx->newList();
+    for (long long i = 0; i < 200; ++i) l = l->appendLast(ctx, num(i));
+    const proto::ProtoObject* listKey = l->asObject(ctx);
+    const proto::ProtoObject* tupleKey = ctx->newTupleFromList(l)->asObject(ctx);
+    const proto::ProtoObject* m = assoc(nullptr, tupleKey, kw(":v"));
+    bool found = false;
+    EXPECT_EQ(protoClojure::mapGet(ctx, layout, m, listKey, &found), kw(":v"));
+    EXPECT_TRUE(found);
+    protoClojure::mapGet(ctx, layout, m, l->removeLast(ctx)->asObject(ctx), &found);
+    EXPECT_FALSE(found);
+}
+
+TEST_F(MapOpsFixture, NumericKeysMatchAcrossTypes) {
+    // Deviation D15: numbers are = across types, so equal numbers must find
+    // each other as keys whatever their representation.
+    const proto::ProtoObject* two35 = num(1LL << 35);
+    const proto::ProtoObject* two70 = two35->multiply(ctx, two35);  // LargeInteger
+    const proto::ProtoObject* two60 = num(1LL << 60);  // LargeInteger in long range
+    struct Case {
+        const proto::ProtoObject* stored;
+        const proto::ProtoObject* probe;
+        bool match;
+    };
+    const Case cases[] = {
+        {num(1), ctx->fromDouble(1.0), true},
+        {ctx->fromDouble(-3.0), num(-3), true},
+        {num(0), ctx->fromDouble(-0.0), true},
+        {two60, ctx->fromDouble(1152921504606846976.0), true},
+        {ctx->fromDouble(1180591620717411303424.0), two70, true},
+        {ctx->fromDouble(2.5), ctx->fromDouble(2.5), true},
+        {two70->add(ctx, num(1)), ctx->fromDouble(1180591620717411303424.0), false},
+        {num(1), ctx->fromDouble(1.5), false},
+    };
+    for (std::size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        const proto::ProtoObject* m = assoc(nullptr, cases[i].stored, kw(":v"));
+        bool found = false;
+        protoClojure::mapGet(ctx, layout, m, cases[i].probe, &found);
+        EXPECT_EQ(found, cases[i].match) << "case " << i;
+    }
+}
+
+TEST_F(MapOpsFixture, MapsWithCollectionKeysCompareByValue) {
+    const proto::ProtoObject* k1 = assoc(assoc(nullptr, kw(":a"), num(1)),
+                                         kw(":b"), num(2));
+    const proto::ProtoObject* k2 = assoc(assoc(nullptr, kw(":b"), num(2)),
+                                         kw(":a"), num(1));
+    EXPECT_TRUE(mapsEqual(ctx, layout, assoc(nullptr, k1, num(10)),
+                          assoc(nullptr, k2, num(10))));
+    EXPECT_FALSE(mapsEqual(ctx, layout, assoc(nullptr, k1, num(10)),
+                           assoc(nullptr, k2, num(11))));
+}
+
 } // namespace

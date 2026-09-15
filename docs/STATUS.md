@@ -96,6 +96,13 @@ The design specifications written during development are archived under
       `(= [] (list))` are true, nested collections compare by value, and a
       list or vector is never `=` to a map, a string or `nil`
       (`valuesEqual` in `src/runtime/Primitives.h`)
+- [x] Value hashing of map keys — keys are hashed consistently with `=` and
+      matched with `=` (`valueHash` in `src/runtime/Primitives.h`): maps
+      hash independently of insertion order, lists and vectors hash alike,
+      numbers hash by value across SmallInteger, LargeInteger and double, so
+      `(get {{:a 1} :x} {:a 1})`, `(get {[1 2] :x} (list 1 2))` and
+      `(get {1 :x} 1.0)` return `:x`; hashes are not cached (NaN: see Known
+      issues)
 - [x] Strings — protoCore `ProtoString`
 - [x] Integers — `SmallInteger` tagged + auto-promoted `LargeInteger`
 - [x] Floats — `ProtoObject::fromDouble`
@@ -220,8 +227,7 @@ raises a read, compile or runtime error.
 
 - [ ] Sets — `ProtoSparseList` based, with `conj` / `disj`
 - [ ] Lazy seqs — `LazySeq` wrapper
-- [ ] Map hashing — a map used as a key of another map is hashed and
-      matched by identity, not by value; `hash` is not a primitive
+- [ ] `hash` as a function (the value hash is used internally for map keys)
 - [ ] Keywords, maps and vectors as functions (`(:a m)`, `(m :a)`, `(v 0)`)
 - [ ] `count` on maps
 
@@ -339,13 +345,18 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D12 | `clojure.java.*` namespaces do not exist                   | (perm) |
 | D13 | `read-string` strict on unregistered reader literals       | core   |
 | D14 | LargeInteger promotion is automatic on `*` — no `*'` needed (CONTRA Clojure-JVM, by design) | (perm) |
-| D15 | `(= 1 1.0)` returns `true` in v0.x (CONTRA Clojure-JVM where `=` is type-strict) | (perm) |
+| D15 | `(= 1 1.0)` returns `true` in v0.x (CONTRA Clojure-JVM where `=` is type-strict); map keys follow it, so `1` and `1.0` are one key and `(hash-map 1 :a 1.0 :b)` is `{1 :b}` | (perm) |
 | D16 | `:or` defaults fire on **explicit nil** as well as missing keys (CONTRA JVM-Clojure where only missing keys take the default) | v0.2 |
 | D17 | String ops (`upper-case`, `lower-case`, `split`, `reverse`, `trim`, `index-of`) are byte-level / ASCII-correct only; multi-byte UTF-8 codepoints traverse as bytes (CONTRA JVM-Clojure which is codepoint-aware) | v0.2 |
 | D18 | `(fn name [args] body)` — the name is accepted by the compiler but dropped; self-reference via `name` inside the body is not supported (use `defn` for self-recursion). Planned for v0.2 via wrapper-into-slot capture. | v0.2 |
 | D19 | Maps iterate and print in insertion order at every size, including maps built with `hash-map` (JVM Clojure guarantees insertion order only for array maps of at most 8 entries and leaves it unspecified beyond that and for `hash-map`) | (perm) |
 
 ## Known issues
+
+- **NaN is `=` to every number.** protoCore's numeric comparison reports
+  NaN equal to any number, so `(= nan 1)` is `true`. No hash can agree with
+  that: NaN hashes like `0`, so a NaN map key is matched only by `0`, `0.0`,
+  `-0.0`, NaN and integers that are multiples of 2^61 − 1, and vice versa.
 
 - **Promise `deref` polls.** A pending promise is checked every millisecond
   (with the thread marked unmanaged so garbage collection can proceed);

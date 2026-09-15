@@ -49,9 +49,9 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (165 fixtures under
+- **Tests.** A glob-discovered conformance suite (172 fixtures under
   `tests/conformance/`) and GoogleTest unit tests for the lexer, the reader,
-  the runtime map and value equality (46 tests).
+  the runtime map and value equality and hashing (55 tests).
 - **Benchmarks and examples.** `benchmarks/bench.sh` (comparison with
   Babashka), `benchmarks/actor-bench.sh` (actor throughput) and twelve
   example scripts under `examples/`.
@@ -104,8 +104,7 @@ The project has no tagged releases yet; the version declared in
   now share one value equality: maps are equal when they hold the same keys
   mapped to equal values, whatever the insertion order; vectors compare
   element by element; nested maps and vectors compare recursively; a map is
-  never equal to a vector or a list. `not=` is added. A map used as a map key
-  is still matched by identity (map hashing is not implemented).
+  never equal to a vector or a list. `not=` is added.
 - `=` compares lists by value. `(= (list 1 2) (list 1 2))` returned `false`
   and a vector was never equal to a list, because lists compared by
   identity. Lists and vectors are now compared as sequential collections:
@@ -113,6 +112,16 @@ The project has no tagged releases yet; the version declared in
   whatever their concrete types, so `(= [1 2] (list 1 2))` and
   `(= [] (list))` are `true`. Nested collections compare recursively, and a
   sequential collection is never equal to a map, a string or `nil`.
+- Map keys are hashed by value. A map or a list used as a map key was hashed
+  and matched by identity, so `(get {{:a 1} :x} {:a 1})` returned `nil`, and
+  an integer key was not found with an equal float although `(= 1 1.0)` is
+  `true`. Keys are now hashed with a value hash consistent with `=` and
+  matched with `=`: maps hash independently of insertion order, lists and
+  vectors share one order-dependent hash, and numbers hash by value modulo
+  2^61 − 1 across SmallInteger, LargeInteger and double. Keys that are `=`
+  are one key (`(hash-map 1 :a 1.0 :b)` is `{1 :b}`), and maps whose keys
+  are collections compare by value. NaN, which protoCore reports equal to
+  every number, is matched only by keys that hash like `0`.
 - `--help` and error messages no longer mention internal development labels
   ("Phase 5", "next milestone", "v0.0.x", "v0.7.x", "v0.13"); each message
   now states the actual restriction, for example "let: not supported at top

@@ -6,6 +6,7 @@
 #include "protoCore.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <mutex>
 #include <sstream>
@@ -726,9 +727,9 @@ const proto::ProtoObject* prim_list_p(proto::ProtoContext* ctx,
 // Session 13 — map primitives. The representation (insertion-ordered
 // entries plus a hash index), its cost model and its GC-rooting rules
 // live in src/runtime/MapOps.h; the primitives below only validate
-// arguments and delegate. Key equality is `compare(ctx, other) == 0`, so a
-// map used as a key matches by identity. Map equality under `=` is
-// mapEquals, reached through valuesEqual.
+// arguments and delegate. Keys are hashed with valueHash and matched with
+// valuesEqual, so keys match by value. Map equality under `=` is mapEquals,
+// reached through valuesEqual.
 
 const proto::ProtoObject* prim_map_p(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
@@ -2277,6 +2278,104 @@ SequentialView sequentialView(proto::ProtoContext* ctx,
     return s;
 }
 
+// --- valueHash helpers --------------------------------------------------
+//
+// A number hashes to its value modulo the Mersenne prime 2^61 - 1, the
+// scheme CPython uses for int and float. protoCore compare equates an
+// integer and a double only when they are mathematically equal, and equal
+// values have equal residues, so 1 and 1.0, or 2^70 as a LargeInteger and
+// as a double, hash equally (deviation D15). A negative value hashes to the
+// two's complement of its magnitude's residue.
+
+constexpr unsigned kHashBits = 61;
+constexpr unsigned long long kHashModulus = (1ULL << kHashBits) - 1;
+constexpr unsigned long long kHashInfinity = 314159;
+constexpr unsigned long long kHashNaN = 0;
+constexpr unsigned long long kSequentialSeed = 0x6A09E667F3BCC909ULL;
+constexpr unsigned long long kMapSeed = 0xBB67AE8584CAA73BULL;
+
+// splitmix64 finalizer: a bijective mix used to combine element hashes.
+inline unsigned long long mix64(unsigned long long z) {
+    z ^= z >> 30;
+    z *= 0xBF58476D1CE4E5B9ULL;
+    z ^= z >> 27;
+    z *= 0x94D049BB133111EBULL;
+    return z ^ (z >> 31);
+}
+
+inline unsigned long long withSign(bool negative, unsigned long long residue) {
+    return negative ? 0ULL - residue : residue;
+}
+
+// residue * 2^shift mod (2^61 - 1), for residue < 2^61 and shift < 61.
+inline unsigned long long rotateResidue(unsigned long long residue,
+                                        unsigned shift) {
+    if (shift == 0) return residue;
+    return ((residue << shift) & kHashModulus) |
+           (residue >> (kHashBits - shift));
+}
+
+unsigned long long hashLong(long long v) {
+    const bool negative = v < 0;
+    const unsigned long long magnitude =
+        negative ? 0ULL - static_cast<unsigned long long>(v)
+                 : static_cast<unsigned long long>(v);
+    return withSign(negative, magnitude % kHashModulus);
+}
+
+// Integers beyond the long long range: the residue of the hexadecimal
+// digits. The digit string is protoCore's allocation (made under its own
+// critical section) and is consumed before anything else allocates.
+unsigned long long hashIntegerDigits(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject* v) {
+    const std::string digits = v->asIntegerString(ctx, 16)->toStdString(ctx);
+    bool negative = false;
+    unsigned long long residue = 0;
+    for (char c : digits) {
+        if (c == '-') { negative = true; continue; }
+        const unsigned long long digit = (c >= '0' && c <= '9')
+            ? static_cast<unsigned long long>(c - '0')
+            : static_cast<unsigned long long>(c - 'a' + 10);
+        residue = rotateResidue(residue, 4) + digit;
+        if (residue >= kHashModulus) residue -= kHashModulus;
+    }
+    return withSign(negative, residue);
+}
+
+unsigned long long hashInteger(proto::ProtoContext* ctx,
+                               const proto::ProtoObject* v) {
+    try {
+        return hashLong(v->asLong(ctx));
+    } catch (const std::overflow_error&) {
+        return hashIntegerDigits(ctx, v);
+    }
+}
+
+// The residue of mantissa * 2^exponent, taking the mantissa 28 bits at a
+// time; 2^61 = 1 (mod 2^61 - 1), so the exponent only rotates the residue.
+unsigned long long hashDouble(double v) {
+    if (std::isnan(v)) return kHashNaN;
+    if (std::isinf(v)) return withSign(v < 0, kHashInfinity);
+    int exponent = 0;
+    double mantissa = std::frexp(v, &exponent);
+    const bool negative = mantissa < 0;
+    if (negative) mantissa = -mantissa;
+    unsigned long long residue = 0;
+    while (mantissa != 0.0) {
+        residue = rotateResidue(residue, 28);
+        mantissa *= 268435456.0;  // 2^28
+        exponent -= 28;
+        const auto chunk = static_cast<unsigned long long>(mantissa);
+        mantissa -= static_cast<double>(chunk);
+        residue += chunk;
+        if (residue >= kHashModulus) residue -= kHashModulus;
+    }
+    const int bits = static_cast<int>(kHashBits);
+    const int shift = exponent >= 0 ? exponent % bits
+                                    : bits - 1 - ((-1 - exponent) % bits);
+    return withSign(negative, rotateResidue(residue, static_cast<unsigned>(shift)));
+}
+
 } // namespace
 
 // Externally-visible value equality, declared in Primitives.h; shared by
@@ -2319,6 +2418,49 @@ bool valuesEqual(proto::ProtoContext* ctx, const MapLayout& layout,
     }
 
     return a->compare(ctx, b) == 0;
+}
+
+// Externally-visible value hash, declared in Primitives.h; the key hash of
+// every map. Its categories mirror valuesEqual's.
+unsigned long valueHash(proto::ProtoContext* ctx, const MapLayout& layout,
+                        const proto::ProtoObject* v) {
+    if (!v) v = PROTO_NONE;
+    if (v->isInteger(ctx)) return hashInteger(ctx, v);
+    if (v->isDouble(ctx))  return hashDouble(v->asDouble(ctx));
+    if (proto::ProtoObject::isStringTagFast(v)) return v->getHash(ctx);
+
+    if (isMap(ctx, layout, v)) {
+        // Order-independent: a sum of per-entry mixes. The key hashes are
+        // the ones stored in the map's hash index (valueHash of each key).
+        struct Acc {
+            const MapLayout*   layout;
+            unsigned long long sum;
+            unsigned long long count;
+        } acc{&layout, 0, 0};
+        mapForEachHashedEntry(ctx, layout, v, &acc,
+            [](proto::ProtoContext* c, void* self, unsigned long keyHash,
+               const proto::ProtoObject* value) {
+                auto* a = static_cast<Acc*>(self);
+                a->sum += mix64(keyHash ^ mix64(valueHash(c, *a->layout, value)));
+                ++a->count;
+            });
+        return mix64(acc.sum ^ mix64(kMapSeed + acc.count));
+    }
+
+    // Lists and vectors share one order-dependent combination, so equal
+    // sequential collections hash equally whatever their concrete types.
+    const SequentialView s = sequentialView(ctx, v);
+    if (s) {
+        const unsigned long n = s.size(ctx);
+        unsigned long long h = kSequentialSeed;
+        for (unsigned long i = 0; i < n; ++i)
+            h = mix64(h + valueHash(ctx, layout, s.at(ctx, i)));
+        return mix64(h ^ n);
+    }
+
+    // nil, booleans, atoms, functions, ...: protoCore's identity-based
+    // hash, matching the identity comparison valuesEqual falls back to.
+    return v->getHash(ctx);
 }
 
 void installPrimitives(proto::ProtoContext* ctx,

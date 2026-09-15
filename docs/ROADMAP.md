@@ -106,8 +106,6 @@ Clojure. Macros become user-writable.
   `update-in`, `merge-with`, `zipmap`.
 - Lazy sequences and the sequence library (`range`, `iterate`, `take`,
   `drop`, ...).
-- Value-based hashing, so that collections used as map keys match by value
-  (`=` already compares lists, vectors and maps by value).
 - `format` (printf-style via the host) and characters as 1-codepoint
   strings (D3).
 

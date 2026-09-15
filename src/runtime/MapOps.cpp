@@ -1,4 +1,5 @@
 #include "MapOps.h"
+#include "Primitives.h"  // valueHash / valuesEqual: key hashing and matching
 
 #include "protoCore.h"
 
@@ -29,7 +30,7 @@ inline const proto::ProtoSparseList* asSparse(const proto::ProtoObject* o) {
 
 inline unsigned long keyHash(proto::ProtoContext* ctx, const MapLayout& layout,
                              const proto::ProtoObject* key) {
-    return layout.hash ? layout.hash(ctx, key) : key->getHash(ctx);
+    return layout.hash ? layout.hash(ctx, key) : valueHash(ctx, layout, key);
 }
 
 // The state list of `m`, or nullptr for a map that has never held an entry.
@@ -52,12 +53,13 @@ const proto::ProtoList* bucketAt(proto::ProtoContext* ctx,
     return b->asList(ctx);
 }
 
-// Position of the triple holding `key` inside a bucket, or -1.
-long bucketFind(proto::ProtoContext* ctx, const proto::ProtoList* bucket,
-                const proto::ProtoObject* key) {
+// Position of the triple holding a key equal (valuesEqual) to `key` inside
+// a bucket, or -1.
+long bucketFind(proto::ProtoContext* ctx, const MapLayout& layout,
+                const proto::ProtoList* bucket, const proto::ProtoObject* key) {
     unsigned long n = bucket->getSize(ctx);
     for (unsigned long i = 0; i < n; i += kTriple) {
-        if (bucket->getAt(ctx, static_cast<int>(i))->compare(ctx, key) == 0)
+        if (valuesEqual(ctx, layout, bucket->getAt(ctx, static_cast<int>(i)), key))
             return static_cast<long>(i);
     }
     return -1;
@@ -91,7 +93,7 @@ public:
                const proto::ProtoObject* value) {
         const proto::ProtoSparseList* index = slotSparse(kSlotIndex);
         const proto::ProtoList* bucket = bucketAt(&scope_, index, hash);
-        long pos = bucket ? bucketFind(&scope_, bucket, key) : -1;
+        long pos = bucket ? bucketFind(&scope_, layout_, bucket, key) : -1;
 
         if (pos >= 0) {
             // Existing key: replace the value in its triple. The stored key
@@ -134,7 +136,7 @@ public:
     bool dissoc(unsigned long hash, const proto::ProtoObject* key) {
         const proto::ProtoSparseList* index = slotSparse(kSlotIndex);
         const proto::ProtoList* bucket = bucketAt(&scope_, index, hash);
-        long pos = bucket ? bucketFind(&scope_, bucket, key) : -1;
+        long pos = bucket ? bucketFind(&scope_, layout_, bucket, key) : -1;
         if (pos < 0) return false;
 
         long long seq =
@@ -259,7 +261,7 @@ const proto::ProtoObject* mapGet(proto::ProtoContext* ctx,
     const proto::ProtoList* bucket = bucketAt(
         ctx, asSparse(st->getAt(ctx, kStateIndex)), keyHash(ctx, layout, key));
     if (!bucket) return PROTO_NONE;
-    long pos = bucketFind(ctx, bucket, key);
+    long pos = bucketFind(ctx, layout, bucket, key);
     if (pos < 0) return PROTO_NONE;
     *found = true;
     return bucket->getAt(ctx, static_cast<int>(pos + 1));
@@ -287,7 +289,7 @@ void mapForEach(proto::ProtoContext* ctx, const MapLayout& layout,
             const auto* ad = static_cast<Adapter*>(a);
             const proto::ProtoList* bucket =
                 bucketAt(c, ad->index, keyHash(c, *ad->layout, key));
-            long pos = bucket ? bucketFind(c, bucket, key) : -1;
+            long pos = bucket ? bucketFind(c, *ad->layout, bucket, key) : -1;
             if (pos < 0) return;  // unreachable for a well-formed map
             ad->fn(c, ad->self, key,
                    bucket->getAt(c, static_cast<int>(pos + 1)));
@@ -313,11 +315,12 @@ bool mapEquals(proto::ProtoContext* ctx, const MapLayout& layout,
     // bucket of `b` is one sparse-list probe away. Equal counts plus every
     // key of `a` found in `b` means the key sets are equal.
     struct Walk {
+        const MapLayout*              layout;
         const proto::ProtoSparseList* otherIndex;
         void*                         self;
         MapValueEqFn                  valueEq;
         bool                          equal;
-    } walk{asSparse(stateOf(ctx, layout, b)->getAt(ctx, kStateIndex)),
+    } walk{&layout, asSparse(stateOf(ctx, layout, b)->getAt(ctx, kStateIndex)),
            self, valueEq, true};
     asSparse(stateOf(ctx, layout, a)->getAt(ctx, kStateIndex))->processElements(
         ctx, &walk,
@@ -331,7 +334,7 @@ bool mapEquals(proto::ProtoContext* ctx, const MapLayout& layout,
             const unsigned long size = bucket->getSize(c);
             for (unsigned long i = 0; i < size && w->equal; i += kTriple) {
                 long pos = bucketFind(
-                    c, other, bucket->getAt(c, static_cast<int>(i)));
+                    c, *w->layout, other, bucket->getAt(c, static_cast<int>(i)));
                 w->equal = pos >= 0 &&
                     w->valueEq(c, w->self,
                                bucket->getAt(c, static_cast<int>(i + 1)),
@@ -339,6 +342,27 @@ bool mapEquals(proto::ProtoContext* ctx, const MapLayout& layout,
             }
         });
     return walk.equal;
+}
+
+void mapForEachHashedEntry(proto::ProtoContext* ctx, const MapLayout& layout,
+                           const proto::ProtoObject* m, void* self,
+                           MapHashedEntryFn fn) {
+    const proto::ProtoList* st = stateOf(ctx, layout, m);
+    if (!st) return;
+    struct Walk {
+        void*            self;
+        MapHashedEntryFn fn;
+    } walk{self, fn};
+    asSparse(st->getAt(ctx, kStateIndex))->processElements(
+        ctx, &walk,
+        [](proto::ProtoContext* c, void* p, unsigned long hash,
+           const proto::ProtoObject* bucketObj) {
+            auto* w = static_cast<Walk*>(p);
+            const proto::ProtoList* bucket = bucketObj->asList(c);
+            const unsigned long size = bucket->getSize(c);
+            for (unsigned long i = 0; i < size; i += kTriple)
+                w->fn(c, w->self, hash, bucket->getAt(c, static_cast<int>(i + 1)));
+        });
 }
 
 } // namespace protoClojure

@@ -48,6 +48,35 @@ struct MapLayout;
 bool valuesEqual(proto::ProtoContext* ctx, const MapLayout& layout,
                  const proto::ProtoObject* a, const proto::ProtoObject* b);
 
+// Value hash consistent with valuesEqual, used by MapOps as the hash of
+// every map key: valuesEqual(a, b) implies valueHash(a) == valueHash(b) for
+// every pair of values except those involving NaN (below).
+//
+//   - Numbers hash to their value modulo 2^61 - 1 (the CPython scheme), so
+//     equal numbers hash equally whatever their representation — SmallInteger,
+//     LargeInteger or double (deviation D15): 1 and 1.0, or 2^70 as a
+//     LargeInteger and as a double. The infinities hash to fixed values.
+//   - NaN hashes to 0, like the integer 0. protoCore compare reports NaN
+//     equal to every number, so no hash consistent with `=` exists for NaN;
+//     as a map key NaN is matched only by numbers hashing to 0 (0, 0.0,
+//     -0.0, multiples of 2^61 - 1, and NaN) and vice versa.
+//   - Strings and keywords use protoCore's content hash.
+//   - Maps combine a mix of each entry's key hash and value hash with a sum,
+//     so the hash ignores insertion order.
+//   - Lists and vectors share one order-dependent combination of their
+//     element hashes, so `[1 2]` and `(1 2)` hash equally.
+//   - Every other value (nil, booleans, atoms, functions, ...) uses
+//     protoCore's identity-based hash, matching identity equality.
+//
+// Collections hash recursively. Nothing is cached: a collection is hashed
+// in full on every call — O(1) for numbers in the long long range, strings
+// and keywords; linear in the number of nested elements for collections
+// (list and vector elements are read by index in O(log n)). An integer
+// beyond the long long range renders its digits, which allocates; `v` must
+// be rooted by the caller. nullptr is nil.
+unsigned long valueHash(proto::ProtoContext* ctx, const MapLayout& layout,
+                        const proto::ProtoObject* v);
+
 // Install all v0.0.x primitives on the supplied globals object. The globals
 // object must be a mutable protoCore object (typically a child of
 // objectPrototype) so setAttribute is in-place. After this call, references

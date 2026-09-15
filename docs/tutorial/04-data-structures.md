@@ -297,9 +297,11 @@ In practice, this matters if you put your own types (records, when v0.2
 adds them) into sets and as map keys. Implement structural hash properly
 and equality / set membership just work.
 
-> **In protoClojure 0.0.1** `hash` is not available and maps are not
-> hashed by value: a map used as a key of another map matches by identity,
-> so `(get {{:a 1} :x} {:a 1})` returns `nil`.
+> **In protoClojure 0.0.1** `hash` is not available as a function, but map
+> keys are hashed consistently with `=`: `(get {{:a 1} :x} {:a 1})` and
+> `(get {[1 2] :x} (list 1 2))` return `:x`. Because `(= 1 1.0)` is true in
+> protoClojure (deviation D15), `1` and `1.0` hash equally too and are the
+> same map key. Sets are not implemented.
 
 ## 4.10 The substrate underneath
 
