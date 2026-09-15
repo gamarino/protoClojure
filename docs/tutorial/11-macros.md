@@ -1,5 +1,7 @@
 # 11. Macros
 
+> **Planned — not yet implemented.** Macros (`defmacro`, the quote reader macro `'`, quasiquote `` ` `` with `~` and `~@`, and gensyms) are not available in protoClojure 0.0.1; this chapter describes the intended design.
+
 A macro is a function that takes code as input and returns code as
 output, at compile time. The compiler calls it, takes whatever it
 returns, and compiles *that* instead of the original form.

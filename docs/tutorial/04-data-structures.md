@@ -1,5 +1,17 @@
 # 4. Data Structures
 
+> **Implementation status.** protoClojure 0.0.1 implements vectors
+> (`[...]`, `vector`, `vec`, `nth`, `count`, `empty?`, `first`, `rest`,
+> `reverse`), lists (`list`, `cons`, `first`, `rest`) and maps (`{...}`,
+> `hash-map`, `get`, `assoc`, `contains?`, `keys`, `vals`). Not available
+> yet: sets, the quote reader macro `'`, `conj`, `pop`, `peek`, `last`,
+> `assoc` on vectors, `dissoc`, `update`, `merge`, `select-keys`,
+> `zipmap`, the `get-in` / `assoc-in` / `update-in` family, `seq`,
+> `into`, collections and keywords as functions, `count` on maps, `==`,
+> `identical?`, `hash`, structural equality across collection types, and
+> the sequence and regex functions used in §4.11. See
+> [STATUS.md](../STATUS.md).
+
 protoClojure inherits Clojure's four primary collection types — list,
 vector, map, set — and adds the substrate's twist: every collection is
 backed by a protoCore primitive that other languages on the kernel

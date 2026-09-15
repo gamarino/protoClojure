@@ -2,7 +2,7 @@
  * Reader — turns a token stream into protoCore objects.
  *
  * Architectural rules — see
- *   docs/superpowers/specs/2026-06-14-engineering-principles.md
+ *   docs/archive/design-specs/2026-06-14-engineering-principles.md
  *
  *   P1: Every ProtoObject* held across an allocation lives in a
  *       ProtoContext::automaticLocals slot. NEVER in a C++ stack
@@ -61,11 +61,11 @@ struct ReaderError : std::runtime_error {
 // pay one extra heap allocation each, which is acceptable.
 struct ReaderMarkers {
     const proto::ProtoObject* stringMarkerProto;
-    const proto::ProtoObject* vectorMarkerProto;  // session 9 — `[..]` literals
-    const proto::ProtoObject* mapMarkerProto;     // session 13 — `{..}` literals
+    const proto::ProtoObject* vectorMarkerProto;  // `[..]` literals
+    const proto::ProtoObject* mapMarkerProto;     // `{..}` literals
     const proto::ProtoString* bytesKey;
-    const proto::ProtoString* itemsKey;           // session 9 — vector items list
-    const proto::ProtoString* entriesKey;         // session 13 — map (k,v,k,v) list
+    const proto::ProtoString* itemsKey;           // vector items list
+    const proto::ProtoString* entriesKey;         // map (k,v,k,v) list
 };
 
 class Reader {

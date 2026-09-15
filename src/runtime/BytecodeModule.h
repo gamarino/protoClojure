@@ -9,7 +9,7 @@
  * exist. When the runtime tears down, the modules destruct cleanly with
  * their std internals. No mixing.
  *
- * If session 4+ needs to attach a BytecodeModule to a ProtoObject (for
+ * If later code needs to attach a BytecodeModule to a ProtoObject (for
  * a closure, for example), the attachment is via an opaque
  * ProtoExternalPointer with a finalizer that calls `delete`. P4 — record
  * the boundary explicitly when we make that move.
@@ -28,7 +28,7 @@ class BytecodeModule {
 public:
     enum class ConstKind : uint8_t {
         Long,
-        Double,    // session 9 — IEEE-754 64-bit float literal
+        Double,    // IEEE-754 64-bit float literal
         String,
         Symbol,    // interned at materialisation time via ProtoString::createSymbol
     };
@@ -94,7 +94,7 @@ public:
     int  asSlot() const { return asSlot_; }
     void setAsSlot(int s) { asSlot_ = s; }
 
-    // Closure capture specification (session 6). For each free variable
+    // Closure capture specification. For each free variable
     // the body references through its enclosing scope, the compiler
     // records: parentSlot — the slot in the enclosing scope's frame to
     // read at MAKE_FN time; localSlot — the slot in THIS body's frame to

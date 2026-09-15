@@ -23,8 +23,8 @@ bands, and the worker-pool sizing.
 
 (send acc inc)                ;; => promise — enqueued at medium priority
 (send acc + 100)              ;; => promise — extra args after the function
-@(send acc inc)               ;; => 101 — block until that message is processed
-@acc                          ;; => 101 — the value-so-far
+@(send acc inc)               ;; => 102 — block until that message is processed
+@acc                          ;; => 102 — the value-so-far
 ```
 
 `send` always returns immediately with a promise that will hold the
@@ -44,7 +44,7 @@ The print form is deliberately distinct from atoms, so you see what you
 have at the REPL:
 
 ```
-#<actor 101>
+#<actor 102>
 ```
 
 ## 13.2 The single-method invariant
@@ -58,11 +58,15 @@ of a `send`'d message sees a coherent value — no other worker can touch
 this actor while you are inside. So you write:
 
 ```clojure
-(send bank-account
-      (fn [account msg]
-        (case (:op msg)
-          :deposit  (update account :balance + (:amount msg))
-          :withdraw (update account :balance - (:amount msg)))))
+(defn apply-op [account msg]
+  (cond
+    (= (get msg :op) :deposit)  (assoc account :balance (+ (get account :balance) (get msg :amount)))
+    (= (get msg :op) :withdraw) (assoc account :balance (- (get account :balance) (get msg :amount)))
+    :else account))
+
+(def bank-account (actor {:balance 0}))
+(send bank-account apply-op {:op :deposit :amount 50})
+@(send bank-account apply-op {:op :withdraw :amount 20})   ;; => {:balance 30}
 ```
 
 with no `swap!`, no CAS retry loop, no `locking`. The invariant covers
@@ -142,7 +146,7 @@ Read the running stats with `actor-stats`:
 
 ```clojure
 (actor-stats)
-;; => {:workers 4 :messages-processed 100000}
+;; => {:messages-processed 100000, :workers 4}
 ```
 
 ## 13.5 Wiring atoms, futures, and actors together
@@ -182,14 +186,14 @@ on purpose, but:
   `await`, or `await-for`.
 - The single-method invariant is the same in both.
 
-If you want the JVM `agent` surface verbatim, that lives behind a future
-session — see `docs/STATUS.md`. The current `actor` is the
+The JVM `agent` surface is planned but not implemented — see
+[`STATUS.md`](../STATUS.md). The current `actor` is the
 protoCore-native shape: closer to protoST's actor, simpler than Akka,
 deliberately small.
 
 ## 13.7 Honest numbers
 
-On a 2026-06-14 measurement (Ryzen 5500U, 6 physical cores, SMT 8),
+On a 2026-06-14 measurement (AMD Ryzen 5 5500U, 6 cores, 12 threads),
 running 1,000,000 messages per row, body = `(inc v)`:
 
 | mode      | what it measures                                              | peak msg/s |
@@ -214,17 +218,16 @@ A few things to read out of those numbers:
   CPU) for `fan-out`, and falls off at 8/16 because the extra workers
   go to SMT siblings — same pattern protoST documented.
 
-The benchmark sources are in `benchmarks/actor-{throughput,fanout,mpsc
-,mpmc}.clj`; the runner is `benchmarks/actor-bench.sh`. Treat these as
-**upper bounds for a single-opcode body**. Real message bodies do real
-work; a body of even a few hundred nanoseconds drops these into the
-30-100K msg/s range.
+The benchmark sources are `benchmarks/actor-throughput.clj`,
+`actor-fanout.clj`, `actor-mpsc.clj` and `actor-mpmc.clj`; the runner is
+`benchmarks/actor-bench.sh`. Treat these as **upper bounds for a
+single-operation body**: message bodies that do real work lower them.
 
-> Note: prior versions of this document quoted "~5M msg/s single" and
-> "~250K msg/s fan-out". Those numbers were wrong — the bench was
-> silently failing to compile and the runner was measuring time-to-fail
-> instead of throughput. The numbers above are the first honest
-> measurement. Lesson recorded in MEMORY for next time.
+> Note: earlier versions of this document quoted "~5M msg/s single" and
+> "~250K msg/s fan-out". Those numbers were wrong — the benchmark script
+> was silently failing to compile and the runner was measuring
+> time-to-failure instead of throughput. The runner now checks each
+> script's `:messages-processed` output before reporting a rate.
 
 ## 13.8 Summary
 

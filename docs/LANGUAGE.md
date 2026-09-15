@@ -4,16 +4,15 @@
 > document is correct and the tutorial has a bug.
 
 This is the **design reference** for protoClojure — the surface the
-implementation is converging on. The implementation is at
-**session 12**; the table in §1.3 below summarises what is shipped
-today vs scoped for later phases. `docs/STATUS.md` is the living
-tracker; if a feature you expect is not in STATUS, it is not
-implemented.
+implementation is converging on. The table in §1.2 below summarises
+what protoClojure 0.0.1 implements and what is planned.
+`docs/STATUS.md` is the living tracker; if a feature you expect is not
+listed there as implemented, it is not implemented.
 
-Sections marked **[v0.2]** or **[v0.3]** describe planned behaviour;
-the current build does not implement them. Sections without a tag
-describe v0.x and may be partly or fully shipped — check STATUS for
-the exact line.
+Sections marked **(planned)** describe v0.1 behaviour the current build
+does not implement; sections marked **[v0.2]** or **[v0.3]** describe
+later versions. Sections without a tag describe the v0.1 design and may
+be partly implemented — check STATUS for the exact line.
 
 ---
 
@@ -33,12 +32,12 @@ Three priorities, in order:
 1. **Idiom over performance.** Clojure programmers must read protoClojure
    code and recognise it.
 2. **REPL-driven development is the workflow.** The REPL is first-class;
-   nREPL compatibility is in v0.1.
+   nREPL compatibility is planned for v0.1.
 3. **Honesty about gaps.** Every departure from Clojure-JVM is
    documented in `STATUS.md`. Unimplemented forms raise; they do not
    silently return `nil`.
 
-### 1.2 Implementation status at a glance (session 12)
+### 1.2 Implementation status at a glance (protoClojure 0.0.1)
 
 This snapshot exists so a reader picking up the language reference can
 tell at a glance which parts of the surface are runnable today. The
@@ -46,40 +45,41 @@ tell at a glance which parts of the surface are runnable today. The
 
 | Surface area | Status |
 |---|---|
-| Numbers — integers (SmallInt + LargeInt promoted) | ✅ shipped |
-| Numbers — IEEE-754 floats (`3.14`, `1e6`) | ✅ shipped |
-| Numbers — ratios `1/3` | ⏳ planned |
-| Strings | ✅ shipped (literal + `str` + `println`) |
-| Strings — `clojure.string` ops (split, join, upper, …) | ⏳ planned |
-| Symbols, keywords, booleans, nil literals | ✅ shipped |
-| Reader macros `'`, `` ` ``, `~`, `~@`, `#(...)`, `#'`, `#_`, `^` | ⏳ planned (only `'` quote of atoms today) |
-| Lists `(...)` | ✅ shipped |
-| Vectors `[...]` | ✅ shipped (ProtoTuple, distinct from list) |
-| Maps `{...}` | ⏳ planned (session 14) |
-| Sets `#{...}` | ⏳ planned |
-| `def`, `defn`, `fn`, `let`, `loop`, `recur` | ✅ shipped |
-| Multi-arity `defn` | ✅ shipped |
-| Variadic `& rest` | ✅ shipped |
-| `if`, `do`, `quote`, `apply` | ✅ shipped |
-| `when`, `when-not`, `cond`, `and`, `or` | ✅ shipped |
-| `throw`, `try`, `catch`, `finally`, `ex-info` | ⏳ planned (session 18) |
-| Closures with N-level lexical capture | ✅ shipped |
-| Named arguments `& {:keys [...]}` | ⏳ planned (session 13 — PROMOTED) |
-| Namespaces (`ns`, `:require`, `:as`, `:refer`) | ⏳ planned |
-| State (`atom`, `swap!`, `reset!`, `@`) | ⏳ planned (sessions 26-27) |
-| Lazy seqs (`lazy-seq`, `range`, `iterate`) | ⏳ planned |
-| User-defined macros (`defmacro`) | ⏳ planned (session 17) |
-| REPL | ⏳ planned (session 19+) |
-| nREPL server | ⏳ planned (sessions 20-21) |
-| UMD providers (`py/`, `js/`, `pst/`, `clj/`) | ⏳ planned (sessions 22-25) |
+| Numbers — integers (SmallInteger + promoted LargeInteger) | Implemented |
+| Numbers — IEEE-754 floats (`3.14`, `1e6`) | Implemented |
+| Numbers — ratios `1/3` | Planned |
+| Strings | Implemented (literals, `str`, `println`) |
+| Strings — `clojure.string`-shaped ops (`split`, `join`, `upper-case`, …) | Implemented, in the global namespace |
+| Symbols, keywords, booleans, nil literals | Implemented |
+| Reader macros `'`, `` ` ``, `~`, `~@`, `#(...)`, `#'`, `#_`, `^` | Planned (only `@` today; `(quote atom)` works as a special form) |
+| Lists `(...)` | Implemented |
+| Vectors `[...]` | Implemented (ProtoTuple, distinct from list) |
+| Maps `{...}` | Implemented (`hash-map`, `assoc`, `get`, `contains?`, `keys`, `vals`) |
+| Sets `#{...}` | Planned |
+| `def`, `defn`, `fn`, `let`, `loop`, `recur` | Implemented (`let` and `loop` inside function bodies only) |
+| Multi-arity `defn` | Implemented |
+| Variadic `& rest` | Implemented |
+| `if`, `do`, `quote`, `apply` | Implemented (`quote` of atoms only; `apply` over a list) |
+| `when`, `when-not`, `cond`, `and`, `or` | Implemented |
+| `throw`, `try`, `catch`, `finally`, `ex-info` | Planned |
+| Closures with N-level lexical capture | Implemented |
+| Named arguments `& {:keys [...] :or {...} :as m}` | Implemented |
+| Namespaces (`ns`, `:require`, `:as`, `:refer`) | Planned |
+| State (`atom`, `swap!`, `reset!`, `compare-and-set!`, `@`, watches) | Implemented |
+| `future`, `promise`, `deliver`, `pmap` | Implemented |
+| Actors (`actor`, `send`, `send-h`, `send-l`) | Implemented (see tutorial chapter 13) |
+| Lazy seqs (`lazy-seq`, `range`, `iterate`) | Planned |
+| User-defined macros (`defmacro`) | Planned |
+| Local interactive REPL | Implemented |
+| nREPL server | Planned for v0.1 |
+| UMD providers (`py/`, `js/`, `pst/`, `clj/`) | Planned |
 
-The examples in §1.3 below describe the **eventual** v0.1 shape. The
-ones marked "(shipped)" run today; the ones marked "(planned)" are
-included to define the target surface.
+Example A in §1.3 runs today; examples B and C show the v0.1 target
+surface and do not run yet.
 
 ### 1.3 A first example
 
-**Example A — runs today (session 12 surface).**
+**Example A — runs today.**
 
 ```clojure
 (defn greet [who]
@@ -110,10 +110,10 @@ hello, world
   (println (greet (or (first args) "world"))))
 ```
 
-This will run once `ns`, `:require`, and `clojure.string` land
-(sessions 15, 16, 22 per `ROADMAP.md`).
+This will run once `ns` and `:require` land and `clojure.string` is
+available as a namespace (see `ROADMAP.md`).
 
-**Example C — cross-runtime interop, target shape (planned, session 23+).**
+**Example C — cross-runtime interop, target shape (planned).**
 
 ```clojure
 (ns demo.numpy-bridge
@@ -138,6 +138,10 @@ that need a representation change (see §11 *Interop*).
 
 ## 2. Lexical structure
 
+The protoClojure 0.0.1 reader implements integers, floats, strings,
+symbols, keywords, booleans, `nil`, lists, vectors, maps, `@`, line
+comments and commas as whitespace. The rest of this section is planned.
+
 ### 2.1 Whitespace and comments
 
 Whitespace separates tokens. Commas count as whitespace (an unusual
@@ -148,13 +152,12 @@ comment is `#_<form>` — the next form is read and dropped.
 ### 2.2 Numbers
 
 - **Integer**: `42`, `-7`, `0xff` (hex), `0b1010` (binary), `2r1010`
-  (radix-N). Range: protoCore `SmallInteger` (56-bit inline) and
-  `LargeInteger` (heap-allocated arbitrary precision) — overflow
-  promotes transparently, identical to JVM Clojure since 1.3.
+  (radix-N). Range: protoCore `SmallInteger` (signed 54-bit, stored
+  inline in the tagged pointer) and `LargeInteger` (heap-allocated
+  arbitrary precision) — overflow promotes transparently.
 - **Ratio**: `3/4`, `-22/7`. Stored as a normalised pair of integers.
   Arithmetic preserves exact rationality unless mixed with a float.
-- **Float**: `3.14`, `1e10`, `-0.5e-3`. IEEE 754 double, tagged immediate
-  for the common case.
+- **Float**: `3.14`, `1e10`, `-0.5e-3`. IEEE 754 double.
 - **BigDecimal**: `3.14M` — **[v0.2]**.
 
 ### 2.3 Strings
@@ -215,6 +218,7 @@ truthy).
 - `#_form` → discard the next form.
 - `^{:a 1} form` → attach metadata to `form`. `^kw` is `{:tag kw}`;
   `^Type` is `{:tag Type}`.
+- `@form` → `(deref form)` (implemented).
 
 ### 2.9 Reader literals
 
@@ -228,7 +232,8 @@ tagged forms but does not yet ship `inst?` / `uuid?` predicates.
 ### 3.1 The reader
 
 `(read-string s)` parses one form. `(read rdr)` reads from a reader
-object. Errors carry source position.
+object. Errors carry source position. (Planned: `read-string` and
+`read` are not available in 0.0.1; the reader is used internally.)
 
 ### 3.2 The evaluator
 
@@ -247,6 +252,9 @@ are evaluated by case:
   function), the args are evaluated left-to-right, and the function is
   applied.
 
+In 0.0.1 there are no namespaces or macros: symbols resolve through the
+lexical scope and then a single global table.
+
 ### 3.3 Special forms
 
 `def`, `if`, `do`, `let*`, `loop*`, `recur`, `fn*`, `quote`, `var`,
@@ -254,6 +262,11 @@ are evaluated by case:
 two raise an explicit "JVM-specific, not supported" error in v0.1). The
 user-facing forms `let`, `loop`, `fn`, `defn`, `if-let`, `when`, `cond`,
 etc., are macros built on these specials.
+
+In 0.0.1 the C++ compiler handles `def`, `if`, `do`, `quote`, `fn`,
+`defn`, `let`, `loop`, `recur`, `when`, `when-not`, `cond`, `and`, `or`,
+`apply` and `future` directly; the `*` forms, `var`, `throw`, `try` and
+`if-let` are not implemented.
 
 ### 3.4 Truthiness
 
@@ -270,6 +283,11 @@ to keep the idiom intact.
 All four core structures are persistent (every "modification" returns a
 new value; the old value is unchanged) and immutable by default.
 
+In 0.0.1, lists, vectors and maps are implemented with the primitives
+listed in `STATUS.md`. Sets, `conj`, `dissoc`, `update`, `merge`,
+collections and keywords as functions, and the equality rules of §4.5
+are planned.
+
 ### 4.1 List
 
 A singly-linked persistent list backed by `ProtoList`. Cheap `conj` at
@@ -283,9 +301,8 @@ head, `O(1)` `first` / `rest`, `O(n)` random access.
 
 ### 4.2 Vector
 
-Indexed sequential collection, backed by a balanced AVL tree (the
-protoCore `ProtoList` indexed mode). `O(log n)` random access,
-`O(log n)` `conj` at tail, `O(log n)` `assoc`.
+Indexed sequential collection, backed by protoCore `ProtoTuple`.
+`O(log n)` random access, `O(log n)` `conj` at tail, `O(log n)` `assoc`.
 
 ```clojure
 (conj [1 2] 3)         ;; => [1 2 3]
@@ -296,7 +313,7 @@ protoCore `ProtoList` indexed mode). `O(log n)` random access,
 
 ### 4.3 Map
 
-Hash-array-mapped trie of key→value pairs, backed by protoCore
+Hash-keyed map of key→value pairs, backed by protoCore
 `ProtoSparseList`. Keys can be any value supporting `=` / `hash`.
 
 ```clojure
@@ -309,7 +326,7 @@ Hash-array-mapped trie of key→value pairs, backed by protoCore
 (merge {:a 1} {:b 2})          ;; => {:a 1, :b 2}
 ```
 
-### 4.4 Set
+### 4.4 Set (planned)
 
 Persistent hash set, backed by a `ProtoSparseList` keyed on the element.
 
@@ -327,6 +344,10 @@ the same elements in order. Two maps are equal iff they have the same
 key→value pairs. `==` is numeric equality across types (`(== 1 1.0)`
 is true; `(= 1 1.0)` is false). Identity is `identical?` (pointer
 equality, useful for sentinels).
+
+In 0.0.1, `=` compares numbers across types (`(= 1 1.0)` is true, see
+deviation D15 in `STATUS.md`), and structural equality of collections,
+`==` and `identical?` are not implemented.
 
 ---
 
@@ -364,10 +385,12 @@ optimisation:
       (recur (dec n) (* acc n)))))
 ```
 
-`recur` may only appear in tail position. The compiler enforces this
-and raises a clear error otherwise. Without `recur`, deep self-recursion
-will overflow the operand stack — there is no automatic TCO for general
-calls, only at `recur` points (matches JVM Clojure exactly).
+`recur` may only appear in tail position. The v0.1 design has the
+compiler enforce this with a clear error; the 0.0.1 compiler does not
+check it yet, and a non-tail `recur` fails at run time. Without `recur`,
+deep self-recursion will overflow the operand stack — there is no
+automatic TCO for general calls, only at `recur` points (matches JVM
+Clojure exactly).
 
 ### 5.3 Closures
 
@@ -387,7 +410,7 @@ updated by referring to an `atom`.
 `if`, `do`, `let*`, `loop*`, `recur`, `fn*`, `quote`, `def`, `var`,
 `throw`, `try` / `catch` / `finally`. The macro `let` expands into
 `let*`, `loop` into `loop*`, `fn` into `fn*`, etc. User code rarely
-writes the `*` forms directly.
+writes the `*` forms directly. (See §3.3 for what 0.0.1 implements.)
 
 ```clojure
 (if test then else)
@@ -407,7 +430,7 @@ matches all of them.
 
 ---
 
-## 7. Namespaces
+## 7. Namespaces (planned)
 
 A file starts with a `ns` form declaring the namespace and its imports:
 
@@ -431,12 +454,12 @@ through the namespaced UMD provider — see `INTEROP.md` for the full
 chain.
 
 `in-ns`, `create-ns`, `find-ns`, `the-ns`, `all-ns`, `ns-publics`,
-`ns-refers`, `ns-aliases`, `ns-unmap` are supported and behave as in
+`ns-refers`, `ns-aliases`, `ns-unmap` will be supported and behave as in
 JVM Clojure. `ns-import` (JVM-specific) is not supported.
 
 ---
 
-## 8. Vars and dynamic binding
+## 8. Vars and dynamic binding (planned)
 
 `def` interns a *var* in the current namespace. The var is what is
 captured when code references the symbol; redefining it propagates.
@@ -455,8 +478,11 @@ captured when code references the symbol; redefining it propagates.
 `^:dynamic` marks the var dynamically rebindable. `binding` pushes
 thread-local bindings; without `^:dynamic` the var is constant.
 
-`alter-var-root` is supported with a warning — most uses are a code
-smell.
+`alter-var-root` will be supported with a warning — most uses are a
+code smell.
+
+In 0.0.1, `def` stores the value in a single global table; redefining
+a name at the REPL replaces it for later calls.
 
 ---
 
@@ -465,7 +491,7 @@ smell.
 ### 9.1 Atoms
 
 A reference to a value, swappable atomically. Backed by protoCore's
-`setAttributeIfEqual` CAS.
+`setAttributeIfEqual` CAS. Implemented.
 
 ```clojure
 (def counter (atom 0))
@@ -487,25 +513,31 @@ implementation plan.
 
 ### 9.3 Agents — **[v0.3]**
 
-`agent`, `send`, `send-off`, `await`, `await-for` are reserved.
-Implementation will run on protoCore actors but with the JVM Clojure
-surface API where it makes sense.
+`agent`, `send-off`, `await`, `await-for` are reserved. The
+implementation will run on protoCore actors but with the JVM Clojure
+surface API where it makes sense. protoClojure 0.0.1 already ships a
+protoCore-native `actor` whose `send` returns a promise; see tutorial
+chapter 13.
 
-### 9.4 Volatiles
+### 9.4 Volatiles (planned)
 
-`volatile!`, `vreset!`, `vswap!` are supported. They are *not* CAS
+`volatile!`, `vreset!`, `vswap!` will be supported. They are *not* CAS
 based — they're an unsynchronised mutable cell, used for inner-loop
 state where the user has externally guaranteed single-thread access.
 Useful for the implementation of transducers.
 
 ### 9.5 Promises and delays
 
-`delay`, `force`, `realized?` work as JVM Clojure. `promise`,
-`deliver` are supported and route to protoCore's `Future` primitive.
+`promise`, `deliver` and `realized?` are implemented. `delay` and
+`force` are planned and will work as in JVM Clojure.
 
 ---
 
-## 10. Sequences and lazy evaluation
+## 10. Sequences and lazy evaluation (planned)
+
+In 0.0.1, `first`, `rest`, `cons`, `map`, `filter` and `reduce` work
+over lists and vectors and return fully realised lists; `seq`, `next`,
+laziness and the functions below are planned.
 
 ### 10.1 The seq abstraction
 
@@ -550,7 +582,7 @@ The arity that takes a collection works.
 
 ---
 
-## 11. Interop with foreign UMD modules
+## 11. Interop with foreign UMD modules (planned)
 
 Loaded modules from `py/X`, `js/X`, `pst/X` are protoCore objects.
 Their *attributes* are their members. Function call uses standard
@@ -591,18 +623,21 @@ The full chain and edge cases are documented in
 Inherited entirely from protoCore: real OS threads, no GIL, per-thread
 allocation arenas, concurrent garbage collector.
 
-`future`, `promise`, `deref`, `realized?` work and route to protoCore's
-`Future`. `pmap`, `pcalls`, `pvalues` parallelise over the host thread
-pool.
+`future`, `promise`, `deliver`, `deref` and `realized?` are
+implemented: `future` runs its body on a new OS thread, and `deref`
+blocks on a pending future or promise. `pmap` runs one OS thread per
+element. `pcalls` and `pvalues` are planned. Actors (`actor`, `send`,
+`send-h`, `send-l`) run on a shared worker pool; see tutorial
+chapter 13.
 
 ```clojure
 (def result (future (slow-computation)))
 @result                        ;; blocks until done
 ```
 
-The Clojure-JVM thread-local Var binding semantics is preserved: a
-`binding` form establishes a thread-local rebinding that propagates to
-threads created inside the binding scope.
+The Clojure-JVM thread-local Var binding semantics will be preserved
+(planned, with `binding`): a `binding` form establishes a thread-local
+rebinding that propagates to threads created inside the binding scope.
 
 ---
 
@@ -618,7 +653,7 @@ Honest catalogue. Updated whenever a deviation is introduced or removed.
 | D4  | No chunked sequences in v0.1                                             | Simplicity. Performance follow-up in v0.2.                                                                           |
 | D5  | No transducers in v0.1                                                   | v0.2 deliverable. The 2-arg seq form of `map`/`filter`/etc. works.                                                   |
 | D6  | No STM in v0.1                                                           | v0.2. `ref` raises with a clear "v0.2" message.                                                                      |
-| D7  | No agents in v0.1                                                        | v0.3. `agent` raises.                                                                                                |
+| D7  | No agents in v0.1                                                        | v0.3. `agent` raises. The protoCore-native `actor` ships instead.                                                    |
 | D8  | No `core.async` (likely permanent — re-imagined on actors)              | protoCore actors give CSP-like behaviour with a different surface; deliberate divergence.                            |
 | D9  | No `defrecord` / `deftype` in v0.1                                       | Protocols + maps cover most needs.                                                                                   |
 | D10 | No `BigDecimal` literal `M` suffix in v0.1                               | v0.2.                                                                                                                |
@@ -626,11 +661,12 @@ Honest catalogue. Updated whenever a deviation is introduced or removed.
 | D12 | `clojure.java.*` namespaces do not exist                                 | JVM-specific.                                                                                                        |
 | D13 | `read-string` rejects forms with reader literals not registered          | JVM Clojure is permissive here; we are strict to surface typos.                                                      |
 
-Deviations introduced after v0.1 release will be numbered D14+.
+Deviations introduced after these (D14 onward) are listed in
+`STATUS.md`.
 
 ---
 
-## 14. Errors
+## 14. Errors (planned)
 
 Errors are protoCore exception objects. The `clojure.core` exception
 constructors (`ex-info`, `ex-data`, `ex-message`, `ex-cause`) work as
@@ -650,25 +686,33 @@ Class hierarchy: `Exception` ← `Error` ← `ArithmeticError`, `IndexError`,
 `KeyError`, `TypeError`, `ArityError`. A catch on `Exception` matches any
 of them.
 
+In 0.0.1, a read, compile or runtime error stops a script with a
+message on standard error and exit status 1; the REPL prints the error
+and continues.
+
 ---
 
 ## 15. The REPL
 
-`protoclj` launches a REPL. With no arguments, the interactive prompt
-is local. With `--nrepl PORT`, an nREPL server listens on that port for
-CIDER / Calva / Conjure connections.
+`protoclj` with no arguments launches the local interactive REPL
+(implemented). With `--nrepl PORT`, an nREPL server will listen on that
+port for CIDER / Calva / Conjure connections (planned for v0.1).
 
-Operations supported in v0.1:
+nREPL operations planned for v0.1:
 - `eval`, `interrupt`, `clone`, `close`, `describe`, `load-file`
 - `info`, `complete` — **[v0.1 stretch]**
 
-The REPL prints values using `pr-str`-style formatting (quotes on
-strings, `:keyword` for keywords, etc.), not `print-str`. `*1` `*2`
-`*3` hold the last three results; `*e` holds the last exception.
+The v0.1 design prints REPL values using `pr-str`-style formatting
+(quotes on strings, `:keyword` for keywords, etc.), not `print-str`. In
+0.0.1 the REPL uses the `println` printer, so strings print without
+quotes. `*1` `*2` `*3` hold the last three results (implemented); `*e`
+will hold the last exception (planned).
 
 ---
 
-## 16. Sample code reference
+## 16. Sample code reference (planned)
+
+This example combines most v0.1 features and does not run on 0.0.1.
 
 ```clojure
 ;; A non-trivial example combining most v0.1 features.

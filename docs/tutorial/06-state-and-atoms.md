@@ -1,5 +1,12 @@
 # 6. State and Atoms
 
+> **Implementation status.** `atom`, `@` / `deref`, `swap!`, `reset!`,
+> `compare-and-set!`, `add-watch`, `remove-watch`, `future`, `promise`
+> and `deliver` work in protoClojure 0.0.1. Not available yet:
+> `update-in`, `fnil`, `volatile!` / `vswap!` / `vreset!`, `dotimes`,
+> `delay`, and cross-runtime access to atoms (§6.8). `let` works only
+> inside function bodies. See [STATUS.md](../STATUS.md).
+
 State in Clojure is a deliberate, named tool — not the default. The
 default is values: maps, vectors, sets, numbers, strings, all
 immutable and persistent. When you genuinely need a value that can
@@ -152,8 +159,8 @@ Atoms are *not* enough when:
 - You need **serialised, asynchronous, side-effecting updates** — the
   agent pattern. Not in v0.1; D7 (v0.3).
 - You are coordinating between threads with a *message-passing* shape
-  rather than a *shared-state* shape — actors. The protoCore actor
-  primitive is available; protoClojure exposes it from v0.3.
+  rather than a *shared-state* shape — actors. protoClojure ships
+  `actor` today; see [Chapter 13](13-actors.md).
 
 In v0.1, your toolkit for state is: `atom`, `volatile!` (single-thread,
 no CAS, used inside transducer-shaped code), `promise` /  `deliver`
@@ -177,21 +184,20 @@ loop where you have externally guaranteed single-thread access:
 Used heavily in transducer internals (v0.2).
 
 **`promise`** is a one-shot rendezvous. Created empty. The first
-`deliver!` sets its value. Subsequent `@promise` reads the value
-(blocking until delivered):
+`deliver` sets its value; later delivers are ignored. `@promise` reads
+the value (blocking until delivered):
 
 ```clojure
 (def result (promise))
 
-(future                            ;; future runs on another thread
-  (Thread/sleep 100)
-  (deliver result 42))
+(future (deliver result 42))       ;; future runs on another thread
 
 @result                            ;; blocks until deliver, then => 42
 ```
 
-(`future` is the protoCore async primitive, surfaced under the same
-name JVM Clojure uses; see Chapter 10 for the concurrency model.)
+(`future` runs its body on a new OS thread, under the same name JVM
+Clojure uses; [Chapter 13](13-actors.md) covers actors, the other
+concurrency primitive.)
 
 **`delay`** wraps a computation that runs at most once, the first time
 its value is needed:

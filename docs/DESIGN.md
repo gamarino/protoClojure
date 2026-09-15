@@ -5,45 +5,48 @@
 > writing code, useful for understanding *why* a feature is the way it is
 > when the reference only documents *what* it does.
 
-> **Implementation status (session 12).** §1 (substrate) is fully
-> realised — the runtime IS what is described there. §2 onward
-> describes the design surface the implementation is converging on.
-> Areas marked in `docs/STATUS.md` as "shipped" match the design as
-> written; areas marked "planned" describe the target shape, not the
+> **Implementation status (protoClojure 0.0.1).** §1 (substrate) is
+> realised — the runtime is what is described there. The reader and the
+> compiler / VM (§3-§4), atoms (§6) and the local REPL (§9) are
+> implemented in part; the UMD module system (§2), namespaces and vars
+> (§5), refs and agents (§6), lazy sequences (§7), protocols and
+> multimethods (§8), the nREPL server (§9) and macros (§10) are planned.
+> `docs/STATUS.md` lists exactly what ships; where this document and the
+> implementation differ, the design describes the target shape, not the
 > current behaviour.
 
 ---
 
 ## 1. The substrate
 
-protoClojure compiles to bytecode for a tree-walking-then-stack-based
-interpreter that runs on top of the **protoCore object kernel** —
-the same C++20 kernel that hosts protoJS, protoPython, and protoST. The
-kernel gives us, for free, every property that Clojure usually has to fight
-the host runtime for:
+protoClojure compiles to bytecode for a stack-based interpreter that
+runs on top of the **protoCore object kernel** — the same C++20 kernel
+that hosts protoJS, protoPython, and protoST. The kernel gives us, for
+free, every property that Clojure usually has to fight the host runtime
+for:
 
 - **Immutability by default**: every protoCore object is immutable unless
   explicitly created mutable. A protoClojure `(assoc m :k v)` returns a new
-  map via the kernel's structural-sharing `setAttribute` path.
+  map through the kernel's structural-sharing collections.
 - **Persistent collections**: protoCore ships AVL trees (`ProtoList`),
-  hash-array-mapped tries (`ProtoSparseList`), ropes (`ProtoString`), and
-  multisets (`ProtoMultiset`). These map onto Clojure's `PersistentVector`,
-  `PersistentHashMap`, persistent strings, and `PersistentHashSet` with
-  almost no adapter layer.
+  tuples (`ProtoTuple`), hash-keyed sparse lists (`ProtoSparseList`), ropes
+  (`ProtoString`), and multisets (`ProtoMultiset`). These map onto
+  Clojure's persistent lists and vectors, `PersistentHashMap`, persistent
+  strings, and `PersistentHashSet` with almost no adapter layer.
 - **Compare-and-swap on attributes**: protoCore's `setAttributeIfEqual`
   *is* the primitive that `atom` and `swap!` need. No JVM atomics, no
   retry loop in the language layer.
 - **GIL-free concurrency**: per-thread allocation arenas, concurrent
   garbage collector, no global lock. Clojure's promise of "use all your
   cores" actually lands.
-- **Tagged immediates**: `SmallInteger` (56-bit inline) and `Float` are
-  stored in the pointer. Arithmetic on small ints does not allocate.
+- **Tagged immediates**: `SmallInteger` (signed 54-bit) is stored in the
+  pointer. Arithmetic on small ints does not allocate.
 
 The implementation cost we therefore pay is *interpretation*, *the reader*,
 *the standard library*, *the REPL*, and *the macro system* — but **not**
 the data model, the memory model, or concurrency.
 
-## 2. The hybrid module system — UMD as the invisible motor
+## 2. The hybrid module system — UMD as the invisible motor (planned)
 
 This is the most consequential architectural decision in the language.
 
@@ -112,9 +115,15 @@ A standard Clojure reader, in C++. The lexer produces tokens for:
   `#'` (var quote), `#_` (discard).
 - Metadata `^{...}` and the shorthand `^kw` / `^Type`.
 
-Every reader output is a protoCore object — a list is a `ProtoList`, a
-vector is a `ProtoList` tagged as vector, a map is a `ProtoSparseList`
-under a small mutable wrapper. Symbols are interned `ProtoString`s.
+In 0.0.1 the lexer and reader implement symbols, keywords, numbers,
+strings, booleans, nil, lists, vectors, maps and `@` (read as
+`(deref form)`); the quote, quasiquote, `#` reader macros, characters
+and metadata are rejected with a "reserved-for-later token" error.
+
+Every reader output is a protoCore object. In the implementation, a
+list is a `ProtoList`, a vector is a `ProtoTuple`, and a map is a
+`ProtoSparseList` keyed by hash under a map marker prototype. Symbols
+are interned `ProtoString`s.
 
 The reader is the place where "code is data" becomes literal: the result
 of `(read-string "(+ 1 2)")` is a real `ProtoList` of three elements that
@@ -137,11 +146,18 @@ Clojure-specific opcodes for:
 - **Anonymous function creation** as a closure-over-locals — same
   mechanism as protoST blocks and protoPython lambdas.
 
+In 0.0.1 the VM has 29 opcodes (`src/runtime/Opcodes.h`). `recur`
+compiles to a backward jump (`JUMP_BACK`); `def` stores directly into a
+single globals object (`STORE_GLOBAL` / `PUSH_VAR`); closures use
+`MAKE_FN` / `MAKE_FN_MULTI`; SmallInteger arithmetic and comparison have
+fast-path opcodes. Vars as objects and exception-handling opcodes are
+planned.
+
 The compiler does NOT do whole-program analysis. Each top-level form
 compiles independently — the REPL relies on this, and the JVM Clojure
 does it the same way.
 
-## 5. Namespaces and vars
+## 5. Namespaces and vars (planned)
 
 A namespace is a protoCore object. Its attributes are vars (or aliases to
 vars). A var is a small mutable protoCore object with `__value__` and
@@ -160,11 +176,11 @@ We get this for free from protoCore's mutable-object model with CAS.
 
 ## 6. Atoms, refs, and STM
 
-**Atoms** are a one-liner. A `clojure.core/atom` is a mutable protoCore
-object with `__value__`. `swap!` is a CAS loop using
-`setAttributeIfEqual`. `reset!` is a plain `setAttribute`. `deref` /
-`@` is an attribute read. The exact same primitive protoST exposed in its
-`Atom` class.
+**Atoms** are a one-liner, and they are implemented. A
+`clojure.core/atom` is a mutable protoCore object with `__value__`.
+`swap!` is a CAS loop using `setAttributeIfEqual`. `deref` / `@` is an
+attribute read. Watches live in a `__watches__` map on the atom. The
+exact same primitive protoST exposes in its `Atom` class.
 
 **Refs and STM** are in scope for v0.2, not v0.1. The implementation path
 is: each ref carries a (value, version) pair; a transaction collects a
@@ -174,11 +190,14 @@ mutable-shard snapshot in the GC (`335ef608`) is suggestive of how the
 read-set can be made consistent across allocation cycles. This is non-trivial
 but mechanical. v0.2.
 
-**Agents** are deferred to v0.3. protoCore's actor primitives are the
-natural substrate, but the Clojure `send` / `send-off` API has scheduling
-semantics we want to align with the actor / task model thoughtfully.
+**Agents** are deferred to v0.3. protoClojure 0.0.1 already ships a
+protoCore-native `actor` — a worker pool, three priority bands, a
+single-method invariant and a lock-free per-actor mailbox — whose `send`
+returns a promise. The Clojure `send` / `send-off` agent API has
+scheduling semantics we want to align with that actor model
+thoughtfully.
 
-## 7. Lazy sequences
+## 7. Lazy sequences (planned)
 
 Lazy seqs are thunks with memoised first / rest. A `LazySeq` is a small
 protoCore object with `__thunk__` (the unrealised computation),
@@ -196,7 +215,7 @@ add it in v0.2 if benchmarks demand it. (The whole point of "idiom over
 performance" is that idiom-visible behaviour stays the same; chunking is
 invisible until you watch closely.)
 
-## 8. Protocols and multimethods
+## 8. Protocols and multimethods (planned)
 
 **Protocols** map onto prototype attributes. A `defprotocol` declares a
 set of method names. `extend-type` adds attributes (the methods) onto the
@@ -223,20 +242,22 @@ is mechanical.
 
 A respected REPL is a v0.1 hard requirement. Two layers:
 
-- **The reader-eval-print loop itself**: read one form, eval, print,
-  loop. Trivial.
-- **nREPL server**: a TCP server speaking the [nREPL
-  protocol](https://nrepl.org/) so CIDER / Calva / Conjure can connect.
-  The protocol is bencode over a socket; the operations a v0.1 needs to
-  support are `eval`, `load-file`, `interrupt`, `describe`, `clone`,
-  `close`. Pretty-printing, completion (`complete`), and lookup
+- **The read-eval-print loop itself**: read one form, eval, print,
+  loop. Implemented in 0.0.1 on libreadline (`src/repl/Repl.cpp`), with
+  multi-line input, history, `*1` / `*2` / `*3` and the `:help`,
+  `:quit`, `:load` and `:time` commands.
+- **nREPL server** (planned for v0.1): a TCP server speaking the
+  [nREPL protocol](https://nrepl.org/) so CIDER / Calva / Conjure can
+  connect. The protocol is bencode over a socket; the operations a v0.1
+  needs to support are `eval`, `load-file`, `interrupt`, `describe`,
+  `clone`, `close`. Pretty-printing, completion (`complete`), and lookup
   (`info`) are stretch but high-value.
 
 The implementation cost of nREPL is the highest in the v0.1 plan — bencode
 parser, an op dispatcher, session management. We accept it because
 without it the language fails the *respect* test.
 
-## 10. Macros
+## 10. Macros (planned)
 
 Macros are functions that take and return reader output (data). The
 compiler expands them at compile time: when it sees a symbol that resolves
@@ -278,6 +299,10 @@ Two phases:
   `clojure.edn`.** Mostly straightforward — each is a few hundred lines
   of Clojure-level code once `clojure.core` is solid.
 
+In 0.0.1 every library function is a C++ primitive: 74 are installed in
+the global table at startup, including `clojure.string`-shaped string
+functions (the list is in `STATUS.md`).
+
 What is *out of scope* (likely permanently):
 
 - `clojure.java.*` — JVM-specific.
@@ -308,10 +333,10 @@ external behaviour stays bit-identical is accepted. The yardstick for
 "bit-identical" is the JVM Clojure reference behaviour, modulo the
 documented departures.
 
-Benchmarks live next to the source, run in CI once we have CI. The first
-benchmark target is **startup time + simple-script throughput**, because
-that is the comparison Clojure programmers will make first against
-Babashka.
+Benchmarks live next to the source (`benchmarks/`); there is no CI yet.
+The first benchmark target is **startup time + simple-script
+throughput**, because that is the comparison Clojure programmers will
+make first against Babashka.
 
 ## 14. Out of scope (v1 line)
 
@@ -336,4 +361,4 @@ Honest accounting of where this design could fail:
 | Macro bootstrap (§10) is harder than estimated         | Time-box phase v0.1-b; if it slips, ship v0.1 with the C++ built-in macro set and call it     |
 | Persistent collection performance is much worse than JVM | Benchmark early; protoCore's structural sharing should be competitive; if not, profile and fix |
 | The community reads "not 100% compatible" as "broken"  | Lead with the dialect framing in README, STATUS, and tutorial chapter 3                       |
-| Clojure community is too small to materially help      | Accept it — the goal is prestige-by-association, not headcount                                |
+| Clojure community is too small to materially help      | Accept it — the project does not depend on a large contributor base                           |

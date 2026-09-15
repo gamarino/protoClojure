@@ -1,10 +1,12 @@
 # protoClojure
 
-> **A Clojure dialect on the protoCore object kernel — fast startup, true parallelism, infinite-precision integers by default, transparent interop with Python and JavaScript.**
+> **A Clojure dialect on the protoCore object kernel — fast startup, GIL-free threads, arbitrary-precision integers by default, and a design for transparent interop with Python and JavaScript.**
 
-protoClojure is a Clojure-inspired language runtime built on the [protoCore](../protoCore) kernel. It is the fourth member of the protoCore language family — alongside [protoST](../protoST) (Smalltalk), [protoJS](../protoJS) (JavaScript) and [protoPython](../protoPython) (Python) — and it brings the **REPL-driven, immutability-first, data-as-substrate** stance of the Clojure community to a kernel that was already built around those three principles.
+protoClojure is a Clojure-inspired language runtime built on the [protoCore](https://github.com/numaes/protoCore) kernel. It is one of the language runtimes of the protoCore family — alongside [protoST](https://github.com/gamarino/protoST) (Smalltalk-inspired), [protoJS](https://github.com/gamarino/protoJS) (JavaScript) and [protoPython](https://github.com/gamarino/protoPython) (Python) — and it brings the **REPL-driven, immutability-first, data-as-substrate** stance of the Clojure community to a kernel that was already built around those three principles.
 
-protoClojure is **not** a drop-in replacement for Clojure-JVM. There is no JVM, no Java interop, no Maven, no `clojure.java.*`. What it is, instead, is the Clojure idiom — `defn`, `let`, `loop`/`recur`, closures, persistent collections, higher-order functions, keywords, multi-arity — running on a runtime that **starts in milliseconds**, **uses real OS threads with no GIL**, and **promotes to LargeInteger automatically** when an arithmetic result no longer fits in a tagged word. The companion runtimes are reached through the same UMD module system protoST and protoPython already share, so `(:require [py/numpy :as np])` is the same kind of pointer hand-off, not a separate process.
+protoClojure is **not** a drop-in replacement for Clojure-JVM. There is no JVM, no Java interop, no Maven, no `clojure.java.*`. What it offers instead is the Clojure idiom — `defn`, `let`, `loop`/`recur`, closures, persistent collections, higher-order functions, keywords, multi-arity — running on a runtime that **starts in milliseconds**, **uses real OS threads with no GIL**, and **promotes to LargeInteger automatically** when an arithmetic result no longer fits in a tagged word. The design reaches the companion runtimes through the same UMD module system protoST and protoPython share, so that `(:require [py/numpy :as np])` becomes a pointer hand-off rather than a separate process; that module system is not implemented yet.
+
+protoClojure is at an early stage: version 0.0.1, with no tagged release.
 
 ## Why this exists
 
@@ -12,20 +14,20 @@ The Clojure community is small, technically demanding, and shares three convicti
 
 What protoClojure offers that JVM Clojure does not:
 
-- **Native interop with Python and JavaScript modules**, through the same UMD plumbing protoPython and protoJS use. A `(:require [py/numpy :as np])` form pulls a NumPy module in and the result is a real protoCore object — no FFI marshalling, no copy at the boundary, no separate process. *(Module system shipping in a coming session; the foreign-dispatch spec is in `docs/superpowers/specs/2026-06-14-foreign-dispatch.md`.)*
-- **Fast startup, small footprint.** No JVM warm-up: process start is milliseconds, not seconds. Scripts and CLI tools become a viable form factor without reaching for GraalVM AOT.
-- **Infinite-precision integers by default.** When `(* acc n)` overflows a SmallInteger, protoCore's promoting `multiply` returns a LargeInteger and the program keeps going. `(factorial 100)` runs out of the box; Babashka 1.4 and JVM Clojure both fail on `(factorial 21)` unless the programmer writes `*'` or `(bigint 1)` explicitly.
-- **Real parallelism without the GIL.** Every protoCore-hosted runtime shares the same GIL-free concurrency model. Atoms are a protoCore CAS, not a Clojure abstraction over a JVM primitive. *(Concurrent primitives exposed in a coming session — the kernel support is already there.)*
+- **Native interop with Python and JavaScript modules (planned).** The design routes a `(:require [py/numpy :as np])` form through the same UMD plumbing protoPython and protoJS use, so the result is a real protoCore object — no FFI marshalling, no copy at the boundary, no separate process. The module system is not implemented yet; see [docs/INTEROP.md](docs/INTEROP.md) and the archived [foreign-dispatch design](docs/archive/design-specs/2026-06-14-foreign-dispatch.md).
+- **Fast startup, small footprint.** No JVM warm-up: running a hello-world script takes about 17 ms and peaks at about 20 MB of resident memory on the benchmark machine. Scripts and CLI tools are a viable form factor without GraalVM AOT.
+- **Arbitrary-precision integers by default.** When `(* acc n)` overflows a SmallInteger, protoCore's promoting `multiply` returns a LargeInteger and the program keeps going. `(factorial 100)` runs out of the box; Babashka 1.4 fails on `(factorial 21)` because Clojure's default `*` uses long arithmetic, which requires `*'` or `(bigint 1)` for promotion.
+- **Real parallelism without a GIL.** Every protoCore-hosted runtime shares the same GIL-free concurrency model. Atoms are a protoCore compare-and-set; futures run on OS threads; actors run on a worker pool.
 
 What protoClojure does **not** offer:
 
-- **JVM interop.** No Java classes, no `clojure.java.io`, no Maven, no Leiningen. The substitute, where applicable, is calling the Python or JavaScript ecosystem through UMD.
+- **JVM interop.** No Java classes, no `clojure.java.io`, no Maven, no Leiningen. The intended substitute, where applicable, is calling the Python or JavaScript ecosystem through UMD.
 - **100% Clojure-JVM compatibility.** This is a *dialect*. The reader, the core forms, and the standard library try to feel like Clojure; details intentionally do not match where the JVM-specific design would not earn its keep on this substrate.
-- **`core.async` channels (yet).** The protoCore actor / future primitives give a different concurrency model that is closer in spirit to the Hickey designs. A CSP layer is a follow-up, not an immediate goal.
+- **`core.async` channels.** The protoCore actor and future primitives give a different concurrency model. A CSP layer is a possible follow-up, not an immediate goal.
 
 ## A flavour of the language
 
-A recursive `factorial` exercising loop/recur, conditional, multi-arity, and infinite-precision integers:
+A recursive `factorial` exercising `recur`, conditionals, multi-arity, and arbitrary-precision integers:
 
 ```clojure
 (defn factorial
@@ -36,7 +38,7 @@ A recursive `factorial` exercising loop/recur, conditional, multi-arity, and inf
 (println (factorial 100))  ;; => 158-digit LargeInteger, no overflow
 ```
 
-Closures and higher-order:
+Closures and higher-order functions:
 
 ```clojure
 (defn make-adder [n] (fn [x] (+ x n)))
@@ -63,11 +65,11 @@ Multi-arity, variadic, the higher-order pipeline:
 (println (my-reduce + 100 (list 1 2 3)))   ;; => 106
 ```
 
-The 160 conformance fixtures under `tests/conformance/` cover everything the language supports today.
+The 130 conformance fixtures under `tests/conformance/` are the executable reference for what the language accepts today.
 
 ## Concurrency — atoms, futures, actors
 
-protoClojure exposes the GIL-free concurrency that protoCore already has underneath. There is no global interpreter lock; threads are real OS threads, tracked by the kernel's GC quorum.
+protoClojure exposes the GIL-free concurrency that protoCore already has underneath. There is no global interpreter lock; threads are real OS threads, tracked by the kernel's garbage collector.
 
 ```clojure
 ;; --- atoms: CAS-backed shared state ------------------------------------
@@ -77,11 +79,11 @@ protoClojure exposes the GIL-free concurrency that protoCore already has underne
 (add-watch counter :log
   (fn [k r old new] (println k old "->" new)))
 
-;; --- futures: a real OS thread per future, value materialises on @ -----
+;; --- futures: one OS thread per future, value materialises on @ --------
 (def f (future (slow-compute)))
-@f                                ;; blocks (goUnmanaged) until done
+@f                                ;; blocks until the future completes
 
-;; --- pmap: fan out over the worker pool, gather in input order ---------
+;; --- pmap: one OS thread per element, results in input order -----------
 (pmap slow-compute [1 2 3 4 5])
 
 ;; --- promises: hand off a value across threads -------------------------
@@ -98,13 +100,13 @@ protoClojure exposes the GIL-free concurrency that protoCore already has underne
 @acc                              ;; current value, no message round-trip
 ```
 
-Actors run on a configurable worker pool (`PROTOCLJ_ACTOR_WORKERS`, default `max(2, cores − 2)`, cap 16). The kernel enforces a **single-method invariant**: at most one message per actor is being processed at any instant, so the function body sees no concurrent access to the actor's state. Three priority bands (`send-h` / `send` / `send-l`) drain highest-priority-non-empty first.
+Actors run on a configurable worker pool (`PROTOCLJ_ACTOR_WORKERS`, default `max(2, cores − 2)`, cap 16). The scheduler enforces a **single-method invariant**: at most one message per actor is being processed at any instant, so the function body sees no concurrent access to the actor's state. Three priority bands (`send-h` / `send` / `send-l`) drain highest-priority-non-empty first.
 
-The per-actor mailbox is **lock-free** (3 atomic-pointer MPSC stacks + one `claimed` flag), borrowed from protoST's mailbox pattern. Senders never take a per-actor mutex; the running worker drains each stack with one atomic exchange + reverse and processes the batch.
+The per-actor mailbox is **lock-free** (three atomic-pointer MPSC stacks plus one `claimed` flag), following protoST's mailbox design. Senders never take a per-actor mutex; the running worker drains each stack with one atomic exchange and a reversal, then processes the batch.
 
 #### Benchmark — actors
 
-Numbers below were taken on 2026-06-14 with a Ryzen 5500U (6 physical cores, SMT8). Each row is **1,000,000 messages**, runs of 4-10 seconds, body = trivial `(inc v)`. The bench is `./benchmarks/actor-bench.sh`.
+Numbers below were measured on 2026-06-14 on an AMD Ryzen 5 5500U (6 cores, 12 threads). Each row is **1,000,000 messages** with the trivial body `(inc v)`; runs take 4-10 seconds. The runner is [`benchmarks/actor-bench.sh`](benchmarks/actor-bench.sh), which verifies that every script reports the expected message count before computing a rate.
 
 | mode      | what it measures                                              | peak msg/s |
 |-----------|---------------------------------------------------------------|-----------:|
@@ -113,36 +115,35 @@ Numbers below were taken on 2026-06-14 with a Ryzen 5500U (6 physical cores, SMT
 | `MPSC`    | 4 senders × 1 actor — per-actor sender contention             |   171,851  |
 | `MPMC`    | 4 senders × 4 actors (round-robin) — both contention paths    |   125,424  |
 
-Worker-count scaling: **`fan-out` peaks at `PROTOCLJ_ACTOR_WORKERS=6`** (matches the physical-core count exactly), and degrades at `w=8`/`16` because the extra workers cross over into SMT siblings — same regression curve protoST documented. `single` and `MPSC` don't scale with workers (single-method invariant pins them to one worker at a time). `MPMC` *regresses* with more workers because the global ready-queue mutex becomes the bottleneck — that's the next optimisation.
+These are upper bounds for a single-operation message body. Worker-count scaling: **`fan-out` peaks at `PROTOCLJ_ACTOR_WORKERS=6`** (the physical-core count) and degrades at 8 and 16 workers, when the extra workers land on SMT siblings. `single` and `MPSC` do not scale with workers, because the single-method invariant pins each actor to one worker at a time. `MPMC` *regresses* with more workers because the global ready-queue mutex becomes the bottleneck; it is the next optimisation target.
 
-Compared with the pre-lock-free baseline (per-actor `std::mutex` + `std::deque`), the lock-free port wins by **+4% (single)**, **+30-41% (fan-out @ w=2-4)**, **+11-19% (MPSC @ w≥2)** and **+0-3% (MPMC)**. The MPMC near-zero delta confirms that MPMC's bottleneck is the global ready queue, not the per-actor mailbox.
+Compared with the earlier mailbox (per-actor `std::mutex` + `std::deque`), the lock-free mailbox measured **+4-17% (single)**, **+30-41% (fan-out at 2-4 workers)**, **+11-19% (MPSC at 2 or more workers)** and **±0-3% (MPMC)**. The flat MPMC result is consistent with the global ready queue, not the per-actor mailbox, being MPMC's bottleneck.
 
 ## Performance — what is measured
 
-**On compute-bound recursion, protoClojure is within ~25% of Babashka 1.4. On tight `loop`/`recur` arithmetic it is ~3× faster than Babashka. On LargeInteger workloads Babashka does not finish.** Numbers below were taken with Babashka 1.4.192 (GraalVM-native) on the same hardware. The harness is `benchmarks/bench.sh` — three runs per workload, wall-clock best-of-three, single invocation including cold start.
+**On call-dispatch-bound recursion (`fib`, `tak`), protoClojure is 1.2-1.4× slower than Babashka 1.4.192. On `loop`/`recur` arithmetic, `reduce` over a list and `map` + `reduce` it is faster (0.36-0.75× Babashka's time). On LargeInteger workloads Babashka does not finish with default arithmetic.** The harness is [`benchmarks/bench.sh`](benchmarks/bench.sh): three runs per workload, best wall-clock time of three, each run a single process invocation including start-up. Babashka is GraalVM-native; both runtimes ran on the same machine.
 
 | Workload | protoclj (ms) | bb (ms) | ratio | Notes |
 |---|---:|---:|---:|---|
-| `fib(30)` (pure recursion) | 620 | 496 | 1.25× | call-dispatch bound |
-| `tak(18,12,6)` (Takeuchi) | 45 | 42 | 1.07× | call-dispatch bound |
-| `sum-loop(1M)` (`loop`/`recur` arithmetic) | 66 | 196 | **0.34×** | tight SmallInt loop |
-| `reduce-list(10K)` (reduce + over list) | 29 | 33 | 0.88× | allocation + reduce |
-| `sum-squares(1K)` (map + reduce) | 19 | 28 | 0.68× | startup-bound at this size |
+| `fib(30)` (pure recursion) | 712 | 524 | 1.36× | call-dispatch bound |
+| `tak(18,12,6)` (Takeuchi) | 52 | 43 | 1.21× | call-dispatch bound |
+| `sum-loop(1M)` (`loop`/`recur` arithmetic) | 79 | 219 | **0.36×** | tight SmallInteger loop |
+| `reduce-list(10K)` (reduce + over list) | 27 | 36 | 0.75× | allocation + reduce |
+| `sum-squares(1K)` (map + reduce) | 19 | 31 | 0.61× | start-up bound at this size |
 | `factorial(100)` (158-digit result) | runs | **fails** | — | LargeInteger by default |
 
-The single biggest win in the perf trajectory was **SmallInt fast-path opcodes** (session 11): the VM short-circuits `(+ x y)` / `(< x y)` etc. when both operands are tagged SmallInt, and routes everything else through protoCore's promoting `add` / `compare` / `multiply`. That collapsed `fib(30)` from 4113 ms (session 10) to 720 ms.
+These are the most recent numbers in [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md), measured after maps, strings and the concurrency primitives were added. Two earlier changes shaped the trajectory:
 
-The follow-up (session 12) was **fewer attribute lookups per CALL** — splitting the function-marker prototype into `fnSingleProto` / `fnMultiProto` so the dispatcher picks the path via `getPrototype` alone, and skipping the captures attribute read when the body has no captures. That brought `fib(30)` to 620 ms with **15% fewer instructions and 32% fewer L1-d misses** (per `perf stat`).
+- **SmallInteger fast-path opcodes** (commit `700f352`): the VM short-circuits `(+ x y)`, `(< x y)` and the other arithmetic and comparison operators when both operands are tagged SmallIntegers, and routes everything else through protoCore's promoting `add` / `compare` / `multiply`. `fib(30)` went from 4113 ms to 720 ms.
+- **Fewer attribute lookups per call** (commit `a099b45`): separate prototypes for single- and multi-arity function wrappers let the dispatcher pick the path with `getPrototype` alone, and the captures attribute is read only when a body has captures. `fib(30)` went to 620 ms, with 15% fewer instructions and 32% fewer L1-d cache misses (per `perf stat`).
 
-### How we read this against the original "5× JVM Clojure" goal
+The features added afterwards cost about 15% on `fib(30)` (620 ms → 712 ms); the extra parameters threaded through every recursive VM call are the identified cause, and recovering that cost is on the [roadmap](docs/ROADMAP.md).
 
-Babashka typically trails JVM Clojure JIT'd by ~2-3× on steady-state compute. Extrapolating the table above, protoClojure is in the **~2-4× JVM-Clojure band** on these workloads — comfortably **inside** the "5× JVM Clojure single-thread" target stated at design time. **We are not faster than JVM Clojure.** JVM Clojure has a JIT, decades of tuning, and adaptive inlining; on the same hardware it would beat protoClojure on every row of the table. What protoClojure has, instead, is `factorial(100)` working without thought, a 5 ms cold start, and a kernel small enough to read and modify in a single session — see the discussion under "How protoClojure compares" below.
-
-The benchmark sources are in [`benchmarks/`](benchmarks/); the dated report is in [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md).
+JVM Clojure has not been measured. It has a JIT and adaptive inlining that protoClojure does not have, and no claim is made here about protoClojure's speed relative to it.
 
 ## How protoClojure compares
 
-Three comparators matter — JVM Clojure, Babashka, and the rest of the family — and each is honest in a different way.
+Three comparators matter — JVM Clojure, Babashka, and the rest of the protoCore family.
 
 ### vs. JVM Clojure (the canonical Clojure)
 
@@ -150,82 +151,88 @@ JVM Clojure is the language, the ecosystem, and the JIT-compiled runtime the res
 
 protoClojure does not try to replace it. The places where protoClojure is **architecturally different**, not just an alternative implementation, are:
 
-- **Cold-start**: 5 ms vs ~1.5-2 s.
-- **Footprint**: a few MB of compiled native code + protoCore vs a JVM and its libraries.
-- **Numeric default**: LargeInteger automatic vs `long`-arithmetic with explicit `*'` for promotion.
-- **No JVM**: no `java.*`, no Java reflection. The Python and JavaScript companion ecosystems instead, through UMD.
+- **Start-up**: no JVM start-up; a hello-world script runs in about 17 ms.
+- **Footprint**: a native binary plus the protoCore shared library.
+- **Numeric default**: automatic LargeInteger promotion instead of `long` arithmetic with explicit `*'` for promotion.
+- **No JVM**: no `java.*`, no Java reflection. The design substitutes the Python and JavaScript ecosystems through UMD.
 
 The places where JVM Clojure wins on substance, not just legacy:
 
-- **Mature persistent-collection performance** — HAMT, RRB-tree, transient batching, well-tuned hash. protoClojure uses protoCore's `ProtoList` / `ProtoTuple` shapes, which are competent but not yet at the level of `clojure.lang.PersistentHashMap`.
+- **Mature persistent-collection performance** — HAMT, RRB-tree, transient batching, well-tuned hashing. protoClojure uses protoCore's `ProtoList` / `ProtoTuple` / `ProtoSparseList` shapes, which are competent but not yet at the level of `clojure.lang.PersistentHashMap`.
 - **JIT**. On any inner-loop workload that benefits from method-call inlining, the JVM goes through code paths protoClojure does not have.
-- **Ecosystem**. Two decades of libraries, Datomic, Lein/Deps, well-known editors with deep CIDER/Calva integration. protoClojure has none of that today.
+- **Ecosystem**. Two decades of libraries, Datomic, Leiningen and deps, editors with deep CIDER / Calva integration. protoClojure has none of that today.
 
-### vs. Babashka (Clojure-on-GraalVM-native)
+### vs. Babashka (Clojure on GraalVM native-image)
 
-Babashka is the closest comparator and the one the bench section measures. Babashka shares two of protoClojure's appeals — fast startup, low footprint — by AOT-compiling a Clojure subset through GraalVM native-image. The differences:
+Babashka is the closest comparator and the one the benchmark section measures. It shares two of protoClojure's appeals — fast start-up and a low footprint — by shipping a GraalVM native-image. The differences:
 
-- **BigInt**: Babashka 1.4 fails on `(factorial 21)` (long overflow); protoClojure promotes automatically.
-- **Concurrency**: Babashka runs Clojure code through the same native-compiled subset; protoCore-class GC, atoms, futures are not exposed in the same way. *(protoClojure's exposure is a coming session.)*
-- **Mutation of bytecode at the REPL**: Babashka's native-image is a closed image; redefinitions go through a Clojure-side interpreter shim. protoClojure compiles fresh on every form at the REPL because the compiler is the same binary.
-- **Tradeoff cost**: Babashka takes the Clojure-JVM `*` semantics literally, which means `long`-arithmetic and overflow. protoClojure takes the simpler-but-distinct path of always-promoting arithmetic, paying the SmallInt-tag check on every op and the LargeInteger allocation on overflow.
+- **Arbitrary-precision integers**: Babashka 1.4 fails on `(factorial 21)` (long overflow); protoClojure promotes automatically.
+- **Concurrency substrate**: protoClojure's atoms, futures, promises, `pmap` and actors run directly on protoCore's GIL-free threads and compare-and-set.
+- **REPL compilation**: protoClojure compiles every REPL form with the same compiler it uses for scripts.
+- **Trade-off**: Babashka follows the Clojure-JVM `*` semantics, which means `long` arithmetic and overflow errors. protoClojure always promotes, paying a SmallInteger tag check on every operation and a LargeInteger allocation on overflow.
 
 ### vs. protoST / protoJS / protoPython (siblings on protoCore)
 
-protoClojure is the *immutable-by-default, REPL-first* face of the protoCore family. It shares the kernel — `ProtoObject`, the GC, the immutable collections, the GIL-free concurrency, the per-thread attribute cache — but expresses them through Clojure idiom: a Lisp reader, persistent vectors written `[x y z]`, keywords as values, `defn` / `fn` / `let` / `loop` / `recur` as special forms, multi-arity via the same wrapper machinery as protoST's method dispatch.
+protoClojure is the *immutable-by-default, REPL-first* face of the protoCore family. It shares the kernel — `ProtoObject`, the garbage collector, the immutable collections, the GIL-free concurrency, the per-thread attribute cache — but expresses it through Clojure idiom: a Lisp reader, persistent vectors written `[x y z]`, keywords as values, `defn` / `fn` / `let` / `loop` / `recur`, multi-arity functions.
 
-The interesting property that this membership confers: a value materialised in any of the four runtimes is a real `ProtoObject`. **A Python list reaches protoClojure's `(count py-list)` through the same chain walk every protoClojure call does**, with no marshalling. Where Babashka would need its own bridges, protoClojure inherits them from the kernel.
+The property this membership is designed to confer: a value materialised in any of the runtimes is a real `ProtoObject`. Once the UMD providers exist, **a Python list is meant to reach protoClojure's `(count py-list)` through the same attribute chain walk every protoClojure call uses**, with no marshalling.
 
 ## Project status
 
-protoClojure runs. Nineteen development sessions have landed (each numbered, dated, and traced in the commit log on `main`):
+protoClojure runs scripts and an interactive REPL. Version 0.0.1; no tagged release yet. Shipped changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
-| Session | What it shipped | Conformance count |
-|---:|---|---:|
-| 1-3 | Lexer, reader, bytecode VM, `println` | 32 |
-| 4 | `def`, `if`, `do`, integer arithmetic, comparisons | 42 |
-| 5 | `fn`, `defn`, `let`, `loop`, `recur` | 48 |
-| 6 | Closures with N-level lexical capture | 54 |
-| 7 | Variadic `& rest`, `apply`, `map` / `filter` / `reduce` | 66 |
-| 8 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, keywords | 80 |
-| 9 | IEEE-754 floats, vectors distinct from lists | 90 |
-| 10 | First benchmark vs Babashka | 90 |
-| 11 | SmallInt fast-path opcodes + LargeInteger promotion | 93 |
-| 12 | Fewer attribute lookups per CALL | 93 |
-| 13 | Maps `{:a 1}` + named-arg destructuring `& {:keys [...]}` | 108 |
-| 14 | Trailing kv pairs + `:or` + `:as` — dual call convention closed | 117 |
-| 15 | `clojure.string`-shaped surface (15 string primitives) | 132 |
-| 16 | `atom`, `swap!`, `reset!`, `deref`, `@` — CAS on protoCore | 138 |
-| 17 | `future` on real OS threads (4× wall-clock on parallel workload) | 144 |
-| 18 | `add-watch`/`remove-watch`, `promise`/`deliver`, parallel `pmap`, named anon fn | 152 |
-| 19 | Actor system: worker pool, 3 priority bands, ~5M msg/s upper bound | 160 |
+| Area | Status |
+|---|---|
+| Lexer, reader, bytecode compiler and VM | Implemented |
+| `def`, `if`, `do`, `fn`, `defn`, `let`, `loop`, `recur`, `when`, `cond`, `and`, `or` | Implemented (`let` and `loop` only inside function bodies) |
+| Closures, variadic functions, `apply`, multi-arity | Implemented |
+| SmallInteger fast path, LargeInteger and float promotion | Implemented |
+| Lists, vectors, maps; named arguments `& {:keys [...] :or {...} :as m}` | Implemented |
+| String functions (`clojure.string`-shaped, in the global namespace) | Implemented |
+| Atoms, watches, futures, promises, `pmap` | Implemented |
+| Actors with priority bands | Implemented |
+| Local REPL on libreadline | Implemented |
+| CPack packaging | Configured; TGZ and DEB verified on Linux |
+| Quote reader macro, macros, sets, lazy sequences, exceptions | Planned |
+| Namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
+| nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-The suite stands at **160 conformance fixtures + the unit tests** (`ctest`, single-threaded). The benchmark numbers above are reproduced by `./benchmarks/bench.sh` on the same build; the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **161 test cases: 130 conformance fixtures and 31 unit tests** (lexer and reader). Against the current protoCore, three map-printing fixtures fail because printed map entries no longer come out in the order the fixtures expect; see *Known issues* in [docs/STATUS.md](docs/STATUS.md). The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
-What is implemented and stable:
+What is implemented:
 
-- Lexer: integers, floats (`3.14`, `1e6`), strings, symbols, keywords (`:foo`), vectors (`[x y z]`), lists (`(...)`), comments (`;;`).
-- Special forms: `def`, `defn` (single + multi-arity), `fn`, `let`, `loop`, `recur` (in both `loop` and the implicit fn-body recur target), `if`, `do`, `quote`, `apply`, `when`, `when-not`, `cond`, `and`, `or`.
-- Literals: `true`, `false`, `nil`, integers (SmallInt + LargeInteger), floats, strings, keywords, vectors, lists.
-- Closures: full N-level capture cascade, including chained closures across `(fn ... (fn ... (fn ...)))`.
-- Primitives: `+ - * / inc dec < <= > >= = str println list vector vec nth vector? list? first rest cons count empty? nil? not reverse map filter reduce apply`.
-- VM: 28 opcodes including SmallInt fast-path binary opcodes (`ADD SUB MUL LT LE GT GE EQ`), arity dispatch (`MAKE_FN` / `MAKE_FN_MULTI`), CALL APPLY for variadic dispatch, DUP and JUMP_IF_TRUE for short-circuit forms.
-- Numeric semantics: SmallInt for tagged-pointer-fit values, automatic promotion to LargeInteger on overflow, automatic promotion to double when any operand is float.
+- Reader: integers, floats (`3.14`, `1e6`), strings, symbols, keywords (`:foo`), `true` / `false` / `nil`, lists `(...)`, vectors `[...]`, maps `{...}`, `@form` as `(deref form)`, line comments (`;`), commas as whitespace.
+- Special forms: `def`, `defn` and `fn` (single- and multi-arity, variadic, named-argument destructuring), `let`, `loop`, `recur` (in `loop` and as the implicit function-body target), `if`, `do`, `quote` (of symbols, keywords and other atoms), `apply`, `when`, `when-not`, `cond`, `and`, `or`, `future`.
+- Closures: full N-level capture, including chained closures across `(fn ... (fn ... (fn ...)))`.
+- Primitives (74 registered at startup):
+  - arithmetic and comparison: `+ - * / inc dec < <= > >= =`
+  - output: `println str`
+  - lists and vectors: `list vector vec nth first rest cons count empty? reverse`
+  - higher-order: `map filter reduce pmap`
+  - predicates: `nil? not vector? list? map? string?`
+  - maps: `hash-map assoc get contains? keys vals`
+  - strings: `subs upper-case lower-case starts-with? ends-with? includes? index-of replace join split trim triml trimr blank?`
+  - atoms and watches: `atom atom? deref reset! swap! compare-and-set! add-watch remove-watch`
+  - futures and promises: `make-future future? realized? promise promise? deliver`
+  - actors: `actor actor? send send-h send-m send-l actor-stats`
+- VM: 29 opcodes, including SmallInteger fast-path binary opcodes (`ADD SUB MUL LT LE GT GE EQ`), arity dispatch (`MAKE_FN` / `MAKE_FN_MULTI`), `CALL_APPLY` for spread arguments, `CALL_KW` for trailing keyword arguments, and `DUP` / `JUMP_IF_TRUE` for short-circuit forms.
+- Numeric semantics: SmallInteger for values that fit a tagged pointer, automatic promotion to LargeInteger on overflow, automatic promotion to double when any operand is a float.
 
-What is **not yet** implemented (and tracked):
+What is **not yet** implemented:
 
-- **Clojure-style `agent`** with its specific send/await semantics (the in-tree `actor` is the protoCore-native variant — different surface, see [docs/tutorial/13-actors.md](docs/tutorial/13-actors.md)).
+- **Clojure-style `agent`** with its send/await semantics (the in-tree `actor` is the protoCore-native variant — different surface, see [docs/tutorial/13-actors.md](docs/tutorial/13-actors.md)).
 - **`delay` / `force`** and `volatile!` / `vreset!` / `vswap!`.
-- **The UMD module system**: `(:require [py/numpy :as np])` and the foreign-dispatch protocol layer.
-- **An nREPL server** for CIDER / Calva / Conjure editor integration. The local interactive REPL on libreadline ships today (see [docs/tutorial/10-repl.md](docs/tutorial/10-repl.md)); editor wiring is the v0.2 step.
-- **A `core.clj`** evaluated at startup so we stop installing primitives in C++ and start composing them in Clojure.
-- **JIT or threaded-dispatch**. The current bytecode VM is a clean switch loop and runs surprisingly well on a modern CPU; both are upgrade paths, neither is queued yet.
+- **The quote reader macro `'`, macros, sets, lazy sequences, exceptions** and most of `clojure.core` beyond the primitives above.
+- **The UMD module system**: `ns`, `(:require [py/numpy :as np])` and the foreign-dispatch protocol layer.
+- **An nREPL server** for CIDER / Calva / Conjure. It is planned for v0.1; the local interactive REPL on libreadline ships today (see [docs/tutorial/10-repl.md](docs/tutorial/10-repl.md)).
+- **A `core.clj`** evaluated at startup, so that library functions are composed in Clojure instead of installed as C++ primitives.
+- **JIT or threaded dispatch.** The bytecode VM is a switch loop; both are possible upgrade paths, neither is scheduled.
 
-The live tracker is `docs/STATUS.md`; the roadmap is `docs/ROADMAP.md`. The full design specs (the protoCore call-convention adoption note, the foreign-dispatch protocol, the engineering principles) live under `docs/superpowers/specs/`.
+The live tracker is [docs/STATUS.md](docs/STATUS.md); the roadmap is [docs/ROADMAP.md](docs/ROADMAP.md). The design specifications written during development (the protoCore call-convention adoption note, the foreign-dispatch protocol, the engineering principles) are archived under [docs/archive/design-specs/](docs/archive/design-specs/).
 
 ## Getting started
 
-protoClojure depends on [protoCore](../protoCore), which must be built first.
+protoClojure depends on [protoCore](https://github.com/numaes/protoCore), which must be built first, and on the readline development package (`libreadline-dev` on Debian / Ubuntu, `readline-devel` on Fedora / RHEL, `readline` from Homebrew on macOS).
 
 ```bash
 cd protoClojure
@@ -236,8 +243,8 @@ cmake --build build_release
 ./build_release/protoclj script.clj          # run a .clj file
 ./build_release/protoclj --version           # version
 
-cd build_release && ctest -j1                # run the conformance suite (160/160)
-cd .. && ./benchmarks/bench.sh               # run the benchmark vs Babashka
+ctest --test-dir build_release -j1           # 161 cases: 130 conformance fixtures + 31 unit tests
+./benchmarks/bench.sh                        # benchmark against Babashka
 ./benchmarks/actor-bench.sh                  # actor throughput, varied worker counts
 ```
 
@@ -247,11 +254,9 @@ The benchmark harness expects a Babashka binary at `/tmp/proto-bench/bb` by defa
 ./benchmarks/bench.sh ./build_release/protoclj /usr/local/bin/bb
 ```
 
-The single-threaded build constraint reflects a local DEV12-specific issue (see `MEMORY.md`); concurrent build is supported by the CMakeLists.
-
 ### Packaging
 
-protoClojure ships installable packages on Linux, macOS, and Windows via CPack — the same machinery protoST uses. The platform-appropriate generator is selected automatically; you pick which artifact you want with `cpack -G`. All artifacts contain the `protoclj` binary, the documentation, the example `.clj` scripts under `share/protoClojure/examples`, and the benchmark scripts under `share/protoClojure/benchmarks`.
+protoClojure configures installable packages for Linux, macOS, and Windows via CPack — the same machinery protoST uses. The platform-appropriate generators are selected automatically; you pick which artifact you want with `cpack -G`. All artifacts contain the `protoclj` binary, the documentation, the example `.clj` scripts under `share/protoClojure/examples`, and the benchmark scripts under `share/protoClojure/benchmarks`.
 
 ```bash
 # (After a successful build of protoCore and protoClojure.)
@@ -270,7 +275,7 @@ cpack -G NSIS               # protoclojure-0.0.1-win64.exe   (NSIS installer)
 cpack -G ZIP                # protoclojure-0.0.1-win64.zip   (portable)
 ```
 
-The DEB and RPM artifacts declare `protocore` as a runtime dependency, so the package manager will fail cleanly if libprotoCore is not installed. The TGZ / DMG / NSIS / ZIP artifacts do **not** carry libprotoCore — install it from its own package first, or build it side-by-side and add its install prefix to your loader path. The installed `protoclj` already has an `INSTALL_RPATH` of `$ORIGIN/../lib` (Linux) / `@executable_path/../lib` (macOS), so as long as protoCore lives under the same `<prefix>/lib` no environment variable is needed.
+The DEB and RPM artifacts declare `protocore` as a runtime dependency, so the package manager fails cleanly if libprotoCore is not installed. The TGZ / DMG / NSIS / ZIP artifacts do **not** carry libprotoCore — install it from its own package first, or build it side by side and add its install prefix to your loader path. The installed `protoclj` has an `INSTALL_RPATH` of `$ORIGIN/../lib` (Linux) / `@executable_path/../lib` (macOS), so as long as protoCore lives under the same `<prefix>/lib` no environment variable is needed.
 
 ```bash
 # Quick sanity check after installing the DEB:
@@ -279,7 +284,7 @@ protoclj --version
 protoclj /usr/share/protoClojure/examples/02-factorial.clj
 ```
 
-The macOS and Windows generators are configured but **unverified on a Linux build host** — they will work where `cpack` recognises the platform; the in-tree CI to produce them on real Apple/Windows runners is a future-session item.
+Only the TGZ and DEB artifacts have been verified, on Linux. The RPM, macOS and Windows generators are configured but unverified, and no packages are published.
 
 ## Documentation
 
@@ -287,35 +292,40 @@ The macOS and Windows generators are configured but **unverified on a Linux buil
 |---|---|
 | [docs/LANGUAGE.md](docs/LANGUAGE.md) | The language reference — reader, evaluator, special forms, primitives. |
 | [docs/STATUS.md](docs/STATUS.md) | Live status — what works, what departs from Clojure-JVM, what is on the list. |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | The session-by-session roadmap and how to contribute. |
-| [docs/INTEROP.md](docs/INTEROP.md) | The UMD interop story — pulling a Python or JavaScript module into a protoClojure namespace. |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Planned milestones, versioning, and how to read the plan. |
+| [docs/INTEROP.md](docs/INTEROP.md) | The UMD interop design — pulling a Python or JavaScript module into a protoClojure namespace. |
 | [docs/DESIGN.md](docs/DESIGN.md) | The architectural overview — reader, compiler, BytecodeModule, VM, primitives. |
 | [docs/TUTORIAL.md](docs/TUTORIAL.md) | Index to the dual-audience tutorial under `docs/tutorial/`. |
-| [docs/superpowers/specs/](docs/superpowers/specs/) | Dated design specifications — engineering principles, phase plans, foreign dispatch, call convention. |
+| [CHANGELOG.md](CHANGELOG.md) | Changes since the start of the project. |
+| [docs/archive/design-specs/](docs/archive/design-specs/) | Historical design specifications — engineering principles, phase plans, foreign dispatch, call convention. |
 
 The conformance fixtures themselves are the de facto reference for what the implementation accepts — `tests/conformance/**/*.clj`.
 
 ## Related projects
 
-- **[protoCore](../protoCore)** — the prototype-based kernel: object model, GC, immutable collections (`ProtoList` / `ProtoTuple` / `ProtoString` / `ProtoSparseList`), GIL-free concurrency, the per-thread `AttributeCache` and `MutableValueCache` that protoClojure's CALL handler leans on instead of re-implementing.
-- **[protoST](../protoST)** — Smalltalk runtime on protoCore, with the first-class actor model. The blueprint for the concurrency-primitive exposure protoClojure will follow.
-- **[protoPython](../protoPython)** — Python 3.14 runtime on protoCore. Source of the bytecode-format pattern that protoClojure's `ExecutionEngine` adopts.
-- **[protoJS](../protoJS)** — JavaScript runtime on protoCore. Source of the `JSSymbols`-style stable interned-key pattern that protoClojure uses for its `__bytecode__` / `__captures__` / `__arities__` markers.
+Four language runtimes (protoJS, protoPython, protoST, protoClojure) and protoCpp's C++ examples are built on protoCore.
+
+| Project | Role | Repository |
+|---|---|---|
+| protoCore | C++20 object model and runtime kernel: immutable structures, concurrent GC, GIL-free threads | https://github.com/numaes/protoCore |
+| protoJS | JavaScript runtime on protoCore | https://github.com/gamarino/protoJS |
+| protoPython | Python 3 runtime (protopy) and ahead-of-time compiler (protopyc) on protoCore | https://github.com/gamarino/protoPython |
+| protoST | Smalltalk-inspired actor language on protoCore | https://github.com/gamarino/protoST |
+| protoClojure | Clojure dialect on protoCore (early stage) | https://github.com/gamarino/protoClojure |
+| protoCpp | Examples and benchmarks using protoCore directly from C++ | https://github.com/gamarino/protoCpp |
 
 ## Why "protoClojure"?
 
-`proto` — built on protoCore. `Clojure` — the language idiom we're modelling. The name signals what it is and where it lives in the family. We avoid "Clojure-on-protoCore" because the goal is not a port of Clojure-JVM; it's a Clojure-flavoured dialect that earns its place by what protoCore can do.
+`proto` — built on protoCore. `Clojure` — the language idiom being modelled. The name signals what it is and where it lives in the family. "Clojure-on-protoCore" is avoided because the goal is not a port of Clojure-JVM; it is a Clojure-flavoured dialect that earns its place by what protoCore can do.
 
 ## The Swarm of One
 
-**This is what changed.** protoClojure went from zero to a working Clojure dialect rivalling Babashka on compute-bound workloads in roughly twelve focused sessions — half of them in a single afternoon. That is not the result of a particularly fast typist. It is the result of a **single architect, paired with a swarm of specialised AI agents, treating each session as a hypothesis-test loop**: design → emit → compile → measure with `perf stat` → keep or discard → commit.
+protoClojure is designed and maintained by a single architect, Gustavo Marino, working with AI coding agents that draft code, tests and documentation under human review.
 
-The cost of "let's see if it works" collapsed. In session 12 we read protoCore's `AttributeCache` implementation, understood the hash, traced the mutable-snapshot path, redesigned the wrapper schema to ask for fewer lookups, measured the result with `perf stat`, validated the 15% instruction-count drop, and committed — in under an hour. Without the swarm, the same hour buys you the *reading* of the cache. The build, the redesign, the measurement, the commit live on a different week.
-
-This matters past protoClojure. The criterion for "is this worth building" was, until recently, set by the *cost of building* — runtime engineering was a 2-year project for a team. With the swarm, a single architect can produce a runtime that **runs, benchmarks, and improves under its own measurements**, with traceable per-session commits and a conformance suite that grew with the implementation. The "interesting but not practical" projects move into the "implementable in an afternoon" column.
-
-protoClojure is the proof. The point is the pattern.
+The work proceeds as a measured loop — design, implement, compile, measure, keep or discard, commit — and the repository keeps the evidence: the conformance suite grew with the implementation to 130 fixtures, performance changes record their `perf stat` measurements in the commit history, and every benchmark figure in this README can be reproduced with the scripts in [`benchmarks/`](benchmarks/).
 
 ## License
 
-protoClojure is released under the [MIT License](LICENSE) — the same licence as protoCore, protoST, protoJS, and protoPython.
+Copyright (c) 2026 Gustavo Marino. Released under the MIT License; see [LICENSE](LICENSE).
+
+protoCore, protoJS, protoPython, protoST and protoCpp are also released under the MIT License.

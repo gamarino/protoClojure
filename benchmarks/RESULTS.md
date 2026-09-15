@@ -1,9 +1,12 @@
 # protoClojure vs Babashka — benchmarks
 
-**Date.** 2026-06-14 (session 11).
-**Setup.** DEV12 (AMD Ryzen 5500U Lucienne, 6 cores), Linux 6.17.0.
+**Date.** 2026-06-14. This snapshot collects the measurements taken that
+day across successive builds, from the first benchmark (commit `ac85269`)
+through the addition of watches, promises and parallel `pmap` (commit
+`ce9819d`). Build labels below refer to those commits.
+**Setup.** AMD Ryzen 5 5500U (6 cores), Linux 6.17.0.
 **Runtimes.**
-- `protoclj` — protoClojure session-11 head, `build_release/` (Release).
+- `protoclj` — protoClojure, `build_release/` (Release), at the commits named in each section.
 - `bb` — Babashka 1.4.192 (GraalVM-native).
 - (JVM Clojure not measured this round; binary not installed.)
 
@@ -12,7 +15,7 @@ runs the script through each interpreter 3 times and reports the
 minimum wall-clock (cold-start + execution). No JVM warmup phase.
 Result strings are compared across runtimes for correctness.
 
-## Session-18 numbers (after sessions 13-18 surface additions)
+## Numbers at commit `ce9819d` (after maps, strings, atoms, futures, watches, promises and parallel `pmap`)
 
 | Workload         | protoclj (ms) | bb (ms) | ratio   | Result        | Match |
 |------------------|--------------:|--------:|--------:|---------------|:-----:|
@@ -22,16 +25,16 @@ Result strings are compared across runtimes for correctness.
 | `reduce-list(10K)` |          27 |      36 | 0.75×   | 49995000      | ✓ |
 | `sum-squares(1K)` |           19 |      31 | 0.61×   | 332833500     | ✓ |
 
-vs session 12 (the perf high-water mark): fib 620→712 (+15%),
-tak 45→52 (+16%), sum-loop 66→79 (+20%). Honest regression — sessions
-13-18 added five new prototype pointers and ten new key pointers to
-the `run()` signature, threaded through every recursive call. The
-cost is measurable but small in absolute terms (~10 ns/call on fib),
-and we still beat Babashka on 3 of 5 workloads. A future perf-only
-session could collapse the run() params into a single struct and
-claw back most of this; not blocking real workloads.
+vs commit `a099b45` (the perf high-water mark): fib 620→712 (+15%),
+tak 45→52 (+16%), sum-loop 66→79 (+20%). Honest regression — the
+changes between the two commits added five new prototype pointers and
+ten new key pointers to the `run()` signature, threaded through every
+recursive call. The cost is measurable but small in absolute terms
+(~10 ns/call on fib), and we still beat Babashka on 3 of 5 workloads.
+A future performance-only change could collapse the run() params into a
+single struct and claw back most of this; not blocking real workloads.
 
-**New in session 18 — parallel pmap on real OS threads:**
+**New at `ce9819d` — parallel pmap on real OS threads:**
 
   $ time protoclj /tmp/map_perf.clj    # 4× fib(30) via sequential map
     real    0m2.800s   user    0m2.790s
@@ -39,11 +42,11 @@ claw back most of this; not blocking real workloads.
   $ time protoclj /tmp/pmap_perf.clj   # 4× fib(30) via pmap
     real    0m0.862s   user    0m3.323s
 
-  Wall-clock speedup: 3.25×. Same pattern as session 17's explicit
-  futures, but the surface is now `(pmap f coll)` — drop-in for
-  JVM-Clojure code.
+  Wall-clock speedup: 3.25×. Same pattern as the explicit futures added
+  in commit `5830237`, but the surface is now `(pmap f coll)` — drop-in
+  for JVM-Clojure code.
 
-## Session-12 numbers (after split fn prototypes + captures-only-if-needed)
+## Numbers at commit `a099b45` (after split fn prototypes + captures-only-if-needed)
 
 | Workload         | protoclj (ms) | bb (ms) | ratio   | Result        | Match |
 |------------------|--------------:|--------:|--------:|---------------|:-----:|
@@ -53,17 +56,17 @@ claw back most of this; not blocking real workloads.
 | `reduce-list(10K)` |          29 |      33 | 0.88×   | 49995000      | ✓ |
 | `sum-squares(1K)` |           19 |      28 | 0.68×   | 332833500     | ✓ |
 
-### Session 10 → 11 → 12 trajectory on `fib(30)`
+### Trajectory on `fib(30)`: `ac85269` → `700f352` → `a099b45`
 
-| Round | Wall (ms) | Cycles | Instructions | IPC  | L1-d misses |
-|-------|----------:|-------:|-------------:|-----:|------------:|
-| s10   |      4113 | (n/a)  |       (n/a)  | (n/a)|       (n/a) |
-| s11   |       720 |  2.45G |        5.93G | 2.42 |       11.2M |
-| s12   |       620 |  2.05G |        5.02G | 2.45 |        7.6M |
+| Build     | Wall (ms) | Cycles | Instructions | IPC  | L1-d misses |
+|-----------|----------:|-------:|-------------:|-----:|------------:|
+| `ac85269` |      4113 | (n/a)  |       (n/a)  | (n/a)|       (n/a) |
+| `700f352` |       720 |  2.45G |        5.93G | 2.42 |       11.2M |
+| `a099b45` |       620 |  2.05G |        5.02G | 2.45 |        7.6M |
 
 Per-call:
-- s11: 720 ms / 2.7M calls = **267 ns/call**
-- s12: 620 ms / 2.7M calls = **230 ns/call**  (−14%)
+- `700f352`: 720 ms / 2.7M calls = **267 ns/call**
+- `a099b45`: 620 ms / 2.7M calls = **230 ns/call**  (−14%)
 - bb:  498 ms / 2.7M calls = **184 ns/call**
 
 We are now ~25% over Babashka per call. The residual ~46 ns/call sits in
@@ -82,13 +85,13 @@ by ~2–3× on steady-state compute): protoClojure is in the
 **~2–4× JVM Clojure** band on these workloads — comfortably inside
 the **5× JVM** target set in the brainstorm phase.
 
-## What changed since session 10
+## What changed since the first benchmark (`ac85269`)
 
-Session 10 ratios were 8.3× / 2.3× / 8.1× / 1.5× / 0.53× (slower than bb
-across the board on compute-bound rows). Sessions 11 and 12 closed that
-gap. Three sets of changes:
+The first benchmark's ratios were 8.3× / 2.3× / 8.1× / 1.5× / 0.53×
+(slower than bb across the board on compute-bound rows). Commits
+`700f352` and `a099b45` closed that gap. The changes:
 
-### Session 12 — fewer getAttribute calls per CALL
+### `a099b45` — fewer getAttribute calls per CALL
 
 The user observed (correctly): protoCore already runs a 1024-entry
 per-thread attribute cache plus a mutable-snapshot cache, so adding
@@ -119,7 +122,7 @@ Single-arity CALL goes from 3 getAttribute → **1** (just `bytecodeKey`).
 - L1-d misses: 11.2M → 7.6M (−32%)
 - branch-miss / IPC unchanged → no new dispatch overhead
 
-### Session 11 — SmallInt fast-path
+### `700f352` — SmallInt fast-path
 
 1. **SmallInt fast-path binary opcodes** (`ADD` `SUB` `MUL` `LT` `LE`
    `GT` `GE` `EQ`). The compiler now emits these directly for

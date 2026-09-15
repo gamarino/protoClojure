@@ -15,7 +15,18 @@ under a `Dnn` id.
 
 ## 3.1 What is identical
 
-Read these and feel at home:
+> **Implementation status.** This section lists the v0.1 design, and
+> protoClojure 0.0.1 implements only part of it: vectors, lists and maps
+> with `assoc` / `get`; truthiness; `defn` with multi-arity and variadic
+> parameters (no docstrings or attribute maps); `let`, `loop`, `recur`;
+> closures; atoms with watches; promises; `println`. Reader macros other
+> than `@`, sets, most collection functions, lazy sequences, the
+> higher-order combinators, the threading macros, namespaces, vars and
+> `binding`, volatiles, delays, exceptions and the `pr`-family printers
+> are not implemented yet. See [STATUS.md](../STATUS.md) for the exact
+> list.
+
+In the v0.1 design, these match Clojure-JVM:
 
 - The reader. `'`, `` ` ``, `~`, `~@`, `#()`, `#{}`, `#'`, `#_`, `^`
   metadata, `:keyword`, `::ns-keyword`, namespaced symbols. All as you
@@ -51,7 +62,8 @@ Read these and feel at home:
   `ex-message`, `ex-data`, `ex-cause`.
 - `pr-str`, `print-str`, `println`, `prn`, `pr`, edn-style printing.
 
-If your code uses only the above, the migration is mostly a recompile.
+Once v0.1 implements this list, code that uses only the above should
+need few changes.
 
 ## 3.2 What is gone, and the substitute
 
@@ -148,12 +160,12 @@ instance of.
 
 ### 3.3.2 Numbers and overflow
 
-protoCore has a unified numeric tower: `SmallInteger` (56-bit inline,
+protoCore has a unified numeric tower: `SmallInteger` (signed 54-bit,
 tagged immediate), `LargeInteger` (arbitrary precision heap),
 `Float` (double). Arithmetic auto-promotes between integer sizes —
-identical to JVM Clojure since 1.3. There is no `int`/`long`
-distinction at the user level. There is no `BigDecimal` in v0.1.
-`Ratio` works as expected.
+unlike JVM Clojure, where `*` throws on `long` overflow and `*'`
+promotes (deviation D14). There is no `int`/`long` distinction at the
+user level. There is no `BigDecimal` in v0.1. `Ratio` is planned.
 
 ### 3.3.3 Strings
 

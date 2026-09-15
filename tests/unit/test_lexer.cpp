@@ -136,7 +136,7 @@ TEST(Lexer, HelloWorldShape) {
 }
 
 TEST(Lexer, BracketsAreLexedAsTokens) {
-    // Brackets implement vector literals starting in session 5 (fn / let /
+    // Brackets implement vector literals (fn / let /
     // loop bindings). Confirm they tokenise to LBracket / RBracket.
     auto toks = tokenise("[1 2 3]");
     ASSERT_GE(toks.size(), 5u);
@@ -145,7 +145,7 @@ TEST(Lexer, BracketsAreLexedAsTokens) {
 }
 
 TEST(Lexer, BracesAreLexedAsTokens) {
-    // Maps land in session 13; `{...}` now tokenises to LBrace / RBrace.
+    // Map literals: `{...}` tokenises to LBrace / RBrace.
     auto toks = tokenise("{:a 1}");
     ASSERT_GE(toks.size(), 4u);
     EXPECT_EQ(toks[0].kind, TokenKind::LBrace);

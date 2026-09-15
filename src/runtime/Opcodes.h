@@ -2,7 +2,7 @@
  * Opcodes — the v0.0.x bytecode VM instruction set.
  *
  * Each instruction is two bytes: opcode + one-byte operand. Operand
- * widening (>255 const-pool indices, etc.) lands in session 4+ via an
+ * widening (>255 const-pool indices, etc.) is planned via an
  * EXTEND prefix — same pattern protoST uses.
  *
  * Session 3 minimum — only what `(println "hello, world")` needs:

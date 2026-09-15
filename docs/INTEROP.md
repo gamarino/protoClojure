@@ -4,14 +4,13 @@
 > has Python, JavaScript, and Smalltalk, all through one resolver. This
 > document explains how that works and where the seams are.
 
-> **Implementation status (session 12).** Everything in this document
-> is design — the providers (`py/`, `js/`, `pst/`, `clj/`) are scoped
-> for Phase 5 of `ROADMAP.md` (sessions 22-25). The positional half of
-> the protoCore call convention works today (a `defn`-defined function
-> is reachable from protoST and protoPython with positional args); the
-> named-arg half is the priority of session 13. Until the providers
-> land, `(:require [py/numpy])` raises a clear "UMD provider not yet
-> registered" error.
+> **Planned — not yet implemented.** The UMD providers (`py/`, `js/`,
+> `pst/`, `clj/`), `ns` / `:require` and the conversion functions are not
+> available in protoClojure 0.0.1; this document describes the intended
+> design (see the UMD providers milestone in `ROADMAP.md`). What already
+> works is the protoClojure side of the protoCore call convention: both
+> positional arguments and named arguments (`& {:keys [...]}` and
+> trailing keyword/value pairs) for functions defined in protoClojure.
 
 ---
 

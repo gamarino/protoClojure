@@ -17,7 +17,7 @@
  *
  * Session 3 scope: integers, strings, symbols (resolved to PUSH_VAR), and
  * lists interpreted as call forms. No special forms yet — that is
- * session 4.
+ * a later step.
  */
 #pragma once
 #include "runtime/BytecodeModule.h"
@@ -51,15 +51,15 @@ struct CompilerMarkers {
     // cleanup removed fnMarkerProto from this struct; the VM carries the
     // single-arity and multi-arity prototypes through ActiveCallContext.
     const proto::ProtoObject* stringMarkerProto;
-    const proto::ProtoObject* vectorMarkerProto; // session 9 — `[..]` literal
-    const proto::ProtoObject* mapMarkerProto;    // session 13 — `{..}` literal
+    const proto::ProtoObject* vectorMarkerProto; // `[..]` literal
+    const proto::ProtoObject* mapMarkerProto;    // `{..}` literal
     const proto::ProtoString* bytesKey;
-    const proto::ProtoString* bytecodeKey;       // session 5 — opaque ptr
-    const proto::ProtoString* arityKey;          // session 5
-    const proto::ProtoString* capturesKey;       // session 6 — closure captures list
-    const proto::ProtoString* aritiesKey;        // session 8 — multi-arity dispatch list
-    const proto::ProtoString* itemsKey;          // session 9 — vector items list
-    const proto::ProtoString* entriesKey;        // session 13 — map entries list
+    const proto::ProtoString* bytecodeKey;       // opaque ptr
+    const proto::ProtoString* arityKey;          // fn arity
+    const proto::ProtoString* capturesKey;       // closure captures list
+    const proto::ProtoString* aritiesKey;        // multi-arity dispatch list
+    const proto::ProtoString* itemsKey;          // vector items list
+    const proto::ProtoString* entriesKey;        // map entries list
 };
 
 class Compiler {

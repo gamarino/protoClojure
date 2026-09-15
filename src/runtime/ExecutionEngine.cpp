@@ -689,7 +689,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 // Stack: [..., callable, pos1, ..., posK, kwMap].
                 // operand = K + 1 (positionals counting the kwMap).
                 // If callee is a user fn declaring isKwBased, keep the
-                // map and dispatch (session 13 path). Otherwise unpack
+                // map and dispatch (the kw-based path). Otherwise unpack
                 // the kwMap into k,v,k,v positionals so the call sees
                 // the literal `:k v` shape the source had — backwards
                 // compatibility for primitives + non-kw user fns.

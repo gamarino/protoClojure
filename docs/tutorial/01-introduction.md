@@ -1,5 +1,11 @@
 # 1. Introduction
 
+> **Implementation status.** The cross-runtime interop described in
+> "In 60 seconds" and the running example at the end of this chapter,
+> which uses namespaces (`ns`, `:require`), UMD interop, `#(...)` and
+> `->>`, are not available in protoClojure 0.0.1; the example shows the
+> intended v0.1 shape. See [STATUS.md](../STATUS.md) for what runs today.
+
 protoClojure is a Clojure dialect that runs on a different substrate
 than the JVM. It is built on the **protoCore object kernel** — a small
 C++20 runtime that is also the foundation for a Python interpreter
@@ -26,11 +32,11 @@ In return:
 - **Persistent collections are not a layer — they are the kernel.**
   The protoCore object model is structurally shared and immutable by
   default. Clojure does not have to convince it.
-- **You can call Python and JavaScript modules directly.** A
-  `(:require [py/numpy :as np])` brings NumPy in through the same
-  module resolver the Python runtime uses. The result is a protoCore
-  object you can call from Clojure. No FFI marshalling, no separate
-  process.
+- **You will be able to call Python and JavaScript modules directly
+  (planned).** In the design, a `(:require [py/numpy :as np])` brings
+  NumPy in through the same module resolver the Python runtime uses.
+  The result is a protoCore object you can call from Clojure. No FFI
+  marshalling, no separate process.
 
 The unique trade is **the JVM ecosystem for the Python and JavaScript
 ecosystems, on a runtime that natively understands Clojure idioms**.

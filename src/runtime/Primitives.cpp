@@ -429,7 +429,7 @@ const proto::ProtoObject* prim_mul(proto::ProtoContext* ctx,
     return ctx->fromLong(acc);
 }
 
-// `/` arrives in session 9 — float-by-default once any arg is float; int
+// `/` — float-by-default once any arg is float; int
 // truncating div when all ints. Matches Clojure for ints when divisible;
 // not bit-for-bit for Ratios (we have no Ratio in v0.9, so we truncate).
 const proto::ProtoObject* prim_div(proto::ProtoContext* ctx,
@@ -571,12 +571,12 @@ const proto::ProtoObject* prim_str(proto::ProtoContext* ctx,
     return ctx->fromUTF8String(os.str().c_str());
 }
 
-// List + predicate primitives (session 7) -----------------------------------
+// List + predicate primitives -----------------------------------
 
 // Treat nil as the empty seq. Vectors (ProtoTuple) are seq-coerced via
 // ProtoTuple::asList, which converts in O(N) but is fine for v0.9
 // benchmarks (consumers walk linearly anyway). Strings stay opaque for
-// session 9 — supported in session 10.
+// the first version; later changes added string support.
 const proto::ProtoList* asSeqOrNull(proto::ProtoContext* ctx,
                                     const proto::ProtoObject* v) {
     if (!v || v == PROTO_NONE) return nullptr;
@@ -725,7 +725,7 @@ const proto::ProtoObject* prim_list_p(proto::ProtoContext* ctx,
 // SmallInt / LargeInt / Float / Symbol / String identity AND value
 // equivalence per the kernel.
 //
-// Hash fast-path TODO (session 14): for interned symbols / keywords
+// Hash fast-path TODO: for interned symbols / keywords
 // the canonical pattern across protoCore (see ProtoObject::getAttribute,
 // THREAD_CACHE_DEPTH index) is `(reinterpret_cast<uintptr_t>(key) >> 6)`
 // directly — the symbol-table guarantees pointer-stability, and the
@@ -1092,7 +1092,7 @@ const proto::ProtoObject* prim_reverse(proto::ProtoContext* ctx,
     return out;
 }
 
-// Higher-order primitives (session 7) --------------------------------------
+// Higher-order primitives --------------------------------------
 
 const proto::ProtoObject* prim_map(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
@@ -2157,7 +2157,7 @@ static const proto::ProtoObject* sendCore(proto::ProtoContext* ctx,
             ->appendLast(ctx, args->getAt(ctx, (int)i))->asObject(ctx);
     }
 
-    // Build the per-send promise — same wire shape as session 18.
+    // Build the per-send promise — same wire shape as `promise`.
     proto::ProtoObject* p = const_cast<proto::ProtoObject*>(
         cc->promiseMarkerProto->newChild(ctx, /*isMutable=*/true));
     p->setAttribute(ctx, cc->valueKey, PROTO_NONE);

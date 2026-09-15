@@ -41,7 +41,7 @@ enum class TokenKind : uint8_t {
     HashUnderscore,  // reserved — #_
     HashApostrophe,  // reserved — #'
     Caret,           // reserved — ^
-    At,              // @  (session 16 — reader macro for `(deref ...)`)
+    At,              // @  (reader macro for `(deref ...)`)
 
     EndOfFile,
     Error,           // text carries the error message
@@ -51,7 +51,7 @@ struct Token {
     TokenKind   kind;
     std::string text;           // raw lexeme (or error message when kind=Error)
     long long   intValue = 0;   // valid for Integer
-    double      doubleValue = 0.0;  // valid for Float (session 9)
+    double      doubleValue = 0.0;  // valid for Float
     int         line   = 1;
     int         column = 1;
 };

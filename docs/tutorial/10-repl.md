@@ -1,5 +1,11 @@
 # 10. The REPL
 
+> **Implementation status.** The local REPL (§10.1) ships in
+> protoClojure 0.0.1, except `doc`, `source`, `find-doc`, `*e` and
+> `pprint`. The nREPL server and the editor workflow built on it
+> (§10.2-§10.3), `tap>` (§10.3.1) and cross-runtime REPL sessions (§10.4)
+> are planned and not yet implemented.
+
 The REPL — the read-eval-print loop — is the Clojure workflow. Every
 serious Clojure programmer drives development through it: write a
 form in the editor, send it to a running REPL, see the result, fix
@@ -107,28 +113,25 @@ The prompt is plain `user=>` — once protoClojure gets real
 namespaces, it will switch by namespace the way JVM Clojure does
 (`my.app=>`).
 
+A line that starts with `:` at the primary prompt is read as a
+meta-command, so typing a bare keyword such as `:foo` reports an
+unknown command. Wrap it in an expression instead, for example
+`(str :foo)`.
+
 ### 10.1.3 What gets printed
 
-The REPL prints values with `pr-str`, which is the *readable* form
-— strings have their quotes, keywords have their colon, nil prints
-as `nil`. This is intentional: the printed form is round-trippable
-through the reader. `(read-string (pr-str x))` returns the original
-`x` for any printable value.
+The REPL prints each result with the same printer `println` uses.
+Numbers, keywords and collections print as you would write them, but
+strings print without their quotes (`"hi"` prints `hi`), functions
+print as `#<fn>`, and atoms and actors print as tags such as
+`#<atom 0>` and `#<actor 102>`.
 
-For human-readable output, `(println x)` uses `print-str` (no quotes,
-no escapes). You will use `println` in code and let the REPL use
-`pr-str` for the result.
-
-For pretty-printing of nested data — long maps, deep vectors — wrap
-in `(pprint x)`:
-
-```
-user=> (pprint people)
-[{:name "alice", :age 30} {:name "bob", :age 25}]
-```
-
-(In v0.1, `pprint` is a minimal one-pass printer. The full
-`clojure.pprint` lands in v0.2.)
+The v0.1 design prints REPL results with `pr-str`, the *readable* form
+— strings keep their quotes, so the printed form is round-trippable
+through the reader — and keeps `(println x)` for human-readable output.
+That printer is planned, as is `(pprint x)` for pretty-printing nested
+data (a minimal one-pass printer first, the full `clojure.pprint` in
+v0.2).
 
 ## 10.2 nREPL — your editor connects to a running program
 

@@ -1,5 +1,15 @@
 # 5. Functions and Closures
 
+> **Implementation status.** protoClojure 0.0.1 implements `defn` and
+> `fn` (single- and multi-arity, variadic), closures, `let`, `loop` /
+> `recur`, `apply` over a list, `map` / `filter` / `reduce`, atoms, and
+> named-argument destructuring with `& {:keys [...]}`. Not available yet:
+> docstrings and `doc`, the `#(...)` shorthand, vector and map
+> destructuring in `let` and parameter vectors, `zero?`, `even?`, `conj`,
+> `comp`, `partial`, `juxt`, `complement`, lazy sequences (`range`,
+> `take`), `doseq`, pre/post conditions, `defn-` and `memoize`. See
+> [STATUS.md](../STATUS.md).
+
 Functions are values. They have a name (sometimes), an arglist, and a
 body. They close over the lexical environment where they were defined.
 They are called with `(f args)`. Everything else in this chapter is
@@ -150,10 +160,10 @@ whole chapter ([Chapter 6](06-state-and-atoms.md)).
 `let` introduces names visible only in its body:
 
 ```clojure
-(defn hypotenuse [a b]
+(defn sum-of-squares [a b]
   (let [a2 (* a a)
         b2 (* b b)]
-    (Math/sqrt (+ a2 b2))))
+    (+ a2 b2)))
 ```
 
 Bindings are sequential — `a2` is visible to `b2`'s right-hand side. A
@@ -204,15 +214,17 @@ Two pieces:
 (count-up 1000000)        ;; => :done   — no stack overflow
 ```
 
-The compiler **enforces** that `recur` is in tail position. If you try
-to use `recur` somewhere it cannot work, you get a clear compile error:
+`recur` belongs in tail position. JVM Clojure rejects a non-tail
+`recur` with a compile error, and the v0.1 design does the same; the
+protoClojure 0.0.1 compiler does not check it yet, so the example below
+compiles and then fails at run time with an operand-stack overflow:
 
 ```clojure
 (defn bad [n]
-  (+ 1 (recur (dec n))))   ;; compile error: recur not in tail position
+  (+ 1 (recur (dec n))))   ;; recur not in tail position
 ```
 
-This is intentional. JVM Clojure does the same. Without explicit
+The tail-position rule is intentional. Without explicit
 `recur`, deep general recursion will eventually overflow the operand
 stack — protoCore does not optimise tail calls automatically. That is
 a real constraint and an honest one.

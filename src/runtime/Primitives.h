@@ -79,10 +79,10 @@ struct ActiveCallContext {
     const proto::ProtoString*  bytecodeKey;
     const proto::ProtoString*  arityKey;
     const proto::ProtoString*  capturesKey;
-    const proto::ProtoString*  aritiesKey;       // session 8
-    const proto::ProtoString*  entriesKey;       // session 13
-    const proto::ProtoString*  valueKey;         // session 16
-    const proto::ProtoString*  watchesKey;       // session 18 — atom watches
+    const proto::ProtoString*  aritiesKey;       // multi-arity dispatch list
+    const proto::ProtoString*  entriesKey;       // map entries list
+    const proto::ProtoString*  valueKey;         // atom value
+    const proto::ProtoString*  watchesKey;       // atom watches
     // Session 17 keys.
     const proto::ProtoString*  thunkKey;
     const proto::ProtoString*  ccBlobKey;

@@ -1,5 +1,7 @@
 # 7. Protocols and Multimethods
 
+> **Planned — not yet implemented.** Protocols and multimethods (`defprotocol`, `extend-type`, `extend-protocol`, `defmulti`, `defmethod`, `derive`, `isa?`) are not available in protoClojure 0.0.1; this chapter describes the intended design.
+
 Clojure does polymorphism without classes. Two mechanisms:
 
 - **Protocols**: a set of named functions whose implementation can be

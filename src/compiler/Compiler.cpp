@@ -166,7 +166,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     //     a list — the session-7 shape, unchanged.
     //   - a wrapped map (`& {:keys [k1 k2 ...]}`): kw-based, names each
     //     declared key as a local slot whose value will be supplied by
-    //     the caller's kwArgs dict at CALL_KW time (session 13).
+    //     the caller's kwArgs dict at CALL_KW time.
     //
     // The two shapes are mutually exclusive — JVM-Clojure shares the
     // surface (`& {:keys}` is the kw form of variadic), but the
@@ -176,7 +176,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     bool isVariadic = false;
     bool isKwBased  = false;
     std::string restName;
-    std::string asBindName;  // session 14 — `:as` snapshot binding name
+    std::string asBindName;  // `:as` snapshot binding name
     // Session 14 — each kw key may have an associated default form from
     // `:or {key default}`. defaultForm = nullptr when no default.
     struct KwKeyDecl {
@@ -435,7 +435,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                            BytecodeModule& out,
                            const CompilerMarkers& markers) {
     if (form == nullptr || form == PROTO_NONE) {
-        // nil literal — not yet emitting a PUSH_NIL opcode. For session 3 we
+        // nil literal — not yet emitting a PUSH_NIL opcode. For now we
         // represent nil as a const-pool entry with kind String "" until
         // PUSH_NIL lands. Cheating but bounded; nil is not exercised by
         // hello-world.
@@ -484,7 +484,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // (def name expr) — compile expr, store in globals under `name`.
         // The store leaves the value on the stack as `def`'s result, matching
         // Clojure semantics (def returns the Var; we return the value for
-        // session 4 simplicity — close enough for the conformance tests).
+        // simplicity — close enough for the conformance tests).
         if (headName == "def") {
             if (n != 3) throw CompileError("def: expects (def name expr)");
             const proto::ProtoObject* nameForm = lst->getAt(ctx, 1);
@@ -761,7 +761,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             };
 
             if (!multiArity) {
-                // Single-arity — unchanged from session 6.
+                // Single-arity — the original single-body path.
                 std::unique_ptr<BytecodeModule> body =
                     compileFnBody(ctx, lst, markers);
                 std::size_t blockIdx = out.addBlock(std::move(body));
@@ -1097,7 +1097,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // host a key must be a keyword. The longest such suffix is
         // packaged into a synthetic `(hash-map :k v :k v ...)` call and
         // emitted as the LAST positional argument; the callee can then
-        // peel it off when isKwBased (session 13's path).
+        // peel it off when isKwBased (the kw-based call path).
         unsigned long kvStart = n;
         for (long long i = (long long)n - 2; i >= 1; i -= 2) {
             const proto::ProtoObject* arg =

@@ -10,18 +10,18 @@
 The authoritative language reference is
 [`docs/LANGUAGE.md`](LANGUAGE.md). The cross-runtime story is in
 [`docs/INTEROP.md`](INTEROP.md). The live tracker of what works and what
-deviates is [`docs/STATUS.md`](STATUS.md). Every non-trivial code
-snippet in this tutorial is intended to run against the `protoclj`
-binary.
+deviates is [`docs/STATUS.md`](STATUS.md). The tutorial describes the
+language protoClojure is converging on; not every snippet runs against
+the current `protoclj` binary.
 
-> **What runs today (session 12).** The interpreter exists, the
-> conformance suite has 93 fixtures, and chapters 1, 2 (most of it),
-> 4 (lists + vectors + numbers; not maps/sets yet), and 5 (functions
-> + closures + multi-arity) run end-to-end. Chapters 6 (atoms), 8
-> (modules / `ns`), 9 (interop), 10 (REPL), 11 (macros) describe
-> features scoped for the next sessions — see `docs/ROADMAP.md`.
-> The tutorial text is stable; the implementation is filling in
-> behind it.
+> **What runs today (protoClojure 0.0.1).** Functions, closures,
+> multi-arity and variadic functions, lists, vectors, maps and strings
+> (chapters 2, 4 and 5, in part); atoms, watches, futures and promises
+> (chapter 6, in part); the local REPL (chapter 10, in part); and actors
+> (chapter 13). Chapters 7, 8, 9, 11 and 12 describe planned features
+> that are not implemented yet. Each chapter that uses unimplemented
+> features opens with a note listing them; [`STATUS.md`](STATUS.md) is
+> the authoritative list.
 
 ## How to use this tutorial
 
@@ -47,28 +47,28 @@ of the underlying object model, the protoCore concurrency primitives.
 | 4  | [Data structures](tutorial/04-data-structures.md)                             | Lists, vectors, maps, sets. Persistence. Why `assoc` returns a new map.                                   |
 | 5  | [Functions and closures](tutorial/05-functions-and-closures.md)               | `fn`, `defn`, variadic, multi-arity. Closures. `recur` for tail recursion.                                |
 | 6  | [State and atoms](tutorial/06-state-and-atoms.md)                             | The atom. CAS. When to reach for one. The protoCore primitive underneath.                                 |
-| 7  | [Protocols and multimethods](tutorial/07-protocols-and-multimethods.md)       | Polymorphism without classes. Why this is interesting on a prototype runtime.                             |
-| 8  | [Modules](tutorial/08-modules.md)                                             | `(ns ... :require [...])`. The Clojure path. Aliases.                                                     |
-| 9  | [Cross-runtime interop](tutorial/09-interop.md)                               | `py/`, `js/`, `pst/` prefixes. When to convert. The conversion functions.                                 |
-| 10 | [The REPL](tutorial/10-repl.md)                                               | Interactive `protoclj`. nREPL. Connecting CIDER / Calva / Conjure.                                        |
-| 11 | [Macros](tutorial/11-macros.md)                                               | Code as data. `defmacro`. Why this is the language's leverage point.                                      |
-| 12 | [A worked example](tutorial/12-worked-example.md)                             | The tri-runtime demo from `INTEROP.md`, walked through one line at a time.                                |
+| 7  | [Protocols and multimethods](tutorial/07-protocols-and-multimethods.md)       | *Planned.* Polymorphism without classes. Why this is interesting on a prototype runtime.                  |
+| 8  | [Modules](tutorial/08-modules.md)                                             | *Planned.* `(ns ... :require [...])`. The Clojure path. Aliases.                                          |
+| 9  | [Cross-runtime interop](tutorial/09-interop.md)                               | *Planned.* `py/`, `js/`, `pst/` prefixes. When to convert. The conversion functions.                      |
+| 10 | [The REPL](tutorial/10-repl.md)                                               | The interactive `protoclj` REPL. The planned nREPL server for CIDER / Calva / Conjure.                    |
+| 11 | [Macros](tutorial/11-macros.md)                                               | *Planned.* Code as data. `defmacro`. Why this is the language's leverage point.                           |
+| 12 | [A worked example](tutorial/12-worked-example.md)                             | *Planned.* The tri-runtime demo from `INTEROP.md`, walked through one line at a time.                     |
 | 13 | [Actors](tutorial/13-actors.md)                                               | `actor` / `send` / `send-h` / `send-l` / `actor?` / `actor-stats`. Single-method invariant, priority bands, worker pool. |
 
 ## A note on running the examples
 
-The `protoclj` binary exists and runs `.clj` files. The interactive
-REPL, the `-e` one-expression flag, and the nREPL server are coming
-in sessions 19-21 (see `docs/ROADMAP.md`). Today:
+The `protoclj` binary runs `.clj` files and, when started without
+arguments, an interactive REPL. The `-e` one-expression flag and the
+nREPL server are planned (see [`ROADMAP.md`](ROADMAP.md)).
 
 ```bash
-$ protoclj script.clj           # works today
-$ protoclj --version            # works today
-$ protoclj -e '(+ 1 2)'         # planned, sessions 19+
-$ protoclj                       # planned (interactive REPL), session 19
-$ protoclj --nrepl 7888          # planned (nREPL server), sessions 20-21
+$ protoclj script.clj           # run a file
+$ protoclj                      # interactive REPL
+$ protoclj --version            # print the version
+$ protoclj -e '(+ 1 2)'         # planned
+$ protoclj --nrepl 7888         # planned (nREPL server)
 ```
 
 The runnable examples shipped with the repository live under
-[`examples/`](../examples/) and exercise the session-12 surface end-to-
+[`examples/`](../examples/) and exercise the implemented surface end to
 end.

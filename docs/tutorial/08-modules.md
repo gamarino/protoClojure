@@ -1,5 +1,7 @@
 # 8. Modules
 
+> **Planned — not yet implemented.** Namespaces and modules (`ns`, `:require`, `:as`, `:refer`, `CLOJURE_PATH` loading, vars, `^:dynamic` / `binding`, `defn-`) are not available in protoClojure 0.0.1; this chapter describes the intended design.
+
 A protoClojure program is a tree of files, each declaring a
 **namespace** and listing what it needs from elsewhere. The mechanics
 look almost identical to Clojure-JVM — the same `ns` form, the same

@@ -1,5 +1,7 @@
 # 9. Cross-Runtime Interop
 
+> **Planned — not yet implemented.** Cross-runtime interop (the `py/`, `js/` and `pst/` UMD providers, `ns` / `:require`, and the `clj->py` / `py->clj` / `clj->js` / `js->clj` conversion functions) is not available in protoClojure 0.0.1; this chapter describes the intended design.
+
 This is the chapter that earns the project its existence. Everything
 covered so far — persistent data, REPL-driven, functional core — exists
 in other Clojure dialects. The cross-runtime UMD interop does not.

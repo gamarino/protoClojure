@@ -1,5 +1,12 @@
 # 2. For the Python or JavaScript Developer
 
+> **Implementation status.** Some forms in this chapter are not
+> available in protoClojure 0.0.1: the quote reader macro `'`, set
+> literals `#{...}`, the `#(...)` shorthand, `conj`, `dissoc`, `update`,
+> `even?`, `pos?`, `mapv`, `sort`, the threading macros `->` / `->>`, and
+> editor integration through nREPL. `let` works only inside function
+> bodies. See [STATUS.md](../STATUS.md) for what runs today.
+
 Clojure looks unfamiliar at first — there are a lot of parentheses and
 the function comes *before* the arguments — but the underlying ideas
 are smaller than they look. If you have written Python or JavaScript
@@ -250,14 +257,16 @@ get the result:
 
 ```
 $ protoclj
+protoClojure 0.0.1
+REPL — :help for commands, :quit or Ctrl-D to exit
 user=> (+ 1 2)
 3
 user=> (def xs [10 20 30])
-#'user/xs
+[10 20 30]
 user=> (map inc xs)
 (11 21 31)
 user=> (defn double [x] (* 2 x))
-#'user/double
+#<fn>
 user=> (double 21)
 42
 ```
@@ -277,8 +286,9 @@ Two things make this more than what Python's REPL gives you:
   state you built up.
 
 This is what is meant by "REPL-driven development". It is the way
-Clojure programmers actually work. protoClojure ships an nREPL server
-in v0.1 specifically so that workflow works.
+Clojure programmers actually work. The nREPL server that connects the
+editor is planned for protoClojure v0.1; today the local REPL gives you
+the redefine-anything half of the workflow.
 
 ## 2.10 Where this is going
 

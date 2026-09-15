@@ -3,7 +3,7 @@
  *
  * v0.0.x scope: --version, --help, and *running a .clj file* through the
  * reader/compiler/VM pipeline. Subsequent sessions add -e (one-form eval),
- * the interactive REPL (session 4-ish), and --nrepl (phase 5).
+ * the interactive REPL, and --nrepl.
  */
 #include "protoClojure.h"
 #include "protoCore.h"
@@ -75,7 +75,7 @@ int runFile(const char* path) {
     //   0 : globals namespace (mutable child of objectPrototype).
     //   1 : forms (the ProtoList readAll() returned).
     //   2 : stringMarkerProto — see ReaderMarkers / CompilerMarkers docs.
-    //   3 : fnMarkerProto — wraps user-fn callables (session 5).
+    //   3 : fnMarkerProto — wraps user-fn callables.
     ctx->resizeAutomaticLocals(11);
     constexpr unsigned int kSlotGlobals       = 0;
     constexpr unsigned int kSlotForms         = 1;

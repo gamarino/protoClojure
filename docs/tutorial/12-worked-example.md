@@ -1,5 +1,7 @@
 # 12. A Worked Example
 
+> **Planned — not yet implemented.** The features this example relies on (namespaces, the `py/` and `js/` UMD providers, the conversion functions, `#(...)` and the `->>` threading macro) are not available in protoClojure 0.0.1; this chapter describes the intended design.
+
 This is the chapter where we tie the tutorial together. We will take
 the tri-runtime script from Chapter 1 — pandas reads a CSV, Clojure
 processes it, D3 renders a chart — and walk through it one line at a

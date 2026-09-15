@@ -5,8 +5,8 @@
  * deliberately tiny surface; v0.1 will grow it as Phase 1 of the roadmap
  * lands actual interpreter functionality.
  *
- * See docs/superpowers/specs/2026-06-14-phase-1-bootstrap-interpreter.md
- * for what comes next.
+ * See docs/archive/design-specs/2026-06-14-phase-1-bootstrap-interpreter.md
+ * for the original (archived) phase-1 plan.
  */
 #pragma once
 

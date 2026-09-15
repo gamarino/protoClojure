@@ -1,227 +1,186 @@
 # protoClojure — Roadmap
 
-> Session-by-session plan. Each session is roughly an afternoon. The
-> swarm-of-one cadence (see README §"The Swarm of One") makes the unit
-> of progress smaller and more honest than week-by-week milestones.
+> Planned work, grouped into milestones. The order between milestones
+> reflects dependencies; no dates are estimated. What already works is
+> tracked in [STATUS.md](STATUS.md); shipped changes are listed in
+> [CHANGELOG.md](../CHANGELOG.md).
 
 ---
 
-## Phase 0 — Bootstrap interpreter (sessions 1-9, CLOSED)
+## Versioning
 
-**Goal:** the language reads, the VM runs, the conformance suite is
-real, and the implementation rivals Babashka semantically.
-
-Done:
-- Sessions 1-3: Lexer, reader, bytecode VM, `println`.
-- Session 4: `def`, `if`, `do`, integer arithmetic, comparisons.
-- Session 5: `fn`, `defn`, `let`, `loop`, `recur`.
-- Session 6: Closures with N-level lexical capture.
-- Session 7: Variadic `& rest`, `apply`, `map` / `filter` / `reduce`.
-- Session 8: Multi-arity `defn`, `cond` / `when` / `and` / `or`, keywords.
-- Session 9: IEEE-754 floats, vectors distinct from lists.
-
-Snapshot: 90 conformance fixtures pass, the surface covers everything
-in the tutorial's first four chapters.
+protoClojure has not been released. The version declared in
+`CMakeLists.txt` (and printed by `protoclj --version`) is **0.0.1**, and the
+repository has no release tags. **v0.1.0** is the first planned release;
+the milestones under [Towards v0.1](#towards-v01) define its scope. Version
+labels such as v0.2 and v0.3 in this document and in the design documents
+describe intended scope, not scheduled dates.
 
 ---
 
-## Phase 1 — Honest benchmark + perf pass (sessions 10-12, CLOSED)
+## Completed
 
-**Goal:** measure against Babashka, identify the levers, ship the wins.
+### Bootstrap interpreter
 
-Done:
-- Session 10: Babashka 1.4.192 installed locally; first bench harness;
-  numbers are honest (and at the time, ~8× slower than bb on compute-
-  bound).
-- Session 11: SmallInt fast-path binary opcodes (`ADD SUB MUL LT LE GT GE EQ`),
-  routed slow-path through protoCore's promoting `add` / `compare` /
-  `multiply`. fib 4113 ms → 720 ms. LargeInteger by default
-  (factorial(100) runs out of the box).
-- Session 12: Split `fnMarkerProto` into `fnSingleProto` + `fnMultiProto`;
-  skip captures read when body has none. fib 720 → 620 ms.
-  `perf stat` confirmed: −15% instructions, −32% L1-d misses.
+The language reads, the VM runs, and the conformance suite is real:
+lexer, reader, bytecode compiler and VM; `def`, `if`, `do`, `quote`;
+`fn`, `defn`, `let`, `loop`, `recur`; closures with N-level lexical
+capture; variadic parameters, `apply`, `map` / `filter` / `reduce`;
+multi-arity functions; `cond` / `when` / `and` / `or`; keywords;
+IEEE-754 floats; vectors distinct from lists.
 
-Snapshot: 93 conformance fixtures, 3 of 5 bench rows faster than bb,
-1.07-1.25× bb on the call-heavy ones, in the 2-4× JVM Clojure band
-on extrapolation — inside the "5× JVM Clojure single-thread" target.
+### Benchmark and performance pass
 
----
+- A benchmark harness against Babashka 1.4.192 (`benchmarks/bench.sh`).
+- SmallInteger fast-path opcodes (`ADD SUB MUL LT LE GT GE EQ`), with the
+  slow path routed through protoCore's promoting `add` / `compare` /
+  `multiply`: `fib(30)` went from 4113 ms to 720 ms, and LargeInteger
+  results are the default (`factorial(100)` runs out of the box).
+- Separate `fnSingleProto` / `fnMultiProto` function prototypes, and the
+  captures attribute read only when a body has captures: `fib(30)` went
+  from 720 ms to 620 ms, with 15% fewer instructions and 32% fewer L1-d
+  cache misses (per `perf stat`).
 
-## Phase 2 — UMD-ready call convention + collections (NEXT)
+The features added afterwards raised `fib(30)` to 712 ms; see
+[benchmarks/RESULTS.md](../benchmarks/RESULTS.md) and the performance
+follow-ups below.
 
-**Promoted to the front of the queue** following the realisation that
-interop with foreign modules requires the **full** protoCore call
-convention (positional + named), in BOTH directions (consume and
-generate). Without this, the "transparent UMD interop" promise in the
-README is partial: positional calls work today, named-arg calls do not,
-so `(np/zeros [3 3] :dtype :float64)` is not yet reachable.
+### Named arguments, maps and strings
 
-The protoST runtime already implements this on its side (see
-`protoST/docs/superpowers/specs/2026-06-13-protocore-call-syntax.md` —
-the `recv name(p1, k=v)` dual syntax). protoClojure's spec is
-`docs/superpowers/specs/2026-06-14-protocore-call-convention.md`; this
-phase implements its named-arg half.
+- Map literals `{:a 1 :b 2}` and `hash-map` / `assoc` / `get` /
+  `contains?` / `keys` / `vals` / `map?`.
+- Named-argument destructuring `& {:keys [...] :or {...} :as name}` and
+  trailing keyword/value pairs at call sites via the `CALL_KW` opcode.
+  Both the positional and the named half of the protoCore call convention
+  now work for functions defined in protoClojure; protoST implements the
+  same convention with its own call syntax.
+- `clojure.string`-shaped functions in the global namespace (`subs`,
+  `upper-case`, `lower-case`, `join`, `split`, `replace`, `trim`, ...).
 
-### Session 13 — Named-argument support in `defn` and call sites
+### Concurrency primitives
 
-- Reader: map literal `{:a 1 :b 2}` (today's gap that blocks everything else here).
-- Compiler: detect map-destructuring `& {:keys [...] :or {...}}` in fn params.
-- Compiler: emit `CALL_KW` opcode (operand = const-pool index of a
-  mangled selector with sorted named keys; same shape as protoST's
-  `SEND_CALL`). Stack layout matches the protoST design: receiver,
-  positionals in source order, named values in alphabetical-key order.
-- VM: `CALL_KW` dispatch path. Reuses `dispatchCall` for the positional
-  part; threads `kwArgs` (a `ProtoSparseList`) through to the receiver.
-- Generate side: `defn` with `& {:keys}` produces a wrapper whose
-  signature advertises the named-arg keys, so foreign callers
-  (protoST, protoPython) reach the right argument by name.
+- `atom`, `swap!`, `reset!`, `compare-and-set!`, `deref` / `@` on protoCore
+  compare-and-set, with `add-watch` / `remove-watch`.
+- `future` on OS threads, `promise` / `deliver`, `realized?`, and `pmap`
+  running one thread per element.
+- Actors on a worker pool, with three priority bands, a single-method
+  invariant and a lock-free per-actor mailbox.
 
-### Session 14 — Maps as a first-class collection
+### Local REPL and packaging
 
-- `ProtoSparseList`-backed maps; `assoc`, `dissoc`, `get`, `contains?`,
-  `keys`, `vals`, `merge`, `update`, `get-in`, `assoc-in`, `update-in`.
-- `select-keys`, `merge-with`, `zipmap`.
-- Print path for maps.
-
-### Session 15 — Strings as a first-class collection
-
-- `clojure.string` ops: `count`, `upper-case`, `lower-case`, `split`,
-  `join`, `subs`, `replace`, `trim`.
-- `format` (printf-style via the host).
-- Char support — strings as a sequence of 1-codepoint strings (D3).
-
-**Phase 2 done when:** the worked example in `INTEROP.md` §10
-type-checks against the language as written, even if the providers
-aren't wired in yet.
+- Interactive `protoclj` REPL on libreadline: multi-line input, history,
+  `*1` `*2` `*3`, `:help` / `:quit` / `:load` / `:time`.
+- CPack packaging (DEB, RPM, TGZ, DragNDrop, NSIS, ZIP); TGZ and DEB are
+  verified on Linux.
 
 ---
 
-## Phase 3 — Bootstrap `core.clj` + macros
+## Towards v0.1
+
+### Bootstrap `core.clj` and macros
 
 **Goal:** stop installing primitives in C++ and start composing them in
 Clojure. Macros become user-writable.
 
-### Session 16 — `core.clj` evaluated at startup
 - A minimal `core.clj` shipped with the runtime; `protoclj` evaluates it
   before any user code.
-- Re-implementing `every?`, `some?`, `comp`, `partial`, `juxt`,
-  threading macros (`->`, `->>`, `as->`, `some->`, `some->>`), `case`,
-  `if-let`, `when-let`, `dotimes`, etc., in Clojure on top of the
-  primitives.
-
-### Session 17 — `defmacro` + compile-time evaluation
-- Compile-time eval pipeline: compiler invokes the existing
+- Re-implement `every?`, `some?`, `comp`, `partial`, `juxt`, the threading
+  macros (`->`, `->>`, `as->`, `some->`, `some->>`), `case`, `if-let`,
+  `when-let`, `dotimes`, etc., in Clojure on top of the primitives.
+- Compile-time evaluation pipeline: the compiler invokes the existing
   ExecutionEngine to expand a macro form.
-- `defmacro` syntax + quasiquote (`` ` ``, `~`, `~@`).
+- `defmacro`, the quote reader macro `'`, and quasiquote (`` ` ``, `~`, `~@`).
 - Move every `clojure.core` macro definable in protoClojure into
   `core.clj`. Keep only special-form-coupled macros in C++.
 
-### Session 18 — Exceptions: `try`, `catch`, `finally`, `throw`
+### Exceptions
+
+- `try`, `catch`, `finally`, `throw`.
 - `ex-info`, `ex-data`, `ex-message`.
-- Stack-unwinding via protoCore exceptions.
+- Stack unwinding via protoCore exceptions.
 
----
+### Collections and sequences
 
-## Phase 4 — REPL + nREPL
+- Sets `#{...}` with `conj` / `disj`.
+- `dissoc`, `update`, `merge`, `select-keys`, `get-in`, `assoc-in`,
+  `update-in`, `merge-with`, `zipmap`.
+- Lazy sequences and the sequence library (`range`, `iterate`, `take`,
+  `drop`, ...).
+- Structural equality across collections.
+- `format` (printf-style via the host) and characters as 1-codepoint
+  strings (D3).
+
+### nREPL server
 
 **Goal:** CIDER / Calva / Conjure can connect and edit a live protoClojure
-program.
+program. The nREPL server is a v0.1 requirement (see
+[DESIGN.md §9](DESIGN.md#9-the-repl)).
 
-### Session 19 — Interactive `protoclj` REPL
-- Read-eval-print loop on stdin; multi-line input; history.
-- `*1` `*2` `*3` `*e` bindings.
-- `(doc symbol)`, `(source symbol)`.
-
-### Session 20-21 — nREPL server
 - bencode encoder / decoder.
 - TCP server with session multiplexing.
 - Operations: `eval`, `interrupt`, `clone`, `close`, `describe`,
   `load-file`.
 - A `protoclj --nrepl PORT` flag.
 
----
-
-## Phase 5 — UMD providers
+### UMD providers
 
 **Goal:** `(:require [py/numpy :as np])` works, and the result is a
 real protoCore object reachable from Clojure code with the full call
-convention (set up in Phase 2).
+convention.
 
-### Session 22 — Provider registry + `clj/` resolver
-- The provider-registration hook in the runtime.
-- The unprefixed Clojure-path resolver — loads `.clj` files.
-- `:require :as :refer`.
+- `ns`, `:require`, `:as`, `:refer`; the provider-registration hook in the
+  runtime; the unprefixed Clojure-path resolver that loads `.clj` files.
+- `py/` provider (protoPython bridge), delegating to protoPython's import
+  machinery, with the foreign-dispatch protocols (`ICounted`, `ISeqable`,
+  `IIndexed`, `ILookup`, `IAssociative`, `ICollection`) extended at
+  provider-init time, per the archived
+  [foreign-dispatch design](archive/design-specs/2026-06-14-foreign-dispatch.md).
+- `js/` provider (protoJS bridge) and `pst/` provider (protoST bridge), with
+  the same shape as `py/`.
+- Conversion helpers `clj->py / py->clj / clj->js / js->clj / clj->pst /
+  pst->clj`, and `(meta foreign-fn) → {:arglists ...}` so `:keys`
+  destructuring works symmetrically across runtimes.
 
-### Session 23 — `py/` provider (protoPython bridge)
-- Delegates to protoPython's import machinery.
-- Foreign-dispatch protocols extended at provider-init time
-  (`ICounted`, `ISeqable`, `IIndexed`, `ILookup`, `IAssociative`,
-  `ICollection`), per
-  `docs/superpowers/specs/2026-06-14-foreign-dispatch.md`.
-
-### Session 24 — `js/` provider (protoJS bridge) + `pst/` (protoST)
-- Same shape as `py/`. The protocol extensions are per-provider files
-  in Clojure (~40-80 lines each).
-
-### Session 25 — Conversion helpers
-- `clj->py / py->clj / clj->js / js->clj / clj->pst / pst->clj`.
-- `(meta foreign-fn) → {:arglists ...}` so `:keys` destructuring works
-  symmetrically across runtimes.
-
----
-
-## Phase 6 — Concurrency primitives
-
-**Goal:** what protoCore already provides under the hood, exposed as
-Clojure idiom.
-
-### Session 26-27 — `atom`, `swap!`, `reset!`, `compare-and-set!`, `deref` / `@`
-- Built on protoCore CAS.
-- `add-watch`, `remove-watch`.
-
-### Session 28 — `future`, `promise`, `deliver`, `realized?`
-- Built on protoCore Future.
-
-### Session 29 — `pmap` and parallel reduce
-- Leveraging protoCore's worker pool (the same one protoST exposes for
-  actors).
-
-### Session 30+ — agents and the protoST-style actor model
-- Track 9 of protoST's actor system surfaced through Clojure idiom.
-
----
-
-## Phase 7 — Quality pass + v0.1 release
+### Quality pass and v0.1 release
 
 **Goal:** publishable. The benchmark is honest, the docs run, the
 examples work, the tutorial holds up.
 
-- Bench against **JVM Clojure** (primary, once the CLI is installed
-  and a baseline is measured) and Babashka (secondary) across the
-  four axes: startup, single-thread CPU, multi-core parallel, RSS.
-  Workloads: fib(N), word-count, JSON parse-and-walk, a CPU-bound
-  `pmap` over 4-8 cores (the structural advantage we should show),
-  long-running daemon for RSS. Publish honest multi-dimensional
-  results — even when unflattering on single-thread.
-- Documentation polish: every example in `LANGUAGE.md` and the
-  tutorial must run.
-- Examples directory: 10-15 idiomatic scripts of increasing complexity.
+- Benchmark against **JVM Clojure** (not measured so far) and Babashka
+  across four axes: startup, single-thread CPU, multi-core parallelism,
+  resident memory. Workloads: fib(N), word-count, JSON parse-and-walk, a
+  CPU-bound `pmap` over 4-8 cores, and a long-running daemon for resident
+  memory. Publish multi-dimensional results, including unflattering ones.
+- Documentation polish: every example in `LANGUAGE.md` and the tutorial
+  must run.
+- Examples directory: idiomatic scripts of increasing complexity (twelve
+  today).
 - `protoclj --version` / `--help` output review; error-message review.
-- Tag `v0.1.0`, announce in the order:
-  1. Trusted reviewers (private).
-  2. Clojurians Slack #announce (no Hacker News).
-  3. The cross-runtime demo as a separate post.
+- Tag `v0.1.0`.
 
 **Done when:** a Clojure programmer can read the README, install
-protoclj, work through the tutorial, and report back that it felt
-like Clojure (not "felt like Clojure-ish").
+`protoclj`, work through the tutorial, and find that it behaves like
+Clojure.
+
+### Performance follow-ups
+
+- Collapse the parameters threaded through the VM's `run()` into a single
+  structure, to recover the per-call cost added with maps, strings and the
+  concurrency primitives.
+- Size `pmap` parallelism with a thread pool instead of one thread per
+  element.
+- Replace the global actor ready-queue mutex, which limits the
+  multi-producer, multi-consumer case.
+- Wait for promise delivery without polling.
+- Threaded dispatch (computed goto) in the VM and a reusable
+  `ProtoContext` pool for call dispatch, if `perf stat` shows they are
+  worth the complexity.
 
 ---
 
 ## v0.2 and beyond
 
-Once v0.1 has been seen by ~50 users and a real backlog of feedback
-exists:
+Once v0.1 has users and a backlog of feedback exists:
 
 ### v0.2 — performance and richness
 - Chunked sequences (32-element chunks transparently).
@@ -229,10 +188,7 @@ exists:
 - Refs + STM. (Implementation per `DESIGN.md` §6.)
 - `defrecord`, `deftype`.
 - `BigDecimal` `M` suffix.
-- Threaded dispatch / computed-goto in the VM (if the benchmark says
-  it's worth the complexity).
-- Reused ProtoContext pool for hot-path call dispatch (if `perf stat`
-  shows the frame setup is the bottleneck).
+- The Clojure-JVM `agent` surface on top of the actor scheduler.
 
 ### v0.3 — bigger concurrency story
 - Reactive primitives (signals, watches with batching).
@@ -240,25 +196,21 @@ exists:
   protoST).
 
 ### v0.4+ — open
-Driven by what the community asks for. Possible directions:
-- ClojureScript-style CLJS transpilation TO protoJS (huge — a full
-  separate project).
+Driven by what users ask for. Possible directions:
+- ClojureScript-style transpilation to protoJS (a separate project in
+  its own right).
 - Spec or Schema-like data validation.
-- Browser embedding once protoJS-in-browser is real.
+- Browser embedding once protoJS runs in the browser.
 - A typed surface (deftype-like ad-hoc types with verification).
 
 ---
 
 ## How to read this roadmap
 
-- "Session" = roughly an afternoon of focused work. The unit reflects
-  the swarm-of-one cadence; estimates in weeks would be misleading.
-- Sessions ship one logical change with conformance fixtures, a memory
-  entry, and a commit on `main`. The commit message documents the
-  rationale, the perf trajectory (when applicable), and the next
-  candidates.
-- The order between sessions inside a phase is flexible; the order
-  between phases is not — each builds on the previous one's surface.
-- The roadmap is allowed to be wrong. When a session reveals a wrong
-  assumption (as session 11 → 12 did re: inline caches), the next
-  session's plan moves accordingly and this file gets rewritten.
+- Language changes ship with conformance fixtures and a commit on `main`;
+  the commit message documents the rationale and, for performance work,
+  the measurements.
+- The order of items inside a milestone is flexible; the order between
+  milestones is not — each builds on the previous one's surface.
+- The roadmap is allowed to be wrong. When implementation reveals a wrong
+  assumption, the plan changes and this file is rewritten.

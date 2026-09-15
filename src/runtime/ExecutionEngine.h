@@ -13,7 +13,7 @@
  * of the instruction.
  *
  * Session 3 minimum: one flat run, no nested frames yet (no user
- * functions yet). When user-defined fns land (session 4+), each
+ * functions yet). When user-defined fns land, each
  * invocation pushes its own context, chained via `previous` to the
  * caller's frame — the protoCore method-invocation model.
  */
