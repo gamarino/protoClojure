@@ -1,6 +1,7 @@
 #include "reader/Lexer.h"
 
 #include <climits>
+#include <cmath>
 
 #include <gtest/gtest.h>
 
@@ -262,4 +263,46 @@ TEST(Lexer, BigIntegerSuffixOnIntegersOnly) {
     ASSERT_EQ(floatSuffix.back().kind, TokenKind::Error);
     EXPECT_EQ(floatSuffix.back().text, "malformed number literal: 1.5N");
     EXPECT_EQ(tokenise("42Nx").back().kind, TokenKind::Error);
+}
+
+TEST(Lexer, SymbolicValuesReadAsFloats) {
+    auto toks = tokenise("##Inf ##-Inf ##NaN");
+    ASSERT_EQ(toks.size(), 4u);
+    for (int i = 0; i < 3; ++i) EXPECT_EQ(toks[i].kind, TokenKind::Float);
+    EXPECT_TRUE(std::isinf(toks[0].doubleValue));
+    EXPECT_GT(toks[0].doubleValue, 0.0);
+    EXPECT_TRUE(std::isinf(toks[1].doubleValue));
+    EXPECT_LT(toks[1].doubleValue, 0.0);
+    EXPECT_TRUE(std::isnan(toks[2].doubleValue));
+    EXPECT_EQ(toks[0].text, "##Inf");
+    EXPECT_EQ(toks[1].text, "##-Inf");
+    EXPECT_EQ(toks[2].text, "##NaN");
+    EXPECT_EQ(toks[3].kind, TokenKind::EndOfFile);
+}
+
+TEST(Lexer, SymbolicValueAllowsWhitespaceAfterHashes) {
+    // JVM Clojure reads the form after `##`, skipping whitespace.
+    auto toks = tokenise("[## Inf]");
+    ASSERT_EQ(toks.size(), 4u);
+    EXPECT_EQ(toks[1].kind, TokenKind::Float);
+    EXPECT_TRUE(std::isinf(toks[1].doubleValue));
+    EXPECT_EQ(toks[2].kind, TokenKind::RBracket);
+}
+
+TEST(Lexer, UnknownSymbolicValueIsError) {
+    auto toks = tokenise("##Infinity");
+    ASSERT_EQ(toks.back().kind, TokenKind::Error);
+    EXPECT_EQ(toks.back().text, "Unknown symbolic value: Infinity");
+}
+
+TEST(Lexer, SymbolicValueNeedsASymbol) {
+    auto number = tokenise("##1");
+    ASSERT_EQ(number.back().kind, TokenKind::Error);
+    EXPECT_EQ(number.back().text, "Invalid token: ##1");
+    auto keyword = tokenise("##:Inf");
+    ASSERT_EQ(keyword.back().kind, TokenKind::Error);
+    EXPECT_EQ(keyword.back().text, "Invalid token: ##:Inf");
+    auto nothing = tokenise("##");
+    ASSERT_EQ(nothing.back().kind, TokenKind::Error);
+    EXPECT_EQ(nothing.back().text, "Invalid token: ##");
 }

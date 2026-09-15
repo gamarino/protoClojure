@@ -5,6 +5,7 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <limits>
 
 namespace protoClojure {
 
@@ -396,6 +397,45 @@ std::size_t Lexer::symbolCharLength(std::size_t pos) const {
     return (len > 0 && isSymbolLetter(cp)) ? len : 0;
 }
 
+// The symbolic values of JVM Clojure's reader: `##Inf`, `##-Inf` and `##NaN`
+// read as a Float token holding positive infinity, negative infinity and a
+// quiet NaN, the values the printer spells that way. As in JVM Clojure, `##`
+// is followed by a symbol, possibly after whitespace or comments; any other
+// symbol is "Unknown symbolic value: <symbol>", and a number, a keyword or
+// no symbol at all is "Invalid token: ##<text>".
+Token Lexer::lexSymbolicValue() {
+    const int startLine = line_, startCol = column_;
+    advance();  // #
+    advance();  // #
+    skipWhitespaceAndComments();
+    std::string name;
+    while (!eof()) {
+        const std::size_t len = symbolCharLength(pos_);
+        if (len == 0) break;
+        name.append(source_, pos_, len);
+        for (std::size_t i = 0; i < len; ++i) advance();
+    }
+    if (name.empty() || name[0] == ':' ||
+        std::isdigit(static_cast<unsigned char>(name[0]))) {
+        return makeError("Invalid token: ##" + name, startLine, startCol);
+    }
+    Token t;
+    t.kind = TokenKind::Float;
+    t.text = "##" + name;
+    t.line = startLine;
+    t.column = startCol;
+    if (name == "Inf") {
+        t.doubleValue = std::numeric_limits<double>::infinity();
+    } else if (name == "-Inf") {
+        t.doubleValue = -std::numeric_limits<double>::infinity();
+    } else if (name == "NaN") {
+        t.doubleValue = std::numeric_limits<double>::quiet_NaN();
+    } else {
+        return makeError("Unknown symbolic value: " + name, startLine, startCol);
+    }
+    return t;
+}
+
 Token Lexer::lexSymbolOrPunct() {
     int startLine = line_, startCol = column_;
     char c = current();
@@ -415,6 +455,7 @@ Token Lexer::lexSymbolOrPunct() {
     }
     if (c == '#') {
         char la = lookahead();
+        if (la == '#') return lexSymbolicValue();
         if (la == '{' || la == '(' || la == '_' || la == '\'' || la == '"') {
             std::string s = std::string("#") + la;
             advance(); advance();

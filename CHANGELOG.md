@@ -49,10 +49,10 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (268 fixtures under
+- **Tests.** A glob-discovered conformance suite (271 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
   the bytecode module, the runtime map, value equality and hashing, the
-  native stack guard and the double printer (78 tests), and five CLI checks (`--help`, a
+  native stack guard and the double printer (82 tests), and five CLI checks (`--help`, a
   generated program with 70,000 distinct literals of each kind, a
   stack overflow in the REPL, globals bound to nil in the REPL, and
   deeply nested source).
@@ -290,3 +290,11 @@ The project has no tagged releases yet; the version declared in
   `StringIndexOutOfBoundsException: nth index 3 is out of bounds (count 3)`
   past the end; and any other type raises
   `UnsupportedOperationException: nth not supported on a map`.
+- The reader accepts `##Inf`, `##-Inf` and `##NaN`. The printer has spelled
+  infinities and NaN that way since floats print as in JVM Clojure, but the
+  lexer rejected any `#` it did not reserve with
+  "reserved-for-later token: #", so printed floats did not read back. They
+  now read as the positive and negative infinity and a quiet NaN; as in JVM
+  Clojure, whitespace may separate `##` from the symbol, another symbol is
+  "Unknown symbolic value: <symbol>" and a number or keyword is
+  "Invalid token: ##<text>".

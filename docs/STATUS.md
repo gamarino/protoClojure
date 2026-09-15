@@ -5,8 +5,8 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 351 test cases: 268
-conformance fixtures under `tests/conformance/`, 78 GoogleTest unit
+scripts and an interactive REPL. `ctest` registers 358 test cases: 271
+conformance fixtures under `tests/conformance/`, 82 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 value equality and hashing, the native stack guard and the double printer
 (`tests/unit/`), and
@@ -32,7 +32,7 @@ directories that cover them.
 | Closures with N-level lexical capture | `06-closures` | 6 |
 | Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 35 |
 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 21 |
-| IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 21 |
+| IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 24 |
 | LargeInteger promotion, big integer literals | `15-bigint` | 9 |
 | Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 41 |
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 17 |
@@ -57,6 +57,9 @@ The design specifications written during development are archived under
       (`12345678901234567890`), and Clojure's `N` suffix is accepted on
       integer literals (`42N`, same value; `1.5N` is a read error)
 - [x] Floats — `3.14`, `1e6`, `1.5e-3`
+- [x] Symbolic values — `##Inf`, `##-Inf`, `##NaN` read as the infinities
+      and NaN the printer spells that way; another symbol after `##` is
+      `Unknown symbolic value: <symbol>`
 - [x] Strings — `"hello"`, with `\n \t \r \\ \" \0` escapes
 - [x] Symbols (interned via the protoCore symbol table)
 - [x] Keywords — `:foo`, self-evaluating constants
@@ -305,8 +308,7 @@ raises a read, compile or runtime error.
 - [ ] Var-quote `#'`
 - [ ] Discard `#_`
 - [ ] Metadata `^{...}` plus shorthands `^kw` `^Type`
-- [ ] Reader literals `#inst` `#uuid`, regex `#"..."`, and the symbolic
-      values `##Inf` `##-Inf` `##NaN` (they print, but do not read)
+- [ ] Reader literals `#inst` `#uuid`, regex `#"..."`
 - [ ] Ratio literal `1/3`
 - [ ] Character literal `\a`
 - [ ] Namespace-qualified symbols / keywords `foo/bar`, `:ns/kw`

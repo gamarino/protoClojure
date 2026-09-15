@@ -175,8 +175,12 @@ comment is `#_<form>` — the next form is read and dropped.
   10,000,000 (`100.0`, `0.001`, `1234567.5`) and in scientific notation
   outside that range (`1.0E7`, `1.0E21`, `1.5E-7`); `-0.0` keeps its sign;
   infinities and NaN print as `##Inf`, `##-Inf` and `##NaN`, and `str` of a
-  bare one gives `Infinity`, `-Infinity` or `NaN`. In 0.0.1 the reader
-  does not accept `##Inf`, `##-Inf` or `##NaN`. When any operand of `/` is
+  bare one gives `Infinity`, `-Infinity` or `NaN`. The reader accepts
+  `##Inf`, `##-Inf` and `##NaN`, so every printed float reads back as the
+  same value; as in JVM Clojure, whitespace may separate `##` from the
+  symbol, any other symbol after `##` is the read error
+  `Unknown symbolic value: <symbol>`, and anything but a symbol is
+  `Invalid token: ##<text>`. When any operand of `/` is
   a float, the division follows IEEE 754: `(/ 1 0.0)` is `##Inf`,
   `(/ -1 0.0)` is `##-Inf` and `(/ 0 0.0)` is `##NaN`.
 - **BigDecimal**: `3.14M` — **[v0.2]**.
