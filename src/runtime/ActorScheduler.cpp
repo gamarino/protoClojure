@@ -240,14 +240,11 @@ void ActorScheduler::workerLoop(proto::ProtoContext* ctx) {
                         ->setAttribute(ctx, ccBlueprint_->valueKey, result);
                 }
                 if (msg->promise) {
-                    proto::ProtoObject* p =
-                        const_cast<proto::ProtoObject*>(msg->promise);
-                    bool first = p->setAttributeIfEqual(
-                        ctx, ccBlueprint_->doneKey,
-                        PROTO_FALSE, PROTO_TRUE);
-                    if (first) {
-                        p->setAttribute(ctx, ccBlueprint_->valueKey, result);
-                    }
+                    // One compare-and-set, as `deliver` does: a concurrent
+                    // deref never sees the promise realized without its
+                    // value.
+                    deliverPromise(ctx, ccBlueprint_->valueKey, msg->promise,
+                                   result);
                 }
 
                 messagesProcessed_.fetch_add(1, std::memory_order_relaxed);

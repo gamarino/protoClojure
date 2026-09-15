@@ -117,6 +117,19 @@ bool isObjectTag(const proto::ProtoObject* v) {
     return v && (reinterpret_cast<uintptr_t>(v) & 0x3F) == 0;
 }
 
+// The value delivered to `promise`, with `*delivered` set; nullptr, with
+// `*delivered` false, while the promise is pending. One own-attribute read
+// answers both, because deliverPromise installs the one-element list holding
+// the value in a single compare-and-set.
+const proto::ProtoObject* promiseValue(proto::ProtoContext* ctx,
+                                       const proto::ProtoString* valueKey,
+                                       const proto::ProtoObject* promise,
+                                       bool* delivered) {
+    const proto::ProtoObject* box = promise->getOwnAttributeDirect(ctx, valueKey);
+    *delivered = box != nullptr;
+    return box ? box->asList(ctx)->getAt(ctx, 0) : nullptr;
+}
+
 inline MapLayout mapLayoutOf(const ActiveCallContext* cc) {
     return MapLayout{cc->mapMarkerProto, cc->mapStateKey};
 }
@@ -275,9 +288,12 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
         return;
     }
     if (prototype == cc->promiseMarkerProto) {
-        if (v->getAttribute(ctx, cc->doneKey) == PROTO_TRUE) {
+        bool delivered = false;
+        const proto::ProtoObject* value =
+            promiseValue(ctx, cc->valueKey, v, &delivered);
+        if (delivered) {
             out += "#<promise ";
-            printTo(ctx, out, v->getAttribute(ctx, cc->valueKey), readable);
+            printTo(ctx, out, value, readable);
             out += '>';
         } else {
             out += "#<promise pending>";
@@ -1657,17 +1673,19 @@ const proto::ProtoObject* prim_deref(proto::ProtoContext* ctx,
         // is parked on an OS-level wait so a STW can proceed without
         // it. Pair with returnFromUnmanaged before touching any
         // ProtoObject* again. The 1ms sleep amortises wake-up under
-        // realistic deliver latencies.
+        // realistic deliver latencies. Delivery is one compare-and-set
+        // (deliverPromise), so the read that finds the promise delivered
+        // also yields its value.
         proto::ProtoThread* th = ctx->thread;
         for (;;) {
-            const proto::ProtoObject* done =
-                a->getAttribute(ctx, cc->doneKey);
-            if (done == PROTO_TRUE) break;
+            bool delivered = false;
+            const proto::ProtoObject* v =
+                promiseValue(ctx, cc->valueKey, a, &delivered);
+            if (delivered) return v;
             if (th) th->goUnmanaged();
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             if (th) th->returnFromUnmanaged();
         }
-        return a->getAttribute(ctx, cc->valueKey);
     }
     throw std::runtime_error("deref: not an atom, future, or promise");
 }
@@ -1723,10 +1741,16 @@ const proto::ProtoObject* prim_reset_bang(proto::ProtoContext* ctx,
     if (!a || a->getPrototype(ctx) != cc->atomMarkerProto)
         throw std::runtime_error("reset!: not an atom");
     const proto::ProtoObject* nv = args->getAt(ctx, 1);
-    const proto::ProtoObject* old = a->getAttribute(ctx, cc->valueKey);
+    // Once setAttribute replaces it, the old value is referenced only by
+    // this function, and setAttribute and the watches allocate: pin it in a
+    // child context slot for the rest of the call.
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    const proto::ProtoObject* old = a->getAttribute(&scope, cc->valueKey);
+    scope.setAutomaticLocal(0, old);
     const_cast<proto::ProtoObject*>(a)
-        ->setAttribute(ctx, cc->valueKey, nv);
-    fireWatches(ctx, cc, a, old, nv);
+        ->setAttribute(&scope, cc->valueKey, nv);
+    fireWatches(&scope, cc, a, old, nv);
     return nv;
 }
 
@@ -1759,14 +1783,26 @@ const proto::ProtoObject* prim_swap_bang(proto::ProtoContext* ctx,
     // concurrent writer installs a new snapshot before our CAS
     // completes, setAttributeIfEqual returns false and we recompute
     // (f old ...) against the fresh `old`. Lock-free, no mutex.
+    //
+    // GC rooting: another thread may replace the atom's value, dropping the
+    // last reference to `old`, while `f`, the compare-and-set and the
+    // watches allocate; and the callee returns `neu` unrooted. Both are
+    // pinned in a child context's slots as soon as they are obtained, with
+    // no allocation in between.
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(2);
+    constexpr unsigned int kSlotOld = 0;
+    constexpr unsigned int kSlotNew = 1;
     for (;;) {
         const proto::ProtoObject* old =
-            a->getOwnAttributeDirect(ctx, cc->valueKey);
+            a->getOwnAttributeDirect(&scope, cc->valueKey);
+        scope.setAutomaticLocal(kSlotOld, old ? old : PROTO_NONE);
         buf[0] = old ? old : PROTO_NONE;
         const proto::ProtoObject* neu =
-            cc->engine->invoke(ctx, f, buf, extras + 1);
-        if (a->setAttributeIfEqual(ctx, cc->valueKey, old, neu)) {
-            fireWatches(ctx, cc, a, old, neu);
+            cc->engine->invoke(&scope, f, buf, extras + 1);
+        scope.setAutomaticLocal(kSlotNew, neu);
+        if (a->setAttributeIfEqual(&scope, cc->valueKey, old, neu)) {
+            fireWatches(&scope, cc, a, old, neu);
             return neu;
         }
     }
@@ -1959,8 +1995,13 @@ const proto::ProtoObject* prim_realized_p(proto::ProtoContext* ctx,
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!v) return PROTO_FALSE;
     const proto::ProtoObject* proto = v->getPrototype(ctx);
-    if (proto != cc->futureMarkerProto && proto != cc->promiseMarkerProto)
-        return PROTO_FALSE;
+    if (proto == cc->promiseMarkerProto) {
+        bool delivered = false;
+        promiseValue(ctx, cc->valueKey, v, &delivered);
+        return delivered ? PROTO_TRUE : PROTO_FALSE;
+    }
+    if (proto != cc->futureMarkerProto) return PROTO_FALSE;
+    // A future's worker writes __result__ (and __error__) before __done__.
     const proto::ProtoObject* done = v->getAttribute(ctx, cc->doneKey);
     return done == PROTO_TRUE ? PROTO_TRUE : PROTO_FALSE;
 }
@@ -2128,10 +2169,10 @@ const proto::ProtoObject* prim_promise(proto::ProtoContext* ctx,
         throw std::runtime_error("promise: takes no arguments");
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("promise: no active VM context");
-    proto::ProtoObject* p = const_cast<proto::ProtoObject*>(
-        cc->promiseMarkerProto->newChild(ctx, /*isMutable=*/true));
-    p->setAttribute(ctx, cc->valueKey, PROTO_NONE);
-    p->setAttribute(ctx, cc->doneKey, PROTO_FALSE);
+    // A pending promise has no own value attribute: deliverPromise installs
+    // it with one compare-and-set, which is why the promise is mutable.
+    const proto::ProtoObject* p =
+        cc->promiseMarkerProto->newChild(ctx, /*isMutable=*/true);
     return p;
 }
 
@@ -2239,10 +2280,10 @@ static const proto::ProtoObject* sendCore(proto::ProtoContext* ctx,
     }
 
     // Build the per-send promise — same wire shape as `promise`.
-    proto::ProtoObject* p = const_cast<proto::ProtoObject*>(
-        cc->promiseMarkerProto->newChild(ctx, /*isMutable=*/true));
-    p->setAttribute(ctx, cc->valueKey, PROTO_NONE);
-    p->setAttribute(ctx, cc->doneKey, PROTO_FALSE);
+    // A pending promise has no own value attribute: deliverPromise installs
+    // it with one compare-and-set, which is why the promise is mutable.
+    const proto::ProtoObject* p =
+        cc->promiseMarkerProto->newChild(ctx, /*isMutable=*/true);
 
     ActorMessage msg{f, extras, p, priority};
     ActorScheduler::instance().send(state, std::move(msg));
@@ -2314,11 +2355,9 @@ const proto::ProtoObject* prim_deliver(proto::ProtoContext* ctx,
     if (!p || p->getPrototype(ctx) != cc->promiseMarkerProto)
         throw std::runtime_error("deliver: not a promise");
     const proto::ProtoObject* v = args->getAt(ctx, 1);
-    // Single-shot CAS on doneKey: succeed only when still PROTO_FALSE.
-    bool first = p->setAttributeIfEqual(ctx, cc->doneKey, PROTO_FALSE, PROTO_TRUE);
-    if (!first) return PROTO_NONE;
-    const_cast<proto::ProtoObject*>(p)->setAttribute(ctx, cc->valueKey, v);
-    return p;
+    // Single-shot: the first delivery wins and returns the promise; later
+    // ones change nothing and return nil.
+    return deliverPromise(ctx, cc->valueKey, p, v) ? p : PROTO_NONE;
 }
 
 const proto::ProtoObject* prim_compare_and_set_bang(
@@ -2533,6 +2572,21 @@ void shutdownFutures(proto::ProtoContext* ctx) {
 void replPrintValue(proto::ProtoContext* ctx, std::FILE* out,
                     const proto::ProtoObject* v) {
     printValue(ctx, out, v, /*readable=*/true);
+}
+
+// Declared in Primitives.h; used by `deliver` and the actor scheduler.
+bool deliverPromise(proto::ProtoContext* ctx, const proto::ProtoString* valueKey,
+                    const proto::ProtoObject* promise,
+                    const proto::ProtoObject* value) {
+    // The one-element list is rooted in a child context slot across the
+    // compare-and-set, which allocates.
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    scope.setAutomaticLocal(0,
+        scope.newList()->appendLast(&scope, value ? value : PROTO_NONE)
+            ->asObject(&scope));
+    return promise->setAttributeIfEqual(&scope, valueKey, nullptr,
+                                        scope.getAutomaticLocal(0));
 }
 
 namespace {

@@ -214,4 +214,15 @@ void shutdownFutures(proto::ProtoContext* ctx);
 void replPrintValue(proto::ProtoContext* ctx, std::FILE* out,
                     const proto::ProtoObject* v);
 
+// Delivers `value` to `promise` unless it was delivered before. A pending
+// promise has no own `valueKey` attribute; delivery installs a one-element
+// list holding the value with a single compare-and-set, so a reader never
+// sees a promise realized without its value (a nil value included). Returns
+// true for the first delivery and false, changing nothing, afterwards.
+// `promise` and `value` must be rooted by the caller. Shared by `deliver`
+// and the actor scheduler.
+bool deliverPromise(proto::ProtoContext* ctx, const proto::ProtoString* valueKey,
+                    const proto::ProtoObject* promise,
+                    const proto::ProtoObject* value);
+
 } // namespace protoClojure

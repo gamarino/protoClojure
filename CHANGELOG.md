@@ -49,7 +49,7 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (276 fixtures under
+- **Tests.** A glob-discovered conformance suite (279 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
   the bytecode module, the runtime map, value equality and hashing, the
   native stack guard and the double printer (82 tests), and five CLI checks (`--help`, a
@@ -78,6 +78,17 @@ The project has no tagged releases yet; the version declared in
 
 ### Fixed
 
+- Promise delivery is atomic. `deliver`, and the actor worker delivering the
+  promise `send` returned, first marked the promise done and then stored the
+  value in a second write, so a concurrent `deref` or `realized?` could see a
+  delivered promise whose value was still `nil`. A promise now holds its
+  value in one attribute, installed with a single compare-and-set, and
+  `deref`, `realized?` and the printer read only that attribute.
+- `swap!` and `reset!` keep the old and new atom values rooted while the
+  update function and the watches run. Another thread could replace the
+  atom's value and drop the last reference to the old value, which was held
+  only in a C++ local across allocations, and the new value returned by the
+  update function was unrooted across the compare-and-set.
 - Future worker threads are joined before the runtime shuts down, so a script
   that exits without dereferencing its futures no longer crashes at exit.
 - A race in the actor drain path that could let two workers process the same
