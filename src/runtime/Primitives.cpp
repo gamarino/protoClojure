@@ -1686,33 +1686,51 @@ static void fireWatches(proto::ProtoContext* ctx,
                         const proto::ProtoObject* atomObj,
                         const proto::ProtoObject* oldV,
                         const proto::ProtoObject* newV) {
+    // Pin the watches map as soon as it is read: another thread may replace
+    // the atom's watches (add-watch, remove-watch) while the watches run.
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(2);
+    constexpr unsigned int kSlotWatchesMap = 0;
+    constexpr unsigned int kSlotWatchList  = 1;
     const proto::ProtoObject* watchesObj =
-        atomObj->getAttribute(ctx, cc->watchesKey);
-    if (!watchesObj || watchesObj == PROTO_NONE) return;
+        atomObj->getAttribute(&scope, cc->watchesKey);
     if (!isMap(watchesObj)) return;
-    // Watch order is unspecified, as on the JVM (the map's walk order).
-    struct Acc {
-        const ActiveCallContext* cc;
-        const proto::ProtoObject* atomObj;
-        const proto::ProtoObject* oldV;
-        const proto::ProtoObject* newV;
-    } acc{cc, atomObj, oldV, newV};
-    mapForEach(ctx, watchesObj, &acc,
+    scope.setAutomaticLocal(kSlotWatchesMap, watchesObj);
+
+    // Collect (key fn key fn ...) first, then call the watches after the
+    // walk. On a map of more than 3 entries protoCore walks inside a GC
+    // critical section, where only structures may be built: user code there
+    // would skip heap-limit checkpoints and never park for collection. Watch
+    // order is the map's unspecified walk order, as on the JVM.
+    scope.setAutomaticLocal(kSlotWatchList, scope.newList()->asObject(&scope));
+    mapForEach(&scope, watchesObj, &scope,
         [](proto::ProtoContext* c, void* self,
            const proto::ProtoObject* k, const proto::ProtoObject* f) {
-            auto* a = static_cast<Acc*>(self);
-            const proto::ProtoObject* four[4] = {
-                k, a->atomObj,
-                a->oldV ? a->oldV : PROTO_NONE,
-                a->newV ? a->newV : PROTO_NONE
-            };
-            try {
-                a->cc->engine->invoke(c, f, four, 4);
-            } catch (...) {
-                // v0.18: swallow exceptions in a watcher; capturing
-                // them is a follow-up.
-            }
+            auto* s = static_cast<proto::ProtoContext*>(self);
+            s->setAutomaticLocal(kSlotWatchList,
+                s->getAutomaticLocal(kSlotWatchList)->asList(c)
+                    ->appendLast(c, k)->appendLast(c, f)->asObject(c));
         });
+
+    // The list stays rooted in its slot while the watches run.
+    const proto::ProtoList* watches =
+        scope.getAutomaticLocal(kSlotWatchList)->asList(&scope);
+    const unsigned long n = watches->getSize(&scope);
+    for (unsigned long i = 0; i + 1 < n; i += 2) {
+        const proto::ProtoObject* four[4] = {
+            watches->getAt(&scope, static_cast<int>(i)), atomObj,
+            oldV ? oldV : PROTO_NONE,
+            newV ? newV : PROTO_NONE
+        };
+        try {
+            cc->engine->invoke(&scope,
+                               watches->getAt(&scope, static_cast<int>(i + 1)),
+                               four, 4);
+        } catch (...) {
+            // v0.18: swallow exceptions in a watcher; capturing them is a
+            // follow-up.
+        }
+    }
 }
 
 const proto::ProtoObject* prim_reset_bang(proto::ProtoContext* ctx,
