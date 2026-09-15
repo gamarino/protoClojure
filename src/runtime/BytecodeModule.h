@@ -45,6 +45,10 @@ public:
                    // execution time via ProtoString::createSymbol
         Named,     // a keyword or quoted-symbol value for PUSH_CONST,
                    // interned at compile time (Named.h)
+        BigInteger,  // an integer beyond the long long range, kept as its
+                     // decimal digits in `sval`; PUSH_CONST rebuilds the
+                     // LargeInteger on each execution (a module holds no
+                     // unrooted heap values)
     };
 
     struct Const {
@@ -57,6 +61,8 @@ public:
 
     // Const-pool insertion. Returns the index for use in PUSH_CONST / PUSH_VAR.
     std::size_t addLong(long long v);
+    // An integer beyond the long long range, as decimal digits ("-123...").
+    std::size_t addBigInteger(const std::string& digits);
     std::size_t addDouble(double v);
     std::size_t addString(const std::string& s);
     std::size_t addSymbol(const std::string& s);

@@ -1,5 +1,7 @@
 #include "reader/Lexer.h"
 
+#include <climits>
+
 #include <gtest/gtest.h>
 
 using protoClojure::Lexer;
@@ -230,4 +232,34 @@ TEST(Lexer, ColumnsCountCodePoints) {
     EXPECT_EQ(toks[1].column, 7);
     EXPECT_EQ(toks[2].kind, TokenKind::RParen);
     EXPECT_EQ(toks[2].column, 11);
+}
+
+TEST(Lexer, IntegerBeyondLongRangeKeepsItsDigits) {
+    auto toks = tokenise("12345678901234567890 -9223372036854775809 -9223372036854775808");
+    ASSERT_EQ(toks.size(), 4u);
+    EXPECT_EQ(toks[0].kind, TokenKind::Integer);
+    EXPECT_FALSE(toks[0].fitsLong);
+    EXPECT_EQ(toks[0].text, "12345678901234567890");
+    EXPECT_EQ(toks[1].kind, TokenKind::Integer);
+    EXPECT_FALSE(toks[1].fitsLong);
+    EXPECT_EQ(toks[1].text, "-9223372036854775809");
+    // The most negative long long still fits.
+    EXPECT_EQ(toks[2].kind, TokenKind::Integer);
+    EXPECT_TRUE(toks[2].fitsLong);
+    EXPECT_EQ(toks[2].intValue, LLONG_MIN);
+}
+
+TEST(Lexer, BigIntegerSuffixOnIntegersOnly) {
+    auto toks = tokenise("42N -7N");
+    ASSERT_EQ(toks.size(), 3u);
+    EXPECT_EQ(toks[0].kind, TokenKind::Integer);
+    EXPECT_EQ(toks[0].intValue, 42);
+    EXPECT_EQ(toks[0].text, "42");
+    EXPECT_EQ(toks[1].kind, TokenKind::Integer);
+    EXPECT_EQ(toks[1].intValue, -7);
+
+    auto floatSuffix = tokenise("1.5N");
+    ASSERT_EQ(floatSuffix.back().kind, TokenKind::Error);
+    EXPECT_EQ(floatSuffix.back().text, "malformed number literal: 1.5N");
+    EXPECT_EQ(tokenise("42Nx").back().kind, TokenKind::Error);
 }

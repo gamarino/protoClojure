@@ -41,8 +41,8 @@ namespace {
 
 // Common helpers ------------------------------------------------------------
 
-// Pull an argument and coerce to long long. Pre-session-9 helper kept for
-// the comparison-chain template; for arithmetic see argAsNumber below.
+// Argument `i` as a long long, for index and position arguments (nth,
+// subs, index-of). An integer beyond the long long range is an error.
 long long argAsLong(proto::ProtoContext* ctx, const proto::ProtoList* args,
                     int i, const char* primName) {
     const proto::ProtoObject* a = args->getAt(ctx, i);
@@ -54,28 +54,36 @@ long long argAsLong(proto::ProtoContext* ctx, const proto::ProtoList* args,
     return a->asLong(ctx);
 }
 
-// Session 9 — numeric union. Carries either an int or a float, with the
-// promotion rule "any float in the input → float result". Used by the
-// arithmetic and comparison primitives.
-struct Num {
-    bool   isFloat;
-    long long  ival;
-    double     dval;
-    double  asDouble() const { return isFloat ? dval : static_cast<double>(ival); }
-};
-
-Num argAsNumber(proto::ProtoContext* ctx, const proto::ProtoList* args,
-                int i, const char* primName) {
+// Argument `i` of a numeric primitive: an integer (SmallInteger or
+// LargeInteger) or a float. Anything else is an error naming the primitive.
+const proto::ProtoObject* numberArg(proto::ProtoContext* ctx,
+                                    const proto::ProtoList* args,
+                                    int i, const char* primName) {
     const proto::ProtoObject* a = args->getAt(ctx, i);
     if (!a) {
         throw std::runtime_error(
             std::string(primName) + ": argument " + std::to_string(i) + " is nil");
     }
-    if (a->isInteger(ctx)) return {false, a->asLong(ctx), 0.0};
-    if (a->isFloat(ctx))   return {true,  0, a->asDouble(ctx)};
+    if (a->isInteger(ctx) || a->isFloat(ctx)) return a;
     throw std::runtime_error(
         std::string(primName) + ": argument " + std::to_string(i) +
         " is not a number");
+}
+
+// The sign of a - b for two integers, exact at every magnitude: two
+// SmallIntegers compare inline (tagged-pointer layout, headers/protoCore.h);
+// anything larger goes through protoCore compare.
+int compareIntegers(proto::ProtoContext* ctx, const proto::ProtoObject* a,
+                    const proto::ProtoObject* b) {
+    constexpr unsigned long kSmallIntMask  = 0x3FFUL;
+    constexpr unsigned long kSmallIntValue = 0x001UL;
+    if ((reinterpret_cast<unsigned long>(a) & kSmallIntMask) == kSmallIntValue &&
+        (reinterpret_cast<unsigned long>(b) & kSmallIntMask) == kSmallIntValue) {
+        const long long x = reinterpret_cast<long long>(a) >> 10;
+        const long long y = reinterpret_cast<long long>(b) >> 10;
+        return (x > y) - (x < y);
+    }
+    return a->compare(ctx, b);
 }
 
 // Pointer-tag constants matching protoCore's internal layout. Mirrored
@@ -336,41 +344,34 @@ const proto::ProtoObject* prim_println(proto::ProtoContext* ctx,
     return PROTO_NONE;
 }
 
-// Arithmetic (integer-only in v0.0.x) -------------------------------------
+// Arithmetic ---------------------------------------------------------------
+//
+// Integer arithmetic is exact: protoCore's add, subtract, multiply and
+// divide keep a result that fits a SmallInteger inline and promote it to a
+// LargeInteger otherwise, so no integer operation wraps around (deviation
+// D14); the SmallInteger arithmetic opcodes fall back to the same calls. A
+// float operand makes the result a double. Every argument is checked to be a
+// number before any arithmetic runs.
 
-// Arithmetic helper: walk all args; if any is float, the result is a
-// double computed via `dop`; otherwise it's a long computed via `iop`.
-template <typename Iop, typename Dop>
-const proto::ProtoObject* arithFold(proto::ProtoContext* ctx,
-                                    const proto::ProtoList* args,
-                                    const char* name,
-                                    long long iIdent, double dIdent,
-                                    Iop iop, Dop dop) {
-    unsigned long n = args ? args->getSize(ctx) : 0;
-    bool anyFloat = false;
-    for (unsigned long i = 0; i < n; ++i) {
-        Num x = argAsNumber(ctx, args, (int)i, name);
-        if (x.isFloat) { anyFloat = true; break; }
-    }
-    if (anyFloat) {
-        double acc = dIdent;
-        bool started = false;
-        for (unsigned long i = 0; i < n; ++i) {
-            double v = argAsNumber(ctx, args, (int)i, name).asDouble();
-            acc = started ? dop(acc, v) : v;
-            started = true;
-        }
-        return ctx->fromDouble(n == 0 ? dIdent : acc);
-    } else {
-        long long acc = iIdent;
-        bool started = false;
-        for (unsigned long i = 0; i < n; ++i) {
-            long long v = argAsLong(ctx, args, (int)i, name);
-            acc = started ? iop(acc, v) : v;
-            started = true;
-        }
-        return ctx->fromLong(n == 0 ? iIdent : acc);
-    }
+// Clojure's variadic left fold, (op (op a b) c ...), over n >= 2 numeric
+// arguments. With more than two arguments the running result is a C++ local
+// held across allocations, so that loop runs in a GC critical section.
+template <typename Op>
+const proto::ProtoObject* numericFold(proto::ProtoContext* ctx,
+                                      const proto::ProtoList* args,
+                                      unsigned long n, Op op) {
+    if (n == 2) return op(args->getAt(ctx, 0), args->getAt(ctx, 1));
+    proto::ProtoContext::CriticalSection guard(ctx);
+    const proto::ProtoObject* acc = args->getAt(ctx, 0);
+    for (unsigned long i = 1; i < n; ++i)
+        acc = op(acc, args->getAt(ctx, static_cast<int>(i)));
+    return acc;
+}
+
+void checkNumbers(proto::ProtoContext* ctx, const proto::ProtoList* args,
+                  unsigned long n, const char* primName) {
+    for (unsigned long i = 0; i < n; ++i)
+        numberArg(ctx, args, static_cast<int>(i), primName);
 }
 
 const proto::ProtoObject* prim_plus(proto::ProtoContext* ctx,
@@ -379,20 +380,13 @@ const proto::ProtoObject* prim_plus(proto::ProtoContext* ctx,
                                     const proto::ProtoList* args,
                                     const proto::ProtoSparseList*) {
     unsigned long n = args ? args->getSize(ctx) : 0;
+    checkNumbers(ctx, args, n, "+");
     if (n == 0) return ctx->fromLong(0);
-    bool anyFloat = false;
-    for (unsigned long i = 0; i < n; ++i) {
-        if (argAsNumber(ctx, args, (int)i, "+").isFloat) { anyFloat = true; break; }
-    }
-    if (anyFloat) {
-        double acc = 0.0;
-        for (unsigned long i = 0; i < n; ++i)
-            acc += argAsNumber(ctx, args, (int)i, "+").asDouble();
-        return ctx->fromDouble(acc);
-    }
-    long long acc = 0;
-    for (unsigned long i = 0; i < n; ++i) acc += argAsLong(ctx, args, (int)i, "+");
-    return ctx->fromLong(acc);
+    if (n == 1) return args->getAt(ctx, 0);
+    return numericFold(ctx, args, n,
+        [ctx](const proto::ProtoObject* a, const proto::ProtoObject* b) {
+            return a->add(ctx, b);
+        });
 }
 
 const proto::ProtoObject* prim_minus(proto::ProtoContext* ctx,
@@ -402,21 +396,17 @@ const proto::ProtoObject* prim_minus(proto::ProtoContext* ctx,
                                      const proto::ProtoSparseList*) {
     unsigned long n = args ? args->getSize(ctx) : 0;
     if (n == 0) throw std::runtime_error("- : needs at least one arg");
-    bool anyFloat = false;
-    for (unsigned long i = 0; i < n; ++i) {
-        if (argAsNumber(ctx, args, (int)i, "-").isFloat) { anyFloat = true; break; }
+    checkNumbers(ctx, args, n, "-");
+    if (n == 1) {
+        // Negation. A float keeps its sign bit, so (- 0.0) is -0.0.
+        const proto::ProtoObject* x = args->getAt(ctx, 0);
+        if (x->isFloat(ctx)) return ctx->fromDouble(-x->asDouble(ctx));
+        return ctx->fromLong(0)->subtract(ctx, x);
     }
-    if (anyFloat) {
-        if (n == 1) return ctx->fromDouble(-argAsNumber(ctx, args, 0, "-").asDouble());
-        double acc = argAsNumber(ctx, args, 0, "-").asDouble();
-        for (unsigned long i = 1; i < n; ++i)
-            acc -= argAsNumber(ctx, args, (int)i, "-").asDouble();
-        return ctx->fromDouble(acc);
-    }
-    if (n == 1) return ctx->fromLong(-argAsLong(ctx, args, 0, "-"));
-    long long acc = argAsLong(ctx, args, 0, "-");
-    for (unsigned long i = 1; i < n; ++i) acc -= argAsLong(ctx, args, (int)i, "-");
-    return ctx->fromLong(acc);
+    return numericFold(ctx, args, n,
+        [ctx](const proto::ProtoObject* a, const proto::ProtoObject* b) {
+            return a->subtract(ctx, b);
+        });
 }
 
 const proto::ProtoObject* prim_mul(proto::ProtoContext* ctx,
@@ -425,25 +415,18 @@ const proto::ProtoObject* prim_mul(proto::ProtoContext* ctx,
                                    const proto::ProtoList* args,
                                    const proto::ProtoSparseList*) {
     unsigned long n = args ? args->getSize(ctx) : 0;
+    checkNumbers(ctx, args, n, "*");
     if (n == 0) return ctx->fromLong(1);
-    bool anyFloat = false;
-    for (unsigned long i = 0; i < n; ++i) {
-        if (argAsNumber(ctx, args, (int)i, "*").isFloat) { anyFloat = true; break; }
-    }
-    if (anyFloat) {
-        double acc = 1.0;
-        for (unsigned long i = 0; i < n; ++i)
-            acc *= argAsNumber(ctx, args, (int)i, "*").asDouble();
-        return ctx->fromDouble(acc);
-    }
-    long long acc = 1;
-    for (unsigned long i = 0; i < n; ++i) acc *= argAsLong(ctx, args, (int)i, "*");
-    return ctx->fromLong(acc);
+    if (n == 1) return args->getAt(ctx, 0);
+    return numericFold(ctx, args, n,
+        [ctx](const proto::ProtoObject* a, const proto::ProtoObject* b) {
+            return a->multiply(ctx, b);
+        });
 }
 
-// `/` — float-by-default once any arg is float; int
-// truncating div when all ints. Matches Clojure for ints when divisible;
-// not bit-for-bit for Ratios (we have no Ratio in v0.9, so we truncate).
+// `/` — when every argument is an integer, the quotient truncates toward
+// zero (there are no ratios yet) and stays exact at any magnitude; once any
+// argument is a float, every argument is taken as a double.
 const proto::ProtoObject* prim_div(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
                                    const proto::ParentLink*,
@@ -451,32 +434,29 @@ const proto::ProtoObject* prim_div(proto::ProtoContext* ctx,
                                    const proto::ProtoSparseList*) {
     unsigned long n = args ? args->getSize(ctx) : 0;
     if (n == 0) throw std::runtime_error("/: needs at least one arg");
+    checkNumbers(ctx, args, n, "/");
     bool anyFloat = false;
-    for (unsigned long i = 0; i < n; ++i) {
-        if (argAsNumber(ctx, args, (int)i, "/").isFloat) { anyFloat = true; break; }
-    }
+    for (unsigned long i = 0; i < n && !anyFloat; ++i)
+        anyFloat = args->getAt(ctx, static_cast<int>(i))->isFloat(ctx);
     if (anyFloat) {
-        if (n == 1) return ctx->fromDouble(1.0 / argAsNumber(ctx, args, 0, "/").asDouble());
-        double acc = argAsNumber(ctx, args, 0, "/").asDouble();
+        if (n == 1) return ctx->fromDouble(1.0 / args->getAt(ctx, 0)->asDouble(ctx));
+        double acc = args->getAt(ctx, 0)->asDouble(ctx);
         for (unsigned long i = 1; i < n; ++i) {
-            double v = argAsNumber(ctx, args, (int)i, "/").asDouble();
+            double v = args->getAt(ctx, static_cast<int>(i))->asDouble(ctx);
             if (v == 0.0) throw std::runtime_error("/: divide by zero");
             acc /= v;
         }
         return ctx->fromDouble(acc);
     }
-    if (n == 1) {
-        long long v = argAsLong(ctx, args, 0, "/");
-        if (v == 0) throw std::runtime_error("/: divide by zero");
-        return ctx->fromLong(1 / v);
+    for (unsigned long i = (n == 1 ? 0 : 1); i < n; ++i) {
+        if (args->getAt(ctx, static_cast<int>(i))->integerSign(ctx) == 0)
+            throw std::runtime_error("/: divide by zero");
     }
-    long long acc = argAsLong(ctx, args, 0, "/");
-    for (unsigned long i = 1; i < n; ++i) {
-        long long v = argAsLong(ctx, args, (int)i, "/");
-        if (v == 0) throw std::runtime_error("/: divide by zero");
-        acc /= v;
-    }
-    return ctx->fromLong(acc);
+    if (n == 1) return ctx->fromLong(1)->divide(ctx, args->getAt(ctx, 0));
+    return numericFold(ctx, args, n,
+        [ctx](const proto::ProtoObject* a, const proto::ProtoObject* b) {
+            return a->divide(ctx, b);
+        });
 }
 
 const proto::ProtoObject* prim_inc(proto::ProtoContext* ctx,
@@ -486,9 +466,9 @@ const proto::ProtoObject* prim_inc(proto::ProtoContext* ctx,
                                    const proto::ProtoSparseList*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("inc: expects 1 arg");
-    Num x = argAsNumber(ctx, args, 0, "inc");
-    if (x.isFloat) return ctx->fromDouble(x.dval + 1.0);
-    return ctx->fromLong(x.ival + 1);
+    const proto::ProtoObject* x = numberArg(ctx, args, 0, "inc");
+    if (x->isFloat(ctx)) return ctx->fromDouble(x->asDouble(ctx) + 1.0);
+    return x->add(ctx, ctx->fromLong(1));
 }
 
 const proto::ProtoObject* prim_dec(proto::ProtoContext* ctx,
@@ -498,27 +478,33 @@ const proto::ProtoObject* prim_dec(proto::ProtoContext* ctx,
                                    const proto::ProtoSparseList*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("dec: expects 1 arg");
-    Num x = argAsNumber(ctx, args, 0, "dec");
-    if (x.isFloat) return ctx->fromDouble(x.dval - 1.0);
-    return ctx->fromLong(x.ival - 1);
+    const proto::ProtoObject* x = numberArg(ctx, args, 0, "dec");
+    if (x->isFloat(ctx)) return ctx->fromDouble(x->asDouble(ctx) - 1.0);
+    return x->subtract(ctx, ctx->fromLong(1));
 }
 
 // Comparison ---------------------------------------------------------------
 
-// Variadic monotonic chain helper. Returns true if for every adjacent pair
-// (a, b) the predicate(a, b) holds. Numeric promotion: any float in the
-// chain promotes ALL comparisons to double — matches Clojure-JVM.
-template <typename Pred>
+// Variadic monotonic chain: true when the predicate holds for every adjacent
+// pair (a, b). Two integers compare exactly (compareIntegers), so integers
+// beyond 2^53 are not rounded; a pair involving a float compares as doubles,
+// which keeps every comparison with NaN false. Arguments are checked pair by
+// pair and the chain stops at the first pair that fails, as in Clojure.
+template <typename DoublePred, typename SignPred>
 const proto::ProtoObject* monotonicChain(proto::ProtoContext* ctx,
                                          const proto::ProtoList* args,
                                          const char* name,
-                                         Pred pred) {
+                                         DoublePred holdsForDoubles,
+                                         SignPred holdsForSign) {
     unsigned long n = args ? args->getSize(ctx) : 0;
     if (n < 2) return PROTO_TRUE;            // 0- or 1-arg form is true
-    double prev = argAsNumber(ctx, args, 0, name).asDouble();
+    const proto::ProtoObject* prev = numberArg(ctx, args, 0, name);
     for (unsigned long i = 1; i < n; ++i) {
-        double cur = argAsNumber(ctx, args, (int)i, name).asDouble();
-        if (!pred(prev, cur)) return PROTO_FALSE;
+        const proto::ProtoObject* cur = numberArg(ctx, args, (int)i, name);
+        const bool holds = (prev->isInteger(ctx) && cur->isInteger(ctx))
+            ? holdsForSign(compareIntegers(ctx, prev, cur))
+            : holdsForDoubles(prev->asDouble(ctx), cur->asDouble(ctx));
+        if (!holds) return PROTO_FALSE;
         prev = cur;
     }
     return PROTO_TRUE;
@@ -529,7 +515,8 @@ const proto::ProtoObject* prim_lt(proto::ProtoContext* ctx,
                                   const proto::ParentLink*,
                                   const proto::ProtoList* args,
                                   const proto::ProtoSparseList*) {
-    return monotonicChain(ctx, args, "<", [](double a, double b){ return a < b; });
+    return monotonicChain(ctx, args, "<", [](double a, double b){ return a < b; },
+                          [](int sign){ return sign < 0; });
 }
 
 const proto::ProtoObject* prim_le(proto::ProtoContext* ctx,
@@ -537,7 +524,8 @@ const proto::ProtoObject* prim_le(proto::ProtoContext* ctx,
                                   const proto::ParentLink*,
                                   const proto::ProtoList* args,
                                   const proto::ProtoSparseList*) {
-    return monotonicChain(ctx, args, "<=", [](double a, double b){ return a <= b; });
+    return monotonicChain(ctx, args, "<=", [](double a, double b){ return a <= b; },
+                          [](int sign){ return sign <= 0; });
 }
 
 const proto::ProtoObject* prim_gt(proto::ProtoContext* ctx,
@@ -545,7 +533,8 @@ const proto::ProtoObject* prim_gt(proto::ProtoContext* ctx,
                                   const proto::ParentLink*,
                                   const proto::ProtoList* args,
                                   const proto::ProtoSparseList*) {
-    return monotonicChain(ctx, args, ">", [](double a, double b){ return a > b; });
+    return monotonicChain(ctx, args, ">", [](double a, double b){ return a > b; },
+                          [](int sign){ return sign > 0; });
 }
 
 const proto::ProtoObject* prim_ge(proto::ProtoContext* ctx,
@@ -553,7 +542,8 @@ const proto::ProtoObject* prim_ge(proto::ProtoContext* ctx,
                                   const proto::ParentLink*,
                                   const proto::ProtoList* args,
                                   const proto::ProtoSparseList*) {
-    return monotonicChain(ctx, args, ">=", [](double a, double b){ return a >= b; });
+    return monotonicChain(ctx, args, ">=", [](double a, double b){ return a >= b; },
+                          [](int sign){ return sign >= 0; });
 }
 
 const proto::ProtoObject* prim_eq(proto::ProtoContext* ctx,

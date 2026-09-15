@@ -3,6 +3,8 @@
 #include "protoCore.h"
 #include <gtest/gtest.h>
 
+#include <stdexcept>
+
 using protoClojure::Reader;
 using protoClojure::ReaderError;
 using protoClojure::ReaderMarkers;
@@ -165,4 +167,16 @@ TEST_F(ReaderFixture, UnmatchedCloseIsError) {
 TEST_F(ReaderFixture, MalformedNumberIsError) {
     Reader r(ctx, "42abc", markers);
     EXPECT_THROW(r.readOne(), ReaderError);
+}
+
+TEST_F(ReaderFixture, IntegerBeyondLongRangeReadsExactly) {
+    Reader r(ctx, "12345678901234567890 -12345678901234567890N", markers);
+    const proto::ProtoObject* big = r.readOne();
+    ASSERT_NE(big, nullptr);
+    ASSERT_TRUE(big->isInteger(ctx));
+    EXPECT_EQ(big->asIntegerString(ctx)->toStdString(ctx), "12345678901234567890");
+    EXPECT_THROW(big->asLong(ctx), std::overflow_error);
+    const proto::ProtoObject* negative = r.readOne();
+    ASSERT_NE(negative, nullptr);
+    EXPECT_EQ(negative->asIntegerString(ctx)->toStdString(ctx), "-12345678901234567890");
 }

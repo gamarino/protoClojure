@@ -165,6 +165,19 @@ The project has no tagged releases yet; the version declared in
   recognised only user fns. A built-in function now prints as
   `#<fn NAME>` (`#<fn println>`), next to the `#<fn>` of a user fn; the name
   comes from the table that also installs the primitives.
+- Integers no longer lose their value silently. A literal beyond 64 bits
+  such as `12345678901234567890` read as `9223372036854775807`, because the
+  lexer parsed it with a clamping `strtoll`; the `+ - * / inc dec`
+  primitives, reached through `apply`, `reduce` or a first-class `+`,
+  computed in `long long` and wrapped around (`(apply + (list
+  9223372036854775807 1))` was `-9223372036854775808`), failed on
+  LargeInteger arguments, and `(apply / (list -9223372036854775808 -1))`
+  crashed the process with SIGFPE; `< <= > >=` compared through doubles
+  and misordered integers beyond 2^53. Literals beyond 64 bits now read as
+  exact LargeIntegers (also under `quote`), the `N` suffix is accepted on
+  integer literals, the arithmetic primitives use protoCore's promoting
+  integer operations like the arithmetic opcodes, and integer comparisons
+  are exact.
 - Symbols and keywords may contain non-ASCII letters. `:ñandú` or
   `(defn año [x] ...)` failed with "unexpected character: �": the lexer
   classified source bytes with `isalnum`, which rejects every byte of a

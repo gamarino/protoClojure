@@ -155,6 +155,15 @@ comment is `#_<form>` — the next form is read and dropped.
   (radix-N). Range: protoCore `SmallInteger` (signed 54-bit, stored
   inline in the tagged pointer) and `LargeInteger` (heap-allocated
   arbitrary precision) — overflow promotes transparently.
+  In 0.0.1 an integer literal of any size reads exactly: a literal beyond
+  the 64-bit range, such as `12345678901234567890`, is a LargeInteger, and
+  the `N` suffix of Clojure's BigInt literals (`42N`) is accepted and does
+  not change the value. `+`, `-`, `*`, `/`, `inc` and `dec` never wrap
+  around, whether compiled to an opcode or called through `apply` or
+  `reduce`: `(inc 9223372036854775807)` is `9223372036854775808` (JVM
+  Clojure throws an `ArithmeticException`; deviation D14). `<`, `<=`, `>`
+  and `>=` compare integers exactly at every magnitude. Hexadecimal, binary
+  and radix literals are planned.
 - **Ratio**: `3/4`, `-22/7`. Stored as a normalised pair of integers.
   Arithmetic preserves exact rationality unless mixed with a float.
 - **Float**: `3.14`, `1e10`, `-0.5e-3`. IEEE 754 double.

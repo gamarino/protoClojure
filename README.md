@@ -197,11 +197,11 @@ protoClojure runs scripts and an interactive REPL. Version 0.0.1; no tagged rele
 | Namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **260 test cases: 198 conformance fixtures, 61 unit tests** (lexer, reader, runtime map, value equality and hashing) **and 1 CLI check** (`--help`). All of them pass. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **270 test cases: 205 conformance fixtures, 64 unit tests** (lexer, reader, runtime map, value equality and hashing) **and 1 CLI check** (`--help`). All of them pass. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 
-- Reader: integers, floats (`3.14`, `1e6`), strings, symbols, keywords (`:foo`), `true` / `false` / `nil`, lists `(...)`, vectors `[...]`, maps `{...}`, `@form` as `(deref form)`, line comments (`;`), commas as whitespace.
+- Reader: integers of any size (`12345678901234567890`, `42N`), floats (`3.14`, `1e6`), strings, symbols, keywords (`:foo`), `true` / `false` / `nil`, lists `(...)`, vectors `[...]`, maps `{...}`, `@form` as `(deref form)`, line comments (`;`), commas as whitespace.
 - Special forms: `def`, `defn` and `fn` (single- and multi-arity, variadic, named-argument destructuring), `let`, `loop`, `recur` (in `loop` and as the implicit function-body target), `if`, `do`, `quote` (of symbols, keywords and other atoms), `apply`, `when`, `when-not`, `cond`, `and`, `or`, `future`.
 - Closures: full N-level capture, including chained closures across `(fn ... (fn ... (fn ...)))`.
 - Primitives (75 registered at startup):
@@ -216,7 +216,7 @@ What is implemented:
   - futures and promises: `make-future future? realized? promise promise? deliver`
   - actors: `actor actor? send send-h send-m send-l actor-stats`
 - VM: 29 opcodes, including SmallInteger fast-path binary opcodes (`ADD SUB MUL LT LE GT GE EQ`), arity dispatch (`MAKE_FN` / `MAKE_FN_MULTI`), `CALL_APPLY` for spread arguments, `CALL_KW` for trailing keyword arguments, and `DUP` / `JUMP_IF_TRUE` for short-circuit forms.
-- Numeric semantics: SmallInteger for values that fit a tagged pointer, automatic promotion to LargeInteger on overflow, automatic promotion to double when any operand is a float.
+- Numeric semantics: SmallInteger for values that fit a tagged pointer, automatic promotion to LargeInteger on overflow (no integer operation wraps around, whether compiled to an opcode or called through `apply` / `reduce`), automatic promotion to double when any operand is a float.
 
 What is **not yet** implemented:
 
@@ -243,7 +243,7 @@ cmake --build build_release
 ./build_release/protoclj script.clj          # run a .clj file
 ./build_release/protoclj --version           # version
 
-ctest --test-dir build_release -j1           # 260 cases: 198 fixtures + 61 unit tests + 1 CLI check
+ctest --test-dir build_release -j1           # 270 cases: 205 fixtures + 64 unit tests + 1 CLI check
 ./benchmarks/bench.sh                        # benchmark against Babashka
 ./benchmarks/actor-bench.sh                  # actor throughput, varied worker counts
 ```

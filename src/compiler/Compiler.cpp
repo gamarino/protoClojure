@@ -3,6 +3,7 @@
 #include "protoCore.h"
 
 #include <cstdio>
+#include <stdexcept>
 #include <unordered_map>
 #include <vector>
 
@@ -52,6 +53,19 @@ std::string asUtf8(proto::ProtoContext* ctx, const proto::ProtoObject* form) {
     const proto::ProtoString* s =
         reinterpret_cast<const proto::ProtoString*>(form);
     return s->toStdString(ctx);
+}
+
+// The const-pool entry for the integer `value`, a literal or a quoted
+// integer: a Long when it fits a long long, otherwise its decimal digits
+// (ConstKind::BigInteger), so a literal beyond 64 bits keeps its exact value.
+std::size_t addIntegerConst(proto::ProtoContext* ctx,
+                            const proto::ProtoObject* value,
+                            BytecodeModule& out) {
+    try {
+        return out.addLong(value->asLong(ctx));
+    } catch (const std::overflow_error&) {
+        return out.addBigInteger(value->asIntegerString(ctx, 10)->toStdString(ctx));
+    }
 }
 
 } // namespace
@@ -446,7 +460,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
 
     // Integer literal — emit PUSH_CONST <addLong>.
     if (form->isInteger(ctx)) {
-        std::size_t idx = out.addLong(form->asLong(ctx));
+        std::size_t idx = addIntegerConst(ctx, form, out);
         if (idx > 255) {
             throw CompileError("const-pool overflow: more than 256 constants in "
                                "one compilation unit");
@@ -713,7 +727,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 return;
             }
             if (q->isInteger(ctx)) {
-                std::size_t idx = out.addLong(q->asLong(ctx));
+                std::size_t idx = addIntegerConst(ctx, q, out);
                 if (idx > 255) throw CompileError("quote: const-pool overflow");
                 out.emit(Op::PUSH_CONST, static_cast<std::uint8_t>(idx));
                 return;

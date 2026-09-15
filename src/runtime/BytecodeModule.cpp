@@ -49,6 +49,11 @@ std::size_t BytecodeModule::addLong(long long v) {
     return consts_.size() - 1;
 }
 
+std::size_t BytecodeModule::addBigInteger(const std::string& digits) {
+    consts_.push_back(Const{ConstKind::BigInteger, 0, 0.0, digits});
+    return consts_.size() - 1;
+}
+
 std::size_t BytecodeModule::addDouble(double v) {
     consts_.push_back(Const{ConstKind::Double, 0, v, {}});
     return consts_.size() - 1;

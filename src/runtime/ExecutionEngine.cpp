@@ -49,6 +49,15 @@ inline bool smallIntFitsLong(long long v) {
     return v >= kMin && v <= kMax;
 }
 
+// A BigInteger constant rebuilt from its digits. Out of line: it is rare, and
+// keeping it out of materialise leaves the PUSH_CONST path of the common
+// kinds as compact as before.
+[[gnu::noinline, gnu::cold]]
+const proto::ProtoObject* materialiseBigInteger(proto::ProtoContext* ctx,
+                                                const BytecodeModule::Const& c) {
+    return ctx->fromString(c.sval.c_str(), 10);
+}
+
 // The value a PUSH_CONST pushes. Keyword literals and quoted symbols are
 // Named constants holding the value the compiler interned (Named.h).
 const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
@@ -59,6 +68,7 @@ const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
         case K::Double: return ctx->fromDouble(c.dval);
         case K::String: return ctx->fromUTF8String(c.sval.c_str());
         case K::Named:  return c.named;
+        case K::BigInteger: return materialiseBigInteger(ctx, c);
         case K::Symbol: break;  // a global name, never a value
     }
     throw std::runtime_error("VM: PUSH_CONST of a global name: " + c.sval);

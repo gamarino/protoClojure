@@ -50,7 +50,10 @@ enum class TokenKind : uint8_t {
 struct Token {
     TokenKind   kind;
     std::string text;           // raw lexeme (or error message when kind=Error)
-    long long   intValue = 0;   // valid for Integer
+    long long   intValue = 0;   // valid for Integer when fitsLong
+    // Integer: false when the literal is beyond the long long range; `text`
+    // then holds its decimal digits (with a leading `-` when negative).
+    bool        fitsLong = true;
     double      doubleValue = 0.0;  // valid for Float
     int         line   = 1;
     int         column = 1;

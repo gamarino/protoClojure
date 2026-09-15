@@ -5,8 +5,8 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 260 test cases: 198
-conformance fixtures under `tests/conformance/`, 61 GoogleTest unit
+scripts and an interactive REPL. `ctest` registers 270 test cases: 205
+conformance fixtures under `tests/conformance/`, 64 GoogleTest unit
 tests for the lexer, the reader, the runtime map and value equality and
 hashing (`tests/unit/`), and a CLI check of `--help` (`tests/cli/`); all
 pass. Benchmark numbers against Babashka 1.4.192
@@ -23,13 +23,13 @@ directories that cover them.
 | Feature | Conformance directories | Fixtures |
 |---|---|---:|
 | Binary, lexer, reader, bytecode VM, `println` | `00-binary`, `01-literals` | 2 |
-| `def`, `if`, `do`, integer arithmetic, comparisons, `str` | `02-special-forms`, `03-arithmetic` | 10 |
+| `def`, `if`, `do`, integer arithmetic, comparisons, `str` | `02-special-forms`, `03-arithmetic` | 12 |
 | `fn`, `defn`, `let`, `loop`, `recur` | `04-functions`, `05-recursion` | 8 |
 | Closures with N-level lexical capture | `06-closures` | 6 |
 | Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 22 |
 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 19 |
 | IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 13 |
-| LargeInteger promotion | `15-bigint` | 3 |
+| LargeInteger promotion, big integer literals | `15-bigint` | 8 |
 | Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 40 |
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 16 |
 | `clojure.string`-shaped string functions | `20-strings` | 16 |
@@ -48,7 +48,10 @@ The design specifications written during development are archived under
 
 ### Reader
 
-- [x] Integers (SmallInteger + auto-promoted LargeInteger)
+- [x] Integers (SmallInteger + auto-promoted LargeInteger); a literal
+      beyond the 64-bit range reads as an exact LargeInteger
+      (`12345678901234567890`), and Clojure's `N` suffix is accepted on
+      integer literals (`42N`, same value; `1.5N` is a read error)
 - [x] Floats — `3.14`, `1e6`, `1.5e-3`
 - [x] Strings — `"hello"`, with `\n \t \r \\ \" \0` escapes
 - [x] Symbols (interned via the protoCore symbol table)
@@ -128,9 +131,13 @@ The design specifications written during development are archived under
 ### Numeric semantics
 
 - [x] SmallInteger fast-path arithmetic via opcodes (`ADD SUB MUL LT LE GT GE EQ`)
-- [x] Automatic promotion to LargeInteger on overflow
+- [x] Automatic promotion to LargeInteger on overflow, in the opcodes and in
+      the `+ - * / inc dec` primitives alike (`(apply + ...)`, `reduce`,
+      `(inc 9223372036854775807)`): no integer operation wraps around (D14)
 - [x] Automatic promotion to double when any operand is a float
-- [x] Integer division truncates: `(/ 10 4)` is `2`
+- [x] Integer division truncates: `(/ 10 4)` is `2`, exact at any magnitude
+- [x] `< <= > >=` compare integers exactly beyond 2^53; a comparison with a
+      float compares doubles
 - [x] Print path handles SmallInteger, LargeInteger and floats
 
 ### Closures
@@ -371,7 +378,7 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D11 | No `clojure.spec`                                          | v0.x   |
 | D12 | `clojure.java.*` namespaces do not exist                   | (perm) |
 | D13 | `read-string` strict on unregistered reader literals       | core   |
-| D14 | LargeInteger promotion is automatic on `*` — no `*'` needed (CONTRA Clojure-JVM, by design) | (perm) |
+| D14 | LargeInteger promotion is automatic in `+ - * / inc dec`, so `(* 9223372036854775807 2)` is `18446744073709551614` where JVM Clojure throws `ArithmeticException: integer overflow` — no `+'` / `*'` needed; big integers are not a separate type, so the `N` suffix is accepted but does not change the value or how it prints (CONTRA Clojure-JVM, by design) | (perm) |
 | D15 | `(= 1 1.0)` returns `true` in v0.x (CONTRA Clojure-JVM where `=` is type-strict); map keys follow it, so `1` and `1.0` are one key and `(hash-map 1 :a 1.0 :b)` is `{1 :b}` | (perm) |
 | D16 | `:or` defaults fire on **explicit nil** as well as missing keys (CONTRA JVM-Clojure where only missing keys take the default) | v0.2 |
 | D17 | String ops (`upper-case`, `lower-case`, `split`, `reverse`, `trim`, `index-of`) are byte-level / ASCII-correct only; multi-byte UTF-8 codepoints traverse as bytes (CONTRA JVM-Clojure which is codepoint-aware) | v0.2 |

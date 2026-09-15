@@ -2,6 +2,7 @@
 #include "UnicodeLetters.h"
 
 #include <cctype>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 
@@ -269,9 +270,18 @@ Token Lexer::lexNumber(bool negative) {
         }
     }
 
-    // Numbers followed by a letter, `_` or `.` (e.g. `42x`, `42ñ`) are an
-    // error — JVM Clojure also rejects them. The digit loops above leave no
-    // ASCII digit at the current position.
+    // Clojure's big-integer suffix, `42N`. Integers already promote to a
+    // LargeInteger when they need to (D14), so the suffix only marks the
+    // literal and does not change its value; a float cannot take it.
+    bool bigSuffix = false;
+    if (!isFloat && !eof() && current() == 'N') {
+        bigSuffix = true;
+        advance();
+    }
+
+    // Numbers followed by a letter, `_` or `.` (e.g. `42x`, `42ñ`, `1.5N`)
+    // are an error — JVM Clojure also rejects them. The digit loops above
+    // leave no ASCII digit at the current position.
     if (!eof()) {
         // Byte length of the character at `pos` when it continues a
         // malformed number: an ASCII letter or digit, `_`, `.`, or a
@@ -283,6 +293,7 @@ Token Lexer::lexNumber(bool negative) {
         };
         if (trailLength(pos_) > 0) {
             std::string bad = digits;
+            if (bigSuffix) bad += 'N';
             while (!eof()) {
                 const std::size_t len = trailLength(pos_);
                 if (len == 0) break;
@@ -302,7 +313,13 @@ Token Lexer::lexNumber(bool negative) {
         t.doubleValue = std::strtod(digits.c_str(), nullptr);
     } else {
         t.kind = TokenKind::Integer;
-        t.intValue = std::strtoll(digits.c_str(), nullptr, 10);
+        // strtoll clamps an out-of-range literal to LLONG_MIN / LLONG_MAX;
+        // such a literal keeps only its digits, which the Reader turns into
+        // an exact LargeInteger.
+        errno = 0;
+        const long long value = std::strtoll(digits.c_str(), nullptr, 10);
+        if (errno == ERANGE) t.fitsLong = false;
+        else                 t.intValue = value;
     }
     return t;
 }

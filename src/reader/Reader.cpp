@@ -45,7 +45,10 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
     switch (tok.kind) {
         case TokenKind::Integer:
             // Atomic — no intermediate state to protect. The caller takes
-            // ownership of rooting the return value.
+            // ownership of rooting the return value. A literal beyond the
+            // long long range is built from its digits as an exact
+            // LargeInteger (protoCore parses under its own critical section).
+            if (!tok.fitsLong) return parent->fromString(tok.text.c_str(), 10);
             return parent->fromLong(tok.intValue);
 
         case TokenKind::Float:
