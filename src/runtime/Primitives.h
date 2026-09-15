@@ -159,9 +159,9 @@ const ActiveCallContext* activeCallContext();
 // exit. Mirrors `ActorScheduler::shutdown`, idempotent.
 void shutdownFutures(proto::ProtoContext* ctx);
 
-// Same value-formatter `println` / `prn` use. Exposed so the REPL can
-// echo evaluated results in the canonical Clojure shape without
-// rebuilding the printer. Falls back to "nil" on a null pointer.
+// The value printer `println`, `str` and `join` use (printTo in
+// Primitives.cpp), writing to `out`. Exposed so the REPL echoes evaluated
+// results exactly as `println` prints them. A null pointer prints "nil".
 void replPrintValue(proto::ProtoContext* ctx, std::FILE* out,
                     const proto::ProtoObject* v);
 

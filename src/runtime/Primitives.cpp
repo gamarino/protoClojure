@@ -9,7 +9,6 @@
 #include <cmath>
 #include <cstdio>
 #include <mutex>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -103,33 +102,43 @@ inline MapLayout mapLayoutOf(const ActiveCallContext* cc) {
     return MapLayout{cc->mapMarkerProto, cc->mapStateKey};
 }
 
-// Print a single value in `println` / `str` form. No surrounding quotes on
-// strings (that is `pr`'s job, not `println`'s).
+// The value printer. `println`, `str`, `join` and the REPL all render values
+// through printTo, so a value reads the same wherever it is printed. It
+// appends the println form of `v` to `out`:
+//   - nil, booleans and numbers as literals; an integer-valued float with
+//     a trailing `.0`;
+//   - strings as their characters, without quotes at any depth (readable
+//     `pr`-style printing is not implemented);
+//   - keywords and symbols as their spelling;
+//   - lists `(1 2)`, vectors `[1 2]` and maps `{:a 1, :b 2}` (insertion
+//     order), recursively;
+//   - atoms `#<atom 1>`, futures `#<future 1>` / `#<future pending>`,
+//     promises `#<promise 1>` / `#<promise pending>`, actors `#<actor 1>`
+//     (the current state) and user fns `#<fn>`;
+//   - anything else, primitive fns included, as `#<unprintable>`.
+// Runtime objects are recognised by the prototypes in the ActiveCallContext;
+// without one only the literal kinds and collections render.
 //
-// Note: at v0.0.x runtime, the VM materialises String const-pool entries
-// via ctx->fromUTF8String, which returns a plain ProtoString (NOT the
-// Reader's wrapper — that wrapping only lives between Reader and Compiler).
-// So at runtime, strings are just stringy ProtoObjects and printValue can
-// reach the bytes directly.
-void printValue(proto::ProtoContext* ctx, std::FILE* out,
-                const proto::ProtoObject* v) {
-    if (!v || v == PROTO_NONE) { std::fputs("nil", out); return; }
-    if (v == PROTO_TRUE)        { std::fputs("true", out); return; }
-    if (v == PROTO_FALSE)       { std::fputs("false", out); return; }
+// Runtime strings are plain protoCore strings (the Reader's string wrapper
+// never reaches the VM), so their bytes are read directly.
+//
+// GC: allocates only to render a LargeInteger. `v` must be rooted by the
+// caller; every nested value is reachable from it.
+void printTo(proto::ProtoContext* ctx, std::string& out,
+             const proto::ProtoObject* v) {
+    if (!v || v == PROTO_NONE) { out += "nil"; return; }
+    if (v == PROTO_TRUE)        { out += "true"; return; }
+    if (v == PROTO_FALSE)       { out += "false"; return; }
     if (v->isInteger(ctx)) {
-        // SmallInt: print via the tagged-pointer fast extract. LargeInt:
-        // route through protoCore's asIntegerString (long-long range may
-        // overflow). Mirror of the tagged check in ExecutionEngine.cpp;
-        // duplicated here to keep this file independent of the VM.
+        // SmallInt: the tagged-pointer fast extract, mirror of the check in
+        // ExecutionEngine.cpp. LargeInt: protoCore's asIntegerString.
         constexpr unsigned long kSmallIntMask  = 0x3FFUL;
         constexpr unsigned long kSmallIntValue = 0x001UL;
         unsigned long bits = reinterpret_cast<unsigned long>(v);
         if ((bits & kSmallIntMask) == kSmallIntValue) {
-            std::fprintf(out, "%lld",
-                static_cast<long long>(reinterpret_cast<long long>(v) >> 10));
+            out += std::to_string(reinterpret_cast<long long>(v) >> 10);
         } else {
-            const proto::ProtoString* s = v->asIntegerString(ctx);
-            std::fputs(s->toStdString(ctx).c_str(), out);
+            out += v->asIntegerString(ctx)->toStdString(ctx);
         }
         return;
     }
@@ -137,177 +146,114 @@ void printValue(proto::ProtoContext* ctx, std::FILE* out,
         double d = v->asDouble(ctx);
         // Match Clojure-JVM: integer-valued floats print with `.0`.
         if (d == static_cast<long long>(d)) {
-            std::fprintf(out, "%lld.0", static_cast<long long>(d));
+            out += std::to_string(static_cast<long long>(d));
+            out += ".0";
         } else {
-            std::fprintf(out, "%g", d);
+            char buf[32];
+            std::snprintf(buf, sizeof buf, "%g", d);
+            out += buf;
         }
         return;
     }
     if (isListTag(v)) {
         const proto::ProtoList* lst = v->asList(ctx);
-        std::fputc('(', out);
+        out += '(';
         unsigned long n = lst->getSize(ctx);
         for (unsigned long i = 0; i < n; ++i) {
-            if (i > 0) std::fputc(' ', out);
-            printValue(ctx, out, lst->getAt(ctx, static_cast<int>(i)));
+            if (i > 0) out += ' ';
+            printTo(ctx, out, lst->getAt(ctx, static_cast<int>(i)));
         }
-        std::fputc(')', out);
+        out += ')';
         return;
     }
     if (v->isTuple(ctx)) {
         const proto::ProtoTuple* t =
             reinterpret_cast<const proto::ProtoTuple*>(v);
-        std::fputc('[', out);
+        out += '[';
         unsigned long n = t->getSize(ctx);
         for (unsigned long i = 0; i < n; ++i) {
-            if (i > 0) std::fputc(' ', out);
-            printValue(ctx, out, t->getAt(ctx, static_cast<int>(i)));
+            if (i > 0) out += ' ';
+            printTo(ctx, out, t->getAt(ctx, static_cast<int>(i)));
         }
-        std::fputc(']', out);
+        out += ']';
         return;
     }
     if (proto::ProtoObject::isStringTagFast(v)) {
-        const proto::ProtoString* s =
-            reinterpret_cast<const proto::ProtoString*>(v);
-        std::fputs(s->toStdString(ctx).c_str(), out);
+        out += reinterpret_cast<const proto::ProtoString*>(v)->toStdString(ctx);
         return;
     }
-    // Session 13/16 — print maps and atoms via ActiveCallContext
-    // rather than carrying the markers through printValue everywhere.
     const ActiveCallContext* cc = activeCallContext();
-    // Keywords and symbols print their spelling: `:a`, `a`.
-    if (cc && isNamed(ctx, cc->named, v)) {
-        std::fputs(namedSpelling(ctx, cc->named, v)->toStdString(ctx).c_str(),
-                   out);
+    if (!cc) { out += "#<unprintable>"; return; }
+    if (isNamed(ctx, cc->named, v)) {
+        out += namedSpelling(ctx, cc->named, v)->toStdString(ctx);
         return;
     }
-    if (cc && v->getPrototype(ctx) == cc->atomMarkerProto) {
-        std::fputs("#<atom ", out);
-        const proto::ProtoObject* inner =
-            v->getAttribute(ctx, cc->valueKey);
-        printValue(ctx, out, inner ? inner : PROTO_NONE);
-        std::fputc('>', out);
-        return;
-    }
-    if (cc && v->getPrototype(ctx) == cc->futureMarkerProto) {
-        const proto::ProtoObject* done =
-            v->getAttribute(ctx, cc->doneKey);
-        if (done == PROTO_TRUE) {
-            std::fputs("#<future ", out);
-            printValue(ctx, out,
-                v->getAttribute(ctx, cc->resultKey));
-            std::fputc('>', out);
-        } else {
-            std::fputs("#<future pending>", out);
-        }
-        return;
-    }
-    if (cc && v->getPrototype(ctx) == cc->actorMarkerProto) {
-        std::fputs("#<actor ", out);
-        printValue(ctx, out, v->getAttribute(ctx, cc->valueKey));
-        std::fputc('>', out);
-        return;
-    }
-    // User functions — both single-arity and multi-arity wrappers. The
-    // REPL needs these because a top-level `(defn sq …)` returns the
-    // fn object itself (`#'user/sq` in JVM Clojure; protoClojure does
-    // not have a Var indirection yet so we print `#<fn>`).
-    if (cc && (v->getPrototype(ctx) == cc->fnSingleProto
-            || v->getPrototype(ctx) == cc->fnMultiProto)) {
-        std::fputs("#<fn>", out);
-        return;
-    }
-    if (cc && v->getPrototype(ctx) == cc->promiseMarkerProto) {
-        const proto::ProtoObject* done =
-            v->getAttribute(ctx, cc->doneKey);
-        if (done == PROTO_TRUE) {
-            std::fputs("#<promise ", out);
-            printValue(ctx, out, v->getAttribute(ctx, cc->valueKey));
-            std::fputc('>', out);
-        } else {
-            std::fputs("#<promise pending>", out);
-        }
-        return;
-    }
-    if (cc && v->getPrototype(ctx) == cc->mapMarkerProto) {
-        std::fputc('{', out);
-        struct Acc { std::FILE* out; bool first; } acc{out, true};
+    const proto::ProtoObject* prototype = v->getPrototype(ctx);
+    if (prototype == cc->mapMarkerProto) {
+        out += '{';
+        struct Acc { std::string* out; bool first; } acc{&out, true};
         mapForEach(ctx, mapLayoutOf(cc), v, &acc,
             [](proto::ProtoContext* c, void* self,
                const proto::ProtoObject* k, const proto::ProtoObject* val) {
                 auto* a = static_cast<Acc*>(self);
-                if (!a->first) std::fputs(", ", a->out);
+                if (!a->first) *a->out += ", ";
                 a->first = false;
-                printValue(c, a->out, k);
-                std::fputc(' ', a->out);
-                printValue(c, a->out, val);
+                printTo(c, *a->out, k);
+                *a->out += ' ';
+                printTo(c, *a->out, val);
             });
-        std::fputc('}', out);
+        out += '}';
         return;
     }
-    std::fputs("#<unprintable>", out);
+    if (prototype == cc->atomMarkerProto) {
+        const proto::ProtoObject* inner = v->getAttribute(ctx, cc->valueKey);
+        out += "#<atom ";
+        printTo(ctx, out, inner ? inner : PROTO_NONE);
+        out += '>';
+        return;
+    }
+    if (prototype == cc->futureMarkerProto) {
+        if (v->getAttribute(ctx, cc->doneKey) == PROTO_TRUE) {
+            out += "#<future ";
+            printTo(ctx, out, v->getAttribute(ctx, cc->resultKey));
+            out += '>';
+        } else {
+            out += "#<future pending>";
+        }
+        return;
+    }
+    if (prototype == cc->promiseMarkerProto) {
+        if (v->getAttribute(ctx, cc->doneKey) == PROTO_TRUE) {
+            out += "#<promise ";
+            printTo(ctx, out, v->getAttribute(ctx, cc->valueKey));
+            out += '>';
+        } else {
+            out += "#<promise pending>";
+        }
+        return;
+    }
+    if (prototype == cc->actorMarkerProto) {
+        out += "#<actor ";
+        printTo(ctx, out, v->getAttribute(ctx, cc->valueKey));
+        out += '>';
+        return;
+    }
+    // User fns, single- and multi-arity. A top-level `(defn sq ...)` returns
+    // the fn itself; JVM Clojure prints the var `#'user/sq`, and protoClojure
+    // has no vars yet.
+    if (prototype == cc->fnSingleProto || prototype == cc->fnMultiProto) {
+        out += "#<fn>";
+        return;
+    }
+    out += "#<unprintable>";
 }
 
-void appendValue(proto::ProtoContext* ctx, std::ostringstream& os,
-                 const proto::ProtoObject* v) {
-    if (!v || v == PROTO_NONE) { os << "nil"; return; }
-    if (v == PROTO_TRUE)        { os << "true"; return; }
-    if (v == PROTO_FALSE)       { os << "false"; return; }
-    if (v->isInteger(ctx)) {
-        constexpr unsigned long kSmallIntMask  = 0x3FFUL;
-        constexpr unsigned long kSmallIntValue = 0x001UL;
-        unsigned long bits = reinterpret_cast<unsigned long>(v);
-        if ((bits & kSmallIntMask) == kSmallIntValue) {
-            os << static_cast<long long>(reinterpret_cast<long long>(v) >> 10);
-        } else {
-            os << v->asIntegerString(ctx)->toStdString(ctx);
-        }
-        return;
-    }
-    if (v->isFloat(ctx)) {
-        double d = v->asDouble(ctx);
-        if (d == static_cast<long long>(d)) {
-            os << static_cast<long long>(d) << ".0";
-        } else {
-            os << d;
-        }
-        return;
-    }
-    if (isListTag(v)) {
-        const proto::ProtoList* lst = v->asList(ctx);
-        os << '(';
-        unsigned long n = lst->getSize(ctx);
-        for (unsigned long i = 0; i < n; ++i) {
-            if (i > 0) os << ' ';
-            appendValue(ctx, os, lst->getAt(ctx, static_cast<int>(i)));
-        }
-        os << ')';
-        return;
-    }
-    if (v->isTuple(ctx)) {
-        const proto::ProtoTuple* t =
-            reinterpret_cast<const proto::ProtoTuple*>(v);
-        os << '[';
-        unsigned long n = t->getSize(ctx);
-        for (unsigned long i = 0; i < n; ++i) {
-            if (i > 0) os << ' ';
-            appendValue(ctx, os, t->getAt(ctx, static_cast<int>(i)));
-        }
-        os << ']';
-        return;
-    }
-    if (proto::ProtoObject::isStringTagFast(v)) {
-        const proto::ProtoString* s =
-            reinterpret_cast<const proto::ProtoString*>(v);
-        os << s->toStdString(ctx);
-        return;
-    }
-    const ActiveCallContext* cc = activeCallContext();
-    if (cc && isNamed(ctx, cc->named, v)) {
-        os << namedSpelling(ctx, cc->named, v)->toStdString(ctx);
-        return;
-    }
-    os << "#<unprintable>";
+// printTo, written to `stream` in one call.
+void printValue(proto::ProtoContext* ctx, std::FILE* stream,
+                const proto::ProtoObject* v) {
+    std::string text;
+    printTo(ctx, text, v);
+    std::fwrite(text.data(), 1, text.size(), stream);
 }
 
 // println — print each positional arg, space-separated, followed by \n.
@@ -318,20 +264,21 @@ void appendValue(proto::ProtoContext* ctx, std::ostringstream& os,
 // that we can avoid. The println'd objects are read-only inspected for
 // their string representation.
 //
-// P3: writes to stdout via std::printf. No std container is stored inside
-// protoCore; the std::string we build via toStdString lives transiently
-// on the C++ stack.
+// P3: the line is rendered into a std::string on the C++ stack (printTo) and
+// written with one fwrite; no std container is stored inside protoCore.
 const proto::ProtoObject* prim_println(proto::ProtoContext* ctx,
                                        const proto::ProtoObject* /*self*/,
                                        const proto::ParentLink* /*parents*/,
                                        const proto::ProtoList* args,
                                        const proto::ProtoSparseList* /*kwargs*/) {
     unsigned long n = args ? args->getSize(ctx) : 0;
+    std::string line;
     for (unsigned long i = 0; i < n; ++i) {
-        if (i > 0) std::fputc(' ', stdout);
-        printValue(ctx, stdout, args->getAt(ctx, static_cast<int>(i)));
+        if (i > 0) line += ' ';
+        printTo(ctx, line, args->getAt(ctx, static_cast<int>(i)));
     }
-    std::fputc('\n', stdout);
+    line += '\n';
+    std::fwrite(line.data(), 1, line.size(), stdout);
     std::fflush(stdout);
     return PROTO_NONE;
 }
@@ -587,19 +534,19 @@ const proto::ProtoObject* prim_not_eq(proto::ProtoContext* ctx,
 
 // str ----------------------------------------------------------------------
 
-// (str x y z) → concatenated print-string of all args. Used both for
-// printing-with-formatting and for building messages.
+// (str x y z) → the println form of every argument (printTo), concatenated,
+// so `(str {:a 1})` is "{:a 1}" and `(str (atom 1))` is "#<atom 1>".
 const proto::ProtoObject* prim_str(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
                                    const proto::ParentLink*,
                                    const proto::ProtoList* args,
                                    const proto::ProtoSparseList*) {
     unsigned long n = args ? args->getSize(ctx) : 0;
-    std::ostringstream os;
+    std::string text;
     for (unsigned long i = 0; i < n; ++i) {
-        appendValue(ctx, os, args->getAt(ctx, (int)i));
+        printTo(ctx, text, args->getAt(ctx, (int)i));
     }
-    return ctx->fromUTF8String(os.str().c_str());
+    return ctx->fromUTF8String(text.c_str());
 }
 
 // List + predicate primitives -----------------------------------
@@ -1288,16 +1235,16 @@ const proto::ProtoObject* prim_join(proto::ProtoContext* ctx,
         coll = args->getAt(ctx, 0);
     }
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
-    std::ostringstream os;
+    std::string text;
     if (lst) {
         unsigned long n = lst->getSize(ctx);
         for (unsigned long i = 0; i < n; ++i) {
-            if (i > 0) os << sep;
-            appendValue(ctx, os, lst->getAt(ctx, static_cast<int>(i)));
+            if (i > 0) text += sep;
+            printTo(ctx, text, lst->getAt(ctx, static_cast<int>(i)));
         }
     }
     return reinterpret_cast<const proto::ProtoObject*>(
-        proto::ProtoString::fromStdString(ctx, os.str()));
+        proto::ProtoString::fromStdString(ctx, text));
 }
 
 // (split s delim) — returns a list of substrings split by `delim`.

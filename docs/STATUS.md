@@ -5,7 +5,7 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 241 test cases: 184
+scripts and an interactive REPL. `ctest` registers 246 test cases: 189
 conformance fixtures under `tests/conformance/`, 56 GoogleTest unit
 tests for the lexer, the reader, the runtime map and value equality and
 hashing (`tests/unit/`), and a CLI check of `--help` (`tests/cli/`); all
@@ -28,14 +28,14 @@ directories that cover them.
 | Closures with N-level lexical capture | `06-closures` | 6 |
 | Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 22 |
 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 17 |
-| IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 10 |
+| IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 11 |
 | LargeInteger promotion | `15-bigint` | 3 |
-| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 38 |
+| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 39 |
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 16 |
-| `clojure.string`-shaped string functions | `20-strings` | 13 |
-| Atoms | `21-atoms` | 10 |
+| `clojure.string`-shaped string functions | `20-strings` | 14 |
+| Atoms | `21-atoms` | 11 |
 | Futures and `pmap` on OS threads | `22-futures` | 14 |
-| Watches, promises | `23-watches`, `24-promises` | 8 |
+| Watches, promises | `23-watches`, `24-promises` | 9 |
 | Actors | `25-actors` | 9 |
 | Interactive REPL | — (no conformance fixtures) | — |
 
@@ -136,7 +136,10 @@ The design specifications written during development are archived under
 ### Primitives installed at startup (75)
 
 - [x] Arithmetic and comparison: `+ - * / inc dec < <= > >= = not=`
-- [x] Output: `println str`
+- [x] Output: `println str` — one printer (`printTo` in
+      `src/runtime/Primitives.cpp`) renders values for `println`, `str`,
+      `join` and the REPL: `(str {:a 1})` is `"{:a 1}"`, `(str (atom 1))` is
+      `"#<atom 1>"` (D20)
 - [x] Lists and vectors: `list vector vec nth first rest cons count empty? reverse`
 - [x] Higher-order: `map filter reduce pmap`
 - [x] Predicates: `nil? not vector? list? map? string?`
@@ -362,6 +365,7 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D17 | String ops (`upper-case`, `lower-case`, `split`, `reverse`, `trim`, `index-of`) are byte-level / ASCII-correct only; multi-byte UTF-8 codepoints traverse as bytes (CONTRA JVM-Clojure which is codepoint-aware) | v0.2 |
 | D18 | `(fn name [args] body)` — the name is accepted by the compiler but dropped; self-reference via `name` inside the body is not supported (use `defn` for self-recursion). Planned for v0.2 via wrapper-into-slot capture. | v0.2 |
 | D19 | Maps iterate and print in insertion order at every size, including maps built with `hash-map` (JVM Clojure guarantees insertion order only for array maps of at most 8 entries and leaves it unspecified beyond that and for `hash-map`) | (perm) |
+| D20 | `str` renders a value exactly as `println` prints it: strings nested in a collection print without quotes (`(str ["a"])` is `"[a]"`, where JVM Clojure gives `"[\"a\"]"`), and atoms, futures, promises, actors and fns render as tags such as `#<atom 1>` (JVM Clojure: `#object[...]`) | v0.x |
 
 ## Known issues
 

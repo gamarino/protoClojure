@@ -172,6 +172,15 @@ strings are written across newlines:
 line two"
 ```
 
+`(str x ...)` concatenates its arguments rendered exactly as `println`
+prints them; `str`, `println`, `join` and the REPL share one printer.
+`(str 1 :a "b")` is `"1:ab"`, `(str {:a 1 :b [2]})` is `"{:a 1, :b [2]}"`,
+and a reference type renders as a tag: `(str (atom 1))` is `"#<atom 1>"`,
+likewise `#<future ...>`, `#<promise ...>`, `#<actor ...>` and `#<fn>`
+(JVM Clojure renders `#object[clojure.lang.Atom 0x... {:status :ready, :val 1}]`).
+Strings nested in a collection render without quotes: `(str ["a"])` is
+`"[a]"` (deviation D20 in `STATUS.md`).
+
 ### 2.4 Characters
 
 `\a`, `\space`, `\tab`, `\newline`, `é`. A character is a one-codepoint
@@ -777,8 +786,8 @@ nREPL operations planned for v0.1:
 
 The v0.1 design prints REPL values using `pr-str`-style formatting
 (quotes on strings, `:keyword` for keywords, etc.), not `print-str`. In
-0.0.1 the REPL uses the `println` printer, so strings print without
-quotes. `*1` `*2` `*3` hold the last three results (implemented); `*e`
+0.0.1 the REPL, `println` and `str` share one printer, so strings print
+without quotes. `*1` `*2` `*3` hold the last three results (implemented); `*e`
 will hold the last exception (planned).
 
 ---

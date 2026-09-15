@@ -120,7 +120,7 @@ unknown command. Wrap it in an expression instead, for example
 
 ### 10.1.3 What gets printed
 
-The REPL prints each result with the same printer `println` uses.
+The REPL prints each result with the same printer `println` and `str` use.
 Numbers, keywords and collections print as you would write them, but
 strings print without their quotes (`"hi"` prints `hi`), functions
 print as `#<fn>`, and atoms and actors print as tags such as

@@ -49,7 +49,7 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (184 fixtures under
+- **Tests.** A glob-discovered conformance suite (189 fixtures under
   `tests/conformance/`) and GoogleTest unit tests for the lexer, the reader,
   the runtime map and value equality and hashing (56 tests).
 - **Benchmarks and examples.** `benchmarks/bench.sh` (comparison with
@@ -143,6 +143,13 @@ The project has no tagged releases yet; the version declared in
   `not-found`) for a missing key and, for a keyword, for a non-map argument.
   Keywords, quoted symbols and maps are function values for locals, globals,
   `apply`, `map`, `filter`, `reduce` and `pmap`.
+- `str` renders maps, atoms and the other runtime objects. `(str {:a 1})` and
+  `(str (atom 1))` returned `#<unprintable>`, as did a map nested in a vector
+  and a map or atom passed to `join`: `str` and `join` used a second printer
+  that knew only literals, strings, keywords, lists and vectors, while
+  `println` and the REPL used their own. There is now one printer, so
+  `(str {:a 1})` is `"{:a 1}"` and `(str (atom 1))` is `"#<atom 1>"`, exactly
+  as `println` prints them, and `println` writes each line with one call.
 - `--help` and error messages no longer mention internal development labels
   ("Phase 5", "next milestone", "v0.0.x", "v0.7.x", "v0.13"); each message
   now states the actual restriction, for example "let: not supported at top
