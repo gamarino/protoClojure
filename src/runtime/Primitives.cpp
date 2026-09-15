@@ -1746,17 +1746,23 @@ const proto::ProtoObject* prim_reset_bang(proto::ProtoContext* ctx,
     if (!a || a->getPrototype(ctx) != cc->atomMarkerProto)
         throw std::runtime_error("reset!: not an atom");
     const proto::ProtoObject* nv = args->getAt(ctx, 1);
-    // Once setAttribute replaces it, the old value is referenced only by
-    // this function, and setAttribute and the watches allocate: pin it in a
-    // child context slot for the rest of the call.
+    // One compare-and-set per attempt, so the old value handed to the
+    // watches is exactly the value this reset! replaced, even when other
+    // threads write the atom concurrently. The old value is referenced only
+    // by this function once replaced, and the compare-and-set and the
+    // watches allocate: it is pinned in a child context slot as soon as it
+    // is read, with no allocation in between.
     proto::ProtoContext scope(ctx->space, ctx);
     scope.resizeAutomaticLocals(1);
-    const proto::ProtoObject* old = a->getAttribute(&scope, cc->valueKey);
-    scope.setAutomaticLocal(0, old);
-    const_cast<proto::ProtoObject*>(a)
-        ->setAttribute(&scope, cc->valueKey, nv);
-    fireWatches(&scope, cc, a, old, nv);
-    return nv;
+    for (;;) {
+        const proto::ProtoObject* old =
+            a->getOwnAttributeDirect(&scope, cc->valueKey);
+        scope.setAutomaticLocal(0, old ? old : PROTO_NONE);
+        if (a->setAttributeIfEqual(&scope, cc->valueKey, old, nv)) {
+            fireWatches(&scope, cc, a, old ? old : PROTO_NONE, nv);
+            return nv;
+        }
+    }
 }
 
 const proto::ProtoObject* prim_swap_bang(proto::ProtoContext* ctx,

@@ -5,7 +5,7 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 381 test cases: 290
+scripts and an interactive REPL. `ctest` registers 382 test cases: 291
 conformance fixtures under `tests/conformance/`, 86 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 value equality and hashing, the native stack guard and the double printer
@@ -37,7 +37,7 @@ directories that cover them.
 | Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 55 |
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 16 |
 | `clojure.string`-shaped string functions | `20-strings` | 20 |
-| Atoms | `21-atoms` | 12 |
+| Atoms | `21-atoms` | 13 |
 | Futures and `pmap` on OS threads | `22-futures` | 18 |
 | Watches, promises | `23-watches`, `24-promises` | 12 |
 | Actors | `25-actors` | 9 |

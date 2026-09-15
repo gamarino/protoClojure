@@ -49,7 +49,7 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (290 fixtures under
+- **Tests.** A glob-discovered conformance suite (291 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
   the bytecode module, the runtime map, value equality and hashing, the
   native stack guard and the double printer (86 tests), and five CLI checks (`--help`, a
@@ -78,6 +78,11 @@ The project has no tagged releases yet; the version declared in
 
 ### Fixed
 
+- `reset!` replaces the value with one compare-and-set. It read the old value
+  and then wrote the new one in two steps, so under concurrent writers two
+  `reset!` calls could hand their watches the same old value, and a replaced
+  value was never reported. The old value the watches receive is now exactly
+  the value that call replaced.
 - Watches no longer run inside a protoCore critical section. With more than
   three watches on an atom, protoCore walked the watches map inside a GC
   critical section, and the watch functions ran inside it. That is user
