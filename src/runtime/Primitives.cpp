@@ -2384,6 +2384,32 @@ void replPrintValue(proto::ProtoContext* ctx, std::FILE* out,
     printValue(ctx, out, v);
 }
 
+// Externally-visible map builder for keyword arguments; see Primitives.h.
+// The accumulating entries list lives in an automatic local of a child
+// context (P1/P2), so every intermediate is rooted across the allocations
+// of the next assoc.
+const proto::ProtoObject* mapFromPairs(proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* const* kv,
+                                       unsigned int n) {
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("keyword arguments: no active VM context");
+    if (n % 2 != 0)
+        throw std::runtime_error("keyword arguments: a key has no value");
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    scope.setAutomaticLocal(0, scope.newSparseList()->asObject(&scope));
+    for (unsigned int i = 0; i < n; i += 2) {
+        const proto::ProtoSparseList* sparse =
+            reinterpret_cast<const proto::ProtoSparseList*>(
+                scope.getAutomaticLocal(0));
+        scope.setAutomaticLocal(0,
+            sparseAssoc(&scope, sparse, kv[i], kv[i + 1])->asObject(&scope));
+    }
+    return buildMap(&scope, cc,
+        reinterpret_cast<const proto::ProtoSparseList*>(
+            scope.getAutomaticLocal(0)));
+}
+
 void installPrimitives(proto::ProtoContext* ctx,
                        proto::ProtoObject* globals) {
     // Install each primitive: wrap the C function pointer in a callable

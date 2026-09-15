@@ -83,3 +83,11 @@ The project has no tagged releases yet; the version declared in
   garbage-collection cycle requested by another thread. The VM polls the
   protoCore safepoint on every `recur` back-edge and on function entry; a
   loop that waited for the thread requesting the cycle used to deadlock.
+- Trailing keyword/value arguments to an ordinary callee are no longer packed
+  into a map and unpacked again. `(list :b 1 :a 2)` returned `(:a 2 :b 1)`
+  (hash order) and `(vector :a 1 :a 2)` returned `[:a 2]` (repeated keyword
+  dropped); ordinary callees now receive the arguments unchanged. A
+  keyword-argument fn builds its map from the pairs that follow its declared
+  positionals, in order, with the last duplicate winning, so keywords passed
+  to its positional parameters (`(f :p 1 :x 10)` for `[a b & {:keys [x]}]`)
+  no longer raise an arity error.

@@ -166,7 +166,8 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     //     a list — the session-7 shape, unchanged.
     //   - a wrapped map (`& {:keys [k1 k2 ...]}`): kw-based, names each
     //     declared key as a local slot whose value will be supplied by
-    //     the caller's kwArgs dict at CALL_KW time.
+    //     the kwArgs map the VM builds from the caller's trailing
+    //     key/value pairs at CALL_KW time (or the caller's trailing map).
     //
     // The two shapes are mutually exclusive — JVM-Clojure shares the
     // surface (`& {:keys}` is the kw form of variadic), but the
@@ -1094,53 +1095,31 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
 
         // Session 14 — trailing kv-pair detection. Walking backwards
         // from the last arg in steps of 2, every position that should
-        // host a key must be a keyword. The longest such suffix is
-        // packaged into a synthetic `(hash-map :k v :k v ...)` call and
-        // emitted as the LAST positional argument; the callee can then
-        // peel it off when isKwBased (the kw-based call path).
-        unsigned long kvStart = n;
+        // host a key must be a keyword. When such a suffix exists the call
+        // is emitted as CALL_KW instead of CALL. Every argument is pushed
+        // as a plain positional in source order either way: the VM passes
+        // them unchanged to ordinary callees and folds the trailing pairs
+        // into a kwArgs map only for a keyword-argument callee, whose
+        // arity decides where the pairs start. Arguments never go through
+        // a map for an ordinary callee, so their order and any repeated
+        // keywords are preserved.
+        bool hasKvSuffix = false;
         for (long long i = (long long)n - 2; i >= 1; i -= 2) {
             const proto::ProtoObject* arg =
                 lst->getAt(ctx, static_cast<int>(i));
-            if (isKeywordSymbol(ctx, arg)) {
-                kvStart = static_cast<unsigned long>(i);
-            } else {
-                break;
-            }
+            if (!isKeywordSymbol(ctx, arg)) break;
+            hasKvSuffix = true;
         }
-        unsigned long posCount = kvStart - 1;
-        unsigned long kvCount  = n - kvStart;
 
-        // Push positionals.
-        for (unsigned long i = 1; i < kvStart; ++i) {
+        for (unsigned long i = 1; i < n; ++i) {
             compileForm(ctx, lst->getAt(ctx, static_cast<int>(i)), out, markers);
         }
 
-        // If a kv suffix was detected, build the kw map at runtime by
-        // calling `hash-map` with all kv entries; the result becomes
-        // the extra trailing positional arg.
-        if (kvCount > 0) {
-            std::size_t hmIdx = out.addSymbol("hash-map");
-            if (hmIdx > 255) throw CompileError("hash-map: const-pool overflow");
-            out.emit(Op::PUSH_VAR, static_cast<std::uint8_t>(hmIdx));
-            for (unsigned long i = kvStart; i < n; ++i) {
-                compileForm(ctx, lst->getAt(ctx, static_cast<int>(i)), out, markers);
-            }
-            if (kvCount > 255) {
-                throw CompileError("kw suffix: >255 args not supported");
-            }
-            out.emit(Op::CALL, static_cast<std::uint8_t>(kvCount));
-        }
-
-        unsigned long callArgc = posCount + (kvCount > 0 ? 1 : 0);
+        unsigned long callArgc = n - 1;
         if (callArgc > 255) {
             throw CompileError("call with >255 args not supported");
         }
-        // CALL_KW when a kv suffix was packaged; CALL otherwise. The VM
-        // decides at runtime whether to keep the kwMap intact (kw-based
-        // callee) or unpack it back into positional k,v,k,v args
-        // (everyone else).
-        out.emit(kvCount > 0 ? Op::CALL_KW : Op::CALL,
+        out.emit(hasKvSuffix ? Op::CALL_KW : Op::CALL,
                  static_cast<std::uint8_t>(callArgc));
         return;
     }

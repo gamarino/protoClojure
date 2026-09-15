@@ -696,18 +696,27 @@ ExecutionEngine::run(proto::ProtoContext* parent,
             }
 
             case Op::CALL_KW: {
-                // Stack: [..., callable, pos1, ..., posK, kwMap].
-                // operand = K + 1 (positionals counting the kwMap).
-                // If callee is a user fn declaring isKwBased, keep the
-                // map and dispatch (the kw-based path). Otherwise unpack
-                // the kwMap into k,v,k,v positionals so the call sees
-                // the literal `:k v` shape the source had — backwards
-                // compatibility for primitives + non-kw user fns.
+                // Stack: [..., callable, arg1, ..., argN]; operand = N.
+                // The compiler emits CALL_KW instead of CALL when the call
+                // ends in `:keyword value` pairs. Every argument, the pairs
+                // included, is on the stack as a positional in source order.
+                //
+                // A non-keyword-argument callee (every primitive, every
+                // ordinary fn) receives the arguments unchanged, exactly as
+                // CALL would pass them: no reordering, no de-duplication.
+                //
+                // A keyword-argument callee (`& {:keys ...}`) takes its
+                // declared positionals from the front; the remaining
+                // arguments must be key/value pairs, folded into the kwArgs
+                // map in source order (a repeated key keeps its last value,
+                // as in Clojure). The split is decided by the callee's
+                // arity, not by where the compiler saw the first keyword,
+                // so keyword values in positional parameters work.
                 unsigned int argc = operand;
                 if (sp < argc + 1u)
                     throw std::runtime_error("VM: CALL_KW with insufficient stack");
                 const proto::ProtoObject* callable = peekAt(argc);
-                bool calleeIsKwBased = false;
+                const BytecodeModule* kwMod = nullptr;
                 if (callable->getPrototype(&frame) == fnSingleProto) {
                     const proto::ProtoObject* ptrObj =
                         callable->getAttribute(&frame, bytecodeKey);
@@ -715,51 +724,39 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                         const BytecodeModule* subMod =
                             reinterpret_cast<const BytecodeModule*>(
                                 ptrObj->asLong(&frame));
-                        calleeIsKwBased = subMod->isKwBased();
+                        if (subMod->isKwBased()) kwMod = subMod;
                     }
                 }
-                if (calleeIsKwBased) {
+                if (!kwMod) {
                     dispatchCall(argc);
-                } else {
-                    // Pop the kwMap, walk all its (k,v) pairs into a
-                    // transient ProtoList, then push them as alternating
-                    // positionals and dispatch. The flat list lets us
-                    // count without coupling pushVal to the C callback.
-                    const proto::ProtoObject* kwMap = popVal();
-                    if (!kwMap || kwMap->getPrototype(&frame) != mapMarkerProto)
-                        throw std::runtime_error("VM: CALL_KW: kwMap not a map");
-                    const proto::ProtoObject* eRaw =
-                        kwMap->getAttribute(&frame, entriesKey);
-                    const proto::ProtoSparseList* sparse = eRaw
-                        ? reinterpret_cast<const proto::ProtoSparseList*>(eRaw)
-                        : frame.newSparseList();
-                    proto::ProtoContext tmp(frame.space, &frame);
-                    tmp.resizeAutomaticLocals(1);
-                    tmp.setAutomaticLocal(0, tmp.newList()->asObject(&tmp));
-                    struct Acc { proto::ProtoContext* tmp; } acc{&tmp};
-                    sparse->processElements(&tmp, &acc,
-                        [](proto::ProtoContext* /*c*/, void* self,
-                           unsigned long /*hash*/,
-                           const proto::ProtoObject* bucketObj) {
-                            auto* a = static_cast<Acc*>(self);
-                            if (!bucketObj) return;
-                            const proto::ProtoList* bucket = bucketObj->asList(a->tmp);
-                            const proto::ProtoObject* lst = a->tmp->getAutomaticLocal(0);
-                            unsigned long n = bucket->getSize(a->tmp);
-                            for (unsigned long i = 0; i < n; ++i) {
-                                lst = lst->asList(a->tmp)
-                                    ->appendLast(a->tmp, bucket->getAt(a->tmp, (int)i))
-                                    ->asObject(a->tmp);
-                            }
-                            a->tmp->setAutomaticLocal(0, lst);
-                        });
-                    const proto::ProtoList* flat =
-                        tmp.getAutomaticLocal(0)->asList(&tmp);
-                    unsigned long flatN = flat->getSize(&tmp);
-                    for (unsigned long i = 0; i < flatN; ++i) {
-                        pushVal(flat->getAt(&tmp, (int)i));
+                    break;
+                }
+                const unsigned int fixed =
+                    static_cast<unsigned int>(kwMod->arity());
+                if (argc < fixed || (argc - fixed) % 2 != 0) {
+                    throw std::runtime_error(
+                        "VM: keyword-argument fn expects " +
+                        std::to_string(fixed) +
+                        " positional arguments followed by key/value pairs, got " +
+                        std::to_string(argc) + " arguments");
+                }
+                const unsigned int kvItems = argc - fixed;
+                if (kvItems > 0) {
+                    // The pairs stay rooted in their stack slots while the
+                    // map is built; the map is rooted into the first pair's
+                    // slot before anything else allocates.
+                    const proto::ProtoObject* kv[255];
+                    for (unsigned int i = 0; i < kvItems; ++i) {
+                        kv[i] = frame.getAutomaticLocal(
+                            stackBase + sp - kvItems + i);
                     }
-                    dispatchCall(argc - 1 + static_cast<unsigned int>(flatN));
+                    const proto::ProtoObject* kwMap =
+                        mapFromPairs(&frame, kv, kvItems);
+                    sp -= kvItems;
+                    pushVal(kwMap);
+                    dispatchCall(fixed + 1);
+                } else {
+                    dispatchCall(fixed);
                 }
                 break;
             }

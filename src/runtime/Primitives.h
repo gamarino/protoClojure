@@ -102,6 +102,16 @@ const ActiveCallContext* activeCallContext();
 // exit. Mirrors `ActorScheduler::shutdown`, idempotent.
 void shutdownFutures(proto::ProtoContext* ctx);
 
+// Build a map from `n` alternating keys and values (`kv[0]` is the first
+// key), in order; a repeated key keeps its last value. Used by the VM to
+// fold trailing `:key value` call arguments into the kwArgs map of a
+// keyword-argument fn. The values in `kv` must be rooted by the caller;
+// the returned map is UNROOTED (P1: root it before the next allocation).
+// Requires an active call context.
+const proto::ProtoObject* mapFromPairs(proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* const* kv,
+                                       unsigned int n);
+
 // Same value-formatter `println` / `prn` use. Exposed so the REPL can
 // echo evaluated results in the canonical Clojure shape without
 // rebuilding the printer. Falls back to "nil" on a null pointer.

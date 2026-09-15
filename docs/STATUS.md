@@ -5,10 +5,10 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 165 test cases: 134
+scripts and an interactive REPL. `ctest` registers 170 test cases: 139
 conformance fixtures under `tests/conformance/` and 31 GoogleTest unit
 tests for the lexer and reader (`tests/unit/`). Against the current
-protoCore, 162 pass; the three failures are described under
+protoCore, 167 pass; the three failures are described under
 [Known issues](#known-issues). Benchmark numbers against Babashka 1.4.192
 are in [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md). Shipped changes
 are listed in [`CHANGELOG.md`](../CHANGELOG.md).
@@ -31,7 +31,7 @@ directories that cover them.
 | IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 10 |
 | LargeInteger promotion | `15-bigint` | 3 |
 | Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 10 |
-| Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 10 |
+| Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 15 |
 | `clojure.string`-shaped string functions | `20-strings` | 13 |
 | Atoms | `21-atoms` | 10 |
 | Futures and `pmap` on OS threads | `22-futures` | 13 |
@@ -126,8 +126,9 @@ The design specifications written during development are archived under
 - [x] 29 opcodes — see `src/runtime/Opcodes.h`
 - [x] `MAKE_FN` / `MAKE_FN_MULTI` — single + multi-arity wrappers
 - [x] `CALL_APPLY` — spread-arguments dispatch
-- [x] `CALL_KW` — trailing keyword/value pairs; the map is kept for
-      keyword-based callees and expanded back into positional pairs otherwise
+- [x] `CALL_KW` — trailing keyword/value pairs; ordinary callees receive the
+      arguments unchanged, keyword-based callees get the pairs after their
+      positionals folded into a kwArgs map
 - [x] Split fn prototypes (`fnSingleProto` / `fnMultiProto`) for one attribute lookup per single-arity call
 - [x] SmallInteger fast-path binary opcodes
 - [x] DUP + JUMP_IF_TRUE for short-circuit `and` / `or`
@@ -252,10 +253,13 @@ four shapes work end to end:
 - [x] Named consume — trailing map literal `(area 3 4 {:unit :feet})`.
 - [x] Named consume — trailing kv pairs `(area 3 4 :unit :feet)` (the
       Clojure idiom). The compiler detects the `:keyword value` suffix and
-      packages it into a kwArgs map via the `CALL_KW` opcode; the VM
-      keeps the map if the callee is kw-based, otherwise unpacks it
-      back into positional kv pairs so primitives like `assoc` and
-      `get` keep working unchanged.
+      emits the `CALL_KW` opcode with every argument as a positional. An
+      ordinary callee (a primitive such as `assoc` or `get`, or a fn
+      without `& {:keys ...}`) receives the arguments unchanged, in source
+      order and with repeated keywords kept. A kw-based callee takes its
+      declared positionals from the front and gets the remaining pairs
+      folded into a kwArgs map in order; a repeated key keeps its last
+      value.
 - [x] Named generate — `(defn foo [a b & {:keys [unit]}] ...)`.
 - [x] **`:or` defaults** — `(defn foo [& {:keys [unit] :or {unit :meters}}] ...)`.
       The body prologue evaluates the default whenever the slot is nil

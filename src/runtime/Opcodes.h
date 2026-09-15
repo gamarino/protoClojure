@@ -77,16 +77,14 @@ enum class Op : uint8_t {
     GE              = 26,
     EQ              = 27,
 
-    // Session 14 — trailing-kv-pair call. Stack: [callable, pos1,
-    // ..., posN, kwMap]. operand = N + 1 (counting kwMap as the last
-    // positional, same way CALL counts its args). The VM decides at
-    // runtime: when the callee declares `isKwBased` it keeps the
-    // kwMap and dispatches it like the session-13 trailing-map path;
-    // otherwise it unpacks the kwMap into `k1 v1 k2 v2 ...`
-    // positionals and dispatches with the expanded argc. This
-    // preserves call semantics for non-kw callees (`(println :a 1)`
-    // still prints `:a 1`) while letting kw-based callees get the
-    // map directly.
+    // Session 14 — call whose source ends in `:keyword value` pairs.
+    // Stack: [callable, arg1, ..., argN], operand = N, exactly as for
+    // CALL. A callee that is not keyword-based receives the N arguments
+    // unchanged (same as CALL). A keyword-based callee of arity F takes
+    // arg1..argF as positionals and requires the remaining N - F
+    // arguments to be key/value pairs, which the VM folds into the kwArgs
+    // map in order (last duplicate wins) and passes like the session-13
+    // trailing-map path.
     CALL_KW         = 28,
 };
 
