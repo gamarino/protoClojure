@@ -187,7 +187,7 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
 
         default:
             throw ReaderError(
-                std::string("not yet implemented in v0.0.x: token kind ") +
+                std::string("unsupported token: ") +
                 tokenKindName(tok.kind),
                 tok.line, tok.column);
     }

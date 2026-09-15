@@ -981,7 +981,8 @@ const proto::ProtoObject* prim_map(proto::ProtoContext* ctx,
                                    const proto::ProtoList* args,
                                    const proto::ProtoSparseList*) {
     if (!args || args->getSize(ctx) != 2)
-        throw std::runtime_error("map: v0.7.x expects (map f coll)");
+        throw std::runtime_error(
+            "map: only (map f coll) is supported; multi-collection map is not implemented yet");
     const proto::ProtoObject* f    = args->getAt(ctx, 0);
     const proto::ProtoObject* coll = args->getAt(ctx, 1);
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);

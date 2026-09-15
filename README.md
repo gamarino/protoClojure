@@ -65,7 +65,7 @@ Multi-arity, variadic, the higher-order pipeline:
 (println (my-reduce + 100 (list 1 2 3)))   ;; => 106
 ```
 
-The 147 conformance fixtures under `tests/conformance/` are the executable reference for what the language accepts today.
+The 150 conformance fixtures under `tests/conformance/` are the executable reference for what the language accepts today.
 
 ## Concurrency — atoms, futures, actors
 
@@ -197,7 +197,7 @@ protoClojure runs scripts and an interactive REPL. Version 0.0.1; no tagged rele
 | Namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **184 test cases: 147 conformance fixtures and 37 unit tests** (lexer, reader and runtime map). All of them pass. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **188 test cases: 150 conformance fixtures, 37 unit tests** (lexer, reader and runtime map) **and 1 CLI check** (`--help`). All of them pass. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 
@@ -243,7 +243,7 @@ cmake --build build_release
 ./build_release/protoclj script.clj          # run a .clj file
 ./build_release/protoclj --version           # version
 
-ctest --test-dir build_release -j1           # 184 cases: 147 conformance fixtures + 37 unit tests
+ctest --test-dir build_release -j1           # 188 cases: 150 fixtures + 37 unit tests + 1 CLI check
 ./benchmarks/bench.sh                        # benchmark against Babashka
 ./benchmarks/actor-bench.sh                  # actor throughput, varied worker counts
 ```
@@ -322,7 +322,7 @@ Four language runtimes (protoJS, protoPython, protoST, protoClojure) and protoCp
 
 protoClojure is designed and maintained by a single architect, Gustavo Marino, working with AI coding agents that draft code, tests and documentation under human review.
 
-The work proceeds as a measured loop — design, implement, compile, measure, keep or discard, commit — and the repository keeps the evidence: the conformance suite grew with the implementation to 147 fixtures, performance changes record their `perf stat` measurements in the commit history, and every benchmark figure in this README can be reproduced with the scripts in [`benchmarks/`](benchmarks/).
+The work proceeds as a measured loop — design, implement, compile, measure, keep or discard, commit — and the repository keeps the evidence: the conformance suite grew with the implementation to 150 fixtures, performance changes record their `perf stat` measurements in the commit history, and every benchmark figure in this README can be reproduced with the scripts in [`benchmarks/`](benchmarks/).
 
 ## License
 

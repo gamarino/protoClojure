@@ -440,15 +440,15 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // represent nil as a const-pool entry with kind String "" until
         // PUSH_NIL lands. Cheating but bounded; nil is not exercised by
         // hello-world.
-        throw CompileError("nil literal not yet implemented in v0.0.x");
+        throw CompileError("compile: internal error: null form");
     }
 
     // Integer literal — emit PUSH_CONST <addLong>.
     if (form->isInteger(ctx)) {
         std::size_t idx = out.addLong(form->asLong(ctx));
         if (idx > 255) {
-            throw CompileError("const-pool overflow (>255 entries) — EXTEND "
-                               "prefix not yet implemented in v0.0.x");
+            throw CompileError("const-pool overflow: more than 256 constants in "
+                               "one compilation unit");
         }
         out.emit(Op::PUSH_CONST, static_cast<std::uint8_t>(idx));
         return;
@@ -471,7 +471,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         const proto::ProtoList* lst = form->asList(ctx);
         unsigned long n = lst->getSize(ctx);
         if (n == 0) {
-            throw CompileError("empty () not yet implemented in v0.0.x");
+            throw CompileError("empty list () is not supported yet");
         }
         const proto::ProtoObject* head = lst->getAt(ctx, 0);
         // Special-form dispatch keys on the head's text; only symbols
@@ -517,7 +517,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             std::size_t elseOffsetInstr =
                 (elseStart - (jifAt + kInstrSize)) / kInstrSize;
             if (elseOffsetInstr > 255) {
-                throw CompileError("if: then-branch too large for 1-byte offset (v0.0.x)");
+                throw CompileError("if: then-branch too large (jump offset exceeds 255 instructions)");
             }
             out.patchOperand(jifAt,
                 static_cast<std::uint8_t>(elseOffsetInstr));
@@ -533,7 +533,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             std::size_t pastOffsetInstr =
                 (afterElse - (jmpAt + kInstrSize)) / kInstrSize;
             if (pastOffsetInstr > 255) {
-                throw CompileError("if: else-branch too large for 1-byte offset (v0.0.x)");
+                throw CompileError("if: else-branch too large (jump offset exceeds 255 instructions)");
             }
             out.patchOperand(jmpAt,
                 static_cast<std::uint8_t>(pastOffsetInstr));
@@ -687,7 +687,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (n != 2) throw CompileError("quote: expects (quote form)");
             const proto::ProtoObject* q = lst->getAt(ctx, 1);
             if (isList(q)) {
-                throw CompileError("quote: list quoting not yet in v0.0.x");
+                throw CompileError("quote: quoting a list is not supported yet");
             }
             // Atom: emit as a PUSH_CONST. Symbol is the interesting case —
             // we add it to the const pool as Symbol kind so PUSH_CONST
@@ -714,7 +714,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 out.emit(Op::PUSH_CONST, static_cast<std::uint8_t>(idx));
                 return;
             }
-            throw CompileError("quote: unsupported atom in v0.0.x");
+            throw CompileError("quote: only symbols, keywords, strings and integers can be quoted");
         }
 
         // (fn ...) / (defn name ...) — single OR multi-arity. Multi-arity
@@ -835,7 +835,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // (Clojure's let* semantics).
         if (headName == "let") {
             if (scopes_.empty()) {
-                throw CompileError("let: only supported inside fn in v0.0.x");
+                throw CompileError("let: not supported at top level yet; use it inside a fn");
             }
             if (n < 2) throw CompileError("let: expects bindings vector");
             const proto::ProtoObject* bindings = lst->getAt(ctx, 1);
@@ -886,7 +886,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // back.
         if (headName == "loop") {
             if (scopes_.empty()) {
-                throw CompileError("loop: only supported inside fn in v0.0.x");
+                throw CompileError("loop: not supported at top level yet; use it inside a fn");
             }
             if (n < 2) throw CompileError("loop: expects bindings vector");
             const proto::ProtoObject* bindings = lst->getAt(ctx, 1);
@@ -986,7 +986,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         if (headName == "apply") {
             if (n != 3) {
                 throw CompileError(
-                    "apply: v0.7.x supports only (apply f args-list)");
+                    "apply: only the two-argument form (apply f coll) is supported");
             }
             compileForm(ctx, lst->getAt(ctx, 1), out, markers);
             compileForm(ctx, lst->getAt(ctx, 2), out, markers);
@@ -1202,7 +1202,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         return;
     }
 
-    throw CompileError("compile: unsupported form in v0.0.x");
+    throw CompileError("compile: unsupported form");
 }
 
 } // namespace protoClojure

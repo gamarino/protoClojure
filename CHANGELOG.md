@@ -98,3 +98,8 @@ The project has no tagged releases yet; the version declared in
   `remove-watch` keeps the order of the remaining watches, and `keys`, `vals`,
   printing, `:as` maps, watches and `actor-stats` all follow insertion order.
   All map operations now live in `src/runtime/MapOps.{h,cpp}`.
+- `--help` and error messages no longer mention internal development labels
+  ("Phase 5", "next milestone", "v0.0.x", "v0.7.x", "v0.13"); each message
+  now states the actual restriction, for example "let: not supported at top
+  level yet; use it inside a fn". The argument-limit message now states the
+  limit the VM enforces (17 bound parameters).

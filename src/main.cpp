@@ -52,8 +52,8 @@ void printHelp() {
         "  (no args)       Start the interactive REPL (libreadline).\n"
         "\n"
         "Not yet implemented:\n"
-        "  -e <expr>       Evaluate one expression (next milestone).\n"
-        "  --nrepl PORT    Start the nREPL server (Phase 5).\n");
+        "  -e <expr>       Evaluate one expression (planned).\n"
+        "  --nrepl PORT    Start an nREPL server (planned for v0.1).\n");
 }
 
 std::string slurp(const char* path) {

@@ -213,7 +213,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
         if (kwBased) {
             kwCount = static_cast<unsigned int>(subMod->kwKeys().size());
             if (kwCount > 16)
-                throw std::runtime_error("VM: invoke: >16 kw-args not supported in v0.13");
+                throw std::runtime_error("VM: a function may declare at most 16 :keys parameters");
             extractKwVals(ctx, subMod, kwArgsMap,
                           cc->mapMarkerProto, cc->mapStateKey, kwVals);
         }
@@ -478,7 +478,9 @@ ExecutionEngine::run(proto::ProtoContext* parent,
             unsigned int passArgc = posArgc;
             if (variadic) passArgc = static_cast<unsigned int>(fixed) + 1;
             if (passArgc > 17)
-                throw std::runtime_error("VM: >16 args not supported in v0.13");
+                throw std::runtime_error(
+                    "VM: a call may bind at most 17 parameters "
+                    "(a variadic fn binds its rest arguments as one)");
             for (int i = 0; i < fixed; ++i) {
                 callArgs[i] = frame.getAutomaticLocal(
                     stackBase + sp - argc + i);
@@ -506,7 +508,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
             if (kwBased) {
                 kwCount = static_cast<unsigned int>(subMod->kwKeys().size());
                 if (kwCount > 16)
-                    throw std::runtime_error("VM: >16 kw-args not supported in v0.13");
+                    throw std::runtime_error("VM: a function may declare at most 16 :keys parameters");
                 extractKwVals(&frame, subMod, kwArgsMap,
                               mapMarkerProto, mapStateKey, kwVals);
             }
