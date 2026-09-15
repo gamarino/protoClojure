@@ -217,7 +217,7 @@ the eager vector form of `map`):
 (mapv inc [1 2 3])             ; → [2 3 4]
 ```
 
-## 2.8 The threading macros — Clojure's killer feature for readability
+## 2.8 The threading macros — readable pipelines
 
 A common Python pattern:
 

@@ -69,7 +69,7 @@ Two things that distinguish this from Python's or Node's REPL:
   function you just defined. The next form *after that* sees both,
   and so on. The REPL is the live program.
 - **You can redefine anything at any time.** `(defn square [x] (* x x
-  x))` quietly replaces the cube definition; the next caller picks
+  x))` quietly replaces the earlier definition; the next caller picks
   it up. No restart.
 
 ### 10.1.1 REPL helpers
@@ -89,9 +89,9 @@ user=> *2
 42
 ```
 
-`(doc fn)` / `(source fn)` / `(find-doc "regex")` are tutorial-only
-today — they are planned for v0.2 alongside docstring storage on
-`defn`. `*e` (last exception) is also v0.2.
+`(doc fn)`, `(source fn)` and `(find-doc "regex")` are not implemented
+yet; they are planned together with docstring storage on `defn`. `*e`
+(last exception) is planned together with `try` / `catch`.
 
 ### 10.1.2 REPL meta-commands
 

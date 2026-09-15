@@ -67,8 +67,9 @@ one.
   (println "now at" new-value))
 ```
 
-If you genuinely need a side effect under contention, use a lock or
-serialise through a single agent (v0.3) or actor.
+If you genuinely need a side effect under contention, serialise it
+through an actor ([Chapter 13](13-actors.md)); protoClojure has no lock
+primitive.
 
 ## 6.3 `compare-and-set!` — the explicit CAS
 
@@ -128,7 +129,7 @@ The whole application state is one atom holding one map. Mutations
 go through `swap!`, which preserves atomicity over the whole map
 update. Reads dereference and walk the snapshot.
 
-This is the "one big atom" pattern that Reagent, Re-frame, Datomic, and
+This is the "one big atom" pattern that Reagent, Re-frame, and
 most idiomatic Clojure programs use. It works because:
 
 - `update-in` is `O(log n)` on persistent maps — sharing structure

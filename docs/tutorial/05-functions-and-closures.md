@@ -104,17 +104,20 @@ You can mix required args and variadic:
   (println (str "[" level "]") (apply str msgs)))
 
 (log :info "user " "alice" " logged in")
-;; [info] user alice logged in
+;; [:info] user alice logged in
 ```
 
 `apply` is the inverse of `&` — it takes a function and a seq and calls
 the function with the seq's elements as positional args.
 
 ```clojure
-(apply + [1 2 3 4])       ;; => 10  — same as (+ 1 2 3 4)
-(apply str ["hi" " " "there"])
+(apply + (list 1 2 3 4))  ;; => 10  — same as (+ 1 2 3 4)
+(apply str (list "hi" " " "there"))
                            ;; => "hi there"
 ```
+
+In protoClojure 0.0.1 the last argument of `apply` must be a list; a
+vector such as `(apply + [1 2 3 4])` raises `CALL_APPLY: not a list`.
 
 ## 5.5 Closures
 

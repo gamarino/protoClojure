@@ -13,17 +13,16 @@
 > [STATUS.md](../STATUS.md).
 
 protoClojure inherits Clojure's four primary collection types — list,
-vector, map, set — and adds the substrate's twist: every collection is
-backed by a protoCore primitive that other languages on the kernel
-share. A Clojure vector is *the same kind of object* a Python script or
-a JavaScript program would touch if they reached into the same data via
-the UMD bridge. That is not a coincidence; it is the design.
+vector, map, set — and builds them directly on protoCore collections
+(§4.10). The kernel's collections are immutable and share structure
+between versions, so the persistence rules in this chapter come from
+the substrate rather than from an adapter layer.
 
 ## 4.1 The four collections at a glance
 
 | Collection | Literal           | Order      | Duplicates | Random access | Idiomatic for                       |
 |------------|-------------------|------------|------------|---------------|-------------------------------------|
-| List       | `'(1 2 3)`        | sequential | yes        | `O(n)`        | code-as-data, head-add accumulators |
+| List       | `'(1 2 3)`        | sequential | yes        | `O(log n)`    | code-as-data, head-add accumulators |
 | Vector     | `[1 2 3]`         | sequential | yes        | `O(log n)`    | the workhorse — almost everything   |
 | Map        | `{:a 1 :b 2}`     | unordered  | keys no    | `O(log n)`    | structured records, lookups         |
 | Set        | `#{1 2 3}`        | unordered  | no         | `O(log n)`    | membership, deduplication           |
@@ -56,11 +55,10 @@ ys                       ;; => [1 2 3 4]
 ```
 
 Every operation we cover in this chapter follows that rule. There are
-**no in-place mutators** in the collection API. The substrate makes
-them cheap — protoCore collections share structure through AVL nodes
-and hash-array-mapped tries — so the cost is `O(log n)` per
-"modification", not `O(n)`. In practice the difference is invisible
-on real workloads.
+**no in-place mutators** in the collection API. The substrate keeps
+this affordable: protoCore collections are balanced trees that share
+structure between versions, so `assoc` on a map updates its
+`ProtoSparseList` in `O(log n)` instead of copying every entry (§4.10).
 
 The one tool for genuinely mutable state is the `atom` (Chapter 6),
 which is a *deliberate* tool, not a default.
@@ -101,11 +99,9 @@ The core operations:
 (vec (reverse [1 2 3]))    ;; => [3 2 1]      — back to vector
 ```
 
-**Performance feel.** A vector is a 32-way trie. Up to 32 elements it
-fits in one node. Past 32 you grow another level (one extra hop).
-`conj` at the tail is amortised `O(1)`. `assoc` on an existing index
-walks `log32 n` levels. For collections under 10,000 elements you can
-treat operations as constant time and not be wrong.
+**Performance feel.** A vector is a protoCore `ProtoTuple`, an
+immutable tree of four-slot nodes, so `nth` walks `O(log n)` levels.
+`vector` and `vec` copy their elements into a new tuple.
 
 ## 4.4 Maps
 
@@ -197,8 +193,9 @@ hand with `filter` and `into`.
 
 ## 4.6 Lists
 
-The Lisp original. Singly-linked, cheap at the head, expensive in the
-middle. You will use lists in two situations:
+The Lisp original. In protoClojure a list is a protoCore `ProtoList`
+(§4.10), a balanced tree, so adding at the head and indexing are both
+`O(log n)`. You will use lists in two situations:
 
 - **Code is data.** Every form the reader produces from `(...)` is a
   list. Most of the time you do not see them directly; macros do.
@@ -238,7 +235,7 @@ This matters mostly because:
 
 - A seq prints as `(...)`, like a list, regardless of the source.
 - Some operations are *lazy* and may not produce values until you ask
-  (see Chapter 5 §5.8 for the consequences).
+  (see Chapter 5 §5.9 for the consequences).
 - If you specifically want the result back as a vector / map / set,
   wrap with `vec`, `into {}`, `into #{}`:
 
@@ -298,27 +295,26 @@ and equality / set membership just work.
 
 Brief, because it matters when you are debugging or profiling:
 
-- **List** → protoCore `ProtoList` in linked-list mode (head pointer +
-  tail pointer to the next cell).
-- **Vector** → protoCore `ProtoList` in AVL-indexed mode (balanced tree
-  with array leaves).
-- **Map** → protoCore `ProtoSparseList` (hash-array-mapped trie of
-  bucket nodes).
-- **Set** → protoCore `ProtoSparseList`, keyed by element with `true`
-  values.
+- **List** → protoCore `ProtoList` (an immutable balanced tree; `cons`
+  adds at the head).
+- **Vector** → protoCore `ProtoTuple` (an immutable tree of four-slot
+  nodes; `nth` is `O(log n)`).
+- **Map** → a map object whose entries are a protoCore `ProtoSparseList`
+  (a balanced tree keyed by the hash of each key; each entry holds the
+  key/value pairs that share that hash).
+- **Set** → not implemented yet.
 - **String** → protoCore `ProtoString` (rope-backed UTF-8, structurally
   shared on concatenation).
 
-The same primitives serve protoPython's `list` / `dict` / `set` and
-protoJS's `Array` / `Map` / `Set` and protoST's `Array` / `Dictionary`.
-A vector built in Clojure and handed to a Python function through the
-UMD bridge is *the same object* — the Python side sees it as a list
-through its language adapter, but the underlying `ProtoList` is shared.
-
-Conversion is only needed when the target language's collection API
-demands a *different* shape — e.g., NumPy wants a `numpy.ndarray`, not
-just a sequence. Chapter 9 covers when to reach for `clj->py` /
-`py->clj` and friends.
+Other runtimes on the kernel use the same protoCore collection types,
+but each wraps them in its own objects: a Clojure vector and a Python
+list are *different* protoCore objects, with different prototypes and
+invariants. Passing a collection to another runtime therefore takes an
+explicit conversion ([`INTEROP.md`](../INTEROP.md) §4.3): `clj->py` /
+`py->clj`, `clj->js` / `js->clj` and `clj->pst` / `pst->clj` each
+return a fresh collection of converted elements, shallow by default.
+These functions belong to the planned UMD interop and are not
+implemented yet; Chapter 9 covers the design.
 
 ## 4.11 A short worked example
 

@@ -188,9 +188,10 @@ Once v0.1 has users and a backlog of feedback exists:
 - Refs + STM. (Implementation per `DESIGN.md` §6.)
 - `defrecord`, `deftype`.
 - `BigDecimal` `M` suffix.
-- The Clojure-JVM `agent` surface on top of the actor scheduler.
 
 ### v0.3 — bigger concurrency story
+- The Clojure-JVM `agent` surface (`agent`, `send-off`, `await`,
+  `await-for`) on top of the actor scheduler.
 - Reactive primitives (signals, watches with batching).
 - Distributed actors across machines (the kernel work is shared with
   protoST).

@@ -15,7 +15,7 @@ The Clojure community is small, technically demanding, and shares three convicti
 What protoClojure offers that JVM Clojure does not:
 
 - **Native interop with Python and JavaScript modules (planned).** The design routes a `(:require [py/numpy :as np])` form through the same UMD plumbing protoPython and protoJS use, so the result is a real protoCore object — no FFI marshalling, no copy at the boundary, no separate process. The module system is not implemented yet; see [docs/INTEROP.md](docs/INTEROP.md) and the archived [foreign-dispatch design](docs/archive/design-specs/2026-06-14-foreign-dispatch.md).
-- **Fast startup, small footprint.** No JVM warm-up: running a hello-world script takes about 17 ms and peaks at about 20 MB of resident memory on the benchmark machine. Scripts and CLI tools are a viable form factor without GraalVM AOT.
+- **Fast startup, small footprint.** No JVM warm-up: on the benchmark machine (AMD Ryzen 5 5500U), `build_release/protoclj examples/01-hello.clj` has a median wall time of 21.6 ms over 50 runs and a peak resident set size of about 20 MB (`/usr/bin/time -f %M`), measured on 2026-09-15. Scripts and CLI tools are a viable form factor without GraalVM AOT.
 - **Arbitrary-precision integers by default.** When `(* acc n)` overflows a SmallInteger, protoCore's promoting `multiply` returns a LargeInteger and the program keeps going. `(factorial 100)` runs out of the box; Babashka 1.4 fails on `(factorial 21)` because Clojure's default `*` uses long arithmetic, which requires `*'` or `(bigint 1)` for promotion.
 - **Real parallelism without a GIL.** Every protoCore-hosted runtime shares the same GIL-free concurrency model. Atoms are a protoCore compare-and-set; futures run on OS threads; actors run on a worker pool.
 
@@ -115,7 +115,7 @@ Numbers below were measured on 2026-06-14 on an AMD Ryzen 5 5500U (6 cores, 12 t
 | `MPSC`    | 4 senders × 1 actor — per-actor sender contention             |   171,851  |
 | `MPMC`    | 4 senders × 4 actors (round-robin) — both contention paths    |   125,424  |
 
-These are upper bounds for a single-operation message body. Worker-count scaling: **`fan-out` peaks at `PROTOCLJ_ACTOR_WORKERS=6`** (the physical-core count) and degrades at 8 and 16 workers, when the extra workers land on SMT siblings. `single` and `MPSC` do not scale with workers, because the single-method invariant pins each actor to one worker at a time. `MPMC` *regresses* with more workers because the global ready-queue mutex becomes the bottleneck; it is the next optimisation target.
+These are upper bounds for a single-operation message body. Worker-count scaling: **`fan-out` peaks at `PROTOCLJ_ACTOR_WORKERS=6`** (the physical-core count) and degrades at 8 and 16 workers, when the extra workers land on SMT siblings.
 
 Compared with the earlier mailbox (per-actor `std::mutex` + `std::deque`), the lock-free mailbox measured **+4-17% (single)**, **+30-41% (fan-out at 2-4 workers)**, **+11-19% (MPSC at 2 or more workers)** and **±0-3% (MPMC)**. The flat MPMC result is consistent with the global ready queue, not the per-actor mailbox, being MPMC's bottleneck.
 
@@ -137,7 +137,7 @@ These are the most recent numbers in [`benchmarks/RESULTS.md`](benchmarks/RESULT
 - **SmallInteger fast-path opcodes** (commit `700f352`): the VM short-circuits `(+ x y)`, `(< x y)` and the other arithmetic and comparison operators when both operands are tagged SmallIntegers, and routes everything else through protoCore's promoting `add` / `compare` / `multiply`. `fib(30)` went from 4113 ms to 720 ms.
 - **Fewer attribute lookups per call** (commit `a099b45`): separate prototypes for single- and multi-arity function wrappers let the dispatcher pick the path with `getPrototype` alone, and the captures attribute is read only when a body has captures. `fib(30)` went to 620 ms, with 15% fewer instructions and 32% fewer L1-d cache misses (per `perf stat`).
 
-The features added afterwards cost about 15% on `fib(30)` (620 ms → 712 ms); the extra parameters threaded through every recursive VM call are the identified cause, and recovering that cost is on the [roadmap](docs/ROADMAP.md).
+The features added afterwards cost about 15% on `fib(30)` (620 ms → 712 ms); the extra parameters threaded through every recursive VM call are the likely cause, and recovering that cost is on the [roadmap](docs/ROADMAP.md).
 
 JVM Clojure has not been measured. It has a JIT and adaptive inlining that protoClojure does not have, and no claim is made here about protoClojure's speed relative to it.
 
@@ -151,7 +151,7 @@ JVM Clojure is the language, the ecosystem, and the JIT-compiled runtime the res
 
 protoClojure does not try to replace it. The places where protoClojure is **architecturally different**, not just an alternative implementation, are:
 
-- **Start-up**: no JVM start-up; a hello-world script runs in about 17 ms.
+- **Start-up**: no JVM start-up; see the hello-world measurement under [Why this exists](#why-this-exists).
 - **Footprint**: a native binary plus the protoCore shared library.
 - **Numeric default**: automatic LargeInteger promotion instead of `long` arithmetic with explicit `*'` for promotion.
 - **No JVM**: no `java.*`, no Java reflection. The design substitutes the Python and JavaScript ecosystems through UMD.
@@ -275,7 +275,7 @@ cpack -G NSIS               # protoclojure-0.0.1-win64.exe   (NSIS installer)
 cpack -G ZIP                # protoclojure-0.0.1-win64.zip   (portable)
 ```
 
-The DEB and RPM artifacts declare `protocore` as a runtime dependency, so the package manager fails cleanly if libprotoCore is not installed. The TGZ / DMG / NSIS / ZIP artifacts do **not** carry libprotoCore — install it from its own package first, or build it side by side and add its install prefix to your loader path. The installed `protoclj` has an `INSTALL_RPATH` of `$ORIGIN/../lib` (Linux) / `@executable_path/../lib` (macOS), so as long as protoCore lives under the same `<prefix>/lib` no environment variable is needed.
+The DEB artifact declares a runtime dependency on `protocore` and the RPM artifact on `protoCore` (`CPACK_DEBIAN_PACKAGE_DEPENDS` and `CPACK_RPM_PACKAGE_REQUIRES` in `CMakeLists.txt`), so the package manager fails cleanly if libprotoCore is not installed. The TGZ / DMG / NSIS / ZIP artifacts do **not** carry libprotoCore — install it from its own package first, or build it side by side and add its install prefix to your loader path. The installed `protoclj` has an `INSTALL_RPATH` of `$ORIGIN/../lib` (Linux) / `@executable_path/../lib` (macOS), so as long as protoCore lives under the same `<prefix>/lib` no environment variable is needed.
 
 ```bash
 # Quick sanity check after installing the DEB:

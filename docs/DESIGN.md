@@ -34,8 +34,8 @@ for:
   Clojure's persistent lists and vectors, `PersistentHashMap`, persistent
   strings, and `PersistentHashSet` with almost no adapter layer.
 - **Compare-and-swap on attributes**: protoCore's `setAttributeIfEqual`
-  *is* the primitive that `atom` and `swap!` need. No JVM atomics, no
-  retry loop in the language layer.
+  *is* the primitive that `atom` and `swap!` need. No JVM atomics:
+  `swap!` is a short retry loop around one kernel CAS call.
 - **GIL-free concurrency**: per-thread allocation arenas, concurrent
   garbage collector, no global lock. Clojure's promise of "use all your
   cores" actually lands.

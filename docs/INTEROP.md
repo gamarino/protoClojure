@@ -354,7 +354,4 @@ A 30-line script combining all four runtimes:
     (println "Wrote chart to" out-path)))
 ```
 
-This is the demo that goes on the README, in conference talks, and on
-the blog post that announces v0.1. Until the runtime ships, the script
-above is also the *executable spec* — every primitive it uses has to
-work for the launch to be honest.
+This script is the acceptance target for the UMD providers milestone.

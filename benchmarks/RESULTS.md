@@ -1,5 +1,31 @@
 # protoClojure vs Babashka — benchmarks
 
+> **Note (2026-09-15):** this is a dated record; its tables are unchanged.
+> The following statements in it are wrong or unsupported:
+>
+> - The per-call figures divide by "2.7M calls"; `fib(30)` makes
+>   2,692,537 calls (2 × fib(31) − 1).
+> - The `ce9819d` regression was first given as "~10 ns/call on fib";
+>   (712 − 620) ms / 2,692,537 calls ≈ 34 ns/call. The text below is
+>   corrected.
+> - The per-call list under `a099b45` quotes bb at 498 ms; the `a099b45`
+>   table records 496 ms (498 ms is the bb time recorded in the commit
+>   message of `700f352`). The 184 ns/call figure corresponds to 496 ms.
+> - "`fib` and `tak` sit at 1.18–1.45× behind" repeats the ratios of the
+>   `700f352` run (commit message). The `a099b45` table gives 1.25× and
+>   1.07×; the `ce9819d` table gives 1.36× and 1.21×.
+> - The `pmap` timings were taken with `/tmp/map_perf.clj` and
+>   `/tmp/pmap_perf.clj`, which are not in the repository. According to
+>   the commit message of `ce9819d`, the workload was
+>   `(pmap fib (list 30 30 30 30))` against the equivalent `map`.
+>
+> Removed from this record: the extrapolation from Babashka to JVM
+> Clojure and the JVM start-up and JIT estimates (JVM Clojure was never
+> measured), and the "remaining headroom" list written after `700f352`,
+> which stated that every call performs three attribute lookups
+> (superseded by `a099b45`, after which a single-arity call performs
+> one) and repeated the 1.18–1.45× ratios.
+
 **Date.** 2026-06-14. This snapshot collects the measurements taken that
 day across successive builds, from the first benchmark (commit `ac85269`)
 through the addition of watches, promises and parallel `pmap` (commit
@@ -8,7 +34,7 @@ through the addition of watches, promises and parallel `pmap` (commit
 **Runtimes.**
 - `protoclj` — protoClojure, `build_release/` (Release), at the commits named in each section.
 - `bb` — Babashka 1.4.192 (GraalVM-native).
-- (JVM Clojure not measured this round; binary not installed.)
+- JVM Clojure was not measured; no JVM Clojure installation was available.
 
 **Methodology.** Each workload is a single-form `.clj` file. The harness
 runs the script through each interpreter 3 times and reports the
@@ -26,13 +52,12 @@ Result strings are compared across runtimes for correctness.
 | `sum-squares(1K)` |           19 |      31 | 0.61×   | 332833500     | ✓ |
 
 vs commit `a099b45` (the perf high-water mark): fib 620→712 (+15%),
-tak 45→52 (+16%), sum-loop 66→79 (+20%). Honest regression — the
-changes between the two commits added five new prototype pointers and
-ten new key pointers to the `run()` signature, threaded through every
-recursive call. The cost is measurable but small in absolute terms
-(~10 ns/call on fib), and we still beat Babashka on 3 of 5 workloads.
-A future performance-only change could collapse the run() params into a
-single struct and claw back most of this; not blocking real workloads.
+tak 45→52 (+16%), sum-loop 66→79 (+20%). Between the two commits, five
+new prototype pointers and ten new key pointers were added to the
+`run()` signature and threaded through every recursive call, which is
+the likely cause. The cost is about 34 ns/call on fib; protoClojure
+remains faster than Babashka on 3 of 5 workloads. Collapsing the `run()`
+parameters into a single struct is a possible way to recover this cost.
 
 **New at `ce9819d` — parallel pmap on real OS threads:**
 
@@ -43,8 +68,8 @@ single struct and claw back most of this; not blocking real workloads.
     real    0m0.862s   user    0m3.323s
 
   Wall-clock speedup: 3.25×. Same pattern as the explicit futures added
-  in commit `5830237`, but the surface is now `(pmap f coll)` — drop-in
-  for JVM-Clojure code.
+  in commit `5830237`, but the surface is now `(pmap f coll)`, as in
+  Clojure.
 
 ## Numbers at commit `a099b45` (after split fn prototypes + captures-only-if-needed)
 
@@ -69,7 +94,7 @@ Per-call:
 - `a099b45`: 620 ms / 2.7M calls = **230 ns/call**  (−14%)
 - bb:  498 ms / 2.7M calls = **184 ns/call**
 
-We are now ~25% over Babashka per call. The residual ~46 ns/call sits in
+Per call, protoClojure is now ~25% slower than Babashka. The residual ~46 ns/call sits in
 frame setup (new ProtoContext, resizeAutomaticLocals, captures
 seeding, recursive run() entry) — not in attribute lookups. The next
 lever is either a ProtoContext pool (D — invasive) or threaded
@@ -79,11 +104,7 @@ more.
 
 Reading the ratio: `<1` means protoClojure is faster than Babashka by
 that factor. Three of five workloads now run **faster than Babashka**;
-`fib` and `tak` sit at 1.18–1.45× behind. Extrapolating the
-bb→JVM-Clojure ratio (Babashka usually trails JVM Clojure JIT'd
-by ~2–3× on steady-state compute): protoClojure is in the
-**~2–4× JVM Clojure** band on these workloads — comfortably inside
-the **5× JVM** target set in the brainstorm phase.
+`fib` and `tak` sit at 1.18–1.45× behind.
 
 ## What changed since the first benchmark (`ac85269`)
 
@@ -93,7 +114,7 @@ The first benchmark's ratios were 8.3× / 2.3× / 8.1× / 1.5× / 0.53×
 
 ### `a099b45` — fewer getAttribute calls per CALL
 
-The user observed (correctly): protoCore already runs a 1024-entry
+protoCore already runs a 1024-entry
 per-thread attribute cache plus a mutable-snapshot cache, so adding
 a parallel inline cache at the protoClojure layer would be redundant.
 The real lever is to **ask for fewer attribute lookups per call.**
@@ -138,9 +159,9 @@ Single-arity CALL goes from 3 getAttribute → **1** (just `bytecodeKey`).
    calls `a->add(ctx, b)` / `a->multiply(...)` / `a->compare(...)`
    on protoCore's promoting arithmetic API. This is the
    "infinite-precision path" the kernel already implements: SmallInt
-   ↔ LargeInteger ↔ Float promotion is automatic. The previous
-   round did a global-namespace lookup of the operator and a full
-   `dispatchCall` — strictly slower for mixed-type input.
+   ↔ LargeInteger ↔ Float promotion is automatic. Before this
+   change, the VM did a global-namespace lookup of the operator and a
+   full `dispatchCall`.
 
 ## LargeInteger correctness
 
@@ -154,7 +175,7 @@ Single-arity CALL goes from 3 getAttribute → **1** (just `bytecodeKey`).
 ```
 
 Babashka 1.4 fails on `factorial(21)` with `long overflow` because
-JVM Clojure's default `*` is long-arithmetic; the user has to write
+JVM Clojure's default `*` is long-arithmetic; the programmer has to write
 `*'` or `(bigint 1)` for explicit promotion. **protoClojure promotes
 automatically** because the SmallInt fast-path falls through to
 protoCore's `multiply` when the inline result no longer fits.
@@ -168,37 +189,11 @@ Plus `benchmarks/factorial-100.clj` for the demo.
 
 ## Caveats — still
 
-1. **Cold-start + execution.** Each run is one process; bb pays
-   ~30–50 ms of GraalVM startup. JVM Clojure would pay ~1.5–2 s
-   on every invocation. A future pass should use a multi-iter
-   inner loop to dilute startup.
-2. **No JIT warmup.** JVM Clojure under JIT would be 2–3× faster
-   than Babashka on steady-state compute-bound workloads.
-3. **Workloads still small.** No allocation pressure on
+1. **Cold-start + execution.** Each run is one process, so start-up
+   time is included for both runtimes. A multi-iteration inner loop
+   would dilute start-up.
+2. **Workloads still small.** No allocation pressure on
    `fib` / `tak` / `sum-loop`. The volume is modest on the rest.
-
-## Where the remaining headroom is
-
-The gap on `fib` (1.45×) and `tak` (1.18×) is now dominated by
-function-call dispatch, not arithmetic. The next levers:
-
-1. **Inline cache at CALL sites.** Today every user-fn call does
-   `getPrototype` + `getAttribute(bytecodeKey)` + `getAttribute(
-   capturesKey)` (+ multi-arity scan). A single-slot cache keyed
-   on the wrapper identity should cut that to one pointer compare
-   on the hot path. Probably worth 20–30% on `fib`.
-
-2. **Threaded dispatch (computed-goto) in `run()`.** Switch-based
-   dispatch in `run()` has a known +10–15% from going threaded;
-   protoST already documented this win. Smaller absolute win now
-   that the binop opcodes dominate the dispatch budget.
-
-3. **Specialised `inc` / `dec` opcodes.** Today `(inc x)` still
-   goes through PUSH_VAR + CALL to the `prim_inc` primitive,
-   which does the `argAsLong` + `+ 1` work in C++. An opcode-
-   level `(inc x)` → `INC` opcode would inline it the same way
-   `ADD` did. Smaller win, maybe useful on `sum-to-n`-style
-   loops.
 
 ## Reproducibility
 

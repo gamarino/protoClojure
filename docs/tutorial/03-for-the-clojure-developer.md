@@ -13,18 +13,29 @@ JVM-specific design would not earn its keep on this substrate, we
 diverge. Every divergence is recorded in [`STATUS.md`](../STATUS.md)
 under a `Dnn` id.
 
-## 3.1 What is identical
+> **Implementation status.** Sections 3.1 to 3.4 describe the v0.1
+> design, and protoClojure 0.0.1 implements only part of it.
+>
+> - §3.1: implemented are vectors, lists and maps with `assoc` / `get`;
+>   truthiness; `defn` with multi-arity and variadic parameters (no
+>   docstrings or attribute maps); `let`, `loop`, `recur`; closures;
+>   atoms with watches; promises; `println`. Reader macros other than
+>   `@`, sets, most collection functions, lazy sequences, the
+>   higher-order combinators, the threading macros, namespaces, vars and
+>   `binding`, volatiles, delays, exceptions and the `pr`-family printers
+>   are not implemented yet.
+> - §3.2 to §3.4: `defprotocol`, `extend-type`, `extend-protocol` and
+>   `reify`; the `#"..."` regex literal and regex support; `slurp`,
+>   `spit` and `with-open`; character literals such as `\a`, `char` and
+>   `char?`; reader-literal registration; and the UMD interop with the
+>   `clj->py` family of conversion functions are not implemented yet.
+>   The STM and agent names (`ref`, `dosync`, `agent`, ...) are not
+>   reserved: they fail as unresolved symbols. Futures, `pmap`, atoms
+>   and actors work as described.
+>
+> See [STATUS.md](../STATUS.md) for the exact list.
 
-> **Implementation status.** This section lists the v0.1 design, and
-> protoClojure 0.0.1 implements only part of it: vectors, lists and maps
-> with `assoc` / `get`; truthiness; `defn` with multi-arity and variadic
-> parameters (no docstrings or attribute maps); `let`, `loop`, `recur`;
-> closures; atoms with watches; promises; `println`. Reader macros other
-> than `@`, sets, most collection functions, lazy sequences, the
-> higher-order combinators, the threading macros, namespaces, vars and
-> `binding`, volatiles, delays, exceptions and the `pr`-family printers
-> are not implemented yet. See [STATUS.md](../STATUS.md) for the exact
-> list.
+## 3.1 What is identical
 
 In the v0.1 design, these match Clojure-JVM:
 
@@ -103,14 +114,14 @@ the v0.1 window:
 
 1. Use atoms with care. Most ref use cases can be re-expressed as a
    single atom holding a map; `swap!` over the whole map is atomic.
-2. Use the protoCore actor model directly (see protoST for the API)
-   for genuinely actor-shaped workloads.
+2. Use protoClojure's actors ([Chapter 13](13-actors.md)) for
+   genuinely actor-shaped workloads.
 3. Wait for v0.2.
 
 ### 3.2.3 Agents — D7 (v0.3)
 
-`agent`, `send`, `send-off`, `await`, `await-for` raise in v0.1.
-Implementation is on the v0.3 milestone, on top of the protoCore
+`agent`, `send-off`, `await`, `await-for` are not implemented (`send`
+is the actor primitive, [Chapter 13](13-actors.md)). Implementation is on the v0.3 milestone, on top of the protoCore
 actor primitive. We deliberately do not lift the JVM design 1:1 —
 some of agent semantics is shaped by the JVM thread pool, and the
 protoCore actor model has a different cost structure.
@@ -213,30 +224,24 @@ tutorial and in [`INTEROP.md`](../INTEROP.md).
 
 ### 3.4.2 The substrate is *natively* persistent
 
-This is a subtle but real win. In JVM Clojure, `assoc` is a method
-call on a Java class that implements `IPersistentMap`. There is a
-small boxing / unboxing tax at every JVM boundary. In protoClojure,
-`assoc` is a `setAttribute` on a protoCore mutable-prototype object,
-which is *also* what every other language on the kernel uses.
-There are no boundaries to box across.
-
-Practical effect: certain collection operations are measurably
-cheaper than the JVM equivalent. Where Babashka pays a GraalVM AOT
-cost, protoClojure pays nothing extra — the data model *is* the
-kernel.
+In JVM Clojure, `assoc` is a method call on a Java class that
+implements `IPersistentMap`. In protoClojure, `assoc` returns a new map
+whose entries are a new `ProtoSparseList`, the persistent structure the
+kernel uses; the original map is unchanged. Vectors are protoCore
+`ProtoTuple`s. There is no separate persistent-collection library
+between the language and the kernel.
 
 ### 3.4.3 No GIL, real OS threads
 
 A `future` is a real protoCore future running on a real thread, in
-parallel, no global lock. The Clojure `pmap` works the way the API
-promised on the JVM, without the JVM thread costs. This is the
-killer feature for CPU-bound work on multi-core hardware.
+parallel, no global lock. `pmap` runs each element on its own OS
+thread and returns the results in input order, so CPU-bound work can
+use several cores at once.
 
 ### 3.4.4 Atoms are exposed at kernel level
 
 The protoCore `setAttributeIfEqual` CAS primitive is the same
-primitive `swap!` uses, with one less indirection than the JVM
-implementation. `protoST` already exposes this primitive at the
+primitive `swap!` uses: `swap!` is a retry loop around it. `protoST` already exposes this primitive at the
 language level; we inherit the surface.
 
 ## 3.5 Where to look next
