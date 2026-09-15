@@ -64,6 +64,43 @@ const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
     throw std::runtime_error("VM: PUSH_CONST of a global name: " + c.sval);
 }
 
+// A keyword or quoted symbol `k` called as `(k coll)` / `(k coll not-found)`,
+// or a map `m` called as `(m key)` / `(m key not-found)`: a map lookup with
+// the semantics of `get`. The result is the value under the key, or
+// `not-found` (nil by default) when the key is absent or, for a keyword,
+// when `coll` is not a map. `callableIsMap` tells the two shapes apart; the
+// caller has checked that `callable` is a named value or a map.
+//
+// Cost: one mapGet. Allocates nothing, except when hashing an integer key
+// beyond the long long range; `callable` and `args` must be rooted by the
+// caller.
+const proto::ProtoObject* callLookup(proto::ProtoContext* ctx,
+                                     const MapLayout& layout,
+                                     const NamedLayout& named,
+                                     const proto::ProtoObject* callable,
+                                     bool callableIsMap,
+                                     const proto::ProtoObject* const* args,
+                                     unsigned int argc) {
+    if (argc != 1 && argc != 2) {
+        std::string what = "a map";
+        if (!callableIsMap) {
+            const std::string spelling =
+                namedSpelling(ctx, named, callable)->toStdString(ctx);
+            what = (spelling[0] == ':' ? "keyword " : "symbol ") + spelling;
+        }
+        throw std::runtime_error(
+            "VM: " + what + " called as a function expects 1 or 2 arguments, got " +
+            std::to_string(argc));
+    }
+    const proto::ProtoObject* m   = callableIsMap ? callable : args[0];
+    const proto::ProtoObject* key = callableIsMap ? args[0] : callable;
+    const proto::ProtoObject* notFound = (argc == 2) ? args[1] : PROTO_NONE;
+    if (!callableIsMap && !isMap(ctx, layout, m)) return notFound;
+    bool found = false;
+    const proto::ProtoObject* v = mapGet(ctx, layout, m, key, &found);
+    return found ? v : notFound;
+}
+
 } // namespace
 
 // Session 13 — for a kw-based callee, extract the declared kwKey values
@@ -234,6 +271,13 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
                          callArgs, passArgc, capsVal,
                          kwBased ? kwVals : nullptr, kwCount,
                          kwBased ? kwArgsMap : nullptr);
+    }
+
+    // Keywords, quoted symbols and maps are functions: a map lookup.
+    if (proto == cc->named.marker || proto == cc->mapMarkerProto) {
+        return callLookup(ctx, MapLayout{cc->mapMarkerProto, cc->mapStateKey},
+                          cc->named, callable, proto == cc->mapMarkerProto,
+                          args, argc);
     }
 
     // C++ primitive — wrap args into a fresh ProtoList and dispatch.
@@ -526,6 +570,22 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 callArgs, passArgc, capsVal,
                 kwBased ? kwVals : nullptr, kwCount,
                 kwBased ? kwArgsMap : nullptr);
+            pushVal(result);
+            return;
+        }
+
+        // A keyword, a quoted symbol or a map in call position looks a key
+        // up, as `get` does (callLookup). The arguments stay rooted in their
+        // stack slots until the lookup returns.
+        if (proto == named.marker || proto == mapMarkerProto) {
+            const proto::ProtoObject* lookupArgs[2] = {nullptr, nullptr};
+            for (unsigned int i = 0; i < argc && i < 2; ++i) {
+                lookupArgs[i] = frame.getAutomaticLocal(stackBase + sp - argc + i);
+            }
+            const proto::ProtoObject* result = callLookup(
+                &frame, MapLayout{mapMarkerProto, mapStateKey}, named,
+                callable, proto == mapMarkerProto, lookupArgs, argc);
+            sp -= (argc + 1);
             pushVal(result);
             return;
         }

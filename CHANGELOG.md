@@ -49,7 +49,7 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (178 fixtures under
+- **Tests.** A glob-discovered conformance suite (184 fixtures under
   `tests/conformance/`) and GoogleTest unit tests for the lexer, the reader,
   the runtime map and value equality and hashing (56 tests).
 - **Benchmarks and examples.** `benchmarks/bench.sh` (comparison with
@@ -135,6 +135,14 @@ The project has no tagged releases yet; the version declared in
   and print as their spelling. The compiler interns keyword literals, quoted
   symbols and `:keys` keywords once, so executing them reads a pointer, and
   `=` and map-key hashing decide non-map objects by their pointer tag.
+- Keywords and maps are functions. `(:a {:a 1})` failed with "unable to
+  resolve symbol: :a" and `({:a 1} :a)` with "value is not callable": the
+  compiler looked a keyword in call position up as a global name, and the VM
+  called only fns and primitives. `(:k m)`, `(:k m not-found)`, `(m k)` and
+  `(m k not-found)` now look the key up as `get` does, returning `nil` (or
+  `not-found`) for a missing key and, for a keyword, for a non-map argument.
+  Keywords, quoted symbols and maps are function values for locals, globals,
+  `apply`, `map`, `filter`, `reduce` and `pmap`.
 - `--help` and error messages no longer mention internal development labels
   ("Phase 5", "next milestone", "v0.0.x", "v0.7.x", "v0.13"); each message
   now states the actual restriction, for example "let: not supported at top

@@ -1082,9 +1082,12 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 }
             }
 
-            // General path — emit callable, then args, then CALL.
-            int slot = resolveLocal(headName);
-            if (slot >= 0) {
+            // General path — emit callable, then args, then CALL. A keyword
+            // in call position is a value, not a global name: `(:a m)`
+            // pushes the keyword and the VM calls it as a map lookup.
+            if (headName[0] == ':') {
+                compileForm(ctx, head, out, markers);
+            } else if (int slot = resolveLocal(headName); slot >= 0) {
                 out.emit(Op::PUSH_LOCAL, static_cast<std::uint8_t>(slot));
             } else {
                 std::size_t headIdx = out.addSymbol(headName);

@@ -5,7 +5,7 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 235 test cases: 178
+scripts and an interactive REPL. `ctest` registers 241 test cases: 184
 conformance fixtures under `tests/conformance/`, 56 GoogleTest unit
 tests for the lexer, the reader, the runtime map and value equality and
 hashing (`tests/unit/`), and a CLI check of `--help` (`tests/cli/`); all
@@ -26,11 +26,11 @@ directories that cover them.
 | `def`, `if`, `do`, integer arithmetic, comparisons, `str` | `02-special-forms`, `03-arithmetic` | 10 |
 | `fn`, `defn`, `let`, `loop`, `recur` | `04-functions`, `05-recursion` | 6 |
 | Closures with N-level lexical capture | `06-closures` | 6 |
-| Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 21 |
+| Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 22 |
 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 17 |
 | IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 10 |
 | LargeInteger promotion | `15-bigint` | 3 |
-| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 33 |
+| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 38 |
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 16 |
 | `clojure.string`-shaped string functions | `20-strings` | 13 |
 | Atoms | `21-atoms` | 10 |
@@ -110,6 +110,12 @@ The design specifications written during development are archived under
       false, `(string? :a)` is false, and `:a` and `":a"` are different map
       keys; keywords and symbols compare and hash by identity, and interning
       makes identity equivalent to equality of spelling, also across threads
+- [x] Keywords and maps as functions — `(:a m)` and `(:a m not-found)` look
+      `:a` up as `get` does, returning `nil` (or `not-found`) when the key is
+      absent or `m` is not a map; `(m k)` and `(m k not-found)` likewise.
+      Keywords, quoted symbols and maps are function values wherever a
+      function is accepted: locals, globals, `apply`, `map`, `filter`,
+      `reduce`, `pmap` (`callLookup` in `src/runtime/ExecutionEngine.cpp`)
 - [x] Integers — `SmallInteger` tagged + auto-promoted `LargeInteger`
 - [x] Floats — `ProtoObject::fromDouble`
 
@@ -234,7 +240,7 @@ raises a read, compile or runtime error.
 - [ ] Sets — `ProtoSparseList` based, with `conj` / `disj`
 - [ ] Lazy seqs — `LazySeq` wrapper
 - [ ] `hash` as a function (the value hash is used internally for map keys)
-- [ ] Keywords, maps and vectors as functions (`(:a m)`, `(m :a)`, `(v 0)`)
+- [ ] Vectors as functions (`(v 0)`)
 - [ ] `count` on maps
 
 ### Namespaces & vars (not yet)

@@ -7,7 +7,7 @@
 > yet: sets, the quote reader macro `'`, `conj`, `pop`, `peek`, `last`,
 > `assoc` on vectors, `dissoc`, `update`, `merge`, `select-keys`,
 > `zipmap`, the `get-in` / `assoc-in` / `update-in` family, `seq`,
-> `into`, collections and keywords as functions, `count` on maps, `==`,
+> `into`, vectors as functions, `count` on maps, `==`,
 > `identical?`, `hash`, and the sequence and regex functions used in
 > §4.11. See
 > [STATUS.md](../STATUS.md).

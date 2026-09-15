@@ -193,7 +193,8 @@ self-evaluating — they evaluate to themselves. Idiomatic for map keys.
 At run time a keyword, and a symbol produced by `quote`, is an interned
 value of its own kind, never a string: `(= :a ":a")` and
 `(= (quote a) "a")` are false, `(string? :a)` is false, and `:a` and `":a"`
-are two different map keys. `(str :a)` is the string `":a"`.
+are two different map keys. `(str :a)` is the string `":a"`. A keyword is
+also a function of a map: `(:a {:a 1})` is `1` (§4.3).
 
 ### 2.6 Booleans and nil
 
@@ -291,7 +292,7 @@ new value; the old value is unchanged) and immutable by default.
 
 In 0.0.1, lists, vectors and maps are implemented with the primitives
 listed in `STATUS.md`. Sets, `conj`, `dissoc`, `update`, `merge`,
-collections and keywords as functions, and the parts of the equality
+vectors as functions, and the parts of the equality
 rules of §4.5 listed there as not implemented are planned.
 
 ### 4.1 List
@@ -348,6 +349,16 @@ a collection key is hashed in full on every lookup. NaN is the exception:
 protoCore's numeric comparison reports NaN `=` to every number, which no
 hash can agree with; NaN hashes like `0`, so a NaN key is matched only by
 `0`, `0.0`, `-0.0`, NaN and integers that are multiples of 2^61 − 1.
+
+**Keywords and maps as functions.** A keyword is a function of a map and a
+map is a function of its keys, both with the semantics of `get`:
+`(:a m)` is `(get m :a)`, `(:a m not-found)` is `(get m :a not-found)`,
+`(m k)` is `(get m k)` and `(m k not-found)` is `(get m k not-found)`. The
+result is `nil`, or `not-found`, when the key is absent; a keyword called on
+`nil` or on a value that is not a map returns the same. A key mapped to `nil`
+returns `nil`, not `not-found`. Calling either with any other number of
+arguments is an error. Keywords, quoted symbols and maps are ordinary
+function values: `(map :a [{:a 1} {:a 2}])` is `(1 2)`.
 
 **Representation.** A map holds a protoCore `ProtoSparseList` of keys
 indexed by a per-map sequence number (the insertion-order store) and a
