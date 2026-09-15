@@ -65,7 +65,7 @@ Multi-arity, variadic, the higher-order pipeline:
 (println (my-reduce + 100 (list 1 2 3)))   ;; => 106
 ```
 
-The 150 conformance fixtures under `tests/conformance/` are the executable reference for what the language accepts today.
+The 165 conformance fixtures under `tests/conformance/` are the executable reference for what the language accepts today.
 
 ## Concurrency — atoms, futures, actors
 
@@ -197,7 +197,7 @@ protoClojure runs scripts and an interactive REPL. Version 0.0.1; no tagged rele
 | Namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **200 test cases: 158 conformance fixtures, 41 unit tests** (lexer, reader and runtime map) **and 1 CLI check** (`--help`). All of them pass. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **212 test cases: 165 conformance fixtures, 46 unit tests** (lexer, reader, runtime map and value equality) **and 1 CLI check** (`--help`). All of them pass. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 
@@ -205,7 +205,7 @@ What is implemented:
 - Special forms: `def`, `defn` and `fn` (single- and multi-arity, variadic, named-argument destructuring), `let`, `loop`, `recur` (in `loop` and as the implicit function-body target), `if`, `do`, `quote` (of symbols, keywords and other atoms), `apply`, `when`, `when-not`, `cond`, `and`, `or`, `future`.
 - Closures: full N-level capture, including chained closures across `(fn ... (fn ... (fn ...)))`.
 - Primitives (75 registered at startup):
-  - arithmetic and comparison: `+ - * / inc dec < <= > >= = not=` (`=` compares maps and vectors by value)
+  - arithmetic and comparison: `+ - * / inc dec < <= > >= = not=` (`=` compares maps, vectors and lists by value; a vector and a list with equal elements are `=`)
   - output: `println str`
   - lists and vectors: `list vector vec nth first rest cons count empty? reverse`
   - higher-order: `map filter reduce pmap`
@@ -243,7 +243,7 @@ cmake --build build_release
 ./build_release/protoclj script.clj          # run a .clj file
 ./build_release/protoclj --version           # version
 
-ctest --test-dir build_release -j1           # 188 cases: 150 fixtures + 37 unit tests + 1 CLI check
+ctest --test-dir build_release -j1           # 212 cases: 165 fixtures + 46 unit tests + 1 CLI check
 ./benchmarks/bench.sh                        # benchmark against Babashka
 ./benchmarks/actor-bench.sh                  # actor throughput, varied worker counts
 ```
@@ -322,7 +322,7 @@ Four language runtimes (protoJS, protoPython, protoST, protoClojure) and protoCp
 
 protoClojure is designed and maintained by a single architect, Gustavo Marino, working with AI coding agents that draft code, tests and documentation under human review.
 
-The work proceeds as a measured loop — design, implement, compile, measure, keep or discard, commit — and the repository keeps the evidence: the conformance suite grew with the implementation to 150 fixtures, performance changes record their `perf stat` measurements in the commit history, and every benchmark figure in this README can be reproduced with the scripts in [`benchmarks/`](benchmarks/).
+The work proceeds as a measured loop — design, implement, compile, measure, keep or discard, commit — and the repository keeps the evidence: the conformance suite grew with the implementation to 165 fixtures, performance changes record their `perf stat` measurements in the commit history, and every benchmark figure in this README can be reproduced with the scripts in [`benchmarks/`](benchmarks/).
 
 ## License
 

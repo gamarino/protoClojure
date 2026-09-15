@@ -89,8 +89,13 @@ The design specifications written during development are archived under
       `contains?` / `keys` / `vals` / `map?`
 - [x] Map equality — `=` / `not=` compare maps by value, ignoring insertion
       order (`mapEquals` in `src/runtime/MapOps.h`); values compare
-      recursively, so nested maps and vectors compare by value; a map is
-      never `=` to a vector or a list
+      recursively, so nested collections compare by value; a map is never
+      `=` to a vector or a list
+- [x] Sequential equality — `=` / `not=` compare lists and vectors element
+      by element, whatever their concrete types: `(= [1 2] (list 1 2))` and
+      `(= [] (list))` are true, nested collections compare by value, and a
+      list or vector is never `=` to a map, a string or `nil`
+      (`valuesEqual` in `src/runtime/Primitives.h`)
 - [x] Strings — protoCore `ProtoString`
 - [x] Integers — `SmallInteger` tagged + auto-promoted `LargeInteger`
 - [x] Floats — `ProtoObject::fromDouble`
@@ -215,9 +220,6 @@ raises a read, compile or runtime error.
 
 - [ ] Sets — `ProtoSparseList` based, with `conj` / `disj`
 - [ ] Lazy seqs — `LazySeq` wrapper
-- [ ] Value equality of lists — lists compare by identity, so two equal
-      lists built separately are not `=` and a vector is never `=` to a
-      list (vectors and maps compare by value)
 - [ ] Map hashing — a map used as a key of another map is hashed and
       matched by identity, not by value; `hash` is not a primitive
 - [ ] Keywords, maps and vectors as functions (`(:a m)`, `(m :a)`, `(v 0)`)

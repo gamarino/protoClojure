@@ -327,8 +327,8 @@ deviation D19 in `docs/STATUS.md`.)
 **Equality and hashing.** Two maps are `=` when they have the same number
 of entries and every key of one is mapped to an `=` value in the other;
 insertion order is irrelevant, and values are compared recursively, so
-nested maps and vectors compare by value (§4.5). A map is never `=` to a
-vector or a list. Map hashing is not implemented in 0.0.1: a map used as a
+nested maps, vectors and lists compare by value (§4.5). A map is never `=`
+to a vector or a list. Map hashing is not implemented in 0.0.1: a map used as a
 key of another map is hashed and matched by identity, so
 `(get {{:a 1} :x} {:a 1})` returns `nil`; only the same map object finds
 the entry.
@@ -369,14 +369,21 @@ key→value pairs. `==` is numeric equality across types (`(== 1 1.0)`
 is true; `(= 1 1.0)` is false). Identity is `identical?` (pointer
 equality, useful for sentinels).
 
+Lists and vectors are *sequential* collections: two sequential
+collections are `=` when they hold `=` elements in the same order,
+whatever their concrete types, so `(= [1 2] '(1 2))` and `(= [] '())` are
+true. A sequential collection is never `=` to a map, a set, a string or
+`nil`.
+
 In 0.0.1, `=` and `not=` follow these rules for numbers, strings,
-keywords, booleans, `nil`, vectors and maps, recursively through nested
-vectors and maps, with any number of arguments. The departures are:
+keywords, booleans, `nil`, lists, vectors and maps, recursively through
+nested collections, with any number of arguments; every sequence the
+runtime produces (`rest`, `map`, `filter`, `keys`, `cons`, ...) is a list
+or a vector and compares the same way. Lists are written with `list`,
+since the `'` reader macro is not implemented. The departures are:
 
 - `=` compares numbers across types: `(= 1 1.0)` is true (deviation D15
   in `STATUS.md`).
-- Lists compare by identity, so two equal lists built separately are not
-  `=`, and a vector is never `=` to a list.
 - Maps are not hashed by value: a map used as a map key matches by
   identity (§4.3).
 - `==`, `identical?` and `hash` are not implemented.

@@ -8,9 +8,8 @@
 > `assoc` on vectors, `dissoc`, `update`, `merge`, `select-keys`,
 > `zipmap`, the `get-in` / `assoc-in` / `update-in` family, `seq`,
 > `into`, collections and keywords as functions, `count` on maps, `==`,
-> `identical?`, `hash`, value equality of lists and between vectors and
-> lists (`=` compares maps and vectors by value but lists by identity), and
-> the sequence and regex functions used in §4.11. See
+> `identical?`, `hash`, and the sequence and regex functions used in
+> §4.11. See
 > [STATUS.md](../STATUS.md).
 
 protoClojure inherits Clojure's four primary collection types — list,
@@ -265,11 +264,11 @@ defines a cross-type equivalence:
                                 ;; => true
 ```
 
-> **In protoClojure 0.0.1** the vector and map lines hold, including
-> nested maps and vectors (`(= {:a [{:b 1 :c 2}]} {:a [{:c 2 :b 1}]})` is
-> `true`), and so does `not=`. Lists compare by identity, so a vector is
-> not `=` to a list; sets, `seq` and the `'` reader macro are not
-> implemented.
+> **In protoClojure 0.0.1** the vector, list and map lines hold, including
+> nested collections (`(= {:a [{:b 1 :c 2}]} {:a [{:c 2 :b 1}]})` and
+> `(= [1 [2]] (list 1 (list 2)))` are `true`), and so does `not=`. Write
+> the list with `(list 1 2 3)`: the `'` reader macro, sets and `seq` are
+> not implemented.
 
 `==` is the *numeric* equality across number types, with no cross-type
 equivalence for collections:

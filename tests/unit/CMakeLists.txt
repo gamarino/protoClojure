@@ -6,6 +6,7 @@ add_executable(protoclj_unit_tests
     test_lexer.cpp
     test_mapops.cpp
     test_reader.cpp
+    test_values.cpp
 )
 
 target_link_libraries(protoclj_unit_tests

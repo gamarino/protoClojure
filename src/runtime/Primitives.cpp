@@ -2248,6 +2248,37 @@ void replPrintValue(proto::ProtoContext* ctx, std::FILE* out,
     printValue(ctx, out, v);
 }
 
+namespace {
+
+// A list or a vector read through one indexed interface, so the sequential
+// rules below treat both concrete types alike. Every sequence the runtime
+// produces (`rest`, `map`, `filter`, `keys`, `cons`, ...) is one of the two.
+struct SequentialView {
+    const proto::ProtoList*  list  = nullptr;
+    const proto::ProtoTuple* tuple = nullptr;
+
+    explicit operator bool() const { return list || tuple; }
+    unsigned long size(proto::ProtoContext* ctx) const {
+        return list ? list->getSize(ctx) : tuple->getSize(ctx);
+    }
+    // O(log n): protoCore exposes no allocation-free sequential walk of a
+    // ProtoList or a ProtoTuple, so elements are read by index.
+    const proto::ProtoObject* at(proto::ProtoContext* ctx, unsigned long i) const {
+        const int idx = static_cast<int>(i);
+        return list ? list->getAt(ctx, idx) : tuple->getAt(ctx, idx);
+    }
+};
+
+SequentialView sequentialView(proto::ProtoContext* ctx,
+                              const proto::ProtoObject* v) {
+    SequentialView s;
+    if (isListTag(v)) s.list = v->asList(ctx);
+    else              s.tuple = asTupleOrNull(ctx, v);
+    return s;
+}
+
+} // namespace
+
 // Externally-visible value equality, declared in Primitives.h; shared by
 // `=` / `not=` and the VM's EQ opcode.
 bool valuesEqual(proto::ProtoContext* ctx, const MapLayout& layout,
@@ -2269,17 +2300,19 @@ bool valuesEqual(proto::ProtoContext* ctx, const MapLayout& layout,
                 });
     }
 
-    // Vectors element by element, so maps nested in vectors compare by
-    // value. (protoCore shares equal tuples of identical elements, which
-    // the pointer test above already accepts.)
-    const proto::ProtoTuple* ta = asTupleOrNull(ctx, a);
-    const proto::ProtoTuple* tb = ta ? asTupleOrNull(ctx, b) : nullptr;
-    if (ta && tb) {
-        const unsigned long n = ta->getSize(ctx);
-        if (n != tb->getSize(ctx)) return false;
+    // Sequential collections (lists and vectors) are equal when they hold
+    // equal elements in the same order, whatever their concrete types, and
+    // are never equal to anything else. One pass over the elements that
+    // stops at the first mismatch. (protoCore shares equal tuples of
+    // identical elements, which the pointer test above already accepts.)
+    const SequentialView sa = sequentialView(ctx, a);
+    const SequentialView sb = sequentialView(ctx, b);
+    if (sa || sb) {
+        if (!sa || !sb) return false;
+        const unsigned long n = sa.size(ctx);
+        if (n != sb.size(ctx)) return false;
         for (unsigned long i = 0; i < n; ++i) {
-            if (!valuesEqual(ctx, layout, ta->getAt(ctx, static_cast<int>(i)),
-                             tb->getAt(ctx, static_cast<int>(i))))
+            if (!valuesEqual(ctx, layout, sa.at(ctx, i), sb.at(ctx, i)))
                 return false;
         }
         return true;

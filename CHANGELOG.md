@@ -49,9 +49,9 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (158 fixtures under
-  `tests/conformance/`) and GoogleTest unit tests for the lexer, the reader
-  and the runtime map (41 tests).
+- **Tests.** A glob-discovered conformance suite (165 fixtures under
+  `tests/conformance/`) and GoogleTest unit tests for the lexer, the reader,
+  the runtime map and value equality (46 tests).
 - **Benchmarks and examples.** `benchmarks/bench.sh` (comparison with
   Babashka), `benchmarks/actor-bench.sh` (actor throughput) and twelve
   example scripts under `examples/`.
@@ -104,9 +104,15 @@ The project has no tagged releases yet; the version declared in
   now share one value equality: maps are equal when they hold the same keys
   mapped to equal values, whatever the insertion order; vectors compare
   element by element; nested maps and vectors compare recursively; a map is
-  never equal to a vector or a list. `not=` is added. Lists still compare by
-  identity, and a map used as a map key is still matched by identity (map
-  hashing is not implemented).
+  never equal to a vector or a list. `not=` is added. A map used as a map key
+  is still matched by identity (map hashing is not implemented).
+- `=` compares lists by value. `(= (list 1 2) (list 1 2))` returned `false`
+  and a vector was never equal to a list, because lists compared by
+  identity. Lists and vectors are now compared as sequential collections:
+  two of them are equal when they hold equal elements in the same order,
+  whatever their concrete types, so `(= [1 2] (list 1 2))` and
+  `(= [] (list))` are `true`. Nested collections compare recursively, and a
+  sequential collection is never equal to a map, a string or `nil`.
 - `--help` and error messages no longer mention internal development labels
   ("Phase 5", "next milestone", "v0.0.x", "v0.7.x", "v0.13"); each message
   now states the actual restriction, for example "let: not supported at top
