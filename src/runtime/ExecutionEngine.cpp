@@ -721,11 +721,16 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
                     proto::ProtoString::createSymbol(&frame, c.sval.c_str());
                 const proto::ProtoObject* v =
                     env.globals->getAttribute(&frame, key);
-                if (!v || v == PROTO_NONE) {
+                // getAttribute returns PROTO_NONE both for a global bound to
+                // nil and for a missing one; only a miss pays for the
+                // presence probe. Every global is an own attribute of the
+                // globals object (STORE_GLOBAL, installPrimitives).
+                if ((!v || v == PROTO_NONE) &&
+                    env.globals->hasOwnAttribute(&frame, key) != PROTO_TRUE) [[unlikely]] {
                     throw std::runtime_error(
                         "VM: unable to resolve symbol: " + c.sval);
                 }
-                pushVal(v);
+                pushVal(v ? v : PROTO_NONE);
                 break;
             }
 

@@ -309,7 +309,10 @@ are evaluated by case:
   applied.
 
 In 0.0.1 there are no namespaces or macros: symbols resolve through the
-lexical scope and then a single global table.
+lexical scope and then a single global table. A global defined with the
+value `nil` or `false` resolves to that value (`(def x nil)` then `x` is
+`nil`); only a name that was never defined raises
+`unable to resolve symbol`.
 
 ### 3.3 Special forms
 

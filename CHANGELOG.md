@@ -49,12 +49,12 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (254 fixtures under
+- **Tests.** A glob-discovered conformance suite (261 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
   the bytecode module, the runtime map, value equality and hashing, the
-  native stack guard and the double printer (77 tests), and three CLI checks (`--help`, a
-  generated program with 70,000 distinct literals of each kind, and a
-  stack overflow in the REPL).
+  native stack guard and the double printer (77 tests), and four CLI checks (`--help`, a
+  generated program with 70,000 distinct literals of each kind, a
+  stack overflow in the REPL, and globals bound to nil in the REPL).
 - **Benchmarks and examples.** `benchmarks/bench.sh` (comparison with
   Babashka), `benchmarks/actor-bench.sh` (actor throughput) and twelve
   example scripts under `examples/`.
@@ -260,3 +260,10 @@ The project has no tagged releases yet; the version declared in
   now states the actual restriction, for example "let: not supported at top
   level yet; use it inside a fn". The argument-limit message now states the
   limit the VM enforces (17 bound parameters).
+- A global bound to `nil` resolves. `(def x nil)` followed by `x` failed with
+  "unable to resolve symbol: x", as did redefining a global to `nil` and, in
+  the REPL, reading `*1` before any evaluation: protoCore's `getAttribute`
+  returns nil both for an attribute holding nil and for a missing one, and
+  the VM treated both as missing. A global lookup that returns nil now
+  checks whether the name is defined, so only a name never defined is an
+  error; the lookup of a non-nil global is unchanged.

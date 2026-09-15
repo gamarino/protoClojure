@@ -5,14 +5,14 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 334 test cases: 254
+scripts and an interactive REPL. `ctest` registers 342 test cases: 261
 conformance fixtures under `tests/conformance/`, 77 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 value equality and hashing, the native stack guard and the double printer
 (`tests/unit/`), and
-three CLI checks (`tests/cli/`: `--help`, a generated program with 70,000
-distinct literals of each kind, and a stack overflow in the REPL); all
-pass. Benchmark numbers against Babashka 1.4.192
+four CLI checks (`tests/cli/`: `--help`, a generated program with 70,000
+distinct literals of each kind, a stack overflow in the REPL, and globals
+bound to nil in the REPL); all pass. Benchmark numbers against Babashka 1.4.192
 are in [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md). Shipped changes
 are listed in [`CHANGELOG.md`](../CHANGELOG.md).
 
@@ -26,14 +26,14 @@ directories that cover them.
 | Feature | Conformance directories | Fixtures |
 |---|---|---:|
 | Binary, lexer, reader, bytecode VM, `println` | `00-binary`, `01-literals` | 2 |
-| `def`, `if`, `do`, integer arithmetic, comparisons, `str` | `02-special-forms`, `03-arithmetic` | 30 |
-| `fn`, `defn`, `let`, `loop`, `recur`, `StackOverflowError` | `04-functions`, `05-recursion` | 13 |
+| `def`, `if`, `do`, integer arithmetic, comparisons, `str` | `02-special-forms`, `03-arithmetic` | 35 |
+| `fn`, `defn`, `let`, `loop`, `recur`, `StackOverflowError` | `04-functions`, `05-recursion` | 14 |
 | Closures with N-level lexical capture | `06-closures` | 6 |
 | Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 29 |
 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 21 |
 | IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 21 |
 | LargeInteger promotion, big integer literals | `15-bigint` | 9 |
-| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 40 |
+| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 41 |
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 17 |
 | `clojure.string`-shaped string functions | `20-strings` | 20 |
 | Atoms | `21-atoms` | 11 |
@@ -74,7 +74,8 @@ The design specifications written during development are archived under
 
 ### Special forms
 
-- [x] `def`
+- [x] `def` — a global defined as `nil` or `false` resolves to that value;
+      only a name never defined is `unable to resolve symbol`
 - [x] `defn` (single-arity)
 - [x] `defn` (multi-arity, with optional variadic catch-all)
 - [x] `fn` (single + multi-arity); `(fn name [args] ...)` is accepted (see D18)
