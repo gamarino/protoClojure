@@ -5,7 +5,7 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 361 test cases: 274
+scripts and an interactive REPL. `ctest` registers 358 test cases: 271
 conformance fixtures under `tests/conformance/`, 82 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 value equality and hashing, the native stack guard and the double printer
@@ -34,8 +34,8 @@ directories that cover them.
 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 21 |
 | IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 26 |
 | LargeInteger promotion, big integer literals | `15-bigint` | 9 |
-| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 42 |
-| Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 17 |
+| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 40 |
+| Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 16 |
 | `clojure.string`-shaped string functions | `20-strings` | 20 |
 | Atoms | `21-atoms` | 11 |
 | Futures and `pmap` on OS threads | `22-futures` | 18 |
