@@ -5,12 +5,13 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 284 test cases: 214
-conformance fixtures under `tests/conformance/`, 68 GoogleTest unit
-tests for the lexer, the reader, the bytecode module, the runtime map and
-value equality and hashing (`tests/unit/`), and two CLI checks
-(`tests/cli/`: `--help`, and a generated program with 70,000 distinct
-literals of each kind); all pass. Benchmark numbers against Babashka 1.4.192
+scripts and an interactive REPL. `ctest` registers 297 test cases: 220
+conformance fixtures under `tests/conformance/`, 74 GoogleTest unit
+tests for the lexer, the reader, the bytecode module, the runtime map,
+value equality and hashing and the native stack guard (`tests/unit/`), and
+three CLI checks (`tests/cli/`: `--help`, a generated program with 70,000
+distinct literals of each kind, and a stack overflow in the REPL); all
+pass. Benchmark numbers against Babashka 1.4.192
 are in [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md). Shipped changes
 are listed in [`CHANGELOG.md`](../CHANGELOG.md).
 
@@ -25,9 +26,9 @@ directories that cover them.
 |---|---|---:|
 | Binary, lexer, reader, bytecode VM, `println` | `00-binary`, `01-literals` | 2 |
 | `def`, `if`, `do`, integer arithmetic, comparisons, `str` | `02-special-forms`, `03-arithmetic` | 13 |
-| `fn`, `defn`, `let`, `loop`, `recur` | `04-functions`, `05-recursion` | 11 |
+| `fn`, `defn`, `let`, `loop`, `recur`, `StackOverflowError` | `04-functions`, `05-recursion` | 13 |
 | Closures with N-level lexical capture | `06-closures` | 6 |
-| Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 23 |
+| Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 24 |
 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 21 |
 | IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 14 |
 | LargeInteger promotion, big integer literals | `15-bigint` | 8 |
@@ -35,9 +36,9 @@ directories that cover them.
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 17 |
 | `clojure.string`-shaped string functions | `20-strings` | 16 |
 | Atoms | `21-atoms` | 11 |
-| Futures and `pmap` on OS threads | `22-futures` | 14 |
+| Futures and `pmap` on OS threads | `22-futures` | 16 |
 | Watches, promises | `23-watches`, `24-promises` | 9 |
-| Actors | `25-actors` | 9 |
+| Actors | `25-actors` | 10 |
 | Interactive REPL | — (no conformance fixtures) | — |
 
 The design specifications written during development are archived under
@@ -194,6 +195,14 @@ The design specifications written during development are archived under
 - [x] Split fn prototypes (`fnSingleProto` / `fnMultiProto`) for one attribute lookup per single-arity call
 - [x] SmallInteger fast-path binary opcodes
 - [x] DUP + JUMP_IF_TRUE for short-circuit `and` / `or`
+- [x] Native stack check on every call (`src/runtime/StackGuard.h`): a
+      recursion deeper than the thread's stack raises the runtime error
+      `StackOverflowError` instead of crashing, on the evaluator, future,
+      `pmap` and actor threads alike, and so does printing, comparing or
+      hashing a collection nested that deeply. The script driver and the
+      REPL run on a 32 MiB stack and every thread the runtime creates gets
+      the same size; one call takes 1,344 bytes of native stack, so a simple
+      self-recursive fn reaches about 24,700 nested calls
 
 ### Concurrency
 
@@ -405,13 +414,11 @@ See `LANGUAGE.md` for the full discussion. Summary:
   that: NaN hashes like `0`, so a NaN map key is matched only by `0`, `0.0`,
   `-0.0`, NaN and integers that are multiples of 2^61 − 1, and vice versa.
 
-- **Deep non-tail recursion crashes.** Every call runs a nested
-  `ExecutionEngine::run` on the native C++ stack and the depth is not
-  checked: `(defn f [n] (if (= n 0) 0 (+ 1 (f (- n 1)))))` returns at
-  `(f 1000)` and crashes with SIGSEGV at `(f 2000)` with the default 8 MiB
-  stack, where JVM Clojure throws `StackOverflowError`. Use `loop` /
-  `recur` for deep iteration. The other hard limits are listed in
-  `LANGUAGE.md` §17.
+- **Errors on future, `pmap` and actor threads are silent.** A future or a
+  `pmap` element whose body throws (a `StackOverflowError` included)
+  realises to `nil`, and an actor message whose handler throws sets the
+  actor's value to `nil`; the error is not reported. JVM Clojure rethrows
+  a future's exception from `deref`.
 
 - **Promise `deref` polls.** A pending promise is checked every millisecond
   (with the thread marked unmanaged so garbage collection can proceed);

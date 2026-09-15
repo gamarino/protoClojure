@@ -64,6 +64,7 @@ add_library(protoclj_runtime STATIC
     src/runtime/MapOps.cpp
     src/runtime/Named.cpp
     src/runtime/Primitives.cpp
+    src/runtime/StackGuard.cpp
 )
 target_link_libraries(protoclj_runtime PUBLIC ${PROTOCORE_LIBRARY})
 target_compile_options(protoclj_runtime PRIVATE -Wall -Wextra -Wpedantic)

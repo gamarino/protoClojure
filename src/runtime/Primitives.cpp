@@ -2,6 +2,7 @@
 #include "ExecutionEngine.h"
 #include "ActorScheduler.h"
 #include "MapOps.h"
+#include "StackGuard.h"
 
 #include "protoCore.h"
 
@@ -157,9 +158,12 @@ void appendReadableString(std::string& out, const std::string& bytes) {
 // never reaches the VM), so their bytes are read directly.
 //
 // GC: allocates only to render a LargeInteger. `v` must be rooted by the
-// caller; every nested value is reachable from it.
+// caller; every nested value is reachable from it. Recurses once per level
+// of nesting: a collection nested deeper than the stack allows raises
+// StackOverflowError.
 void printTo(proto::ProtoContext* ctx, std::string& out,
              const proto::ProtoObject* v, bool readable) {
+    checkNativeStack();
     if (!v || v == PROTO_NONE) { out += "nil"; return; }
     if (v == PROTO_TRUE)        { out += "true"; return; }
     if (v == PROTO_FALSE)       { out += "false"; return; }
@@ -2502,6 +2506,8 @@ bool valuesEqual(proto::ProtoContext* ctx, const MapLayout& layout,
     if (!a) a = PROTO_NONE;
     if (!b) b = PROTO_NONE;
     if (a == b) return true;
+    // Recurses once per level of nesting (StackGuard.h).
+    checkNativeStack();
 
     const bool aMap = isMap(ctx, layout, a);
     const bool bMap = isMap(ctx, layout, b);
@@ -2551,6 +2557,8 @@ unsigned long valueHash(proto::ProtoContext* ctx, const MapLayout& layout,
     if (v->isInteger(ctx)) return hashInteger(ctx, v);
     if (v->isDouble(ctx))  return hashDouble(v->asDouble(ctx));
     if (proto::ProtoObject::isStringTagFast(v)) return v->getHash(ctx);
+    // Recurses once per level of nesting (StackGuard.h).
+    checkNativeStack();
 
     if (isMap(ctx, layout, v)) {
         // Order-independent: a sum of per-entry mixes. The key hashes are

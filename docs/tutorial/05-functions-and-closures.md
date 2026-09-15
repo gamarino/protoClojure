@@ -228,13 +228,14 @@ compiles and then fails at run time with an operand-stack overflow:
 ```
 
 The tail-position rule is intentional. Without explicit
-`recur`, deep general recursion will eventually overflow the operand
-stack — protoCore does not optimise tail calls automatically. That is
-a real constraint and an honest one.
+`recur`, deep general recursion eventually exhausts the thread's stack
+and raises `StackOverflowError` — protoCore does not optimise tail calls
+automatically. That is a real constraint and an honest one.
 
 If your recursion is *not* tail and the input is bounded — say, walking
-a tree — just use plain recursion. The stack handles thousands of frames
-easily. Reach for `recur` when the recursion is iterative-shaped.
+a tree — just use plain recursion. The stack holds about 24,700 nested
+calls of a simple function. Reach for `recur` when the recursion is
+iterative-shaped.
 
 ## 5.8 Higher-order functions
 

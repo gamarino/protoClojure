@@ -32,6 +32,7 @@ class ProtoList;
 namespace protoClojure {
 
 class BytecodeModule;
+struct ActiveCallContext;
 struct NamedLayout;
 
 class ExecutionEngine {
@@ -47,15 +48,18 @@ public:
                                      const proto::ProtoObject* const* args,
                                      unsigned int argc);
 
-    // Run `mod` from PC=0 until RETURN or end-of-bytecode. The `globals`
-    // namespace resolves PUSH_VAR. `fnMarkerProto` / `bytecodeKey` /
-    // `arityKey` are the markers MAKE_FN uses to construct user-fn
-    // wrappers and CALL uses to recognise them.
+    // Top-level entry: run `mod` from PC=0 until RETURN or end-of-bytecode,
+    // with the ActiveCallContext built from the arguments installed on this
+    // thread (the previous one is restored on every exit path). The
+    // `globals` namespace resolves PUSH_VAR. `fnSingleProto` /
+    // `fnMultiProto` / `bytecodeKey` are the markers MAKE_FN uses to
+    // construct user-fn wrappers and CALL uses to recognise them.
     //
     // Returns the value on top of the stack at RETURN, or PROTO_NONE if
     // the stack is empty. The returned pointer is UNROOTED — caller
     // responsible for rooting it in its own slot before doing anything
-    // that allocates.
+    // that allocates. Throws StackOverflowError (StackGuard.h) when calls
+    // nest deeper than the thread's stack allows.
     const proto::ProtoObject* run(proto::ProtoContext* parent,
                                   const BytecodeModule& mod,
                                   const proto::ProtoObject* globals,
@@ -97,6 +101,22 @@ public:
                                   // `:as` binding (nullptr/PROTO_NONE when
                                   // none was supplied).
                                   const proto::ProtoObject* kwMap = nullptr);
+
+private:
+    // Runs `mod` in a new frame under the call context `env`, which must be
+    // installed on this thread for the whole call (run installs it; invoke
+    // and nested calls find it installed). Every nested call runs here, so
+    // its native frame is what bounds the recursion depth: the context
+    // travels as one reference instead of 23 arguments.
+    const proto::ProtoObject* execute(proto::ProtoContext* parent,
+                                      const BytecodeModule& mod,
+                                      const ActiveCallContext& env,
+                                      const proto::ProtoObject* const* args,
+                                      unsigned int argCount,
+                                      const proto::ProtoObject* captures,
+                                      const proto::ProtoObject* const* kwVals,
+                                      unsigned int kwCount,
+                                      const proto::ProtoObject* kwMap);
 };
 
 } // namespace protoClojure

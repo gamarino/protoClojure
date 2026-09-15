@@ -4,6 +4,7 @@
 #include "Named.h"
 #include "Opcodes.h"
 #include "Primitives.h"
+#include "StackGuard.h"
 
 #include "protoCore.h"
 
@@ -115,6 +116,32 @@ const proto::ProtoObject* callLookup(proto::ProtoContext* ctx,
     bool found = false;
     const proto::ProtoObject* v = mapGet(ctx, layout, m, key, &found);
     return found ? v : notFound;
+}
+
+// The kwArgs map of a CALL_KW: the `kvItems` key/value arguments in the
+// frame slots starting at `firstPairSlot`, folded in source order (a repeated
+// key keeps its last value). The pairs stay rooted in their slots while the
+// map is built, at most kChunkItems at a time. After each chunk the map
+// built so far is rooted in the first pair's slot, which no later chunk
+// reads, before the next chunk allocates. Out of line so the chunk buffer
+// does not enlarge the native frame of every call (StackGuard.h).
+[[gnu::noinline]]
+const proto::ProtoObject* foldKeywordPairs(proto::ProtoContext* frame,
+                                           const MapLayout& layout,
+                                           unsigned int firstPairSlot,
+                                           unsigned int kvItems) {
+    constexpr unsigned int kChunkItems = 256;  // even
+    const proto::ProtoObject* kv[kChunkItems];
+    const proto::ProtoObject* kwMap = nullptr;
+    for (unsigned int done = 0; done < kvItems; done += kChunkItems) {
+        const unsigned int items = std::min(kChunkItems, kvItems - done);
+        for (unsigned int i = 0; i < items; ++i) {
+            kv[i] = frame->getAutomaticLocal(firstPairSlot + done + i);
+        }
+        kwMap = mapAssocPairs(frame, layout, kwMap, kv, items);
+        frame->setAutomaticLocal(firstPairSlot, kwMap);
+    }
+    return kwMap;
 }
 
 } // namespace
@@ -274,23 +301,9 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
                           cc->mapMarkerProto, cc->mapStateKey, kwVals);
         }
 
-        return this->run(ctx, *subMod, cc->globals,
-                         const_cast<proto::ProtoObject*>(cc->fnSingleProto),
-                         const_cast<proto::ProtoObject*>(cc->fnMultiProto),
-                         const_cast<proto::ProtoObject*>(cc->mapMarkerProto),
-                         const_cast<proto::ProtoObject*>(cc->atomMarkerProto),
-                         const_cast<proto::ProtoObject*>(cc->futureMarkerProto),
-                         const_cast<proto::ProtoObject*>(cc->promiseMarkerProto),
-                         const_cast<proto::ProtoObject*>(cc->actorMarkerProto),
-                         cc->bytecodeKey, cc->arityKey, cc->capturesKey,
-                         cc->aritiesKey, cc->mapStateKey, cc->valueKey,
-                         cc->watchesKey,
-                         cc->thunkKey, cc->ccBlobKey, cc->threadKey,
-                         cc->resultKey, cc->doneKey,
-                         cc->actorStateKey, cc->named,
-                         callArgs, passArgc, capsVal,
-                         kwBased ? kwVals : nullptr, kwCount,
-                         kwBased ? kwArgsMap : nullptr);
+        return execute(ctx, *subMod, *cc, callArgs, passArgc, capsVal,
+                       kwBased ? kwVals : nullptr, kwCount,
+                       kwBased ? kwArgsMap : nullptr);
     }
 
     // Keywords, quoted symbols and maps are functions: a map lookup.
@@ -355,13 +368,14 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                      const proto::ProtoObject* const* kwVals,
                      unsigned int kwCount,
                      const proto::ProtoObject* kwMap) {
-    // Snapshot any prior active call context (we're nested under another
-    // run() invocation, e.g. a user fn called from a primitive that
-    // itself called us). Restore on every exit path so deep primitive
-    // recursion stays consistent.
+    // Top-level entry (the script driver, the REPL). Install this run's
+    // call context on the thread and restore the prior one (the REPL's
+    // printer context, or none) on every exit path. Nested calls, from the
+    // VM or from a primitive through invoke(), go to execute() directly and
+    // share the installed context.
     const ActiveCallContext* prior = activeCallContext();
     ActiveCallContext saved = prior ? *prior : ActiveCallContext{};
-    ActiveCallContext cc{this, globals,
+    const ActiveCallContext cc{this, globals,
                          fnSingleProto, fnMultiProto, mapMarkerProto,
                          atomMarkerProto, futureMarkerProto, promiseMarkerProto,
                          actorMarkerProto,
@@ -377,6 +391,24 @@ ExecutionEngine::run(proto::ProtoContext* parent,
             else clearActiveCallContext();
         }
     } guard{prior, saved};
+
+    return execute(parent, mod, cc, args, argCount, captures,
+                   kwVals, kwCount, kwMap);
+}
+
+const proto::ProtoObject*
+ExecutionEngine::execute(proto::ProtoContext* parent,
+                         const BytecodeModule& mod,
+                         const ActiveCallContext& env,
+                         const proto::ProtoObject* const* args,
+                         unsigned int argCount,
+                         const proto::ProtoObject* captures,
+                         const proto::ProtoObject* const* kwVals,
+                         unsigned int kwCount,
+                         const proto::ProtoObject* kwMap) {
+    // Every call nests here on the native stack: raise StackOverflowError
+    // instead of recursing past the end of the thread's stack.
+    checkNativeStack();
 
     // One ProtoContext per frame. Layout of automaticLocals:
     //   [0 .. arity-1]                         — params (bound at call)
@@ -476,8 +508,8 @@ ExecutionEngine::run(proto::ProtoContext* parent,
     auto dispatchCall = [&](unsigned int argc) {
         const proto::ProtoObject* callable = peekAt(argc);
         const proto::ProtoObject* proto = callable->getPrototype(&frame);
-        const bool isSingle = (proto == fnSingleProto);
-        const bool isMulti  = (proto == fnMultiProto);
+        const bool isSingle = (proto == env.fnSingleProto);
+        const bool isMulti  = (proto == env.fnMultiProto);
 
         if (isSingle || isMulti) {
             const BytecodeModule* subMod = nullptr;
@@ -486,7 +518,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
             if (isMulti) {
                 // Multi-arity — read __arities__ and pick the spec.
                 const proto::ProtoObject* aritiesObj =
-                    callable->getAttribute(&frame, aritiesKey);
+                    callable->getAttribute(&frame, env.aritiesKey);
                 const proto::ProtoList* aritiesList = aritiesObj->asList(&frame);
                 int k = pickArity(&frame, aritiesList, argc);
                 if (k < 0)
@@ -503,13 +535,13 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 // captures (the dominant case for top-level defns:
                 // fib, sum-loop, factorial, ...).
                 const proto::ProtoObject* ptrObj =
-                    callable->getAttribute(&frame, bytecodeKey);
+                    callable->getAttribute(&frame, env.bytecodeKey);
                 if (!ptrObj || !ptrObj->isInteger(&frame))
                     throw std::runtime_error("VM: malformed fn-wrapper");
                 subMod = reinterpret_cast<const BytecodeModule*>(
                     ptrObj->asLong(&frame));
                 if (subMod->captureCount() > 0) {
-                    capsVal = callable->getAttribute(&frame, capturesKey);
+                    capsVal = callable->getAttribute(&frame, env.capturesKey);
                 }
             }
 
@@ -580,20 +612,12 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 if (kwCount > 16)
                     throw std::runtime_error("VM: a function may declare at most 16 :keys parameters");
                 extractKwVals(&frame, subMod, kwArgsMap,
-                              mapMarkerProto, mapStateKey, kwVals);
+                              env.mapMarkerProto, env.mapStateKey, kwVals);
             }
 
             sp -= (argc + 1);
-            const proto::ProtoObject* result = this->run(
-                &frame, *subMod, globals,
-                fnSingleProto, fnMultiProto, mapMarkerProto,
-                atomMarkerProto, futureMarkerProto, promiseMarkerProto,
-                actorMarkerProto,
-                bytecodeKey, arityKey, capturesKey, aritiesKey,
-                mapStateKey, valueKey, watchesKey,
-                thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-                actorStateKey, named,
-                callArgs, passArgc, capsVal,
+            const proto::ProtoObject* result = execute(
+                &frame, *subMod, env, callArgs, passArgc, capsVal,
                 kwBased ? kwVals : nullptr, kwCount,
                 kwBased ? kwArgsMap : nullptr);
             pushVal(result);
@@ -603,14 +627,14 @@ ExecutionEngine::run(proto::ProtoContext* parent,
         // A keyword, a quoted symbol or a map in call position looks a key
         // up, as `get` does (callLookup). The arguments stay rooted in their
         // stack slots until the lookup returns.
-        if (proto == named.marker || proto == mapMarkerProto) {
+        if (proto == env.named.marker || proto == env.mapMarkerProto) {
             const proto::ProtoObject* lookupArgs[2] = {nullptr, nullptr};
             for (unsigned int i = 0; i < argc && i < 2; ++i) {
                 lookupArgs[i] = frame.getAutomaticLocal(stackBase + sp - argc + i);
             }
             const proto::ProtoObject* result = callLookup(
-                &frame, MapLayout{mapMarkerProto, mapStateKey}, named,
-                callable, proto == mapMarkerProto, lookupArgs, argc);
+                &frame, MapLayout{env.mapMarkerProto, env.mapStateKey}, env.named,
+                callable, proto == env.mapMarkerProto, lookupArgs, argc);
             sp -= (argc + 1);
             pushVal(result);
             return;
@@ -680,7 +704,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 const proto::ProtoString* key =
                     proto::ProtoString::createSymbol(&frame, c.sval.c_str());
                 const proto::ProtoObject* v =
-                    globals->getAttribute(&frame, key);
+                    env.globals->getAttribute(&frame, key);
                 if (!v || v == PROTO_NONE) {
                     throw std::runtime_error(
                         "VM: unable to resolve symbol: " + c.sval);
@@ -734,11 +758,11 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 // dispatcher reads arity directly from subMod) and is
                 // no longer set on the wrapper.
                 proto::ProtoObject* wrap = const_cast<proto::ProtoObject*>(
-                    fnSingleProto->newChild(&frame, /*isMutable=*/true));
-                wrap->setAttribute(&frame, bytecodeKey,
+                    env.fnSingleProto->newChild(&frame, /*isMutable=*/true));
+                wrap->setAttribute(&frame, env.bytecodeKey,
                     frame.fromLong(reinterpret_cast<long long>(&subMod)));
                 if (nCaps > 0) {
-                    wrap->setAttribute(&frame, capturesKey, capsList);
+                    wrap->setAttribute(&frame, env.capturesKey, capsList);
                 }
                 pushVal(wrap);
                 break;
@@ -794,9 +818,9 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                     throw std::runtime_error("VM: CALL_KW with insufficient stack");
                 const proto::ProtoObject* callable = peekAt(argc);
                 const BytecodeModule* kwMod = nullptr;
-                if (callable->getPrototype(&frame) == fnSingleProto) {
+                if (callable->getPrototype(&frame) == env.fnSingleProto) {
                     const proto::ProtoObject* ptrObj =
-                        callable->getAttribute(&frame, bytecodeKey);
+                        callable->getAttribute(&frame, env.bytecodeKey);
                     if (ptrObj && ptrObj->isInteger(&frame)) {
                         const BytecodeModule* subMod =
                             reinterpret_cast<const BytecodeModule*>(
@@ -819,26 +843,9 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 }
                 const unsigned int kvItems = argc - fixed;
                 if (kvItems > 0) {
-                    // The pairs stay rooted in their stack slots while the
-                    // map is built, at most kChunkItems at a time. After
-                    // each chunk the map built so far is rooted in the first
-                    // pair's slot, which no later chunk reads, before the
-                    // next chunk allocates.
-                    constexpr unsigned int kChunkItems = 256;  // even
-                    const proto::ProtoObject* kv[kChunkItems];
-                    const unsigned int firstPairSlot = stackBase + sp - kvItems;
-                    const proto::ProtoObject* kwMap = nullptr;
-                    for (unsigned int done = 0; done < kvItems; done += kChunkItems) {
-                        const unsigned int items =
-                            std::min(kChunkItems, kvItems - done);
-                        for (unsigned int i = 0; i < items; ++i) {
-                            kv[i] = frame.getAutomaticLocal(firstPairSlot + done + i);
-                        }
-                        kwMap = mapAssocPairs(
-                            &frame, MapLayout{mapMarkerProto, mapStateKey},
-                            kwMap, kv, items);
-                        frame.setAutomaticLocal(firstPairSlot, kwMap);
-                    }
+                    const proto::ProtoObject* kwMap = foldKeywordPairs(
+                        &frame, MapLayout{env.mapMarkerProto, env.mapStateKey},
+                        stackBase + sp - kvItems, kvItems);
                     sp -= kvItems;
                     pushVal(kwMap);
                     dispatchCall(fixed + 1);
@@ -869,7 +876,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                     proto::ProtoString::createSymbol(&frame, c.sval.c_str());
                 const proto::ProtoObject* val =
                     frame.getAutomaticLocal(stackBase + sp - 1);
-                const_cast<proto::ProtoObject*>(globals)
+                const_cast<proto::ProtoObject*>(env.globals)
                     ->setAttribute(&frame, key, val);
                 break;
             }
@@ -968,8 +975,8 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 sp = baseSp;
 
                 proto::ProtoObject* wrap = const_cast<proto::ProtoObject*>(
-                    fnMultiProto->newChild(&frame, /*isMutable=*/true));
-                wrap->setAttribute(&frame, aritiesKey, aritiesList);
+                    env.fnMultiProto->newChild(&frame, /*isMutable=*/true));
+                wrap->setAttribute(&frame, env.aritiesKey, aritiesList);
                 pushVal(wrap);
                 break;
             }
@@ -1072,7 +1079,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                     case Op::GT:  r = a->compare(&frame, b) >  0 ? PROTO_TRUE : PROTO_FALSE; break;
                     case Op::GE:  r = a->compare(&frame, b) >= 0 ? PROTO_TRUE : PROTO_FALSE; break;
                     case Op::EQ:
-                        r = valuesEqual(&frame, MapLayout{mapMarkerProto, mapStateKey}, a, b)
+                        r = valuesEqual(&frame, MapLayout{env.mapMarkerProto, env.mapStateKey}, a, b)
                                 ? PROTO_TRUE : PROTO_FALSE;
                         break;
                     default: break;

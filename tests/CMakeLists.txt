@@ -33,6 +33,8 @@ add_test(NAME cli/help
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/help.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/large-program
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/large-program.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/repl-stack-overflow
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/repl-stack-overflow.sh" "$<TARGET_FILE:protoclj>")
 
 foreach(conf_file ${PROTOCLJ_CONFORMANCE_FILES})
     # Module-helper files prefixed with `_` are loaded by other fixtures, not

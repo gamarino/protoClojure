@@ -16,6 +16,7 @@
 #include "runtime/ExecutionEngine.h"
 #include "runtime/Named.h"
 #include "runtime/Primitives.h"
+#include "runtime/StackGuard.h"
 
 #include <cstring>
 #include <cstdio>
@@ -280,9 +281,17 @@ int runFile(const char* path) {
 } // namespace
 
 int main(int argc, char** argv) {
+    // Every non-tail call nests the VM on the native stack, so the stack
+    // size bounds the recursion depth. The evaluator runs on a thread with
+    // a stack of protoClojure::kThreadStackBytes, and every thread created
+    // later (futures, pmap, actor workers) gets the same size by default;
+    // the VM raises StackOverflowError before any of them overflows.
+    protoClojure::configureThreadStacks();
+
     if (argc < 2) {
         // No arguments → drop into the interactive REPL.
-        return protoClojure::runRepl();
+        return protoClojure::runOnEvaluatorThread(
+            [](void*) { return protoClojure::runRepl(); }, nullptr);
     }
 
     // Walk argv. A non-flag argument is treated as a .clj file to run.
@@ -302,7 +311,9 @@ int main(int argc, char** argv) {
             return 1;
         }
         // Positional: a file to run.
-        return runFile(a);
+        return protoClojure::runOnEvaluatorThread(
+            [](void* path) { return runFile(static_cast<const char*>(path)); },
+            static_cast<void*>(argv[i]));
     }
     return 0;
 }

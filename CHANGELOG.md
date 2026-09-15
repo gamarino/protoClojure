@@ -49,11 +49,12 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (214 fixtures under
+- **Tests.** A glob-discovered conformance suite (220 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
-  the bytecode module, the runtime map and value equality and hashing
-  (68 tests), and two CLI checks (`--help`, and a generated program with
-  70,000 distinct literals of each kind).
+  the bytecode module, the runtime map, value equality and hashing and the
+  native stack guard (74 tests), and three CLI checks (`--help`, a
+  generated program with 70,000 distinct literals of each kind, and a
+  stack overflow in the REPL).
 - **Benchmarks and examples.** `benchmarks/bench.sh` (comparison with
   Babashka), `benchmarks/actor-bench.sh` (actor throughput) and twelve
   example scripts under `examples/`.
@@ -194,6 +195,17 @@ The project has no tagged releases yet; the version declared in
   distinct), and the operand stack grows on demand; a script with 70,000
   distinct literals of each kind compiles and runs. The remaining hard
   limits are documented in `LANGUAGE.md` §17.
+- Deep recursion no longer crashes the process. Every non-tail call nests
+  the VM on the native stack; a call took 4,512 bytes of it and the depth
+  was not checked, so `(defn f [n] (if (= n 0) 0 (+ 1 (f (- n 1)))))`
+  crashed with SIGSEGV before `(f 2000)`. A call now takes 1,344 bytes, the
+  script driver and the REPL run on a 32 MiB stack, every thread the
+  runtime creates (futures, `pmap`, actor workers) gets the same size, and
+  the VM checks the remaining stack on every call: a simple self-recursive
+  function reaches about 24,700 nested calls, and a deeper recursion
+  raises the runtime error `StackOverflowError` on any of those threads.
+  Printing, comparing or hashing a collection nested deeper than the stack
+  allows raises the same error instead of crashing.
 - Symbols and keywords may contain non-ASCII letters. `:ñandú` or
   `(defn año [x] ...)` failed with "unexpected character: �": the lexer
   classified source bytes with `isalnum`, which rejects every byte of a

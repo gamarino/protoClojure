@@ -500,9 +500,11 @@ compiler enforce this with a clear error; the 0.0.1 compiler does not
 check it yet, and a non-tail `recur` fails at run time. Without `recur`,
 deep self-recursion exhausts the stack — there is no automatic TCO for
 general calls, only at `recur` points (matches JVM Clojure exactly). In
-0.0.1 every non-tail call nests the interpreter on the native stack and
-the depth is not checked: a recursion between 1,000 and 2,000 calls deep
-crashes the process instead of raising an error (§17).
+0.0.1 every non-tail call nests the interpreter on the native stack. A
+recursion deeper than the thread's stack allows raises the runtime error
+`StackOverflowError`, as JVM Clojure does; every protoClojure thread runs
+on a 32 MiB stack, where a simple self-recursive function reaches about
+24,700 nested calls (§17).
 
 ### 5.3 Closures
 
@@ -740,7 +742,9 @@ implemented: `future` runs its body on a new OS thread, and `deref`
 blocks on a pending future or promise. `pmap` runs one OS thread per
 element. `pcalls` and `pvalues` are planned. Actors (`actor`, `send`,
 `send-h`, `send-l`) run on a shared worker pool; see tutorial
-chapter 13.
+chapter 13. The evaluator, future and `pmap` threads and actor workers
+all run on 32 MiB stacks, so a recursion reaches the same depth on each
+of them (§17).
 
 ```clojure
 (def result (future (slow-computation)))
@@ -800,7 +804,9 @@ of them.
 
 In 0.0.1, a read, compile or runtime error stops a script with a
 message on standard error and exit status 1; the REPL prints the error
-and continues.
+and continues. A recursion, or a collection printed, compared or hashed,
+nested deeper than the thread's stack allows raises the runtime error
+`StackOverflowError` (§17).
 
 ---
 
@@ -877,4 +883,5 @@ are four different kinds of constant).
 | Extra arguments to `swap!` | 15 | runtime error |
 | Operand stack of a call (arguments pushed by a call, a literal or `apply`) | grows on demand | memory |
 | Integer literals, strings, collections | none | memory |
-| Nesting depth of non-tail calls | native stack: 1,000 calls work and 2,000 crash with an 8 MiB stack | the process crashes (Known issues in `STATUS.md`) |
+| Nesting depth of non-tail calls | the 32 MiB native stack of every thread: about 24,700 calls of a simple self-recursive fn; a recursion through a primitive such as `map` uses more stack per level | runtime error `StackOverflowError` |
+| Nesting depth of a collection that is printed, compared or hashed | the 32 MiB native stack of every thread | runtime error `StackOverflowError` |
