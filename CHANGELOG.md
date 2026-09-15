@@ -49,9 +49,9 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (130 fixtures under
-  `tests/conformance/`) and GoogleTest unit tests for the lexer and reader
-  (31 tests).
+- **Tests.** A glob-discovered conformance suite (158 fixtures under
+  `tests/conformance/`) and GoogleTest unit tests for the lexer, the reader
+  and the runtime map (41 tests).
 - **Benchmarks and examples.** `benchmarks/bench.sh` (comparison with
   Babashka), `benchmarks/actor-bench.sh` (actor throughput) and twelve
   example scripts under `examples/`.
@@ -98,6 +98,15 @@ The project has no tagged releases yet; the version declared in
   `remove-watch` keeps the order of the remaining watches, and `keys`, `vals`,
   printing, `:as` maps, watches and `actor-stats` all follow insertion order.
   All map operations now live in `src/runtime/MapOps.{h,cpp}`.
+- `=` compares maps by value. `(= {:a 1 :b 2} {:b 2 :a 1})` returned `false`:
+  the `EQ` opcode compared maps by identity, and the `=` primitive (used with
+  more than two arguments or as a function value) accepted only numbers. Both
+  now share one value equality: maps are equal when they hold the same keys
+  mapped to equal values, whatever the insertion order; vectors compare
+  element by element; nested maps and vectors compare recursively; a map is
+  never equal to a vector or a list. `not=` is added. Lists still compare by
+  identity, and a map used as a map key is still matched by identity (map
+  hashing is not implemented).
 - `--help` and error messages no longer mention internal development labels
   ("Phase 5", "next milestone", "v0.0.x", "v0.7.x", "v0.13"); each message
   now states the actual restriction, for example "let: not supported at top

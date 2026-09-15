@@ -23,8 +23,10 @@
  *   - assoc of an existing key replaces the value and keeps the key object
  *     and its position (array-map behaviour on the JVM);
  *   - dissoc keeps the relative order of the remaining keys;
- *   - sequence numbers are an implementation detail: any future map
- *     equality or hashing must ignore them and entry order.
+ *   - sequence numbers are an implementation detail: map equality
+ *     (mapEquals) ignores them and entry order;
+ *   - map hashing is not implemented: a map used as a key of another map
+ *     is hashed and compared by identity, not by value.
  *
  * Cost: get is one sparse-list walk plus the bucket scan; assoc of a new
  * key and dissoc update both sparse lists, O(log N); assoc of an existing
@@ -105,5 +107,26 @@ using MapEntryFn = void (*)(proto::ProtoContext* ctx, void* self,
                             const proto::ProtoObject* value);
 void mapForEach(proto::ProtoContext* ctx, const MapLayout& layout,
                 const proto::ProtoObject* m, void* self, MapEntryFn fn);
+
+// Number of entries in map `m` (nullptr is the empty map).
+unsigned long mapCount(proto::ProtoContext* ctx, const MapLayout& layout,
+                       const proto::ProtoObject* m);
+
+// Value equality of two maps, as used by `=`: true when both hold the same
+// number of entries and every key of `a` is present in `b` with a value for
+// which `valueEq(ctx, self, valueInA, valueInB)` holds. Insertion order and
+// sequence numbers are ignored. Keys are matched as in mapGet (hash, then
+// `compare(ctx, other) == 0`). nullptr is the empty map.
+//
+// Cost: O(N log N) — each key of `a` is probed in `b` by the hash already
+// stored in `a`'s index, without rehashing; the walk stops calling
+// `valueEq` after the first mismatch. Allocates nothing itself; both maps
+// must be rooted by the caller if `valueEq` allocates.
+using MapValueEqFn = bool (*)(proto::ProtoContext* ctx, void* self,
+                              const proto::ProtoObject* a,
+                              const proto::ProtoObject* b);
+bool mapEquals(proto::ProtoContext* ctx, const MapLayout& layout,
+               const proto::ProtoObject* a, const proto::ProtoObject* b,
+               void* self, MapValueEqFn valueEq);
 
 } // namespace protoClojure

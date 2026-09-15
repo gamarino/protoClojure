@@ -27,6 +27,19 @@ class ProtoList;
 namespace protoClojure {
 
 class ExecutionEngine;
+struct MapLayout;
+
+// Value equality as `=` defines it, shared by the `=` / `not=` primitives
+// and the VM's EQ opcode. Maps are equal when they hold the same keys mapped
+// to equal values, whatever the insertion order (mapEquals); vectors are
+// equal element by element. Values are compared recursively with this same
+// function, so nested collections compare structurally. A map is never
+// equal to a non-map. Every other pair of values is compared with protoCore
+// `compare(ctx, other) == 0`: numbers across types (deviation D15), strings
+// by content, and everything else — lists included — by identity. nullptr
+// is nil. Both values must be rooted by the caller.
+bool valuesEqual(proto::ProtoContext* ctx, const MapLayout& layout,
+                 const proto::ProtoObject* a, const proto::ProtoObject* b);
 
 // Install all v0.0.x primitives on the supplied globals object. The globals
 // object must be a mutable protoCore object (typically a child of

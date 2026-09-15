@@ -8,7 +8,8 @@
 > `assoc` on vectors, `dissoc`, `update`, `merge`, `select-keys`,
 > `zipmap`, the `get-in` / `assoc-in` / `update-in` family, `seq`,
 > `into`, collections and keywords as functions, `count` on maps, `==`,
-> `identical?`, `hash`, structural equality across collection types, and
+> `identical?`, `hash`, value equality of lists and between vectors and
+> lists (`=` compares maps and vectors by value but lists by identity), and
 > the sequence and regex functions used in §4.11. See
 > [STATUS.md](../STATUS.md).
 
@@ -264,6 +265,12 @@ defines a cross-type equivalence:
                                 ;; => true
 ```
 
+> **In protoClojure 0.0.1** the vector and map lines hold, including
+> nested maps and vectors (`(= {:a [{:b 1 :c 2}]} {:a [{:c 2 :b 1}]})` is
+> `true`), and so does `not=`. Lists compare by identity, so a vector is
+> not `=` to a list; sets, `seq` and the `'` reader macro are not
+> implemented.
+
 `==` is the *numeric* equality across number types, with no cross-type
 equivalence for collections:
 
@@ -290,6 +297,10 @@ substrate's. You can call `hash` directly:
 In practice, this matters if you put your own types (records, when v0.2
 adds them) into sets and as map keys. Implement structural hash properly
 and equality / set membership just work.
+
+> **In protoClojure 0.0.1** `hash` is not available and maps are not
+> hashed by value: a map used as a key of another map matches by identity,
+> so `(get {{:a 1} :x} {:a 1})` returns `nil`.
 
 ## 4.10 The substrate underneath
 

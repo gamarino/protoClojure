@@ -87,6 +87,10 @@ The design specifications written during development are archived under
       of keys indexed by a per-map sequence number plus a hash index holding
       values (`src/runtime/MapOps.h`), with `hash-map` / `assoc` / `get` /
       `contains?` / `keys` / `vals` / `map?`
+- [x] Map equality — `=` / `not=` compare maps by value, ignoring insertion
+      order (`mapEquals` in `src/runtime/MapOps.h`); values compare
+      recursively, so nested maps and vectors compare by value; a map is
+      never `=` to a vector or a list
 - [x] Strings — protoCore `ProtoString`
 - [x] Integers — `SmallInteger` tagged + auto-promoted `LargeInteger`
 - [x] Floats — `ProtoObject::fromDouble`
@@ -105,9 +109,9 @@ The design specifications written during development are archived under
 - [x] Captures cascade — intermediate scopes create capture slots automatically
 - [x] First-class fns — `((make-mul k) x)` callable head, passed around freely
 
-### Primitives installed at startup (74)
+### Primitives installed at startup (75)
 
-- [x] Arithmetic and comparison: `+ - * / inc dec < <= > >= =`
+- [x] Arithmetic and comparison: `+ - * / inc dec < <= > >= = not=`
 - [x] Output: `println str`
 - [x] Lists and vectors: `list vector vec nth first rest cons count empty? reverse`
 - [x] Higher-order: `map filter reduce pmap`
@@ -211,8 +215,11 @@ raises a read, compile or runtime error.
 
 - [ ] Sets — `ProtoSparseList` based, with `conj` / `disj`
 - [ ] Lazy seqs — `LazySeq` wrapper
-- [ ] Structural equality across collections — `=` compares numbers,
-      but two equal lists built separately are not `=`
+- [ ] Value equality of lists — lists compare by identity, so two equal
+      lists built separately are not `=` and a vector is never `=` to a
+      list (vectors and maps compare by value)
+- [ ] Map hashing — a map used as a key of another map is hashed and
+      matched by identity, not by value; `hash` is not a primitive
 - [ ] Keywords, maps and vectors as functions (`(:a m)`, `(m :a)`, `(v 0)`)
 - [ ] `count` on maps
 

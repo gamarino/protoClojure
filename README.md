@@ -197,15 +197,15 @@ protoClojure runs scripts and an interactive REPL. Version 0.0.1; no tagged rele
 | Namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **188 test cases: 150 conformance fixtures, 37 unit tests** (lexer, reader and runtime map) **and 1 CLI check** (`--help`). All of them pass. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **200 test cases: 158 conformance fixtures, 41 unit tests** (lexer, reader and runtime map) **and 1 CLI check** (`--help`). All of them pass. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 
 - Reader: integers, floats (`3.14`, `1e6`), strings, symbols, keywords (`:foo`), `true` / `false` / `nil`, lists `(...)`, vectors `[...]`, maps `{...}`, `@form` as `(deref form)`, line comments (`;`), commas as whitespace.
 - Special forms: `def`, `defn` and `fn` (single- and multi-arity, variadic, named-argument destructuring), `let`, `loop`, `recur` (in `loop` and as the implicit function-body target), `if`, `do`, `quote` (of symbols, keywords and other atoms), `apply`, `when`, `when-not`, `cond`, `and`, `or`, `future`.
 - Closures: full N-level capture, including chained closures across `(fn ... (fn ... (fn ...)))`.
-- Primitives (74 registered at startup):
-  - arithmetic and comparison: `+ - * / inc dec < <= > >= =`
+- Primitives (75 registered at startup):
+  - arithmetic and comparison: `+ - * / inc dec < <= > >= = not=` (`=` compares maps and vectors by value)
   - output: `println str`
   - lists and vectors: `list vector vec nth first rest cons count empty? reverse`
   - higher-order: `map filter reduce pmap`

@@ -543,9 +543,28 @@ const proto::ProtoObject* prim_eq(proto::ProtoContext* ctx,
                                   const proto::ParentLink*,
                                   const proto::ProtoList* args,
                                   const proto::ProtoSparseList*) {
-    // = on integers in v0.0.x — for collections / strings we need structural
-    // equality which lands later. Variadic chain like Clojure's =.
-    return monotonicChain(ctx, args, "=", [](double a, double b){ return a == b; });
+    // Value equality (valuesEqual) over every adjacent pair, like Clojure's
+    // variadic =. The 0- and 1-argument forms are true.
+    unsigned long n = args ? args->getSize(ctx) : 0;
+    if (n < 2) return PROTO_TRUE;
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("=: no active VM context");
+    const MapLayout layout = mapLayoutOf(cc);
+    for (unsigned long i = 1; i < n; ++i) {
+        if (!valuesEqual(ctx, layout, args->getAt(ctx, static_cast<int>(i - 1)),
+                         args->getAt(ctx, static_cast<int>(i))))
+            return PROTO_FALSE;
+    }
+    return PROTO_TRUE;
+}
+
+const proto::ProtoObject* prim_not_eq(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* self,
+                                      const proto::ParentLink* parentLink,
+                                      const proto::ProtoList* args,
+                                      const proto::ProtoSparseList* kwArgs) {
+    return prim_eq(ctx, self, parentLink, args, kwArgs) == PROTO_TRUE
+               ? PROTO_FALSE : PROTO_TRUE;
 }
 
 // str ----------------------------------------------------------------------
@@ -707,7 +726,9 @@ const proto::ProtoObject* prim_list_p(proto::ProtoContext* ctx,
 // Session 13 — map primitives. The representation (insertion-ordered
 // entries plus a hash index), its cost model and its GC-rooting rules
 // live in src/runtime/MapOps.h; the primitives below only validate
-// arguments and delegate. Key equality is `compare(ctx, other) == 0`.
+// arguments and delegate. Key equality is `compare(ctx, other) == 0`, so a
+// map used as a key matches by identity. Map equality under `=` is
+// mapEquals, reached through valuesEqual.
 
 const proto::ProtoObject* prim_map_p(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
@@ -2227,6 +2248,46 @@ void replPrintValue(proto::ProtoContext* ctx, std::FILE* out,
     printValue(ctx, out, v);
 }
 
+// Externally-visible value equality, declared in Primitives.h; shared by
+// `=` / `not=` and the VM's EQ opcode.
+bool valuesEqual(proto::ProtoContext* ctx, const MapLayout& layout,
+                 const proto::ProtoObject* a, const proto::ProtoObject* b) {
+    if (!a) a = PROTO_NONE;
+    if (!b) b = PROTO_NONE;
+    if (a == b) return true;
+
+    const bool aMap = isMap(ctx, layout, a);
+    const bool bMap = isMap(ctx, layout, b);
+    if (aMap || bMap) {
+        return aMap && bMap &&
+            mapEquals(ctx, layout, a, b,
+                const_cast<void*>(static_cast<const void*>(&layout)),
+                [](proto::ProtoContext* c, void* self,
+                   const proto::ProtoObject* x, const proto::ProtoObject* y) {
+                    return valuesEqual(c, *static_cast<const MapLayout*>(self),
+                                       x, y);
+                });
+    }
+
+    // Vectors element by element, so maps nested in vectors compare by
+    // value. (protoCore shares equal tuples of identical elements, which
+    // the pointer test above already accepts.)
+    const proto::ProtoTuple* ta = asTupleOrNull(ctx, a);
+    const proto::ProtoTuple* tb = ta ? asTupleOrNull(ctx, b) : nullptr;
+    if (ta && tb) {
+        const unsigned long n = ta->getSize(ctx);
+        if (n != tb->getSize(ctx)) return false;
+        for (unsigned long i = 0; i < n; ++i) {
+            if (!valuesEqual(ctx, layout, ta->getAt(ctx, static_cast<int>(i)),
+                             tb->getAt(ctx, static_cast<int>(i))))
+                return false;
+        }
+        return true;
+    }
+
+    return a->compare(ctx, b) == 0;
+}
+
 void installPrimitives(proto::ProtoContext* ctx,
                        proto::ProtoObject* globals) {
     // Install each primitive: wrap the C function pointer in a callable
@@ -2251,6 +2312,7 @@ void installPrimitives(proto::ProtoContext* ctx,
     install(">",       &prim_gt);
     install(">=",      &prim_ge);
     install("=",       &prim_eq);
+    install("not=",    &prim_not_eq);
     install("str",     &prim_str);
     install("/",       &prim_div);
 

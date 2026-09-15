@@ -9,6 +9,8 @@
 #include "protoCore.h"
 #include <gtest/gtest.h>
 
+#include <initializer_list>
+#include <utility>
 #include <vector>
 
 using protoClojure::MapLayout;
@@ -175,6 +177,117 @@ TEST_F(MapOpsFixture, HashCollisionsShareABucket) {
     EXPECT_TRUE(walkC(m).empty());
     getC(m, a, &found);
     EXPECT_FALSE(found);
+}
+
+// Value comparator for mapEquals: recurses into maps built with the layout
+// passed as `self`, otherwise protoCore compare.
+bool eqValues(proto::ProtoContext* ctx, void* self,
+              const proto::ProtoObject* a, const proto::ProtoObject* b) {
+    const MapLayout& l = *static_cast<const MapLayout*>(self);
+    if (protoClojure::isMap(ctx, l, a) && protoClojure::isMap(ctx, l, b))
+        return protoClojure::mapEquals(ctx, l, a, b, self, &eqValues);
+    return a->compare(ctx, b) == 0;
+}
+
+bool mapsEqual(proto::ProtoContext* ctx, const MapLayout& l,
+               const proto::ProtoObject* a, const proto::ProtoObject* b) {
+    return protoClojure::mapEquals(
+        ctx, l, a, b, const_cast<void*>(static_cast<const void*>(&l)),
+        &eqValues);
+}
+
+TEST_F(MapOpsFixture, EqualityIgnoresInsertionOrderBeyondTheSmallForm) {
+    // The same 200 entries inserted in ascending and in scrambled order
+    // ((i * 73) % 200 is a permutation of 0..199).
+    const proto::ProtoObject* ascending = nullptr;
+    const proto::ProtoObject* scrambled = nullptr;
+    for (long long i = 0; i < 200; ++i) {
+        long long key = (i * 73) % 200;
+        ascending = assoc(ascending, num(i), num(i * 10));
+        scrambled = assoc(scrambled, num(key), num(key * 10));
+    }
+    EXPECT_EQ(protoClojure::mapCount(ctx, layout, ascending), 200u);
+    EXPECT_EQ(protoClojure::mapCount(ctx, layout, scrambled), 200u);
+    EXPECT_TRUE(mapsEqual(ctx, layout, ascending, scrambled));
+    EXPECT_TRUE(mapsEqual(ctx, layout, scrambled, ascending));
+
+    // One different value breaks equality in both directions.
+    const proto::ProtoObject* changed = assoc(scrambled, num(117), num(0));
+    EXPECT_FALSE(mapsEqual(ctx, layout, ascending, changed));
+    EXPECT_FALSE(mapsEqual(ctx, layout, changed, ascending));
+}
+
+TEST_F(MapOpsFixture, EqualityRequiresTheSameKeysAndSize) {
+    const proto::ProtoObject* ab = assoc(assoc(nullptr, kw(":a"), num(1)),
+                                         kw(":b"), num(2));
+    const proto::ProtoObject* ac = assoc(assoc(nullptr, kw(":a"), num(1)),
+                                         kw(":c"), num(2));
+    const proto::ProtoObject* a = assoc(nullptr, kw(":a"), num(1));
+    EXPECT_FALSE(mapsEqual(ctx, layout, ab, ac));
+    EXPECT_FALSE(mapsEqual(ctx, layout, ab, a));
+    EXPECT_FALSE(mapsEqual(ctx, layout, a, ab));
+
+    // nullptr, a map built from no pairs and a map emptied by dissoc are
+    // all the empty map.
+    const proto::ProtoObject* built =
+        protoClojure::mapAssocPairs(ctx, layout, nullptr,
+                                    static_cast<const proto::ProtoObject* const*>(nullptr), 0);
+    const proto::ProtoObject* emptied =
+        protoClojure::mapDissoc(ctx, layout, a, kw(":a"));
+    EXPECT_EQ(protoClojure::mapCount(ctx, layout, built), 0u);
+    EXPECT_EQ(protoClojure::mapCount(ctx, layout, emptied), 0u);
+    EXPECT_TRUE(mapsEqual(ctx, layout, nullptr, built));
+    EXPECT_TRUE(mapsEqual(ctx, layout, built, emptied));
+    EXPECT_FALSE(mapsEqual(ctx, layout, nullptr, a));
+    EXPECT_FALSE(mapsEqual(ctx, layout, a, emptied));
+}
+
+TEST_F(MapOpsFixture, EqualityMatchesKeysInsideCollidingBuckets) {
+    MapLayout colliding{marker, stateKey,
+        [](proto::ProtoContext*, const proto::ProtoObject*) -> unsigned long {
+            return 42;
+        }};
+    auto build = [&](std::initializer_list<std::pair<const char*, long long>> kvs) {
+        const proto::ProtoObject* m = nullptr;
+        for (const auto& [k, v] : kvs) {
+            const proto::ProtoObject* kv[2] = {kw(k), num(v)};
+            m = protoClojure::mapAssocPairs(ctx, colliding, m, kv, 2);
+        }
+        return m;
+    };
+    // One bucket, triples in a different order.
+    EXPECT_TRUE(mapsEqual(ctx, colliding,
+                          build({{":x1", 1}, {":x2", 2}, {":x3", 3}}),
+                          build({{":x3", 3}, {":x1", 1}, {":x2", 2}})));
+    EXPECT_FALSE(mapsEqual(ctx, colliding,
+                           build({{":x1", 1}, {":x2", 2}, {":x3", 3}}),
+                           build({{":x3", 3}, {":x1", 1}, {":x2", 9}})));
+    EXPECT_FALSE(mapsEqual(ctx, colliding,
+                           build({{":x1", 1}, {":x2", 2}}),
+                           build({{":x1", 1}, {":x4", 2}})));
+}
+
+TEST_F(MapOpsFixture, EqualityComparesValuesThroughTheCallback) {
+    const proto::ProtoObject* inner1 = assoc(assoc(nullptr, kw(":x"), num(1)),
+                                             kw(":y"), num(2));
+    const proto::ProtoObject* inner2 = assoc(assoc(nullptr, kw(":y"), num(2)),
+                                             kw(":x"), num(1));
+    const proto::ProtoObject* inner3 = assoc(assoc(nullptr, kw(":y"), num(3)),
+                                             kw(":x"), num(1));
+    const proto::ProtoObject* outer1 = assoc(nullptr, kw(":m"), inner1);
+    const proto::ProtoObject* outer2 = assoc(nullptr, kw(":m"), inner2);
+    const proto::ProtoObject* outer3 = assoc(nullptr, kw(":m"), inner3);
+    // Distinct inner map objects, equal only by value.
+    EXPECT_NE(inner1, inner2);
+    EXPECT_TRUE(mapsEqual(ctx, layout, outer1, outer2));
+    EXPECT_FALSE(mapsEqual(ctx, layout, outer1, outer3));
+
+    // A comparator that rejects everything makes non-empty maps unequal,
+    // except a map compared with itself.
+    auto never = [](proto::ProtoContext*, void*, const proto::ProtoObject*,
+                    const proto::ProtoObject*) { return false; };
+    EXPECT_FALSE(protoClojure::mapEquals(ctx, layout, inner1, inner2, nullptr, never));
+    EXPECT_TRUE(protoClojure::mapEquals(ctx, layout, inner1, inner1, nullptr, never));
 }
 
 TEST_F(MapOpsFixture, RepeatedKeyInOnePairListKeepsLastValueAndFirstPosition) {

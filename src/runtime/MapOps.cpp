@@ -294,4 +294,51 @@ void mapForEach(proto::ProtoContext* ctx, const MapLayout& layout,
         });
 }
 
+unsigned long mapCount(proto::ProtoContext* ctx, const MapLayout& layout,
+                       const proto::ProtoObject* m) {
+    const proto::ProtoList* st = stateOf(ctx, layout, m);
+    return st ? asSparse(st->getAt(ctx, kStateOrder))->getSize(ctx) : 0;
+}
+
+bool mapEquals(proto::ProtoContext* ctx, const MapLayout& layout,
+               const proto::ProtoObject* a, const proto::ProtoObject* b,
+               void* self, MapValueEqFn valueEq) {
+    if (a == b) return true;
+    const unsigned long n = mapCount(ctx, layout, a);
+    if (n != mapCount(ctx, layout, b)) return false;
+    if (n == 0) return true;
+
+    // Walk `a`'s hash index, not its order store: the index hands over each
+    // bucket together with the hash it is stored under, so the matching
+    // bucket of `b` is one sparse-list probe away. Equal counts plus every
+    // key of `a` found in `b` means the key sets are equal.
+    struct Walk {
+        const proto::ProtoSparseList* otherIndex;
+        void*                         self;
+        MapValueEqFn                  valueEq;
+        bool                          equal;
+    } walk{asSparse(stateOf(ctx, layout, b)->getAt(ctx, kStateIndex)),
+           self, valueEq, true};
+    asSparse(stateOf(ctx, layout, a)->getAt(ctx, kStateIndex))->processElements(
+        ctx, &walk,
+        [](proto::ProtoContext* c, void* p, unsigned long hash,
+           const proto::ProtoObject* bucketObj) {
+            auto* w = static_cast<Walk*>(p);
+            if (!w->equal) return;  // processElements cannot stop early
+            const proto::ProtoList* other = bucketAt(c, w->otherIndex, hash);
+            if (!other) { w->equal = false; return; }
+            const proto::ProtoList* bucket = bucketObj->asList(c);
+            const unsigned long size = bucket->getSize(c);
+            for (unsigned long i = 0; i < size && w->equal; i += kTriple) {
+                long pos = bucketFind(
+                    c, other, bucket->getAt(c, static_cast<int>(i)));
+                w->equal = pos >= 0 &&
+                    w->valueEq(c, w->self,
+                               bucket->getAt(c, static_cast<int>(i + 1)),
+                               other->getAt(c, static_cast<int>(pos + 1)));
+            }
+        });
+    return walk.equal;
+}
+
 } // namespace protoClojure

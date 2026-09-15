@@ -286,8 +286,8 @@ new value; the old value is unchanged) and immutable by default.
 
 In 0.0.1, lists, vectors and maps are implemented with the primitives
 listed in `STATUS.md`. Sets, `conj`, `dissoc`, `update`, `merge`,
-collections and keywords as functions, and the equality rules of §4.5
-are planned.
+collections and keywords as functions, and the parts of the equality
+rules of §4.5 listed there as not implemented are planned.
 
 ### 4.1 List
 
@@ -320,9 +320,18 @@ Map of key→value pairs. Keys can be any value supporting `=` / `hash`.
 printing and every other walk visit entries in the order their keys were
 first added. `assoc` of a new key appends it; `assoc` of an existing key
 replaces the value and keeps the key's position; removing a key keeps the
-order of the others. Equality and hashing ignore order. (JVM Clojure
+order of the others. Equality ignores order. (JVM Clojure
 guarantees insertion order only for array maps of at most 8 entries;
 deviation D19 in `docs/STATUS.md`.)
+
+**Equality and hashing.** Two maps are `=` when they have the same number
+of entries and every key of one is mapped to an `=` value in the other;
+insertion order is irrelevant, and values are compared recursively, so
+nested maps and vectors compare by value (§4.5). A map is never `=` to a
+vector or a list. Map hashing is not implemented in 0.0.1: a map used as a
+key of another map is hashed and matched by identity, so
+`(get {{:a 1} :x} {:a 1})` returns `nil`; only the same map object finds
+the entry.
 
 **Representation.** A map holds a protoCore `ProtoSparseList` of keys
 indexed by a per-map sequence number (the insertion-order store) and a
@@ -360,9 +369,17 @@ key→value pairs. `==` is numeric equality across types (`(== 1 1.0)`
 is true; `(= 1 1.0)` is false). Identity is `identical?` (pointer
 equality, useful for sentinels).
 
-In 0.0.1, `=` compares numbers across types (`(= 1 1.0)` is true, see
-deviation D15 in `STATUS.md`), and structural equality of collections,
-`==` and `identical?` are not implemented.
+In 0.0.1, `=` and `not=` follow these rules for numbers, strings,
+keywords, booleans, `nil`, vectors and maps, recursively through nested
+vectors and maps, with any number of arguments. The departures are:
+
+- `=` compares numbers across types: `(= 1 1.0)` is true (deviation D15
+  in `STATUS.md`).
+- Lists compare by identity, so two equal lists built separately are not
+  `=`, and a vector is never `=` to a list.
+- Maps are not hashed by value: a map used as a map key matches by
+  identity (§4.3).
+- `==`, `identical?` and `hash` are not implemented.
 
 ---
 

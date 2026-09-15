@@ -958,9 +958,11 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 // numeric mistake. Route through protoCore's promoting
                 // add/subtract/multiply/compare which handle SmallInt ↔
                 // LargeInteger ↔ Float automatically. Throws on non-
-                // numeric input. The compiler never emits these opcodes
-                // when the operator is shadowed by a local, so we don't
-                // need to honour user-shadowing here.
+                // numeric input. EQ is value equality on any operands
+                // and shares valuesEqual with the `=` primitive, so maps
+                // and vectors compare structurally. The compiler never
+                // emits these opcodes when the operator is shadowed by a
+                // local, so we don't need to honour user-shadowing here.
                 sp -= 2;
                 const proto::ProtoObject* r = PROTO_NONE;
                 switch (op) {
@@ -971,7 +973,10 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                     case Op::LE:  r = a->compare(&frame, b) <= 0 ? PROTO_TRUE : PROTO_FALSE; break;
                     case Op::GT:  r = a->compare(&frame, b) >  0 ? PROTO_TRUE : PROTO_FALSE; break;
                     case Op::GE:  r = a->compare(&frame, b) >= 0 ? PROTO_TRUE : PROTO_FALSE; break;
-                    case Op::EQ:  r = a->compare(&frame, b) == 0 ? PROTO_TRUE : PROTO_FALSE; break;
+                    case Op::EQ:
+                        r = valuesEqual(&frame, MapLayout{mapMarkerProto, mapStateKey}, a, b)
+                                ? PROTO_TRUE : PROTO_FALSE;
+                        break;
                     default: break;
                 }
                 pushVal(r);
