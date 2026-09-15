@@ -47,6 +47,13 @@ private:
     void   advance();
     void   skipWhitespaceAndComments();
 
+    // Byte length of the symbol character starting at source_[pos]: 1 for an
+    // ASCII symbol character, 2 to 4 for a well-formed UTF-8 sequence that
+    // encodes a Unicode letter, combining mark or decimal digit
+    // (UnicodeLetters.h), and 0 for anything else, delimiters and malformed
+    // UTF-8 included. `pos` must be in range.
+    std::size_t symbolCharLength(std::size_t pos) const;
+
     Token lexNumber(bool negative);
     Token lexString();
     Token lexSymbolOrPunct();

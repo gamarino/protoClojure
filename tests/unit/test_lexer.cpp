@@ -169,3 +169,65 @@ TEST(Lexer, PeekDoesNotConsume) {
     EXPECT_EQ(lex.next().text, "foo");
     EXPECT_EQ(lex.next().text, "bar");
 }
+
+TEST(Lexer, NonAsciiLettersInSymbolsAndKeywords) {
+    // The last symbol spells é as `e` followed by U+0301 COMBINING ACUTE.
+    auto toks = tokenise("ñandú :ñandú café Ωμέγα :日本語 cafe\xCC\x81");
+    ASSERT_EQ(toks.size(), 7u);
+    for (int i = 0; i < 6; ++i) EXPECT_EQ(toks[i].kind, TokenKind::Symbol) << i;
+    EXPECT_EQ(toks[0].text, "ñandú");
+    EXPECT_EQ(toks[1].text, ":ñandú");
+    EXPECT_EQ(toks[2].text, "café");
+    EXPECT_EQ(toks[3].text, "Ωμέγα");
+    EXPECT_EQ(toks[4].text, ":日本語");
+    EXPECT_EQ(toks[5].text, "cafe\xCC\x81");
+}
+
+TEST(Lexer, NonLetterCodePointsEndSymbolsAndAreErrors) {
+    // U+2192 RIGHTWARDS ARROW is not a letter: it ends `a` and is an error.
+    auto arrow = tokenise("a\xE2\x86\x92" "b");
+    ASSERT_EQ(arrow.size(), 2u);
+    EXPECT_EQ(arrow[0].kind, TokenKind::Symbol);
+    EXPECT_EQ(arrow[0].text, "a");
+    EXPECT_EQ(arrow[1].kind, TokenKind::Error);
+    EXPECT_EQ(arrow[1].text, "unexpected character: \xE2\x86\x92 (U+2192)");
+    // U+00A0 NO-BREAK SPACE neither extends a symbol nor separates tokens.
+    auto nbsp = tokenise("x\xC2\xA0y");
+    ASSERT_EQ(nbsp.size(), 2u);
+    EXPECT_EQ(nbsp[0].text, "x");
+    EXPECT_EQ(nbsp[1].kind, TokenKind::Error);
+    EXPECT_NE(nbsp[1].text.find("(U+00A0)"), std::string::npos);
+}
+
+TEST(Lexer, MalformedUtf8IsAnError) {
+    // Truncated, truncated before a delimiter, overlong, surrogate, beyond
+    // U+10FFFF, stray continuation byte, invalid lead byte.
+    const char* const bad[] = {"\xC3", "\xC3(", "\xC0\xAF", "\xED\xA0\x80",
+                               "\xF4\x90\x80\x80", "\x80", "\xFF"};
+    for (const char* b : bad) {
+        auto toks = tokenise(std::string("a") + b);
+        ASSERT_EQ(toks.size(), 2u);
+        EXPECT_EQ(toks[0].kind, TokenKind::Symbol);
+        EXPECT_EQ(toks[0].text, "a");
+        EXPECT_EQ(toks[1].kind, TokenKind::Error);
+        EXPECT_EQ(toks[1].text.rfind("invalid UTF-8 byte 0x", 0), 0u)
+            << toks[1].text;
+    }
+}
+
+TEST(Lexer, NumberFollowedByNonAsciiLetterIsMalformed) {
+    auto toks = tokenise("42ñx");
+    ASSERT_EQ(toks.size(), 1u);
+    EXPECT_EQ(toks[0].kind, TokenKind::Error);
+    EXPECT_EQ(toks[0].text, "malformed number literal: 42ñx");
+}
+
+TEST(Lexer, ColumnsCountCodePoints) {
+    auto toks = tokenise("ñandú \"ü\" )");
+    ASSERT_EQ(toks.size(), 4u);
+    EXPECT_EQ(toks[1].kind, TokenKind::String);
+    EXPECT_EQ(toks[1].text, "ü");
+    EXPECT_EQ(toks[1].column, 7);
+    EXPECT_EQ(toks[2].kind, TokenKind::RParen);
+    EXPECT_EQ(toks[2].column, 11);
+}

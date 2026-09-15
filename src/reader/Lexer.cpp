@@ -1,9 +1,52 @@
 #include "Lexer.h"
+#include "UnicodeLetters.h"
 
 #include <cctype>
+#include <cstdio>
 #include <cstdlib>
 
 namespace protoClojure {
+
+namespace {
+
+// Decode the UTF-8 sequence starting at s[pos]. Returns its length in bytes
+// (1 to 4) and stores the code point in *cp, or returns 0 when the bytes are
+// not well-formed UTF-8: an invalid lead or stray continuation byte, a
+// truncated sequence, an overlong encoding, a surrogate or a value beyond
+// U+10FFFF.
+std::size_t decodeUtf8(const std::string& s, std::size_t pos, char32_t* cp) {
+    const unsigned b0 = static_cast<unsigned char>(s[pos]);
+    std::size_t len = 0;
+    char32_t value = 0;
+    char32_t minimum = 0;
+    if (b0 < 0x80) {
+        *cp = b0;
+        return 1;
+    }
+    if ((b0 & 0xE0) == 0xC0) {
+        len = 2; value = b0 & 0x1F; minimum = 0x80;
+    } else if ((b0 & 0xF0) == 0xE0) {
+        len = 3; value = b0 & 0x0F; minimum = 0x800;
+    } else if ((b0 & 0xF8) == 0xF0) {
+        len = 4; value = b0 & 0x07; minimum = 0x10000;
+    } else {
+        return 0;
+    }
+    if (len > s.size() - pos) return 0;
+    for (std::size_t i = 1; i < len; ++i) {
+        const unsigned b = static_cast<unsigned char>(s[pos + i]);
+        if ((b & 0xC0) != 0x80) return 0;
+        value = (value << 6) | (b & 0x3F);
+    }
+    if (value < minimum || value > 0x10FFFF ||
+        (value >= 0xD800 && value <= 0xDFFF)) {
+        return 0;
+    }
+    *cp = value;
+    return len;
+}
+
+} // namespace
 
 const char* tokenKindName(TokenKind k) {
     switch (k) {
@@ -41,12 +84,15 @@ const char* tokenKindName(TokenKind k) {
 
 Lexer::Lexer(std::string source) : source_(std::move(source)) {}
 
+// Columns count code points: a UTF-8 continuation byte does not advance the
+// column.
 void Lexer::advance() {
     if (eof()) return;
-    if (source_[pos_] == '\n') {
+    const unsigned char c = static_cast<unsigned char>(source_[pos_]);
+    if (c == '\n') {
         ++line_;
         column_ = 1;
-    } else {
+    } else if ((c & 0xC0) != 0x80) {
         ++column_;
     }
     ++pos_;
@@ -223,17 +269,25 @@ Token Lexer::lexNumber(bool negative) {
         }
     }
 
-    // Numbers followed by a Clojure symbol char (e.g. `42x`) are an error —
-    // Clojure does not permit that and JVM Clojure also rejects.
+    // Numbers followed by a letter, `_` or `.` (e.g. `42x`, `42ñ`) are an
+    // error — JVM Clojure also rejects them. The digit loops above leave no
+    // ASCII digit at the current position.
     if (!eof()) {
-        char trail = current();
-        if (std::isalpha(static_cast<unsigned char>(trail))
-            || trail == '_' || trail == '.') {
+        // Byte length of the character at `pos` when it continues a
+        // malformed number: an ASCII letter or digit, `_`, `.`, or a
+        // non-ASCII symbol letter; 0 otherwise.
+        auto trailLength = [&](std::size_t pos) -> std::size_t {
+            const unsigned char ch = static_cast<unsigned char>(source_[pos]);
+            if (ch >= 0x80) return symbolCharLength(pos);
+            return (std::isalnum(ch) || ch == '_' || ch == '.') ? 1 : 0;
+        };
+        if (trailLength(pos_) > 0) {
             std::string bad = digits;
-            while (!eof() && (std::isalnum(static_cast<unsigned char>(current()))
-                              || current() == '_' || current() == '.')) {
-                bad += current();
-                advance();
+            while (!eof()) {
+                const std::size_t len = trailLength(pos_);
+                if (len == 0) break;
+                bad.append(source_, pos_, len);
+                for (std::size_t i = 0; i < len; ++i) advance();
             }
             return makeError("malformed number literal: " + bad,
                              startLine, startCol);
@@ -298,11 +352,14 @@ Token Lexer::lexString() {
 // Anything not handled above and not single-punct is read as a symbol.
 // Clojure symbols accept letters, digits, and the punctuation set
 // `* + ! - _ ' ? < > = . / :`. The first char cannot be a bare digit
-// (handled above) but may be any of the punctuation chars.
+// (handled above) but may be any of the punctuation chars. Beyond ASCII, a
+// symbol accepts UTF-8 encoded Unicode letters, combining marks and decimal
+// digits (UnicodeLetters.h); any other non-ASCII character, and malformed
+// UTF-8, ends the symbol and is a read error on its own.
 //
 // Reserved-for-later characters surface a clear error so the user knows
 // the token category exists but is not yet wired.
-static bool isSymbolChar(char c) {
+static bool isAsciiSymbolChar(char c) {
     if (std::isalnum(static_cast<unsigned char>(c))) return true;
     switch (c) {
         case '*': case '+': case '!': case '-': case '_': case '\'':
@@ -312,6 +369,14 @@ static bool isSymbolChar(char c) {
         default:
             return false;
     }
+}
+
+std::size_t Lexer::symbolCharLength(std::size_t pos) const {
+    const unsigned char c = static_cast<unsigned char>(source_[pos]);
+    if (c < 0x80) return isAsciiSymbolChar(static_cast<char>(c)) ? 1 : 0;
+    char32_t cp = 0;
+    const std::size_t len = decodeUtf8(source_, pos, &cp);
+    return (len > 0 && isSymbolLetter(cp)) ? len : 0;
 }
 
 Token Lexer::lexSymbolOrPunct() {
@@ -344,15 +409,35 @@ Token Lexer::lexSymbolOrPunct() {
     }
 
     // Symbol body.
-    if (!isSymbolChar(c)) {
-        std::string bad(1, c);
-        advance();
+    if (symbolCharLength(pos_) == 0) {
+        char32_t cp = 0;
+        const std::size_t len = decodeUtf8(source_, pos_, &cp);
+        if (len == 0) {
+            char hex[8];
+            std::snprintf(hex, sizeof hex, "0x%02X",
+                          static_cast<unsigned>(static_cast<unsigned char>(c)));
+            advance();
+            return makeError(std::string("invalid UTF-8 byte ") + hex,
+                             startLine, startCol);
+        }
+        // The whole character, plus its code point when it is not ASCII
+        // (it may be invisible, such as a no-break space).
+        std::string bad = source_.substr(pos_, len);
+        if (len > 1) {
+            char codePoint[16];
+            std::snprintf(codePoint, sizeof codePoint, " (U+%04X)",
+                          static_cast<unsigned>(cp));
+            bad += codePoint;
+        }
+        for (std::size_t i = 0; i < len; ++i) advance();
         return makeError("unexpected character: " + bad, startLine, startCol);
     }
     std::string s;
-    while (!eof() && isSymbolChar(current())) {
-        s += current();
-        advance();
+    while (!eof()) {
+        const std::size_t len = symbolCharLength(pos_);
+        if (len == 0) break;
+        s.append(source_, pos_, len);
+        for (std::size_t i = 0; i < len; ++i) advance();
     }
     Token t;
     t.kind = TokenKind::Symbol;

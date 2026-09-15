@@ -49,9 +49,9 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (189 fixtures under
+- **Tests.** A glob-discovered conformance suite (193 fixtures under
   `tests/conformance/`) and GoogleTest unit tests for the lexer, the reader,
-  the runtime map and value equality and hashing (56 tests).
+  the runtime map and value equality and hashing (61 tests).
 - **Benchmarks and examples.** `benchmarks/bench.sh` (comparison with
   Babashka), `benchmarks/actor-bench.sh` (actor throughput) and twelve
   example scripts under `examples/`.
@@ -150,6 +150,16 @@ The project has no tagged releases yet; the version declared in
   `println` and the REPL used their own. There is now one printer, so
   `(str {:a 1})` is `"{:a 1}"` and `(str (atom 1))` is `"#<atom 1>"`, exactly
   as `println` prints them, and `println` writes each line with one call.
+- Symbols and keywords may contain non-ASCII letters. `:ñandú` or
+  `(defn año [x] ...)` failed with "unexpected character: �": the lexer
+  classified source bytes with `isalnum`, which rejects every byte of a
+  multi-byte UTF-8 character, and reported a single broken byte. The lexer
+  now decodes UTF-8 and accepts Unicode letters, combining marks and decimal
+  digits (Unicode 16.0) in symbols and keywords, which read, print, intern
+  and compare like ASCII ones. Any other non-ASCII character is a read error
+  naming the whole character and its code point (`→ (U+2192)`), malformed
+  UTF-8 is reported as such, `42ñ` is a malformed number like `42x`, and
+  error columns count characters instead of bytes.
 - `--help` and error messages no longer mention internal development labels
   ("Phase 5", "next milestone", "v0.0.x", "v0.7.x", "v0.13"); each message
   now states the actual restriction, for example "let: not supported at top

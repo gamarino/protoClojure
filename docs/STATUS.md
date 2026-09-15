@@ -5,8 +5,8 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 246 test cases: 189
-conformance fixtures under `tests/conformance/`, 56 GoogleTest unit
+scripts and an interactive REPL. `ctest` registers 255 test cases: 193
+conformance fixtures under `tests/conformance/`, 61 GoogleTest unit
 tests for the lexer, the reader, the runtime map and value equality and
 hashing (`tests/unit/`), and a CLI check of `--help` (`tests/cli/`); all
 pass. Benchmark numbers against Babashka 1.4.192
@@ -24,13 +24,13 @@ directories that cover them.
 |---|---|---:|
 | Binary, lexer, reader, bytecode VM, `println` | `00-binary`, `01-literals` | 2 |
 | `def`, `if`, `do`, integer arithmetic, comparisons, `str` | `02-special-forms`, `03-arithmetic` | 10 |
-| `fn`, `defn`, `let`, `loop`, `recur` | `04-functions`, `05-recursion` | 6 |
+| `fn`, `defn`, `let`, `loop`, `recur` | `04-functions`, `05-recursion` | 7 |
 | Closures with N-level lexical capture | `06-closures` | 6 |
 | Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 22 |
-| Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 17 |
+| Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 19 |
 | IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 11 |
 | LargeInteger promotion | `15-bigint` | 3 |
-| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 39 |
+| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 40 |
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 16 |
 | `clojure.string`-shaped string functions | `20-strings` | 14 |
 | Atoms | `21-atoms` | 11 |
@@ -53,6 +53,12 @@ The design specifications written during development are archived under
 - [x] Strings — `"hello"`, with `\n \t \r \\ \" \0` escapes
 - [x] Symbols (interned via the protoCore symbol table)
 - [x] Keywords — `:foo`, self-evaluating constants
+- [x] Non-ASCII letters in symbols and keywords — UTF-8 encoded Unicode
+      letters, combining marks and decimal digits (`año`, `:ñandú`,
+      `:日本語`; table generated from Unicode 16.0 in
+      `src/reader/UnicodeLetters.h`); other non-ASCII characters and
+      malformed UTF-8 are read errors naming the character (D21); lexer
+      columns count code points
 - [x] Booleans + nil — `true`, `false`, `nil` as compile-time literals
 - [x] Lists `(...)`
 - [x] Vectors `[...]`
@@ -366,6 +372,7 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D18 | `(fn name [args] body)` — the name is accepted by the compiler but dropped; self-reference via `name` inside the body is not supported (use `defn` for self-recursion). Planned for v0.2 via wrapper-into-slot capture. | v0.2 |
 | D19 | Maps iterate and print in insertion order at every size, including maps built with `hash-map` (JVM Clojure guarantees insertion order only for array maps of at most 8 entries and leaves it unspecified beyond that and for `hash-map`) | (perm) |
 | D20 | `str` renders a value exactly as `println` prints it: strings nested in a collection print without quotes (`(str ["a"])` is `"[a]"`, where JVM Clojure gives `"[\"a\"]"`), and atoms, futures, promises, actors and fns render as tags such as `#<atom 1>` (JVM Clojure: `#object[...]`) | v0.x |
+| D21 | Beyond ASCII, symbols and keywords accept only Unicode letters, combining marks and decimal digits: `a→b`, or a symbol containing a no-break space, is a read error (CONTRA JVM-Clojure, whose reader accepts any character that is neither whitespace nor a macro character) | v0.x |
 
 ## Known issues
 

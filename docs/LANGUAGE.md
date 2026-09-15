@@ -192,7 +192,11 @@ Strings nested in a collection render without quotes: `(str ["a"])` is
 A **symbol** is an identifier: `foo`, `+`, `*ear-muffs*`,
 `my.namespace/foo`. The reader produces a symbol; the evaluator resolves
 it. Allowed characters: letters, digits, and `* + ! - _ ' ? < > = . / :`.
-The first character cannot be a digit. A symbol with `/` is *namespace-
+Letters and digits are not limited to ASCII: a source file is UTF-8, and
+any Unicode letter, combining mark or decimal digit may appear in a symbol
+or keyword (`año`, `café`, `:ñandú`, `:日本語`). Other non-ASCII characters,
+such as `→` or a no-break space, and malformed UTF-8 are read errors
+(deviation D21 in `STATUS.md`). The first character cannot be a digit. A symbol with `/` is *namespace-
 qualified*: `my.app/handler` means symbol `handler` in namespace `my.app`.
 
 A **keyword** is a symbol with a leading `:`. Keywords are interned and
