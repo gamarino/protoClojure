@@ -822,7 +822,11 @@ nested deeper than the thread's stack allows raises the runtime error
 (`+ - * / < <= > >= inc dec`) on a value that is not a number raises the
 runtime error `ClassCastException: <operation> expects a number, got
 <type>`, for example `(+ 1 nil)`: `ClassCastException: + expects a number,
-got nil`.
+got nil`. An index out of range raises
+`IndexOutOfBoundsException: nth index 3 is out of bounds (count 3)` or
+`StringIndexOutOfBoundsException: subs begin 2, end 1, length 3`, with the
+index as written at any magnitude, and an integer divided by zero raises
+`ArithmeticException: Divide by zero`.
 
 ---
 

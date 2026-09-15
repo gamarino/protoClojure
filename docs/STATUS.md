@@ -5,7 +5,7 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 325 test cases: 245
+scripts and an interactive REPL. `ctest` registers 334 test cases: 254
 conformance fixtures under `tests/conformance/`, 77 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 value equality and hashing, the native stack guard and the double printer
@@ -29,13 +29,13 @@ directories that cover them.
 | `def`, `if`, `do`, integer arithmetic, comparisons, `str` | `02-special-forms`, `03-arithmetic` | 30 |
 | `fn`, `defn`, `let`, `loop`, `recur`, `StackOverflowError` | `04-functions`, `05-recursion` | 13 |
 | Closures with N-level lexical capture | `06-closures` | 6 |
-| Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 24 |
+| Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 29 |
 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 21 |
 | IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 21 |
 | LargeInteger promotion, big integer literals | `15-bigint` | 9 |
 | Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 40 |
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 17 |
-| `clojure.string`-shaped string functions | `20-strings` | 16 |
+| `clojure.string`-shaped string functions | `20-strings` | 20 |
 | Atoms | `21-atoms` | 11 |
 | Futures and `pmap` on OS threads | `22-futures` | 16 |
 | Watches, promises | `23-watches`, `24-promises` | 9 |
@@ -186,6 +186,15 @@ The design specifications written during development are archived under
 - [x] Strings: `subs upper-case lower-case starts-with? ends-with?
       includes? index-of replace join split trim triml trimr blank?`;
       `count` / `empty?` / `reverse` also accept strings
+- [x] Index and position arguments (`nth`, `subs`, `index-of`) accept
+      integers of any size: an index out of range raises
+      `IndexOutOfBoundsException: nth index 12345678901234567890 is out of
+      bounds (count 3)` or `StringIndexOutOfBoundsException: subs begin 2,
+      end 1, length 3`, naming the index as written; `nth` with a not-found
+      value returns it instead; `index-of` treats its start position as
+      Java's `String.indexOf` does (a negative start searches from 0); a
+      non-integer index raises `ClassCastException: nth expects an integer,
+      got a float`
 - [x] Atoms and watches: `atom atom? deref reset! swap! compare-and-set!
       add-watch remove-watch`
 - [x] Futures and promises: `make-future future? realized? promise

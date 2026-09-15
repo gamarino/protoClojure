@@ -49,7 +49,7 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (245 fixtures under
+- **Tests.** A glob-discovered conformance suite (254 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
   the bytecode module, the runtime map, value equality and hashing, the
   native stack guard and the double printer (77 tests), and three CLI checks (`--help`, a
@@ -233,6 +233,18 @@ The project has no tagged releases yet; the version declared in
   division by zero, big integers included, still raises an error, now the
   ArithmeticException analogue with JVM Clojure's message:
   `ArithmeticException: Divide by zero`.
+- `nth`, `subs` and `index-of` accept index arguments of any size. A big
+  integer index failed with protoCore's "LargeInteger value exceeds long
+  long range." without naming the function, and an index out of range gave
+  "nth: index out of bounds" or "subs: bounds out of range" without the
+  index. An index out of range now raises
+  `IndexOutOfBoundsException: nth index 12345678901234567890 is out of
+  bounds (count 3)` or `StringIndexOutOfBoundsException: subs begin 2,
+  end 1, length 3`, `nth` with a not-found value returns it for any
+  out-of-range index, and a non-integer index raises
+  `ClassCastException: nth expects an integer, got a float`. `index-of`
+  with a negative start position returned `nil`; it now searches from the
+  beginning, as Java's `String.indexOf` does.
 - Symbols and keywords may contain non-ASCII letters. `:ñandú` or
   `(defn año [x] ...)` failed with "unexpected character: �": the lexer
   classified source bytes with `isalnum`, which rejects every byte of a

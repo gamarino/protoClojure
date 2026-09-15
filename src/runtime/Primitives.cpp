@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <climits>
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
@@ -45,16 +46,26 @@ namespace {
 
 // Common helpers ------------------------------------------------------------
 
-// Argument `i` as a long long, for index and position arguments (nth,
-// subs, index-of). An integer beyond the long long range is an error.
-long long argAsLong(proto::ProtoContext* ctx, const proto::ProtoList* args,
-                    int i, const char* primName) {
+// Argument `i` of an index or position parameter (nth, subs, index-of): an
+// integer of any size. A LargeInteger beyond the long long range saturates
+// to LLONG_MAX or LLONG_MIN, which every caller's bounds check treats as out
+// of range; the caller's error prints the argument itself (printedValue),
+// not the saturated value. Anything but an integer raises the
+// ClassCastException analogue naming the primitive and the type.
+long long indexArg(proto::ProtoContext* ctx, const proto::ProtoList* args,
+                   int i, const char* primName) {
     const proto::ProtoObject* a = args->getAt(ctx, i);
     if (!a || !a->isInteger(ctx)) {
-        throw std::runtime_error(
-            std::string(primName) + ": argument " + std::to_string(i) +
-            " is not an integer");
+        throw std::runtime_error(std::string("ClassCastException: ") + primName +
+                                 " expects an integer, got " +
+                                 valueTypeName(ctx, a));
     }
+    constexpr unsigned long kSmallIntMask  = 0x3FFUL;
+    constexpr unsigned long kSmallIntValue = 0x001UL;
+    if ((reinterpret_cast<unsigned long>(a) & kSmallIntMask) == kSmallIntValue)
+        return reinterpret_cast<long long>(a) >> 10;
+    if (a->compare(ctx, ctx->fromLong(LLONG_MAX)) > 0) return LLONG_MAX;
+    if (a->compare(ctx, ctx->fromLong(LLONG_MIN)) < 0) return LLONG_MIN;
     return a->asLong(ctx);
 }
 
@@ -674,6 +685,24 @@ const proto::ProtoObject* prim_vec(proto::ProtoContext* ctx,
     return ctx->newTupleFromList(lst)->asObject(ctx);
 }
 
+// `v` as println prints it, for error messages (an index argument keeps all
+// its digits, at any magnitude).
+std::string printedValue(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    std::string text;
+    printTo(ctx, text, v, /*readable=*/true);
+    return text;
+}
+
+// The IndexOutOfBoundsException analogue of nth: the index as written and
+// the collection's count.
+[[noreturn, gnu::cold]]
+void throwNthOutOfBounds(proto::ProtoContext* ctx, const proto::ProtoObject* index,
+                         long long count) {
+    throw std::runtime_error("IndexOutOfBoundsException: nth index " +
+                             printedValue(ctx, index) + " is out of bounds (count " +
+                             std::to_string(count) + ")");
+}
+
 // (nth coll i) / (nth coll i not-found)
 const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
@@ -684,7 +713,7 @@ const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
     if (ac != 2 && ac != 3)
         throw std::runtime_error("nth: expects (nth coll i) or (nth coll i nf)");
     const proto::ProtoObject* coll = args->getAt(ctx, 0);
-    long long idx = argAsLong(ctx, args, 1, "nth");
+    long long idx = indexArg(ctx, args, 1, "nth");
     const proto::ProtoObject* notFound = (ac == 3) ? args->getAt(ctx, 2) : nullptr;
 
     // Vector path: O(log N).
@@ -694,7 +723,7 @@ const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
         long long sz = static_cast<long long>(t->getSize(ctx));
         if (idx < 0 || idx >= sz) {
             if (notFound) return notFound;
-            throw std::runtime_error("nth: index out of bounds");
+            throwNthOutOfBounds(ctx, args->getAt(ctx, 1), sz);
         }
         return t->getAt(ctx, static_cast<int>(idx));
     }
@@ -707,7 +736,7 @@ const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
     long long sz = static_cast<long long>(lst->getSize(ctx));
     if (idx < 0 || idx >= sz) {
         if (notFound) return notFound;
-        throw std::runtime_error("nth: index out of bounds");
+        throwNthOutOfBounds(ctx, args->getAt(ctx, 1), sz);
     }
     return lst->getAt(ctx, static_cast<int>(idx));
 }
@@ -1115,11 +1144,18 @@ const proto::ProtoObject* prim_subs(proto::ProtoContext* ctx,
     if (!isStringLike(v))
         throw std::runtime_error("subs: first arg must be a string");
     const proto::ProtoString* s = asProtoString(v);
-    long long start = argAsLong(ctx, args, 1, "subs");
+    long long start = indexArg(ctx, args, 1, "subs");
     long long sz = static_cast<long long>(s->getSize(ctx));
-    long long end = (ac == 3) ? argAsLong(ctx, args, 2, "subs") : sz;
-    if (start < 0 || start > sz || end < start || end > sz)
-        throw std::runtime_error("subs: bounds out of range");
+    long long end = (ac == 3) ? indexArg(ctx, args, 2, "subs") : sz;
+    if (start < 0 || start > sz || end < start || end > sz) {
+        // The StringIndexOutOfBoundsException analogue, with the bounds as
+        // written and Java's "begin B, end E, length L" message.
+        throw std::runtime_error(
+            "StringIndexOutOfBoundsException: subs begin " +
+            printedValue(ctx, args->getAt(ctx, 1)) + ", end " +
+            (ac == 3 ? printedValue(ctx, args->getAt(ctx, 2)) : std::to_string(sz)) +
+            ", length " + std::to_string(sz));
+    }
     return reinterpret_cast<const proto::ProtoObject*>(
         s->getSlice(ctx, static_cast<int>(start), static_cast<int>(end)));
 }
@@ -1219,9 +1255,14 @@ const proto::ProtoObject* prim_index_of(proto::ProtoContext* ctx,
         throw std::runtime_error("index-of: first two args must be strings");
     std::string s = asProtoString(sv)->toStdString(ctx);
     std::string p = asProtoString(pv)->toStdString(ctx);
-    std::size_t from = (ac == 3) ? static_cast<std::size_t>(argAsLong(ctx, args, 2, "index-of"))
-                                 : 0;
-    std::size_t found = s.find(p, from);
+    // The start position follows Java's String.indexOf, at any magnitude: a
+    // negative start searches from 0, and a start past the end searches from
+    // the end (only the empty string is found there).
+    long long from = (ac == 3) ? indexArg(ctx, args, 2, "index-of") : 0;
+    if (from < 0) from = 0;
+    if (static_cast<unsigned long long>(from) > s.size())
+        from = static_cast<long long>(s.size());
+    std::size_t found = s.find(p, static_cast<std::size_t>(from));
     if (found == std::string::npos) return PROTO_NONE;
     return ctx->fromLong(static_cast<long long>(found));
 }
