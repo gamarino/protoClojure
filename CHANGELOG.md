@@ -49,7 +49,7 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (271 fixtures under
+- **Tests.** A glob-discovered conformance suite (274 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
   the bytecode module, the runtime map, value equality and hashing, the
   native stack guard and the double printer (82 tests), and five CLI checks (`--help`, a
@@ -114,8 +114,7 @@ The project has no tagged releases yet; the version declared in
   vectors share one order-dependent hash, and numbers hash by value modulo
   2^61 − 1 across SmallInteger, LargeInteger and double. Keys that are `=`
   are one key (`(hash-map 1 :a 1.0 :b)` is `{1 :b}`), and maps whose keys
-  are collections compare by value. NaN, which protoCore reports equal to
-  every number, is matched only by keys that hash like `0`.
+  are collections compare by value.
 - A keyword is no longer `=` to the string of its spelling. `(= :a ":a")`
   returned `true`, `(get {:a 1} ":a")` returned `1`, `(hash-map :a 1 ":a" 2)`
   held one entry, `(string? :a)` returned `true`, and a quoted symbol was
@@ -298,3 +297,11 @@ The project has no tagged releases yet; the version declared in
   Clojure, whitespace may separate `##` from the symbol, another symbol is
   "Unknown symbolic value: <symbol>" and a number or keyword is
   "Invalid token: ##<text>".
+- Comparisons follow IEEE 754 for NaN. protoCore's numeric compare reports
+  NaN equal to every number, so `(<= ##NaN 1)`, `(>= ##NaN 1)`, `(= ##NaN 1)`
+  and `(= ##NaN ##NaN)` were `true`, and a NaN map key was found with `0`,
+  `0.0` or any other NaN. The ordering opcodes and `=` (which map keys share)
+  now use protoCore's `partialCompare`: every ordering and `=` with a NaN is
+  `false`, `not=` is `true`, and a NaN is `=` only to the identical object,
+  as in JVM Clojure. Numbers still compare exactly across integer and float
+  representations, and `-0.0` is still `=` to `0.0`.

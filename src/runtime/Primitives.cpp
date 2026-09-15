@@ -2777,7 +2777,11 @@ bool valuesEqual(proto::ProtoContext* ctx, const MapLayout& layout,
         return true;
     }
 
-    return a->compare(ctx, b) == 0;
+    // Numbers by value across types (D15) with IEEE semantics, so NaN is equal
+    // to no number, itself included (the identity test above still makes one
+    // NaN object `=` to itself, as JVM Clojure's Util.equiv does); strings by
+    // content; any other pair only when identical.
+    return a->partialCompare(ctx, b) == 0;
 }
 
 // Externally-visible value hash, declared in Primitives.h; the key hash of

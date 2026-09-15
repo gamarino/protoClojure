@@ -1088,10 +1088,13 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
                     case Op::ADD: r = a->add(&frame, b);      break;
                     case Op::SUB: r = a->subtract(&frame, b); break;
                     case Op::MUL: r = a->multiply(&frame, b); break;
-                    case Op::LT:  r = a->compare(&frame, b) <  0 ? PROTO_TRUE : PROTO_FALSE; break;
-                    case Op::LE:  r = a->compare(&frame, b) <= 0 ? PROTO_TRUE : PROTO_FALSE; break;
-                    case Op::GT:  r = a->compare(&frame, b) >  0 ? PROTO_TRUE : PROTO_FALSE; break;
-                    case Op::GE:  r = a->compare(&frame, b) >= 0 ? PROTO_TRUE : PROTO_FALSE; break;
+                    // IEEE ordering (protoCore partialCompare): exact across
+                    // SmallInteger, LargeInteger and double, and every
+                    // comparison with NaN is false.
+                    case Op::LT:  r = a->partialCompare(&frame, b) <  0 ? PROTO_TRUE : PROTO_FALSE; break;
+                    case Op::LE:  r = a->partialCompare(&frame, b) <= 0 ? PROTO_TRUE : PROTO_FALSE; break;
+                    case Op::GT:  r = a->partialCompare(&frame, b) >  0 ? PROTO_TRUE : PROTO_FALSE; break;
+                    case Op::GE:  r = a->partialCompare(&frame, b) >= 0 ? PROTO_TRUE : PROTO_FALSE; break;
                     case Op::EQ:
                         r = valuesEqual(&frame, MapLayout{env.mapMarkerProto, env.mapStateKey}, a, b)
                                 ? PROTO_TRUE : PROTO_FALSE;

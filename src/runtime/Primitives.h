@@ -41,9 +41,10 @@ struct MapLayout;
 // `()`. Values are compared recursively with this same function, so nested
 // collections compare structurally. A map is never equal to a non-map, and
 // a sequential collection is never equal to a non-sequential value. Every
-// other pair of values is compared with protoCore `compare(ctx, other) == 0`:
-// numbers across types (deviation D15), strings by content, and everything
-// else by identity. Keywords and symbols are interned named values
+// other pair of values is identical, or compared with protoCore
+// `partialCompare(ctx, other) == 0`: numbers across types (deviation D15)
+// with IEEE semantics, so NaN is equal to no number, itself included, unless
+// it is the same object; strings by content; everything else by identity. Keywords and symbols are interned named values
 // (Named.h), so identity is equality of spelling, and a keyword or a symbol
 // is never equal to a string. nullptr is nil. Both values must be rooted by
 // the caller; the function allocates nothing itself.
@@ -54,17 +55,16 @@ bool valuesEqual(proto::ProtoContext* ctx, const MapLayout& layout,
                  const proto::ProtoObject* a, const proto::ProtoObject* b);
 
 // Value hash consistent with valuesEqual, used by MapOps as the hash of
-// every map key: valuesEqual(a, b) implies valueHash(a) == valueHash(b) for
-// every pair of values except those involving NaN (below).
+// every map key: valuesEqual(a, b) implies valueHash(a) == valueHash(b).
 //
 //   - Numbers hash to their value modulo 2^61 - 1 (the CPython scheme), so
 //     equal numbers hash equally whatever their representation — SmallInteger,
 //     LargeInteger or double (deviation D15): 1 and 1.0, or 2^70 as a
-//     LargeInteger and as a double. The infinities hash to fixed values.
-//   - NaN hashes to 0, like the integer 0. protoCore compare reports NaN
-//     equal to every number, so no hash consistent with `=` exists for NaN;
-//     as a map key NaN is matched only by numbers hashing to 0 (0, 0.0,
-//     -0.0, multiples of 2^61 - 1, and NaN) and vice versa.
+//     LargeInteger and as a double; -0.0 hashes like 0. The infinities hash to
+//     fixed values.
+//   - NaN hashes to 0. It is equal only to the identical object, so any
+//     fixed hash is consistent; as a map key it is matched only by that
+//     object.
 //   - Strings use protoCore's content hash.
 //   - Maps combine a mix of each entry's key hash and value hash with a sum,
 //     so the hash ignores insertion order.

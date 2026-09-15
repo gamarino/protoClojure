@@ -5,7 +5,7 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 358 test cases: 271
+scripts and an interactive REPL. `ctest` registers 361 test cases: 274
 conformance fixtures under `tests/conformance/`, 82 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 value equality and hashing, the native stack guard and the double printer
@@ -32,9 +32,9 @@ directories that cover them.
 | Closures with N-level lexical capture | `06-closures` | 6 |
 | Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 35 |
 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 21 |
-| IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 24 |
+| IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 26 |
 | LargeInteger promotion, big integer literals | `15-bigint` | 9 |
-| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 41 |
+| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 42 |
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 17 |
 | `clojure.string`-shaped string functions | `20-strings` | 20 |
 | Atoms | `21-atoms` | 11 |
@@ -126,8 +126,8 @@ The design specifications written during development are archived under
       hash independently of insertion order, lists and vectors hash alike,
       numbers hash by value across SmallInteger, LargeInteger and double, so
       `(get {{:a 1} :x} {:a 1})`, `(get {[1 2] :x} (list 1 2))` and
-      `(get {1 :x} 1.0)` return `:x`; hashes are not cached (NaN: see Known
-      issues)
+      `(get {1 :x} 1.0)` return `:x`; hashes are not cached; a NaN key is
+      found only with the identical NaN object
 - [x] Strings — protoCore `ProtoString`
 - [x] Keywords and symbols — interned runtime values distinct from strings
       (`src/runtime/Named.h`): `(= :a ":a")` and `(= (quote a) "a")` are
@@ -163,6 +163,10 @@ The design specifications written during development are archived under
       `(/ 1 0.0)` is `##Inf`, `(/ -1 0.0)` is `##-Inf`, `(/ 0 0.0)` is `##NaN`
 - [x] `< <= > >=` compare integers exactly beyond 2^53; a comparison with a
       float compares doubles
+- [x] Comparisons follow IEEE 754 for NaN (protoCore `partialCompare`):
+      `< <= > >=` and `=` with a NaN are false and `not=` is true, so
+      `(= ##NaN ##NaN)` is false, while one NaN object is `=` to itself
+      (identity first, as in JVM Clojure); `-0.0` is `=` to `0.0` and `0`
 - [x] Print path handles SmallInteger, LargeInteger and floats; a float
       prints as JVM Clojure prints it (`formatDouble` in
       `src/runtime/Primitives.h`): the shortest digits that read back as the
@@ -458,11 +462,6 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D21 | Beyond ASCII, symbols and keywords accept only Unicode letters, combining marks and decimal digits: `a→b`, or a symbol containing a no-break space, is a read error (CONTRA JVM-Clojure, whose reader accepts any character that is neither whitespace nor a macro character) | v0.x |
 
 ## Known issues
-
-- **NaN is `=` to every number.** protoCore's numeric comparison reports
-  NaN equal to any number, so `(= nan 1)` is `true`. No hash can agree with
-  that: NaN hashes like `0`, so a NaN map key is matched only by `0`, `0.0`,
-  `-0.0`, NaN and integers that are multiples of 2^61 − 1, and vice versa.
 
 - **Errors on actor threads are silent.** An actor message whose handler
   throws (a `StackOverflowError` included) sets the actor's value to `nil`

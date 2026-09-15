@@ -216,11 +216,28 @@ TEST_F(ValuesFixture, EqualNumbersHashEquallyAcrossRepresentations) {
     EXPECT_NE(h(dbl(HUGE_VAL)), h(dbl(-HUGE_VAL)));
 }
 
-TEST_F(ValuesFixture, NaNHashesLikeZero) {
-    // protoCore compare reports NaN equal to every number, so no consistent
-    // hash exists; the documented choice is the hash of 0.
+TEST_F(ValuesFixture, NaNIsEqualOnlyToItself) {
+    // `=` follows IEEE for NaN (protoCore partialCompare): a NaN is equal to
+    // no number and to no other NaN object, and a NaN object is equal to
+    // itself through the identity test, as in JVM Clojure's Util.equiv.
+    auto dbl = [&](double d) { return ctx->fromDouble(d); };
     const proto::ProtoObject* nan = ctx->fromDouble(std::nan(""));
-    EXPECT_EQ(valueHash(ctx, layout, nan), valueHash(ctx, layout, num(0)));
+    const proto::ProtoObject* otherNan = ctx->fromDouble(-std::nan(""));
+    EXPECT_TRUE(eq(nan, nan));
+    EXPECT_FALSE(eq(nan, otherNan));
+    EXPECT_FALSE(eq(nan, num(0)));
+    EXPECT_FALSE(eq(num(0), nan));
+    EXPECT_FALSE(eq(nan, dbl(0.0)));
+    EXPECT_FALSE(eq(nan, dbl(-0.0)));
+    EXPECT_FALSE(eq(nan, num(1)));
+    EXPECT_FALSE(eq(nan, dbl(HUGE_VAL)));
+    // Equal only to itself, a NaN key needs no particular hash; it must just
+    // be stable.
+    EXPECT_EQ(valueHash(ctx, layout, nan), valueHash(ctx, layout, nan));
+    // -0.0 stays equal to 0.0 and to 0, with the same hash.
+    EXPECT_TRUE(eq(dbl(-0.0), dbl(0.0)));
+    EXPECT_TRUE(eq(dbl(-0.0), num(0)));
+    EXPECT_EQ(valueHash(ctx, layout, dbl(-0.0)), valueHash(ctx, layout, num(0)));
 }
 
 TEST_F(ValuesFixture, SequentialHashIsSharedByListsAndTuplesAndOrdered) {

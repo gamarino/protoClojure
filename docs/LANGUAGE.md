@@ -408,10 +408,10 @@ has two entries. The hash ignores map insertion order, is the
 same for a list and a vector with equal elements, and hashes numbers by
 value modulo 2^61 − 1, so equal numbers hash equally whatever their
 representation (SmallInteger, LargeInteger, double). Hashes are not cached:
-a collection key is hashed in full on every lookup. NaN is the exception:
-protoCore's numeric comparison reports NaN `=` to every number, which no
-hash can agree with; NaN hashes like `0`, so a NaN key is matched only by
-`0`, `0.0`, `-0.0`, NaN and integers that are multiples of 2^61 − 1.
+a collection key is hashed in full on every lookup. A NaN is `=` only to
+the identical object (§4.5), so a NaN key is found only with that object:
+`(get {nan :a} nan)` is `:a`, while `(get {nan :a} 0)` and
+`(get {nan :a} (/ 0 0.0))` are `nil`.
 
 **Keywords and maps as functions.** A keyword is a function of a map and a
 map is a function of its keys, both with the semantics of `get`:
@@ -481,8 +481,11 @@ since the `'` reader macro is not implemented. The departures are:
 - `=` compares numbers across types: `(= 1 1.0)` is true (deviation D15
   in `STATUS.md`), and map keys follow it: `1` and `1.0` are the same key
   (§4.3).
-- NaN is `=` to every number (protoCore's numeric comparison), so NaN map
-  keys cannot be hashed consistently with `=` (§4.3).
+- Comparisons follow IEEE 754 for NaN, as in JVM Clojure: `<`, `<=`, `>`,
+  `>=` and `=` with a NaN are false and `not=` is true, so
+  `(= ##NaN ##NaN)` is false; one NaN object is `=` to itself, because `=`
+  tests identity first (`(let [x ##NaN] (= x x))` is true). `-0.0` is `=` to
+  `0.0` and to `0`.
 - `==`, `identical?` and `hash` are not implemented.
 
 ---
