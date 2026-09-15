@@ -1524,12 +1524,7 @@ const proto::ProtoObject* prim_deref(proto::ProtoContext* ctx,
             if (tObj && tObj->isInteger(ctx)) {
                 proto::ProtoThread* t =
                     reinterpret_cast<proto::ProtoThread*>(tObj->asLong(ctx));
-                if (t) {
-                    // Blocking wait: run unmanaged so the future's
-                    // thread can complete a GC cycle it requests.
-                    proto::ProtoContext::UnmanagedScope unmanaged(ctx);
-                    t->join(ctx);
-                }
+                if (t) t->join(ctx);
             }
         }
         const proto::ProtoObject* r =
@@ -1799,9 +1794,6 @@ static void shutdownFuturesImpl(proto::ProtoContext* ctx) {
         std::lock_guard<std::mutex> g(g_futureRegistryMtx);
         snapshot.swap(g_futureThreads);
     }
-    // Blocking wait: run unmanaged so a still-running future can complete
-    // a GC cycle it requests.
-    proto::ProtoContext::UnmanagedScope unmanaged(ctx);
     for (const proto::ProtoThread* t : snapshot) {
         if (t) const_cast<proto::ProtoThread*>(t)->join(ctx);
     }
@@ -1973,12 +1965,7 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
             if (tObj && tObj->isInteger(ctx)) {
                 proto::ProtoThread* t =
                     reinterpret_cast<proto::ProtoThread*>(tObj->asLong(ctx));
-                if (t) {
-                    // Blocking wait: run unmanaged so the worker can
-                    // complete a GC cycle it requests.
-                    proto::ProtoContext::UnmanagedScope unmanaged(ctx);
-                    t->join(ctx);
-                }
+                if (t) t->join(ctx);
             }
         }
         const proto::ProtoObject* r =

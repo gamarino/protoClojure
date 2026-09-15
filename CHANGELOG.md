@@ -76,12 +76,6 @@ The project has no tagged releases yet; the version declared in
 - The actor benchmark harness now checks each script's `:messages-processed`
   output. Earlier actor throughput figures measured a script that failed to
   compile and have been withdrawn.
-- Programs no longer hang when a garbage-collection cycle starts while a
-  thread is blocked. protoCore now starts cycles from allocation, and a cycle
-  waits until every running thread parks; a thread blocked in a wait never
-  parks. Idle actor workers waiting for work, `deref` of a pending future,
-  `pmap` joining its workers, the shutdown joins of futures and actor workers,
-  and the REPL waiting for input now run in protoCore unmanaged regions.
 - Trailing keyword/value arguments to an ordinary callee are no longer packed
   into a map and unpacked again. `(list :b 1 :a 2)` returned `(:a 2 :b 1)`
   (hash order) and `(vector :a 1 :a 2)` returned `[:a 2]` (repeated keyword

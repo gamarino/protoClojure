@@ -122,9 +122,7 @@ A good rule of thumb:
 
 There is one pool of workers per process, shared by all actors. Workers
 are real OS threads — created via protoCore's `newThread`, so they
-participate in the GC quorum like every other thread. An idle worker
-waits for work in a protoCore unmanaged region, so it never delays a
-garbage-collection cycle that another thread requests.
+participate in the GC quorum like every other thread.
 
 The pool size is read once from the environment at startup:
 

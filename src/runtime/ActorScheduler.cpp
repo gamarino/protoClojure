@@ -74,9 +74,6 @@ void ActorScheduler::shutdown(proto::ProtoContext* ctx) {
     if (!started_) return;
     shuttingDown_ = true;
     queueCv_.notify_all();
-    // join() blocks until the worker exits. Run it unmanaged so a worker
-    // still draining messages can complete a GC cycle it requests.
-    proto::ProtoContext::UnmanagedScope unmanaged(ctx);
     for (auto* t : workers_) {
         if (t) const_cast<proto::ProtoThread*>(t)->join(ctx);
     }
@@ -151,18 +148,7 @@ void ActorScheduler::send(ActorState* actor, ActorMessage&& msg) {
     }
 }
 
-ActorState* ActorScheduler::popReady_(proto::ProtoContext* ctx) {
-    // An idle worker may block here for an arbitrary time. A blocked
-    // thread cannot reach a GC safepoint, so the wait runs inside an
-    // unmanaged region: a stop-the-world phase requested by another
-    // thread proceeds without this worker. Nothing in the region touches
-    // a ProtoObject (the ready queues hold ActorState pointers only).
-    //
-    // Declaration order matters: `lk` is destroyed before `unmanaged`, so
-    // the queue mutex is released before returnFromUnmanaged(), which
-    // may block until a running GC phase ends. Holding the mutex there
-    // would stall every sender that enqueues an actor.
-    proto::ProtoContext::UnmanagedScope unmanaged(ctx);
+ActorState* ActorScheduler::popReady_() {
     std::unique_lock<std::mutex> lk(queueMtx_);
     queueCv_.wait(lk, [this]() {
         if (shuttingDown_) return true;
@@ -199,7 +185,7 @@ void ActorScheduler::workerLoop(proto::ProtoContext* ctx) {
     setActiveCallContext(*ccBlueprint_);
 
     for (;;) {
-        ActorState* actor = popReady_(ctx);
+        ActorState* actor = popReady_();
         if (!actor) {
             clearActiveCallContext();
             return;
