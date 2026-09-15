@@ -766,6 +766,16 @@ of them (§17).
 @result                        ;; blocks until done
 ```
 
+An error raised by a future's body is kept with the future, and every
+`deref` of that future raises it wrapped as the analogue of JVM Clojure's
+`java.util.concurrent.ExecutionException`: `@(future (/ 1 0))` raises
+`ExecutionException: ArithmeticException: Divide by zero`. A future whose
+error is never dereferenced fails silently, as in JVM Clojure. `pmap` raises
+the error of the first element, in input order, whose call failed, wrapped
+the same way, after waiting for every element. An error in an actor's
+message handler is not reported yet: the actor's state becomes `nil`
+(`STATUS.md`, Known issues).
+
 The Clojure-JVM thread-local Var binding semantics will be preserved
 (planned, with `binding`): a `binding` form establishes a thread-local
 rebinding that propagates to threads created inside the binding scope.
@@ -829,7 +839,9 @@ got nil`. An index out of range raises
 `IndexOutOfBoundsException: nth index 3 is out of bounds (count 3)` or
 `StringIndexOutOfBoundsException: subs begin 2, end 1, length 3`, with the
 index as written at any magnitude, and an integer divided by zero raises
-`ArithmeticException: Divide by zero`.
+`ArithmeticException: Divide by zero`. An error raised on a future or `pmap`
+thread reaches the thread that dereferences the future or calls `pmap`,
+prefixed with `ExecutionException: ` (§12).
 
 ---
 

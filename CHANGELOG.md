@@ -49,7 +49,7 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (261 fixtures under
+- **Tests.** A glob-discovered conformance suite (262 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
   the bytecode module, the runtime map, value equality and hashing, the
   native stack guard and the double printer (77 tests), and four CLI checks (`--help`, a
@@ -257,3 +257,13 @@ The project has no tagged releases yet; the version declared in
   the VM treated both as missing. A global lookup that returns nil now
   checks whether the name is defined, so only a name never defined is an
   error; the lookup of a non-nil global is unchanged.
+- Errors raised on future and `pmap` threads are no longer lost. A future
+  whose body raised an error, a `StackOverflowError` included, realised to
+  `nil`, and a failing `pmap` element mapped to `nil`: the worker threads
+  caught every error and kept nothing. The error's message is now recorded
+  with the future or the element, every `deref` of such a future raises it
+  wrapped as JVM Clojure's `ExecutionException`
+  (`ExecutionException: ArithmeticException: Divide by zero`), and `pmap`
+  raises the error of the first failing element in input order, after
+  waiting for every element. Errors in actor message handlers are still not
+  reported.

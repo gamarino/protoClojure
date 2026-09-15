@@ -5,7 +5,7 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 338 test cases: 257
+scripts and an interactive REPL. `ctest` registers 343 test cases: 262
 conformance fixtures under `tests/conformance/`, 77 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 value equality and hashing, the native stack guard and the double printer
@@ -37,7 +37,7 @@ directories that cover them.
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 17 |
 | `clojure.string`-shaped string functions | `20-strings` | 20 |
 | Atoms | `21-atoms` | 11 |
-| Futures and `pmap` on OS threads | `22-futures` | 13 |
+| Futures and `pmap` on OS threads | `22-futures` | 18 |
 | Watches, promises | `23-watches`, `24-promises` | 9 |
 | Actors | `25-actors` | 9 |
 | Interactive REPL | — (no conformance fixtures) | — |
@@ -244,6 +244,12 @@ The design specifications written during development are archived under
 - [x] `pmap` runs each element on its own OS thread; `(pmap fib (list 30 30 30 30))`
       measured a 3.25× wall-clock speedup over `map` on 2026-06-14
       ([`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md))
+- [x] Errors on future and `pmap` threads propagate: every `deref` of a
+      future whose body raised an error raises it as
+      `ExecutionException: <error>` (`@(future (/ 1 0))` raises
+      `ExecutionException: ArithmeticException: Divide by zero`), and `pmap`
+      raises the error of the first failing element in input order the same
+      way, after waiting for every element
 - [x] **Actors** (`actor`, `send`, `send-h` / `send-m` / `send-l`, `actor?`,
       `actor-stats`) on a configurable worker pool (`PROTOCLJ_ACTOR_WORKERS`,
       default `max(2, cores-2)`, cap 16). Three priority bands, single-method
@@ -443,11 +449,10 @@ See `LANGUAGE.md` for the full discussion. Summary:
   that: NaN hashes like `0`, so a NaN map key is matched only by `0`, `0.0`,
   `-0.0`, NaN and integers that are multiples of 2^61 − 1, and vice versa.
 
-- **Errors on future, `pmap` and actor threads are silent.** A future or a
-  `pmap` element whose body throws (a `StackOverflowError` included)
-  realises to `nil`, and an actor message whose handler throws sets the
-  actor's value to `nil`; the error is not reported. JVM Clojure rethrows
-  a future's exception from `deref`.
+- **Errors on actor threads are silent.** An actor message whose handler
+  throws (a `StackOverflowError` included) sets the actor's value to `nil`
+  and delivers `nil` to the promise `send` returned; the error is not
+  reported. How a failed message should surface is an open design decision.
 
 - **Promise `deref` polls.** A pending promise is checked every millisecond
   (with the thread marked unmanaged so garbage collection can proceed);

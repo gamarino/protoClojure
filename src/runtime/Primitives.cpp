@@ -1499,6 +1499,44 @@ const proto::ProtoObject* prim_atom_p(proto::ProtoContext* ctx,
     return (v->getPrototype(ctx) == cc->atomMarkerProto) ? PROTO_TRUE : PROTO_FALSE;
 }
 
+// The attribute under which a future, or a pmap element, records the error
+// its body raised: the error's message as a string. Absent when the body
+// returned normally.
+const proto::ProtoString* threadErrorKey(proto::ProtoContext* ctx) {
+    return proto::ProtoString::createSymbol(ctx, "__error__");
+}
+
+// The message of an error escaping a future's or a pmap element's body.
+std::string currentErrorMessage() {
+    try {
+        throw;
+    } catch (const std::exception& e) {
+        return e.what();
+    } catch (...) {
+        return "unknown error";
+    }
+}
+
+// True, with the recorded message in `*message`, when the body of `holder`
+// (a future or a pmap element) raised an error.
+bool threadFailed(proto::ProtoContext* ctx, const proto::ProtoObject* holder,
+                  std::string* message) {
+    const proto::ProtoObject* error = holder->getAttribute(ctx, threadErrorKey(ctx));
+    if (!error || !proto::ProtoObject::isStringTagFast(error)) return false;
+    *message = reinterpret_cast<const proto::ProtoString*>(error)->toStdString(ctx);
+    return true;
+}
+
+// The analogue of the java.util.concurrent.ExecutionException JVM Clojure's
+// deref of a failed future raises. Its message is the cause's toString(),
+// "<class>: <message>", which is how the runtime already spells its errors
+// ("ArithmeticException: Divide by zero"), so the message is
+// "ExecutionException: " followed by the cause's message.
+[[noreturn]]
+void throwExecutionException(const std::string& cause) {
+    throw std::runtime_error("ExecutionException: " + cause);
+}
+
 const proto::ProtoObject* prim_deref(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
                                      const proto::ParentLink*,
@@ -1527,6 +1565,10 @@ const proto::ProtoObject* prim_deref(proto::ProtoContext* ctx,
                 if (t) t->join(ctx);
             }
         }
+        // A body that raised an error makes every deref raise it, wrapped as
+        // JVM Clojure's ExecutionException.
+        std::string error;
+        if (threadFailed(ctx, a, &error)) throwExecutionException(error);
         const proto::ProtoObject* r =
             a->getAttribute(ctx, cc->resultKey);
         return r ? r : PROTO_NONE;
@@ -1719,17 +1761,25 @@ const proto::ProtoObject* futureThreadMain(
     setActiveCallContext(*parentCc);
 
     const proto::ProtoObject* value = PROTO_NONE;
+    std::string error;
+    bool failed = false;
     try {
         value = parentCc->engine->invoke(ctx, thunk, nullptr, 0);
     } catch (...) {
-        // v0.17: swallow exceptions, the future's result stays nil.
-        // Capturing the throwable and re-raising on deref lands later.
-        value = PROTO_NONE;
+        // Recorded on the future; deref raises it (prim_deref).
+        failed = true;
+        error = currentErrorMessage();
     }
 
     proto::ProtoObject* futMut =
         const_cast<proto::ProtoObject*>(fut);
     futMut->setAttribute(ctx, resultKey, value);
+    // The error before `__done__`, so a deref that sees the future realised
+    // finds it.
+    if (failed) {
+        futMut->setAttribute(ctx, threadErrorKey(ctx),
+                             ctx->fromUTF8String(error.c_str()));
+    }
     futMut->setAttribute(ctx, doneKey, PROTO_TRUE);
 
     clearActiveCallContext();
@@ -1885,14 +1935,22 @@ const proto::ProtoObject* pmapWorkerMain(
     setActiveCallContext(*parentCc);
 
     const proto::ProtoObject* value = PROTO_NONE;
+    std::string error;
+    bool failed = false;
     try {
         const proto::ProtoObject* one[1] = { x };
         value = parentCc->engine->invoke(ctx, f, one, 1);
     } catch (...) {
-        value = PROTO_NONE;
+        // Recorded on the element; prim_pmap raises it.
+        failed = true;
+        error = currentErrorMessage();
     }
     proto::ProtoObject* futMut = const_cast<proto::ProtoObject*>(fut);
     futMut->setAttribute(ctx, resultKey, value);
+    if (failed) {
+        futMut->setAttribute(ctx, threadErrorKey(ctx),
+                             ctx->fromUTF8String(error.c_str()));
+    }
     futMut->setAttribute(ctx, doneKey, PROTO_TRUE);
     clearActiveCallContext();
     return value;
@@ -1951,10 +2009,16 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
                 ->appendLast(&scope, fut)->asObject(&scope));
     }
 
-    // Phase 2 — join in order, collect results.
+    // Phase 2 — join in order, collect results. An element whose call raised
+    // an error makes pmap raise it, wrapped as ExecutionException, as
+    // consuming that element of JVM Clojure's pmap does: the first failing
+    // element in input order is the one raised, after the loop has waited
+    // for every element.
     const proto::ProtoObject* out = ctx->newList()->asObject(ctx);
     const proto::ProtoList* fs =
         scope.getAutomaticLocal(kSlotFs)->asList(&scope);
+    std::string firstError;
+    bool anyFailed = false;
     for (unsigned long i = 0; i < n; ++i) {
         const proto::ProtoObject* fut = fs->getAt(&scope, (int)i);
         const proto::ProtoObject* done =
@@ -1968,11 +2032,13 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
                 if (t) t->join(ctx);
             }
         }
+        if (!anyFailed) anyFailed = threadFailed(ctx, fut, &firstError);
         const proto::ProtoObject* r =
             fut->getAttribute(ctx, cc->resultKey);
         out = out->asList(ctx)->appendLast(ctx,
             r ? r : PROTO_NONE)->asObject(ctx);
     }
+    if (anyFailed) throwExecutionException(firstError);
     return out;
 }
 

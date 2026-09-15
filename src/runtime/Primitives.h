@@ -165,6 +165,8 @@ struct ActiveCallContext {
     //   __cc_blob__ pointer (as long) to the parent's ActiveCallContext.
     //   __thread__  pointer (as long) to the running ProtoThread.
     //   __result__  the value, once computed.
+    //   __error__   the message of the error the thunk raised, when it
+    //               raised one (absent otherwise); deref raises it.
     //   __done__    PROTO_TRUE when realized, otherwise PROTO_FALSE.
     const proto::ProtoObject*  futureMarkerProto;
     // Session 18 — promises. Same valueKey/doneKey as the rest of the
