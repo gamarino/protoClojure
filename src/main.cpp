@@ -14,6 +14,7 @@
 #include "runtime/ActorScheduler.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/ExecutionEngine.h"
+#include "runtime/Named.h"
 #include "runtime/Primitives.h"
 
 #include <cstring>
@@ -76,7 +77,7 @@ int runFile(const char* path) {
     //   1 : forms (the ProtoList readAll() returned).
     //   2 : stringMarkerProto — see ReaderMarkers / CompilerMarkers docs.
     //   3 : fnMarkerProto — wraps user-fn callables.
-    ctx->resizeAutomaticLocals(11);
+    ctx->resizeAutomaticLocals(13);
     constexpr unsigned int kSlotGlobals       = 0;
     constexpr unsigned int kSlotForms         = 1;
     constexpr unsigned int kSlotStringMarker  = 2;
@@ -88,6 +89,8 @@ int runFile(const char* path) {
     constexpr unsigned int kSlotFutureMarker  = 8;
     constexpr unsigned int kSlotPromiseMarker = 9;
     constexpr unsigned int kSlotActorMarker   = 10;
+    constexpr unsigned int kSlotNamedMarker   = 11;
+    constexpr unsigned int kSlotNamedTable    = 12;
 
     const proto::ProtoObject* globalsObj =
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
@@ -146,6 +149,15 @@ int runFile(const char* path) {
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
     ctx->setAutomaticLocal(kSlotActorMarker, actorMarkerProto);
 
+    // Keywords and symbols: the prototype of every named value and the
+    // table that interns them by spelling (src/runtime/Named.h).
+    const proto::ProtoObject* namedMarkerProto =
+        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+    ctx->setAutomaticLocal(kSlotNamedMarker, namedMarkerProto);
+    const proto::ProtoObject* namedTable =
+        space.objectPrototype->newChild(ctx, /*isMutable=*/true);
+    ctx->setAutomaticLocal(kSlotNamedTable, namedTable);
+
     const proto::ProtoString* bytesKey =
         proto::ProtoString::createSymbol(ctx, "__bytes__");
     const proto::ProtoString* bytecodeKey =
@@ -181,6 +193,10 @@ int runFile(const char* path) {
         proto::ProtoString::createSymbol(ctx, "__done__");
     const proto::ProtoString* actorStateKey =
         proto::ProtoString::createSymbol(ctx, "__actor_state__");
+    const protoClojure::NamedLayout namedLayout{
+        ctx->getAutomaticLocal(kSlotNamedMarker),
+        ctx->getAutomaticLocal(kSlotNamedTable),
+        proto::ProtoString::createSymbol(ctx, "__spelling__")};
 
     protoClojure::ReaderMarkers readerMarkers{
         ctx->getAutomaticLocal(kSlotStringMarker),
@@ -192,7 +208,7 @@ int runFile(const char* path) {
         ctx->getAutomaticLocal(kSlotVectorMarker),
         ctx->getAutomaticLocal(kSlotMapMarker),
         bytesKey, bytecodeKey, arityKey, capturesKey, aritiesKey,
-        itemsKey, entriesKey};
+        itemsKey, entriesKey, namedLayout};
 
     // Read every form from the file.
     std::string source = slurp(path);
@@ -240,7 +256,7 @@ int runFile(const char* path) {
                 bytecodeKey, arityKey, capturesKey, aritiesKey,
                 mapStateKey, valueKey, watchesKey,
                 thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-                actorStateKey);
+                actorStateKey, namedLayout);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s: runtime error: %s\n", path, e.what());
         // Drain the actor scheduler before unwinding so worker

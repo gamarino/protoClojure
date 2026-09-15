@@ -13,6 +13,13 @@
  * a closure, for example), the attachment is via an opaque
  * ProtoExternalPointer with a finalizer that calls `delete`. P4 — record
  * the boundary explicitly when we make that move.
+ *
+ * P4 boundary: interned keyword and symbol values (Const::named,
+ * KwKey::keyword) are the one kind of ProtoObject* a module holds. The
+ * compiler interns them (src/runtime/Named.h), and they stay reachable
+ * through the runtime's rooted intern table for the lifetime of the
+ * ProtoSpace, so the GC needs no reference from here. A module therefore
+ * runs only in the ProtoSpace it was compiled against.
  */
 #pragma once
 #include "Opcodes.h"
@@ -22,6 +29,10 @@
 #include <string>
 #include <vector>
 
+namespace proto {
+class ProtoObject;
+}
+
 namespace protoClojure {
 
 class BytecodeModule {
@@ -30,7 +41,10 @@ public:
         Long,
         Double,    // IEEE-754 64-bit float literal
         String,
-        Symbol,    // interned at materialisation time via ProtoString::createSymbol
+        Symbol,    // a global name for PUSH_VAR / STORE_GLOBAL, interned at
+                   // execution time via ProtoString::createSymbol
+        Named,     // a keyword or quoted-symbol value for PUSH_CONST,
+                   // interned at compile time (Named.h)
     };
 
     struct Const {
@@ -38,6 +52,7 @@ public:
         long long ival = 0;
         double    dval = 0.0;
         std::string sval;        // only the std-side raw bytes; never enters protoCore
+        const proto::ProtoObject* named = nullptr;  // Named: the interned value
     };
 
     // Const-pool insertion. Returns the index for use in PUSH_CONST / PUSH_VAR.
@@ -45,6 +60,10 @@ public:
     std::size_t addDouble(double v);
     std::size_t addString(const std::string& s);
     std::size_t addSymbol(const std::string& s);
+    // A keyword or quoted-symbol value: `value` is internNamed(spelling).
+    // De-duplicated by spelling, like addSymbol.
+    std::size_t addNamed(const std::string& spelling,
+                         const proto::ProtoObject* value);
 
     // Emit one instruction word (opcode + operand). The operand must fit in
     // one byte for v0.0.x; the EXTEND-prefix mechanism is a session-5 follow-up.
@@ -80,13 +99,15 @@ public:
     // VM can populate them in one pass. `isKwBased()` short-circuits
     // the rest-arg path for kw fns.
     struct KwKey {
-        std::string name;
-        int         localSlot;
+        std::string               name;
+        int                       localSlot;
+        const proto::ProtoObject* keyword;  // the interned keyword `:name`
     };
     bool isKwBased() const { return isKwBased_; }
     void setKwBased(bool v) { isKwBased_ = v; }
-    void addKwKey(const std::string& name, int localSlot) {
-        kwKeys_.push_back({name, localSlot});
+    void addKwKey(const std::string& name, int localSlot,
+                  const proto::ProtoObject* keyword) {
+        kwKeys_.push_back({name, localSlot, keyword});
     }
     const std::vector<KwKey>& kwKeys() const { return kwKeys_; }
 

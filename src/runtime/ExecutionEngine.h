@@ -32,6 +32,7 @@ class ProtoList;
 namespace protoClojure {
 
 class BytecodeModule;
+struct NamedLayout;
 
 class ExecutionEngine {
 public:
@@ -78,6 +79,11 @@ public:
                                   const proto::ProtoString* resultKey,
                                   const proto::ProtoString* doneKey,
                                   const proto::ProtoString* actorStateKey,
+                                  // Keyword and symbol values (Named.h),
+                                  // installed in the ActiveCallContext for
+                                  // printing and for primitives that build
+                                  // keywords.
+                                  const NamedLayout& named,
                                   const proto::ProtoObject* const* args = nullptr,
                                   unsigned int argCount = 0,
                                   const proto::ProtoObject* captures = nullptr,

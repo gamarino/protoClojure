@@ -5,10 +5,11 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 188 test cases: 150
-conformance fixtures under `tests/conformance/`, 37 GoogleTest unit
-tests for the lexer, the reader and the runtime map (`tests/unit/`), and
-a CLI check of `--help` (`tests/cli/`); all pass. Benchmark numbers against Babashka 1.4.192
+scripts and an interactive REPL. `ctest` registers 235 test cases: 178
+conformance fixtures under `tests/conformance/`, 56 GoogleTest unit
+tests for the lexer, the reader, the runtime map and value equality and
+hashing (`tests/unit/`), and a CLI check of `--help` (`tests/cli/`); all
+pass. Benchmark numbers against Babashka 1.4.192
 are in [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md). Shipped changes
 are listed in [`CHANGELOG.md`](../CHANGELOG.md).
 
@@ -25,15 +26,15 @@ directories that cover them.
 | `def`, `if`, `do`, integer arithmetic, comparisons, `str` | `02-special-forms`, `03-arithmetic` | 10 |
 | `fn`, `defn`, `let`, `loop`, `recur` | `04-functions`, `05-recursion` | 6 |
 | Closures with N-level lexical capture | `06-closures` | 6 |
-| Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 14 |
-| Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 14 |
+| Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 21 |
+| Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 17 |
 | IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 10 |
 | LargeInteger promotion | `15-bigint` | 3 |
-| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 16 |
+| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 33 |
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 16 |
 | `clojure.string`-shaped string functions | `20-strings` | 13 |
 | Atoms | `21-atoms` | 10 |
-| Futures and `pmap` on OS threads | `22-futures` | 13 |
+| Futures and `pmap` on OS threads | `22-futures` | 14 |
 | Watches, promises | `23-watches`, `24-promises` | 8 |
 | Actors | `25-actors` | 9 |
 | Interactive REPL | — (no conformance fixtures) | — |
@@ -104,6 +105,11 @@ The design specifications written during development are archived under
       `(get {1 :x} 1.0)` return `:x`; hashes are not cached (NaN: see Known
       issues)
 - [x] Strings — protoCore `ProtoString`
+- [x] Keywords and symbols — interned runtime values distinct from strings
+      (`src/runtime/Named.h`): `(= :a ":a")` and `(= (quote a) "a")` are
+      false, `(string? :a)` is false, and `:a` and `":a"` are different map
+      keys; keywords and symbols compare and hash by identity, and interning
+      makes identity equivalent to equality of spelling, also across threads
 - [x] Integers — `SmallInteger` tagged + auto-promoted `LargeInteger`
 - [x] Floats — `ProtoObject::fromDouble`
 

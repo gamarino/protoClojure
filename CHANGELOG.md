@@ -49,9 +49,9 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (172 fixtures under
+- **Tests.** A glob-discovered conformance suite (178 fixtures under
   `tests/conformance/`) and GoogleTest unit tests for the lexer, the reader,
-  the runtime map and value equality and hashing (55 tests).
+  the runtime map and value equality and hashing (56 tests).
 - **Benchmarks and examples.** `benchmarks/bench.sh` (comparison with
   Babashka), `benchmarks/actor-bench.sh` (actor throughput) and twelve
   example scripts under `examples/`.
@@ -122,6 +122,19 @@ The project has no tagged releases yet; the version declared in
   are one key (`(hash-map 1 :a 1.0 :b)` is `{1 :b}`), and maps whose keys
   are collections compare by value. NaN, which protoCore reports equal to
   every number, is matched only by keys that hash like `0`.
+- A keyword is no longer `=` to the string of its spelling. `(= :a ":a")`
+  returned `true`, `(get {:a 1} ":a")` returned `1`, `(hash-map :a 1 ":a" 2)`
+  held one entry, `(string? :a)` returned `true`, and a quoted symbol was
+  likewise `=` to the string of its name. Keywords and quoted symbols were
+  materialised as protoCore symbols, which are strings: protoCore stores a
+  short ASCII string inline in the pointer, so `:a` and `":a"` were the same
+  pointer, and longer spellings compared equal by content. Keywords and
+  symbols are now interned values of their own kind
+  (`src/runtime/Named.{h,cpp}`), published with a lock-free compare-and-set
+  so every thread obtains the same value; they compare and hash by identity
+  and print as their spelling. The compiler interns keyword literals, quoted
+  symbols and `:keys` keywords once, so executing them reads a pointer, and
+  `=` and map-key hashing decide non-map objects by their pointer tag.
 - `--help` and error messages no longer mention internal development labels
   ("Phase 5", "next milestone", "v0.0.x", "v0.7.x", "v0.13"); each message
   now states the actual restriction, for example "let: not supported at top

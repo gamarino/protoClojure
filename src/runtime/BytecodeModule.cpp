@@ -73,6 +73,19 @@ std::size_t BytecodeModule::addSymbol(const std::string& s) {
     return consts_.size() - 1;
 }
 
+std::size_t BytecodeModule::addNamed(const std::string& spelling,
+                                     const proto::ProtoObject* value) {
+    // One entry per spelling, as for addSymbol: interning maps a spelling
+    // to exactly one value.
+    for (std::size_t i = 0; i < consts_.size(); ++i) {
+        if (consts_[i].kind == ConstKind::Named && consts_[i].sval == spelling) {
+            return i;
+        }
+    }
+    consts_.push_back(Const{ConstKind::Named, 0, 0.0, spelling, value});
+    return consts_.size() - 1;
+}
+
 std::size_t BytecodeModule::emit(Op op, std::uint8_t operand) {
     std::size_t at = bytes_.size();
     bytes_.push_back(static_cast<std::uint8_t>(op));

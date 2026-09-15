@@ -5,6 +5,7 @@
 // small inline forms of lists and tuples.
 
 #include "runtime/MapOps.h"
+#include "runtime/Named.h"
 #include "runtime/Primitives.h"
 
 #include "protoCore.h"
@@ -28,10 +29,14 @@ struct ValuesFixture : ::testing::Test {
     const proto::ProtoString* stateKey =
         proto::ProtoString::createSymbol(ctx, "__map__");
     MapLayout layout{marker, stateKey};
+    protoClojure::NamedLayout named{
+        space.objectPrototype->newChild(ctx, /*isMutable=*/true),
+        space.objectPrototype->newChild(ctx, /*isMutable=*/true),
+        proto::ProtoString::createSymbol(ctx, "__spelling__")};
 
-    const proto::ProtoObject* kw(const char* name) const {
-        return reinterpret_cast<const proto::ProtoObject*>(
-            proto::ProtoString::createSymbol(ctx, name));
+    // The interned keyword (or, without a leading colon, symbol) `spelling`.
+    const proto::ProtoObject* kw(const char* spelling) const {
+        return protoClojure::internNamed(ctx, named, spelling);
     }
     const proto::ProtoObject* num(long long v) const { return ctx->fromLong(v); }
 
@@ -122,6 +127,42 @@ TEST_F(ValuesFixture, SequentialNeverEqualsMapsStringsOrNumbers) {
     EXPECT_FALSE(eq(ab, chars));
     EXPECT_FALSE(eq(obj(list(1, 1)), num(1)));
     EXPECT_FALSE(eq(num(1), tuple(list(1, 1))));
+}
+
+TEST_F(ValuesFixture, KeywordsAndSymbolsAreInternedAndNeverEqualStrings) {
+    // protoCore stores short ASCII strings inline, so a symbol and a string
+    // spelled ":a" are one tagged pointer; longer spellings compare equal by
+    // content. Keywords and symbols must differ from strings in every case.
+    for (const char* spelling :
+         {":a", ":a-much-longer-keyword", ":\xC3\xB1" "and\xC3\xBA", "a",
+          "a-much-longer-symbol"}) {
+        const proto::ProtoObject* value = kw(spelling);
+        const proto::ProtoObject* string = ctx->fromUTF8String(spelling);
+        EXPECT_EQ(value, kw(spelling)) << spelling;
+        EXPECT_TRUE(protoClojure::isNamed(ctx, named, value)) << spelling;
+        EXPECT_FALSE(protoClojure::isNamed(ctx, named, string)) << spelling;
+        EXPECT_EQ(protoClojure::namedSpelling(ctx, named, value)->toStdString(ctx),
+                  spelling);
+        EXPECT_TRUE(eq(value, kw(spelling))) << spelling;
+        EXPECT_FALSE(eq(value, string)) << spelling;
+        EXPECT_FALSE(eq(string, value)) << spelling;
+    }
+    EXPECT_FALSE(eq(kw(":a"), kw("a")));
+
+    // As map keys, a keyword and the string of its spelling are two entries.
+    const proto::ProtoObject* kv[4] = {
+        kw(":a"), num(1), ctx->fromUTF8String(":a"), num(2)};
+    const proto::ProtoObject* m =
+        protoClojure::mapAssocPairs(ctx, layout, nullptr, kv, 4);
+    EXPECT_EQ(protoClojure::mapCount(ctx, layout, m), 2u);
+    bool found = false;
+    EXPECT_EQ(protoClojure::mapGet(ctx, layout, m, kw(":a"), &found), num(1));
+    EXPECT_TRUE(found);
+    EXPECT_EQ(protoClojure::mapGet(ctx, layout, m, ctx->fromUTF8String(":a"), &found),
+              num(2));
+    EXPECT_TRUE(found);
+    protoClojure::mapGet(ctx, layout, m, kw("a"), &found);
+    EXPECT_FALSE(found);
 }
 
 TEST_F(ValuesFixture, SequentialElementsUseNumericCrossTypeEquality) {

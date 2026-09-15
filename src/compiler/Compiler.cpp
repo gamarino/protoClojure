@@ -312,7 +312,8 @@ Compiler::compileArity(proto::ProtoContext* ctx,
             for (const auto& d : kwKeyDecls) {
                 int slot = scope.nextSlot++;
                 scope.nameToSlot[d.name] = slot;
-                body->addKwKey(d.name, slot);
+                body->addKwKey(d.name, slot,
+                    internNamed(ctx, markers.named, (":" + d.name).c_str()));
             }
             if (!asBindName.empty()) {
                 int slot = scope.nextSlot++;
@@ -703,7 +704,10 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 return;
             }
             if (isStringy(q)) {
-                std::size_t idx = out.addSymbol(asUtf8(ctx, q));
+                // A quoted symbol or keyword: its interned value (Named.h).
+                const std::string spelling = asUtf8(ctx, q);
+                std::size_t idx = out.addNamed(
+                    spelling, internNamed(ctx, markers.named, spelling.c_str()));
                 if (idx > 255) throw CompileError("quote: const-pool overflow");
                 out.emit(Op::PUSH_CONST, static_cast<std::uint8_t>(idx));
                 return;
@@ -1186,7 +1190,9 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         if (name == "false") { out.emit(Op::PUSH_FALSE, 0); return; }
         if (name == "nil")   { out.emit(Op::PUSH_NIL,   0); return; }
         if (!name.empty() && name[0] == ':') {
-            std::size_t idx = out.addSymbol(name);
+            // Interned once here; PUSH_CONST pushes the pointer (Named.h).
+            std::size_t idx = out.addNamed(
+                name, internNamed(ctx, markers.named, name.c_str()));
             if (idx > 255) throw CompileError("const-pool overflow on keyword");
             out.emit(Op::PUSH_CONST, static_cast<std::uint8_t>(idx));
             return;

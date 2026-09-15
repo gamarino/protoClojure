@@ -15,6 +15,8 @@
  */
 #pragma once
 
+#include "Named.h"
+
 #include <cstdio>
 
 namespace proto {
@@ -40,8 +42,10 @@ struct MapLayout;
 // a sequential collection is never equal to a non-sequential value. Every
 // other pair of values is compared with protoCore `compare(ctx, other) == 0`:
 // numbers across types (deviation D15), strings by content, and everything
-// else by identity. nullptr is nil. Both values must be rooted by the
-// caller; the function allocates nothing itself.
+// else by identity. Keywords and symbols are interned named values
+// (Named.h), so identity is equality of spelling, and a keyword or a symbol
+// is never equal to a string. nullptr is nil. Both values must be rooted by
+// the caller; the function allocates nothing itself.
 //
 // Cost: one pass over the elements of a sequential pair, stopping at the
 // first mismatch; each element is read by index in O(log n).
@@ -60,13 +64,15 @@ bool valuesEqual(proto::ProtoContext* ctx, const MapLayout& layout,
 //     equal to every number, so no hash consistent with `=` exists for NaN;
 //     as a map key NaN is matched only by numbers hashing to 0 (0, 0.0,
 //     -0.0, multiples of 2^61 - 1, and NaN) and vice versa.
-//   - Strings and keywords use protoCore's content hash.
+//   - Strings use protoCore's content hash.
 //   - Maps combine a mix of each entry's key hash and value hash with a sum,
 //     so the hash ignores insertion order.
 //   - Lists and vectors share one order-dependent combination of their
 //     element hashes, so `[1 2]` and `(1 2)` hash equally.
-//   - Every other value (nil, booleans, atoms, functions, ...) uses
-//     protoCore's identity-based hash, matching identity equality.
+//   - Every other object (keywords, symbols, atoms, functions, ...) hashes
+//     its address, and nil and booleans use protoCore's identity-based
+//     hash, matching identity equality; for keywords and symbols, interning
+//     makes identity equivalent to equality of spelling.
 //
 // Collections hash recursively. Nothing is cached: a collection is hashed
 // in full on every call — O(1) for numbers in the long long range, strings
@@ -140,6 +146,8 @@ struct ActiveCallContext {
     const proto::ProtoString*  doneKey;
     // Session 19.
     const proto::ProtoString*  actorStateKey;
+    // Keyword and symbol values (Named.h).
+    NamedLayout                named;
 };
 void setActiveCallContext(const ActiveCallContext& cc);
 void clearActiveCallContext();

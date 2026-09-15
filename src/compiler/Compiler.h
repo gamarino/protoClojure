@@ -14,6 +14,9 @@
  * P3: writes go to a BytecodeModule, which is C++-side. Const-pool values
  * are POD (long long) or std::string; they never enter protoCore until
  * the VM materialises them at PUSH_CONST time, via raw-bytes c_str().
+ * The exception is keyword literals, quoted symbols and `:keys` keywords:
+ * the compiler interns them (runtime/Named.h) and the module keeps the
+ * immortal interned pointer (see the P4 note in BytecodeModule.h).
  *
  * Session 3 scope: integers, strings, symbols (resolved to PUSH_VAR), and
  * lists interpreted as call forms. No special forms yet — that is
@@ -21,6 +24,7 @@
  */
 #pragma once
 #include "runtime/BytecodeModule.h"
+#include "runtime/Named.h"
 
 #include <memory>
 #include <stdexcept>
@@ -60,6 +64,7 @@ struct CompilerMarkers {
     const proto::ProtoString* aritiesKey;        // multi-arity dispatch list
     const proto::ProtoString* itemsKey;          // vector items list
     const proto::ProtoString* entriesKey;        // map entries list
+    NamedLayout               named;             // keyword and symbol values
 };
 
 class Compiler {

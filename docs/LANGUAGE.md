@@ -190,6 +190,11 @@ A **keyword** is a symbol with a leading `:`. Keywords are interned and
 self-evaluating — they evaluate to themselves. Idiomatic for map keys.
 `::foo` is a namespace-qualified keyword in the current namespace.
 
+At run time a keyword, and a symbol produced by `quote`, is an interned
+value of its own kind, never a string: `(= :a ":a")` and
+`(= (quote a) "a")` are false, `(string? :a)` is false, and `:a` and `":a"`
+are two different map keys. `(str :a)` is the string `":a"`.
+
 ### 2.6 Booleans and nil
 
 `true`, `false`, `nil`. As in Clojure, `false` and `nil` are the only
@@ -333,7 +338,9 @@ and matched with `=`, so a key matches by value: `(get {{:a 1} :x} {:a 1})`
 is `:x`, a vector key is found with an equal list, and an integer key is
 found with an equal float (`(get {1 :x} 1.0)` is `:x`, deviation D15). Keys
 that are `=` are one key: `(hash-map 1 :a 1.0 :b)` is `{1 :b}`, keeping the
-first key and the last value. The hash ignores map insertion order, is the
+first key and the last value. A keyword is never the same key as the string
+of its spelling: `(get {:a 1} ":a")` is `nil`, and `(hash-map :a 1 ":a" 2)`
+has two entries. The hash ignores map insertion order, is the
 same for a list and a vector with equal elements, and hashes numbers by
 value modulo 2^61 − 1, so equal numbers hash equally whatever their
 representation (SmallInteger, LargeInteger, double). Hashes are not cached:
@@ -383,6 +390,12 @@ collections are `=` when they hold `=` elements in the same order,
 whatever their concrete types, so `(= [1 2] '(1 2))` and `(= [] '())` are
 true. A sequential collection is never `=` to a map, a set, a string or
 `nil`.
+
+Keywords, symbols and strings are three different kinds of value, never
+`=` to one another even when spelled alike: `(= :a ":a")`,
+`(= (quote a) "a")` and `(= (quote a) :a)` are false. Keywords and symbols
+are interned, so two of them are `=` exactly when they have the same
+spelling.
 
 In 0.0.1, `=` and `not=` follow these rules for numbers, strings,
 keywords, booleans, `nil`, lists, vectors and maps, recursively through

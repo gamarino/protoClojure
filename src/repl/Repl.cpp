@@ -8,6 +8,7 @@
 #include "runtime/ActorScheduler.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/ExecutionEngine.h"
+#include "runtime/Named.h"
 #include "runtime/Opcodes.h"
 #include "runtime/Primitives.h"
 
@@ -151,6 +152,7 @@ struct Session {
     const proto::ProtoObject* futureMarker;
     const proto::ProtoObject* promiseMarker;
     const proto::ProtoObject* actorMarker;
+    NamedLayout               named;          // keywords and symbols (Named.h)
 
     const proto::ProtoString* bytesKey;
     const proto::ProtoString* bytecodeKey;
@@ -197,7 +199,7 @@ struct Session {
 
     Session()
         : ctx(space.rootContext) {
-        ctx->resizeAutomaticLocals(11);
+        ctx->resizeAutomaticLocals(13);
 
         globals = const_cast<proto::ProtoObject*>(
             space.objectPrototype->newChild(ctx, /*isMutable=*/true));
@@ -226,6 +228,14 @@ struct Session {
         ctx->setAutomaticLocal(8,  futureMarker);
         ctx->setAutomaticLocal(9,  promiseMarker);
         ctx->setAutomaticLocal(10, actorMarker);
+
+        // Keywords and symbols: the prototype of every named value and the
+        // table that interns them by spelling, pinned like the markers.
+        named.marker = space.objectPrototype->newChild(ctx, true);
+        ctx->setAutomaticLocal(11, named.marker);
+        named.table = space.objectPrototype->newChild(ctx, true);
+        ctx->setAutomaticLocal(12, named.table);
+        named.spellingKey = proto::ProtoString::createSymbol(ctx, "__spelling__");
 
         bytesKey      = proto::ProtoString::createSymbol(ctx, "__bytes__");
         bytecodeKey   = proto::ProtoString::createSymbol(ctx, "__bytecode__");
@@ -258,7 +268,7 @@ struct Session {
         compilerMarkers = CompilerMarkers{stringMarker, vectorMarker, mapMarker,
                                           bytesKey, bytecodeKey, arityKey,
                                           capturesKey, aritiesKey,
-                                          itemsKey, entriesKey};
+                                          itemsKey, entriesKey, named};
 
         // Build the ActiveCallContext the printer needs. ExecutionEngine::run
         // installs its own cc for the duration of a call (then restores
@@ -274,7 +284,7 @@ struct Session {
             bytecodeKey, arityKey, capturesKey, aritiesKey,
             mapStateKey, valueKey, watchesKey,
             thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-            actorStateKey};
+            actorStateKey, named};
         setActiveCallContext(printerCc);
     }
 
@@ -319,7 +329,7 @@ struct Session {
                 bytecodeKey, arityKey, capturesKey, aritiesKey,
                 mapStateKey, valueKey, watchesKey,
                 thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-                actorStateKey);
+                actorStateKey, named);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "error: %s\n", e.what());
             return false;
@@ -399,7 +409,7 @@ void cmdLoad(Session& s, const std::string& path) {
                 s.bytecodeKey, s.arityKey, s.capturesKey, s.aritiesKey,
                 s.mapStateKey, s.valueKey, s.watchesKey,
                 s.thunkKey, s.ccBlobKey, s.threadKey, s.resultKey, s.doneKey,
-                s.actorStateKey);
+                s.actorStateKey, s.named);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "%s: runtime error: %s\n",
                          path.c_str(), e.what());

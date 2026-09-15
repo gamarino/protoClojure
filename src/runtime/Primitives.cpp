@@ -93,6 +93,12 @@ bool isListTag(const proto::ProtoObject* v) {
     return t == kTagList || t == kTagListSmall;
 }
 
+// True for a protoCore object cell (POINTER_TAG_OBJECT = 0): maps, keywords
+// and symbols, atoms, functions, futures, promises and actors.
+bool isObjectTag(const proto::ProtoObject* v) {
+    return v && (reinterpret_cast<uintptr_t>(v) & 0x3F) == 0;
+}
+
 inline MapLayout mapLayoutOf(const ActiveCallContext* cc) {
     return MapLayout{cc->mapMarkerProto, cc->mapStateKey};
 }
@@ -169,6 +175,12 @@ void printValue(proto::ProtoContext* ctx, std::FILE* out,
     // Session 13/16 — print maps and atoms via ActiveCallContext
     // rather than carrying the markers through printValue everywhere.
     const ActiveCallContext* cc = activeCallContext();
+    // Keywords and symbols print their spelling: `:a`, `a`.
+    if (cc && isNamed(ctx, cc->named, v)) {
+        std::fputs(namedSpelling(ctx, cc->named, v)->toStdString(ctx).c_str(),
+                   out);
+        return;
+    }
     if (cc && v->getPrototype(ctx) == cc->atomMarkerProto) {
         std::fputs("#<atom ", out);
         const proto::ProtoObject* inner =
@@ -288,6 +300,11 @@ void appendValue(proto::ProtoContext* ctx, std::ostringstream& os,
         const proto::ProtoString* s =
             reinterpret_cast<const proto::ProtoString*>(v);
         os << s->toStdString(ctx);
+        return;
+    }
+    const ActiveCallContext* cc = activeCallContext();
+    if (cc && isNamed(ctx, cc->named, v)) {
+        os << namedSpelling(ctx, cc->named, v)->toStdString(ctx);
         return;
     }
     os << "#<unprintable>";
@@ -2114,14 +2131,13 @@ const proto::ProtoObject* prim_actor_stats(proto::ProtoContext* ctx,
     auto s = ActorScheduler::instance().stats();
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("actor-stats: no active VM context");
-    // Counts are SmallInts and keywords are interned symbols: nothing here
-    // needs rooting before the map is built.
+    // Counts are SmallInts and keywords are interned (reachable through the
+    // intern table, Named.h): nothing here needs rooting before the map is
+    // built.
     const proto::ProtoObject* kv[4] = {
-        reinterpret_cast<const proto::ProtoObject*>(
-            proto::ProtoString::createSymbol(ctx, ":workers")),
+        internNamed(ctx, cc->named, ":workers"),
         ctx->fromLong(s.numWorkers),
-        reinterpret_cast<const proto::ProtoObject*>(
-            proto::ProtoString::createSymbol(ctx, ":messages-processed")),
+        internNamed(ctx, cc->named, ":messages-processed"),
         ctx->fromLong(static_cast<long long>(s.messagesProcessed))};
     return mapAssocPairs(ctx, mapLayoutOf(cc), nullptr, kv, 4);
 }
@@ -2399,6 +2415,12 @@ bool valuesEqual(proto::ProtoContext* ctx, const MapLayout& layout,
                 });
     }
 
+    // Any other object — keywords and symbols (interned, Named.h), atoms,
+    // functions, ... — is equal only to itself. Decided by the pointer tag:
+    // protoCore's isTuple, isString and compare would first probe the
+    // object for a `__data__` wrapper attribute, which the runtime never sets.
+    if (isObjectTag(a) || isObjectTag(b)) return false;
+
     // Sequential collections (lists and vectors) are equal when they hold
     // equal elements in the same order, whatever their concrete types, and
     // are never equal to anything else. One pass over the elements that
@@ -2447,6 +2469,10 @@ unsigned long valueHash(proto::ProtoContext* ctx, const MapLayout& layout,
         return mix64(acc.sum ^ mix64(kMapSeed + acc.count));
     }
 
+    // Any other object is equal only to itself (valuesEqual): hash its
+    // address, without the `__data__` probes of protoCore getHash.
+    if (isObjectTag(v)) return mix64(reinterpret_cast<uintptr_t>(v));
+
     // Lists and vectors share one order-dependent combination, so equal
     // sequential collections hash equally whatever their concrete types.
     const SequentialView s = sequentialView(ctx, v);
@@ -2458,7 +2484,7 @@ unsigned long valueHash(proto::ProtoContext* ctx, const MapLayout& layout,
         return mix64(h ^ n);
     }
 
-    // nil, booleans, atoms, functions, ...: protoCore's identity-based
+    // nil, booleans and primitive functions: protoCore's identity-based
     // hash, matching the identity comparison valuesEqual falls back to.
     return v->getHash(ctx);
 }

@@ -1,6 +1,7 @@
 #include "ExecutionEngine.h"
 #include "BytecodeModule.h"
 #include "MapOps.h"
+#include "Named.h"
 #include "Opcodes.h"
 #include "Primitives.h"
 
@@ -48,6 +49,8 @@ inline bool smallIntFitsLong(long long v) {
     return v >= kMin && v <= kMax;
 }
 
+// The value a PUSH_CONST pushes. Keyword literals and quoted symbols are
+// Named constants holding the value the compiler interned (Named.h).
 const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
                                        const BytecodeModule::Const& c) {
     using K = BytecodeModule::ConstKind;
@@ -55,11 +58,10 @@ const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
         case K::Long:   return ctx->fromLong(c.ival);
         case K::Double: return ctx->fromDouble(c.dval);
         case K::String: return ctx->fromUTF8String(c.sval.c_str());
-        case K::Symbol:
-            return reinterpret_cast<const proto::ProtoObject*>(
-                proto::ProtoString::createSymbol(ctx, c.sval.c_str()));
+        case K::Named:  return c.named;
+        case K::Symbol: break;  // a global name, never a value
     }
-    return PROTO_NONE;
+    throw std::runtime_error("VM: PUSH_CONST of a global name: " + c.sval);
 }
 
 } // namespace
@@ -86,14 +88,11 @@ static bool extractKwVals(proto::ProtoContext* ctx,
     }
     const MapLayout layout{mapMarkerProto, mapStateKey};
     for (std::size_t i = 0; i < kkeys.size(); ++i) {
-        // Build the keyword key (`:name`) and look it up, same as prim_get.
-        std::string kw = ":" + kkeys[i].name;
-        const proto::ProtoObject* symObj =
-            reinterpret_cast<const proto::ProtoObject*>(
-                proto::ProtoString::createSymbol(ctx, kw.c_str()));
+        // Look the keyword `:name` (interned by the compiler) up, as
+        // prim_get does.
         bool found = false;
         const proto::ProtoObject* v =
-            mapGet(ctx, layout, maybeMap, symObj, &found);
+            mapGet(ctx, layout, maybeMap, kkeys[i].keyword, &found);
         out[i] = found ? v : PROTO_NONE;
     }
     return true;
@@ -231,7 +230,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
                          cc->watchesKey,
                          cc->thunkKey, cc->ccBlobKey, cc->threadKey,
                          cc->resultKey, cc->doneKey,
-                         cc->actorStateKey,
+                         cc->actorStateKey, cc->named,
                          callArgs, passArgc, capsVal,
                          kwBased ? kwVals : nullptr, kwCount,
                          kwBased ? kwArgsMap : nullptr);
@@ -285,6 +284,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                      const proto::ProtoString* resultKey,
                      const proto::ProtoString* doneKey,
                      const proto::ProtoString* actorStateKey,
+                     const NamedLayout& named,
                      const proto::ProtoObject* const* args,
                      unsigned int argCount,
                      const proto::ProtoObject* captures,
@@ -304,7 +304,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                          bytecodeKey, arityKey, capturesKey, aritiesKey,
                          mapStateKey, valueKey, watchesKey,
                          thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-                         actorStateKey};
+                         actorStateKey, named};
     setActiveCallContext(cc);
     struct Guard {
         const ActiveCallContext* prior; ActiveCallContext saved;
@@ -522,7 +522,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 bytecodeKey, arityKey, capturesKey, aritiesKey,
                 mapStateKey, valueKey, watchesKey,
                 thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-                actorStateKey,
+                actorStateKey, named,
                 callArgs, passArgc, capsVal,
                 kwBased ? kwVals : nullptr, kwCount,
                 kwBased ? kwArgsMap : nullptr);
