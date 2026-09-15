@@ -5,7 +5,7 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 345 test cases: 262
+scripts and an interactive REPL. `ctest` registers 351 test cases: 268
 conformance fixtures under `tests/conformance/`, 78 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 value equality and hashing, the native stack guard and the double printer
@@ -30,7 +30,7 @@ directories that cover them.
 | `def`, `if`, `do`, integer arithmetic, comparisons, `str` | `02-special-forms`, `03-arithmetic` | 35 |
 | `fn`, `defn`, `let`, `loop`, `recur`, `StackOverflowError` | `04-functions`, `05-recursion` | 14 |
 | Closures with N-level lexical capture | `06-closures` | 6 |
-| Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 29 |
+| Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 35 |
 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 21 |
 | IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 21 |
 | LargeInteger promotion, big integer literals | `15-bigint` | 9 |
@@ -194,7 +194,12 @@ The design specifications written during development are archived under
 - [x] Maps: `hash-map assoc get contains? keys vals`
 - [x] Strings: `subs upper-case lower-case starts-with? ends-with?
       includes? index-of replace join split trim triml trimr blank?`;
-      `count` / `empty?` / `reverse` also accept strings
+      `count` / `empty?` / `reverse` also accept strings, and `nth` returns
+      the character at a code-point index as a one-character string
+      (`(nth "año" 1)` is `"ñ"`, D3)
+- [x] `nth` on `nil` returns `nil`, or the not-found value, for any integer
+      index; on a value that is not a list, a vector, a string or `nil` it
+      raises `UnsupportedOperationException: nth not supported on a map`
 - [x] Index and position arguments (`nth`, `subs`, `index-of`) accept
       integers of any size: an index out of range raises
       `IndexOutOfBoundsException: nth index 12345678901234567890 is out of

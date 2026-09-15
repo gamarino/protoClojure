@@ -223,6 +223,13 @@ same mode as the tag.
 `ProtoString`; we do *not* introduce a separate character type in v0.1
 (see *Departures from Clojure-JVM*, §13).
 
+In 0.0.1 character literals are not read yet. `nth` on a string returns the
+character at an index as a one-character string, indexing by code point as
+`count` and `subs` do: `(nth "año" 1)` is `"ñ"` (JVM Clojure returns the
+character `\ñ`). An index past the end raises
+`StringIndexOutOfBoundsException: nth index 3 is out of bounds (count 3)`, or
+returns the not-found value when one is given.
+
 ### 2.5 Symbols and keywords
 
 A **symbol** is an identifier: `foo`, `+`, `*ear-muffs*`,
@@ -841,7 +848,10 @@ runtime error `ClassCastException: <operation> expects a number, got
 got nil`. An index out of range raises
 `IndexOutOfBoundsException: nth index 3 is out of bounds (count 3)` or
 `StringIndexOutOfBoundsException: subs begin 2, end 1, length 3`, with the
-index as written at any magnitude, and an integer divided by zero raises
+index as written at any magnitude (`StringIndexOutOfBoundsException` for
+`nth` on a string), `nth` on a value that is neither sequential, a string nor
+`nil` raises `UnsupportedOperationException: nth not supported on a map`
+(naming the type), and an integer divided by zero raises
 `ArithmeticException: Divide by zero`. An error raised on a future or `pmap`
 thread reaches the thread that dereferences the future or calls `pmap`,
 prefixed with `ExecutionException: ` (§12).

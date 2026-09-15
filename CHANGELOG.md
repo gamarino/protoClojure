@@ -49,7 +49,7 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (262 fixtures under
+- **Tests.** A glob-discovered conformance suite (268 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
   the bytecode module, the runtime map, value equality and hashing, the
   native stack guard and the double printer (78 tests), and five CLI checks (`--help`, a
@@ -281,3 +281,12 @@ The project has no tagged releases yet; the version declared in
   was being compiled (after a read error on a deeply nested form, the next
   deeply nested form failed with "compile: unsupported form" in 7 of 15
   runs).
+- `nth` accepts strings and `nil`. `(nth "abc" 1)` raised "seq op: argument
+  is not a list or vector", `(nth nil 0)` raised "nth: nil collection", and
+  `nth` on a map or a number raised the same "seq op" error. As in JVM
+  Clojure, `(nth nil i)` is now `nil`, or the not-found value, for any integer
+  index; `(nth "abc" 1)` is the one-character string `"b"` (deviation D3),
+  indexed by code point like `count` and `subs`, with
+  `StringIndexOutOfBoundsException: nth index 3 is out of bounds (count 3)`
+  past the end; and any other type raises
+  `UnsupportedOperationException: nth not supported on a map`.

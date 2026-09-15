@@ -703,7 +703,14 @@ void throwNthOutOfBounds(proto::ProtoContext* ctx, const proto::ProtoObject* ind
                              std::to_string(count) + ")");
 }
 
-// (nth coll i) / (nth coll i not-found)
+// (nth coll i) / (nth coll i not-found), as JVM Clojure's nth:
+//   - a vector in O(log N), a list in O(N);
+//   - a string: the character at code-point index `i`, as a one-character
+//     string (deviation D3), indexed like count and subs;
+//   - nil: nil, or not-found, for any integer index;
+//   - an index out of range raises IndexOutOfBoundsException
+//     (StringIndexOutOfBoundsException for a string), or returns not-found;
+//   - any other value raises UnsupportedOperationException.
 const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
                                    const proto::ParentLink*,
@@ -716,8 +723,32 @@ const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
     long long idx = indexArg(ctx, args, 1, "nth");
     const proto::ProtoObject* notFound = (ac == 3) ? args->getAt(ctx, 2) : nullptr;
 
+    if (!coll || coll == PROTO_NONE) return notFound ? notFound : PROTO_NONE;
+
+    // String path: a one-character string (a slice), O(log N).
+    if (proto::ProtoObject::isStringTagFast(coll)) {
+        const auto* s = reinterpret_cast<const proto::ProtoString*>(coll);
+        const long long sz = static_cast<long long>(s->getSize(ctx));
+        if (idx < 0 || idx >= sz) {
+            if (notFound) return notFound;
+            throw std::runtime_error("StringIndexOutOfBoundsException: nth index " +
+                                     printedValue(ctx, args->getAt(ctx, 1)) +
+                                     " is out of bounds (count " +
+                                     std::to_string(sz) + ")");
+        }
+        return reinterpret_cast<const proto::ProtoObject*>(
+            s->getSlice(ctx, static_cast<int>(idx), static_cast<int>(idx) + 1));
+    }
+
+    const bool isVector = coll->isTuple(ctx);
+    if (!isVector && !isListTag(coll)) {
+        throw std::runtime_error(
+            std::string("UnsupportedOperationException: nth not supported on ") +
+            valueTypeName(ctx, coll));
+    }
+
     // Vector path: O(log N).
-    if (coll && coll->isTuple(ctx)) {
+    if (isVector) {
         const proto::ProtoTuple* t =
             reinterpret_cast<const proto::ProtoTuple*>(coll);
         long long sz = static_cast<long long>(t->getSize(ctx));
@@ -728,11 +759,7 @@ const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
         return t->getAt(ctx, static_cast<int>(idx));
     }
     // List path: O(N).
-    const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
-    if (!lst) {
-        if (notFound) return notFound;
-        throw std::runtime_error("nth: nil collection");
-    }
+    const proto::ProtoList* lst = coll->asList(ctx);
     long long sz = static_cast<long long>(lst->getSize(ctx));
     if (idx < 0 || idx >= sz) {
         if (notFound) return notFound;
