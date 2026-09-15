@@ -162,8 +162,9 @@ comment is `#_<form>` — the next form is read and dropped.
   around, whether compiled to an opcode or called through `apply` or
   `reduce`: `(inc 9223372036854775807)` is `9223372036854775808` (JVM
   Clojure throws an `ArithmeticException`; deviation D14). `<`, `<=`, `>`
-  and `>=` compare integers exactly at every magnitude. Hexadecimal, binary
-  and radix literals are planned.
+  and `>=` compare integers exactly at every magnitude. An integer divided
+  by zero, at any magnitude, raises `ArithmeticException: Divide by zero`.
+  Hexadecimal, binary and radix literals are planned.
 - **Ratio**: `3/4`, `-22/7`. Stored as a normalised pair of integers.
   Arithmetic preserves exact rationality unless mixed with a float.
 - **Float**: `3.14`, `1e10`, `-0.5e-3`. IEEE 754 double. A float prints
@@ -175,7 +176,9 @@ comment is `#_<form>` — the next form is read and dropped.
   outside that range (`1.0E7`, `1.0E21`, `1.5E-7`); `-0.0` keeps its sign;
   infinities and NaN print as `##Inf`, `##-Inf` and `##NaN`, and `str` of a
   bare one gives `Infinity`, `-Infinity` or `NaN`. In 0.0.1 the reader
-  does not accept `##Inf`, `##-Inf` or `##NaN`.
+  does not accept `##Inf`, `##-Inf` or `##NaN`. When any operand of `/` is
+  a float, the division follows IEEE 754: `(/ 1 0.0)` is `##Inf`,
+  `(/ -1 0.0)` is `##-Inf` and `(/ 0 0.0)` is `##NaN`.
 - **BigDecimal**: `3.14M` — **[v0.2]**.
 
 ### 2.3 Strings

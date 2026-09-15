@@ -49,7 +49,7 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (240 fixtures under
+- **Tests.** A glob-discovered conformance suite (245 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
   the bytecode module, the runtime map, value equality and hashing, the
   native stack guard and the double printer (77 tests), and three CLI checks (`--help`, a
@@ -227,6 +227,12 @@ The project has no tagged releases yet; the version declared in
   `##Inf`, `##-Inf` and `##NaN` (`str` of a bare one gives `Infinity`,
   `-Infinity` or `NaN`, as in JVM Clojure). `println`, `str`, `join` and the
   REPL share the one printer.
+- Division by a float zero follows IEEE 754. `(/ 1 0.0)`, `(/ 1.0 0)` and
+  `(/ 0 0.0)` raised "/: divide by zero"; as in JVM Clojure they now return
+  `##Inf`, `##-Inf` (`(/ -1 0.0)`, `(/ 1 -0.0)`) and `##NaN`. Integer
+  division by zero, big integers included, still raises an error, now the
+  ArithmeticException analogue with JVM Clojure's message:
+  `ArithmeticException: Divide by zero`.
 - Symbols and keywords may contain non-ASCII letters. `:ñandú` or
   `(defn año [x] ...)` failed with "unexpected character: �": the lexer
   classified source bytes with `isalnum`, which rejects every byte of a

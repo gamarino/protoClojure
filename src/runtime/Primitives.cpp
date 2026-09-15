@@ -427,8 +427,11 @@ const proto::ProtoObject* prim_mul(proto::ProtoContext* ctx,
 }
 
 // `/` — when every argument is an integer, the quotient truncates toward
-// zero (there are no ratios yet) and stays exact at any magnitude; once any
-// argument is a float, every argument is taken as a double.
+// zero (there are no ratios yet) and stays exact at any magnitude, and a zero
+// divisor raises the ArithmeticException analogue with JVM Clojure's message,
+// "Divide by zero". Once any argument is a float, every argument is taken as
+// a double and the division follows IEEE 754, as in JVM Clojure: a zero
+// divisor gives ##Inf, ##-Inf or ##NaN.
 const proto::ProtoObject* prim_div(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
                                    const proto::ParentLink*,
@@ -443,16 +446,13 @@ const proto::ProtoObject* prim_div(proto::ProtoContext* ctx,
     if (anyFloat) {
         if (n == 1) return ctx->fromDouble(1.0 / args->getAt(ctx, 0)->asDouble(ctx));
         double acc = args->getAt(ctx, 0)->asDouble(ctx);
-        for (unsigned long i = 1; i < n; ++i) {
-            double v = args->getAt(ctx, static_cast<int>(i))->asDouble(ctx);
-            if (v == 0.0) throw std::runtime_error("/: divide by zero");
-            acc /= v;
-        }
+        for (unsigned long i = 1; i < n; ++i)
+            acc /= args->getAt(ctx, static_cast<int>(i))->asDouble(ctx);
         return ctx->fromDouble(acc);
     }
     for (unsigned long i = (n == 1 ? 0 : 1); i < n; ++i) {
         if (args->getAt(ctx, static_cast<int>(i))->integerSign(ctx) == 0)
-            throw std::runtime_error("/: divide by zero");
+            throw std::runtime_error("ArithmeticException: Divide by zero");
     }
     if (n == 1) return ctx->fromLong(1)->divide(ctx, args->getAt(ctx, 0));
     return numericFold(ctx, args, n,

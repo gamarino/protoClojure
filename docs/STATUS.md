@@ -5,7 +5,7 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 320 test cases: 240
+scripts and an interactive REPL. `ctest` registers 325 test cases: 245
 conformance fixtures under `tests/conformance/`, 77 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 value equality and hashing, the native stack guard and the double printer
@@ -26,13 +26,13 @@ directories that cover them.
 | Feature | Conformance directories | Fixtures |
 |---|---|---:|
 | Binary, lexer, reader, bytecode VM, `println` | `00-binary`, `01-literals` | 2 |
-| `def`, `if`, `do`, integer arithmetic, comparisons, `str` | `02-special-forms`, `03-arithmetic` | 27 |
+| `def`, `if`, `do`, integer arithmetic, comparisons, `str` | `02-special-forms`, `03-arithmetic` | 30 |
 | `fn`, `defn`, `let`, `loop`, `recur`, `StackOverflowError` | `04-functions`, `05-recursion` | 13 |
 | Closures with N-level lexical capture | `06-closures` | 6 |
 | Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 24 |
 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 21 |
-| IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 20 |
-| LargeInteger promotion, big integer literals | `15-bigint` | 8 |
+| IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 21 |
+| LargeInteger promotion, big integer literals | `15-bigint` | 9 |
 | Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 40 |
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 17 |
 | `clojure.string`-shaped string functions | `20-strings` | 16 |
@@ -144,7 +144,11 @@ The design specifications written during development are archived under
       type, `ClassCastException: * expects a number, got a string`
       (`throwNotANumber` in `src/runtime/Primitives.h`); the one-argument
       comparison `(< x)` is `true` for any value, as in Clojure
-- [x] Integer division truncates: `(/ 10 4)` is `2`, exact at any magnitude
+- [x] Integer division truncates: `(/ 10 4)` is `2`, exact at any magnitude;
+      an integer divided by zero, big integers included, raises
+      `ArithmeticException: Divide by zero`
+- [x] Division with a float operand follows IEEE 754, as in JVM Clojure:
+      `(/ 1 0.0)` is `##Inf`, `(/ -1 0.0)` is `##-Inf`, `(/ 0 0.0)` is `##NaN`
 - [x] `< <= > >=` compare integers exactly beyond 2^53; a comparison with a
       float compares doubles
 - [x] Print path handles SmallInteger, LargeInteger and floats; a float
