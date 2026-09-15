@@ -16,6 +16,7 @@
 #include <cstddef>
 
 using protoClojure::MapLayout;
+using protoClojure::valueTypeName;
 using protoClojure::valueHash;
 using protoClojure::valuesEqual;
 
@@ -303,6 +304,40 @@ TEST_F(ValuesFixture, EqualValuesHashEqually) {
     // Reflexive pairs plus the cross-type ones: the pool is not trivially
     // all-distinct.
     EXPECT_GT(equalPairs, n + 10);
+}
+
+// The type names the ClassCastException analogue reports
+// (throwNotANumber). Without an installed ActiveCallContext, runtime objects
+// such as maps and keywords are "an object"; the conformance fixtures
+// 03-arithmetic/type-error-* cover them through the VM.
+TEST_F(ValuesFixture, ValueTypeNamesForErrorMessages) {
+    EXPECT_STREQ(valueTypeName(ctx, nullptr), "nil");
+    EXPECT_STREQ(valueTypeName(ctx, PROTO_NONE), "nil");
+    EXPECT_STREQ(valueTypeName(ctx, PROTO_TRUE), "a boolean");
+    EXPECT_STREQ(valueTypeName(ctx, PROTO_FALSE), "a boolean");
+    EXPECT_STREQ(valueTypeName(ctx, num(7)), "an integer");
+    EXPECT_STREQ(valueTypeName(ctx, ctx->fromString("123456789012345678901234567890", 10)),
+                 "an integer");
+    EXPECT_STREQ(valueTypeName(ctx, ctx->fromDouble(1.5)), "a float");
+    EXPECT_STREQ(valueTypeName(ctx, ctx->fromUTF8String("ab")), "a string");
+    EXPECT_STREQ(valueTypeName(ctx, ctx->fromUTF8String("a longer string")), "a string");
+    EXPECT_STREQ(valueTypeName(ctx, obj(list(0, 3))), "a list");
+    EXPECT_STREQ(valueTypeName(ctx, obj(list(0, 300))), "a list");
+    EXPECT_STREQ(valueTypeName(ctx, tuple(list(0, 3))), "a vector");
+    EXPECT_STREQ(valueTypeName(ctx, marker), "an object");
+
+    EXPECT_TRUE(protoClojure::isNumber(ctx, num(7)));
+    EXPECT_TRUE(protoClojure::isNumber(ctx, ctx->fromDouble(0.5)));
+    EXPECT_FALSE(protoClojure::isNumber(ctx, nullptr));
+    EXPECT_FALSE(protoClojure::isNumber(ctx, PROTO_NONE));
+    EXPECT_FALSE(protoClojure::isNumber(ctx, ctx->fromUTF8String("1")));
+
+    try {
+        protoClojure::throwNotANumber(ctx, "*", ctx->fromUTF8String("ab"));
+        FAIL() << "throwNotANumber returned";
+    } catch (const std::runtime_error& e) {
+        EXPECT_STREQ(e.what(), "ClassCastException: * expects a number, got a string");
+    }
 }
 
 } // namespace

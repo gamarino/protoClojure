@@ -806,7 +806,11 @@ In 0.0.1, a read, compile or runtime error stops a script with a
 message on standard error and exit status 1; the REPL prints the error
 and continues. A recursion, or a collection printed, compared or hashed,
 nested deeper than the thread's stack allows raises the runtime error
-`StackOverflowError` (§17).
+`StackOverflowError` (§17). An arithmetic or ordering operation
+(`+ - * / < <= > >= inc dec`) on a value that is not a number raises the
+runtime error `ClassCastException: <operation> expects a number, got
+<type>`, for example `(+ 1 nil)`: `ClassCastException: + expects a number,
+got nil`.
 
 ---
 

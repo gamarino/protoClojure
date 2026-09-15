@@ -56,19 +56,15 @@ long long argAsLong(proto::ProtoContext* ctx, const proto::ProtoList* args,
 }
 
 // Argument `i` of a numeric primitive: an integer (SmallInteger or
-// LargeInteger) or a float. Anything else is an error naming the primitive.
+// LargeInteger) or a float. Anything else raises the ClassCastException
+// analogue naming the primitive and the argument's type (throwNotANumber),
+// the same error the arithmetic opcodes raise.
 const proto::ProtoObject* numberArg(proto::ProtoContext* ctx,
                                     const proto::ProtoList* args,
                                     int i, const char* primName) {
     const proto::ProtoObject* a = args->getAt(ctx, i);
-    if (!a) {
-        throw std::runtime_error(
-            std::string(primName) + ": argument " + std::to_string(i) + " is nil");
-    }
-    if (a->isInteger(ctx) || a->isFloat(ctx)) return a;
-    throw std::runtime_error(
-        std::string(primName) + ": argument " + std::to_string(i) +
-        " is not a number");
+    if (isNumber(ctx, a)) return a;
+    throwNotANumber(ctx, primName, a);
 }
 
 // The sign of a - b for two integers, exact at every magnitude: two
@@ -2498,6 +2494,40 @@ unsigned long long hashDouble(double v) {
 }
 
 } // namespace
+
+const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    if (!v || v == PROTO_NONE)              return "nil";
+    if (v == PROTO_TRUE || v == PROTO_FALSE) return "a boolean";
+    if (v->isInteger(ctx))                  return "an integer";
+    if (v->isDouble(ctx))                   return "a float";
+    if (proto::ProtoObject::isStringTagFast(v)) return "a string";
+    if (isListTag(v))                       return "a list";
+    if (v->isTuple(ctx))                    return "a vector";
+    if (v->isMethod(ctx))                   return "a fn";
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) return "an object";
+    if (isNamed(ctx, cc->named, v)) {
+        // A keyword's spelling starts with ':', a symbol's never does.
+        const std::string spelling =
+            namedSpelling(ctx, cc->named, v)->toStdString(ctx);
+        return (!spelling.empty() && spelling[0] == ':') ? "a keyword" : "a symbol";
+    }
+    const proto::ProtoObject* prototype = v->getPrototype(ctx);
+    if (prototype == cc->mapMarkerProto)     return "a map";
+    if (prototype == cc->atomMarkerProto)    return "an atom";
+    if (prototype == cc->futureMarkerProto)  return "a future";
+    if (prototype == cc->promiseMarkerProto) return "a promise";
+    if (prototype == cc->actorMarkerProto)   return "an actor";
+    if (prototype == cc->fnSingleProto || prototype == cc->fnMultiProto)
+        return "a fn";
+    return "an object";
+}
+
+void throwNotANumber(proto::ProtoContext* ctx, const char* operation,
+                     const proto::ProtoObject* v) {
+    throw std::runtime_error(std::string("ClassCastException: ") + operation +
+                             " expects a number, got " + valueTypeName(ctx, v));
+}
 
 // Externally-visible value equality, declared in Primitives.h; shared by
 // `=` / `not=` and the VM's EQ opcode.

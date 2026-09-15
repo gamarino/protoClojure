@@ -49,10 +49,10 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (220 fixtures under
+- **Tests.** A glob-discovered conformance suite (234 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
   the bytecode module, the runtime map, value equality and hashing and the
-  native stack guard (74 tests), and three CLI checks (`--help`, a
+  native stack guard (75 tests), and three CLI checks (`--help`, a
   generated program with 70,000 distinct literals of each kind, and a
   stack overflow in the REPL).
 - **Benchmarks and examples.** `benchmarks/bench.sh` (comparison with
@@ -206,6 +206,14 @@ The project has no tagged releases yet; the version declared in
   raises the runtime error `StackOverflowError` on any of those threads.
   Printing, comparing or hashing a collection nested deeper than the stack
   allows raises the same error instead of crashing.
+- Arithmetic and comparisons check that their operands are numbers. When
+  an operand was not a SmallInteger, the `+ - * < <= > >=` opcodes handed
+  it to protoCore unchecked: `(* "ab" 3)` returned `"ababab"`,
+  `(+ 1.5 "a")` returned `1.5`, `(< 1 "a")` and `(>= [1] 1)` returned
+  `true`, and `(+ 1 nil)` failed with protoCore's "Objects are not integer
+  types for addition.". The opcodes and the `+ - * / < <= > >= inc dec`
+  primitives now raise one error naming the operation and the offending
+  type: `ClassCastException: + expects a number, got nil`.
 - Symbols and keywords may contain non-ASCII letters. `:ñandú` or
   `(defn año [x] ...)` failed with "unexpected character: �": the lexer
   classified source bytes with `isalnum`, which rejects every byte of a

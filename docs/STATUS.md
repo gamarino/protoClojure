@@ -5,8 +5,8 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 297 test cases: 220
-conformance fixtures under `tests/conformance/`, 74 GoogleTest unit
+scripts and an interactive REPL. `ctest` registers 312 test cases: 234
+conformance fixtures under `tests/conformance/`, 75 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 value equality and hashing and the native stack guard (`tests/unit/`), and
 three CLI checks (`tests/cli/`: `--help`, a generated program with 70,000
@@ -25,7 +25,7 @@ directories that cover them.
 | Feature | Conformance directories | Fixtures |
 |---|---|---:|
 | Binary, lexer, reader, bytecode VM, `println` | `00-binary`, `01-literals` | 2 |
-| `def`, `if`, `do`, integer arithmetic, comparisons, `str` | `02-special-forms`, `03-arithmetic` | 13 |
+| `def`, `if`, `do`, integer arithmetic, comparisons, `str` | `02-special-forms`, `03-arithmetic` | 27 |
 | `fn`, `defn`, `let`, `loop`, `recur`, `StackOverflowError` | `04-functions`, `05-recursion` | 13 |
 | Closures with N-level lexical capture | `06-closures` | 6 |
 | Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 24 |
@@ -137,6 +137,12 @@ The design specifications written during development are archived under
       the `+ - * / inc dec` primitives alike (`(apply + ...)`, `reduce`,
       `(inc 9223372036854775807)`): no integer operation wraps around (D14)
 - [x] Automatic promotion to double when any operand is a float
+- [x] Arithmetic and ordering take numbers only: `+ - * / < <= > >= inc dec`,
+      compiled to an opcode or called as a primitive, raise the
+      ClassCastException analogue naming the operation and the offending
+      type, `ClassCastException: * expects a number, got a string`
+      (`throwNotANumber` in `src/runtime/Primitives.h`); the one-argument
+      comparison `(< x)` is `true` for any value, as in Clojure
 - [x] Integer division truncates: `(/ 10 4)` is `2`, exact at any magnitude
 - [x] `< <= > >=` compare integers exactly beyond 2^53; a comparison with a
       float compares doubles

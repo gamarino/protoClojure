@@ -90,6 +90,42 @@ unsigned long valueHash(proto::ProtoContext* ctx, const MapLayout& layout,
 void installPrimitives(proto::ProtoContext* ctx,
                        proto::ProtoObject* globals);
 
+// True when `v` is a number: an integer (SmallInteger or LargeInteger) or a
+// float. nullptr is nil, not a number. Decided by the pointer tag alone, with
+// the tag values of protoCore's headers/proto_internal.h (a SmallInteger
+// carries POINTER_TAG_EMBEDDED_VALUE with EMBEDDED_TYPE_SMALLINT in its low
+// ten bits; POINTER_TAG_LARGE_INTEGER = 14, POINTER_TAG_DOUBLE = 15), so the
+// check on the arithmetic opcodes' slow path costs three compares and no
+// call.
+inline bool isNumber([[maybe_unused]] proto::ProtoContext* ctx,
+                     const proto::ProtoObject* v) {
+    constexpr unsigned long kSmallIntMask     = 0x3FFUL;
+    constexpr unsigned long kSmallIntValue    = 0x001UL;
+    constexpr unsigned long kPointerTagMask   = 0x3FUL;
+    constexpr unsigned long kTagLargeInteger  = 14;
+    constexpr unsigned long kTagDouble        = 15;
+    const auto bits = reinterpret_cast<unsigned long>(v);
+    const unsigned long tag = bits & kPointerTagMask;
+    return (bits & kSmallIntMask) == kSmallIntValue ||
+           (v != nullptr && (tag == kTagDouble || tag == kTagLargeInteger));
+}
+
+// The type of `v` as error messages name it, with its article: "nil",
+// "a boolean", "an integer", "a float", "a string", "a list", "a vector",
+// "a fn", and, when an ActiveCallContext is installed, "a keyword",
+// "a symbol", "a map", "an atom", "a future", "a promise", "an actor";
+// "an object" otherwise. Allocates nothing.
+const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v);
+
+// Raises the analogue of JVM Clojure's ClassCastException for a
+// non-numeric operand of an arithmetic or ordering operation:
+// "ClassCastException: <operation> expects a number, got <type>", with the
+// type from valueTypeName (`(+ 1 nil)`: "+ expects a number, got nil").
+// Cold: call sites move out of the VM's dispatch loop.
+[[noreturn, gnu::cold]]
+void throwNotANumber(proto::ProtoContext* ctx, const char* operation,
+                     const proto::ProtoObject* v);
+
 // Session 7 — primitives that invoke user fns (map / reduce / filter)
 // need access back into the bytecode VM. The ExecutionEngine installs
 // itself here on each top-level run() entry and restores on exit, so the

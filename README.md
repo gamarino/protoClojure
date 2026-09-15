@@ -197,7 +197,7 @@ protoClojure runs scripts and an interactive REPL. Version 0.0.1; no tagged rele
 | Namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **297 test cases: 220 conformance fixtures, 74 unit tests** (lexer, reader, bytecode module, runtime map, value equality and hashing, native stack guard) **and 3 CLI checks** (`--help`, a generated program with 70,000 distinct literals of each kind, and a stack overflow in the REPL). All of them pass. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **312 test cases: 234 conformance fixtures, 75 unit tests** (lexer, reader, bytecode module, runtime map, value equality and hashing, native stack guard) **and 3 CLI checks** (`--help`, a generated program with 70,000 distinct literals of each kind, and a stack overflow in the REPL). All of them pass. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 
@@ -243,7 +243,7 @@ cmake --build build_release
 ./build_release/protoclj script.clj          # run a .clj file
 ./build_release/protoclj --version           # version
 
-ctest --test-dir build_release -j1           # 297 cases: 220 fixtures + 74 unit tests + 3 CLI checks
+ctest --test-dir build_release -j1           # 312 cases: 234 fixtures + 75 unit tests + 3 CLI checks
 ./benchmarks/bench.sh                        # benchmark against Babashka
 ./benchmarks/actor-bench.sh                  # actor throughput, varied worker counts
 ```

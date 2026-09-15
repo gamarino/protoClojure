@@ -49,6 +49,22 @@ inline const proto::ProtoObject* smallIntFromLong(long long v) {
         (v << 10) | static_cast<long long>(kSmallIntTagValue));
 }
 
+// The operator a binary arithmetic or comparison opcode compiles, for error
+// messages.
+const char* binaryOpName(Op op) {
+    switch (op) {
+        case Op::ADD: return "+";
+        case Op::SUB: return "-";
+        case Op::MUL: return "*";
+        case Op::LT:  return "<";
+        case Op::LE:  return "<=";
+        case Op::GT:  return ">";
+        case Op::GE:  return ">=";
+        case Op::EQ:  return "=";
+        default:      return "operator";
+    }
+}
+
 inline bool smallIntFitsLong(long long v) {
     // Same bounds as PROTO_SMALL_INT_MIN/MAX (53-bit).
     constexpr long long kMax =  (1LL << 53) - 1;
@@ -988,10 +1004,9 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
             // Session 11 — SmallInt fast-path binary ops. On the hot path
             // (both args tagged SmallInt, result fits) we inline the
             // arithmetic and skip the ProtoMethod indirection entirely.
-            // On any other shape we fall back to looking up the
-            // corresponding primitive on the globals namespace and
-            // dispatching it as a regular CALL — same semantics as if
-            // the compiler had emitted PUSH_VAR + CALL.
+            // Any other shape takes the slow path below, which checks that
+            // the operands are numbers and computes with protoCore, with
+            // the same results and errors as the primitive.
             case Op::ADD:
             case Op::SUB:
             case Op::MUL:
@@ -1059,15 +1074,25 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
                 }
 
                 // Slow path: at least one operand is NOT a tagged
-                // SmallInt — could be Float, LargeInteger, or a non-
-                // numeric mistake. Route through protoCore's promoting
-                // add/subtract/multiply/compare which handle SmallInt ↔
-                // LargeInteger ↔ Float automatically. Throws on non-
-                // numeric input. EQ is value equality on any operands
-                // and shares valuesEqual with the `=` primitive, so maps
-                // and vectors compare structurally. The compiler never
-                // emits these opcodes when the operator is shadowed by a
-                // local, so we don't need to honour user-shadowing here.
+                // SmallInt — a float, a LargeInteger, or an operand that is
+                // not a number. Arithmetic and ordering take numbers only:
+                // protoCore's multiply repeats a string (`(* "ab" 3)`) and
+                // its add and compare accept other objects, so anything but
+                // a number raises the ClassCastException analogue the
+                // primitives raise (throwNotANumber; isNumber is a pointer
+                // tag test). Numbers go through protoCore's promoting
+                // add/subtract/multiply/compare, which mix SmallInt,
+                // LargeInteger and double. EQ is value equality on any
+                // operands and shares valuesEqual with the `=` primitive,
+                // so maps and vectors compare structurally. The compiler
+                // never emits these opcodes when the operator is shadowed
+                // by a local. The operands stay rooted in their slots until
+                // the result is pushed.
+                if (op != Op::EQ &&
+                    !(isNumber(&frame, a) && isNumber(&frame, b))) [[unlikely]] {
+                    throwNotANumber(&frame, binaryOpName(op),
+                                    isNumber(&frame, a) ? b : a);
+                }
                 sp -= 2;
                 const proto::ProtoObject* r = PROTO_NONE;
                 switch (op) {
