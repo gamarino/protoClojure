@@ -1,6 +1,14 @@
 /*
- * BytecodeModule — a compiled body of code: a const pool + an instruction
- * byte vector.
+ * BytecodeModule — a compiled body of code: a const pool + a vector of
+ * instruction words (Opcodes.h).
+ *
+ * The const pool holds each constant once: adding a constant equal to an
+ * existing one of the same kind returns the existing index (hash-indexed,
+ * O(1) per add). Kinds never merge — 1 and 1.0, the string "a", the keyword
+ * :a and the global name a are distinct entries — and doubles are compared
+ * by bit pattern, so 0.0 and -0.0 stay distinct. A fn body is its own
+ * module with its own pool; the top level of a script or REPL form is one
+ * module.
  *
  * P3 note: BytecodeModule holds std::vectors internally. This is OK
  * because BytecodeModule is a C++-side type owned by the runtime; no
@@ -27,6 +35,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace proto {
@@ -59,7 +68,8 @@ public:
         const proto::ProtoObject* named = nullptr;  // Named: the interned value
     };
 
-    // Const-pool insertion. Returns the index for use in PUSH_CONST / PUSH_VAR.
+    // Const-pool insertion. Returns the index for use in PUSH_CONST / PUSH_VAR;
+    // a constant equal to an existing one of the same kind reuses its index.
     std::size_t addLong(long long v);
     // An integer beyond the long long range, as decimal digits ("-123...").
     std::size_t addBigInteger(const std::string& digits);
@@ -67,26 +77,26 @@ public:
     std::size_t addString(const std::string& s);
     std::size_t addSymbol(const std::string& s);
     // A keyword or quoted-symbol value: `value` is internNamed(spelling).
-    // De-duplicated by spelling, like addSymbol.
+    // De-duplicated by spelling: interning maps a spelling to one value.
     std::size_t addNamed(const std::string& spelling,
                          const proto::ProtoObject* value);
 
-    // Emit one instruction word (opcode + operand). The operand must fit in
-    // one byte for v0.0.x; the EXTEND-prefix mechanism is a session-5 follow-up.
-    // Returns the byte offset of the *opcode* byte — used by patchOperand to
-    // back-patch JUMP / JUMP_IF_FALSE forward-targets.
-    std::size_t emit(Op op, std::uint8_t operand);
+    // Emit one instruction word. Returns its position, which patchOperand
+    // uses to back-patch a forward jump once the target is known. Throws
+    // std::length_error when `operand` exceeds kMaxOperand.
+    std::size_t emit(Op op, std::size_t operand);
 
-    // Rewrite the operand byte of an already-emitted instruction. Used to
-    // back-patch forward jumps once the target PC is known.
-    void patchOperand(std::size_t opcodeOffset, std::uint8_t newOperand);
+    // Rewrite the operand of the instruction at `at`. Throws
+    // std::length_error when `operand` exceeds kMaxOperand and
+    // std::out_of_range when `at` is not an emitted instruction.
+    void patchOperand(std::size_t at, std::size_t operand);
 
-    // The current byte position — used as the "now" point for computing a
-    // forward jump's offset.
-    std::size_t pos() const { return bytes_.size(); }
+    // The position of the next instruction — the "now" point for computing
+    // a jump's offset, in instruction words.
+    std::size_t pos() const { return code_.size(); }
 
     // Read-only access for the executor.
-    const std::vector<std::uint8_t>& bytes() const { return bytes_; }
+    const std::vector<Instr>& code() const { return code_; }
     const Const& constAt(std::size_t i) const { return consts_[i]; }
     std::size_t constCount() const { return consts_.size(); }
 
@@ -164,8 +174,15 @@ public:
     std::size_t arityGroupCount() const { return arityGroups_.size(); }
 
 private:
-    std::vector<std::uint8_t>                    bytes_;
+    std::vector<Instr>                           code_;
     std::vector<Const>                           consts_;
+    // Const-pool indices by value, one index per kind (doubles by bit pattern).
+    std::unordered_map<long long, std::size_t>     longIndex_;
+    std::unordered_map<std::uint64_t, std::size_t> doubleIndex_;
+    std::unordered_map<std::string, std::size_t>   bigIntegerIndex_;
+    std::unordered_map<std::string, std::size_t>   stringIndex_;
+    std::unordered_map<std::string, std::size_t>   symbolIndex_;
+    std::unordered_map<std::string, std::size_t>   namedIndex_;
     std::vector<std::unique_ptr<BytecodeModule>> blocks_;
     std::vector<ArityGroup>                      arityGroups_;
     std::vector<CaptureSpec>                     captureSpecs_;

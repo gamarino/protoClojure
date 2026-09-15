@@ -1,9 +1,13 @@
 /*
  * Opcodes — the v0.0.x bytecode VM instruction set.
  *
- * Each instruction is two bytes: opcode + one-byte operand. Operand
- * widening (>255 const-pool indices, etc.) is planned via an
- * EXTEND prefix — same pattern protoST uses.
+ * Each instruction is one 32-bit word (Instr): the opcode in the low 8 bits
+ * and an unsigned 24-bit operand in the high 24 bits, so every operand —
+ * constant-pool index, local slot, block or arity-group index, argument
+ * count, jump offset (counted in instructions) — ranges over
+ * 0..kMaxOperand (16,777,215). BytecodeModule::emit rejects a larger
+ * operand. One fixed width keeps decoding to a single load and a shift and
+ * lets forward jumps be back-patched in place.
  *
  * Session 3 minimum — only what `(println "hello, world")` needs:
  *
@@ -88,7 +92,11 @@ enum class Op : uint8_t {
     CALL_KW         = 28,
 };
 
-inline constexpr std::size_t kInstrSize = 2;
+// One instruction word: opcode in the low byte, operand in the high 24 bits.
+// Code positions and jump offsets count instruction words.
+using Instr = std::uint32_t;
+inline constexpr unsigned      kOperandShift = 8;
+inline constexpr std::uint32_t kMaxOperand   = (1u << 24) - 1;  // 16,777,215
 
 const char* opName(Op op);
 

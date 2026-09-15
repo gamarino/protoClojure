@@ -49,9 +49,11 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (193 fixtures under
-  `tests/conformance/`) and GoogleTest unit tests for the lexer, the reader,
-  the runtime map and value equality and hashing (61 tests).
+- **Tests.** A glob-discovered conformance suite (214 fixtures under
+  `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
+  the bytecode module, the runtime map and value equality and hashing
+  (68 tests), and two CLI checks (`--help`, and a generated program with
+  70,000 distinct literals of each kind).
 - **Benchmarks and examples.** `benchmarks/bench.sh` (comparison with
   Babashka), `benchmarks/actor-bench.sh` (actor throughput) and twelve
   example scripts under `examples/`.
@@ -178,6 +180,20 @@ The project has no tagged releases yet; the version declared in
   integer literals, the arithmetic primitives use protoCore's promoting
   integer operations like the arithmetic opcodes, and integer comparisons
   are exact.
+- Programs are no longer limited by one-byte bytecode operands. A script
+  or function body with more than 256 constants failed with the
+  undocumented "const-pool overflow", because every instruction carried a
+  one-byte operand and equal number and string literals each took a new
+  pool entry; the same one-byte limit stopped a script defining more than
+  255 functions, a function with more than 255 locals, a call with more
+  than 255 arguments, and an `if`, `cond`, `and`, `or` or `loop` body
+  longer than 255 instructions, while a vector literal or a call with more
+  than 63 arguments failed at run time with "operand-stack overflow".
+  Instructions are now 32-bit words with a 24-bit operand, equal constants
+  of the same kind share one pool entry (`1` and `1.0`, `"a"` and `:a` stay
+  distinct), and the operand stack grows on demand; a script with 70,000
+  distinct literals of each kind compiles and runs. The remaining hard
+  limits are documented in `LANGUAGE.md` §17.
 - Symbols and keywords may contain non-ASCII letters. `:ñandú` or
   `(defn año [x] ...)` failed with "unexpected character: �": the lexer
   classified source bytes with `isalnum`, which rejects every byte of a

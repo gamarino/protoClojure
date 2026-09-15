@@ -308,7 +308,8 @@ struct Session {
         Compiler compiler;
         try {
             compiler.compileForm(ctx, form, mod, compilerMarkers);
-        } catch (const CompileError& e) {
+        } catch (const std::exception& e) {
+            // A CompileError, or a bytecode limit (BytecodeModule::emit).
             std::fprintf(stderr, "compile error: %s\n", e.what());
             return false;
         }
@@ -394,7 +395,7 @@ void cmdLoad(Session& s, const std::string& path) {
         Compiler compiler;
         try {
             compiler.compileForm(s.ctx, form, mod, s.compilerMarkers);
-        } catch (const CompileError& e) {
+        } catch (const std::exception& e) {
             std::fprintf(stderr, "%s: compile error: %s\n",
                          path.c_str(), e.what());
             return;

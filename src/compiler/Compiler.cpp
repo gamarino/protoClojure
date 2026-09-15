@@ -354,17 +354,15 @@ Compiler::compileArity(proto::ProtoContext* ctx,
         for (std::size_t ki = 0; ki < kwKeyDecls.size(); ++ki) {
             if (!kwKeyDecls[ki].defaultForm) continue;
             int slot = body->kwKeys()[ki].localSlot;
-            body->emit(Op::PUSH_LOCAL, static_cast<std::uint8_t>(slot));
+            body->emit(Op::PUSH_LOCAL, slot);
             body->emit(Op::PUSH_NIL, 0);
             body->emit(Op::EQ, 0);
             std::size_t jifAt = body->emit(Op::JUMP_IF_FALSE, 0);
             compileForm(ctx, kwKeyDecls[ki].defaultForm, *body, markers);
-            body->emit(Op::STORE_LOCAL, static_cast<std::uint8_t>(slot));
+            body->emit(Op::STORE_LOCAL, slot);
             std::size_t after = body->pos();
-            std::size_t off = (after - (jifAt + kInstrSize)) / kInstrSize;
-            if (off > 255)
-                throw CompileError(":or default body too large");
-            body->patchOperand(jifAt, static_cast<std::uint8_t>(off));
+            std::size_t off = after - (jifAt + 1);
+            body->patchOperand(jifAt, off);
         }
     }
 
@@ -436,9 +434,6 @@ int Compiler::resolveLocal(const std::string& name) {
             continue;
         }
         int newSlot = s.nextSlot++;
-        if (newSlot > 255) {
-            throw CompileError("closure: local-slot overflow (>255)");
-        }
         s.nameToSlot[name] = newSlot;
         s.captures.push_back({sourceSlot, newSlot});
         sourceSlot = newSlot;
@@ -461,21 +456,14 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
     // Integer literal — emit PUSH_CONST <addLong>.
     if (form->isInteger(ctx)) {
         std::size_t idx = addIntegerConst(ctx, form, out);
-        if (idx > 255) {
-            throw CompileError("const-pool overflow: more than 256 constants in "
-                               "one compilation unit");
-        }
-        out.emit(Op::PUSH_CONST, static_cast<std::uint8_t>(idx));
+        out.emit(Op::PUSH_CONST, idx);
         return;
     }
 
     // Float literal — emit PUSH_CONST <addDouble>.
     if (form->isFloat(ctx)) {
         std::size_t idx = out.addDouble(form->asDouble(ctx));
-        if (idx > 255) {
-            throw CompileError("const-pool overflow on float");
-        }
-        out.emit(Op::PUSH_CONST, static_cast<std::uint8_t>(idx));
+        out.emit(Op::PUSH_CONST, idx);
         return;
     }
 
@@ -510,8 +498,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             }
             compileForm(ctx, exprForm, out, markers);
             std::size_t nameIdx = out.addSymbol(asUtf8(ctx, nameForm));
-            if (nameIdx > 255) throw CompileError("def: const-pool overflow");
-            out.emit(Op::STORE_GLOBAL, static_cast<std::uint8_t>(nameIdx));
+            out.emit(Op::STORE_GLOBAL, nameIdx);
             return;
         }
 
@@ -530,12 +517,9 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             // patch the JIF to point at the start of the else branch
             std::size_t elseStart = out.pos();
             std::size_t elseOffsetInstr =
-                (elseStart - (jifAt + kInstrSize)) / kInstrSize;
-            if (elseOffsetInstr > 255) {
-                throw CompileError("if: then-branch too large (jump offset exceeds 255 instructions)");
-            }
+                elseStart - (jifAt + 1);
             out.patchOperand(jifAt,
-                static_cast<std::uint8_t>(elseOffsetInstr));
+                elseOffsetInstr);
 
             if (n == 4) {
                 compileForm(ctx, lst->getAt(ctx, 3), out, markers);  // else
@@ -546,12 +530,9 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             // patch the JMP to point past the else branch
             std::size_t afterElse = out.pos();
             std::size_t pastOffsetInstr =
-                (afterElse - (jmpAt + kInstrSize)) / kInstrSize;
-            if (pastOffsetInstr > 255) {
-                throw CompileError("if: else-branch too large (jump offset exceeds 255 instructions)");
-            }
+                afterElse - (jmpAt + 1);
             out.patchOperand(jmpAt,
-                static_cast<std::uint8_t>(pastOffsetInstr));
+                pastOffsetInstr);
             return;
         }
 
@@ -573,18 +554,12 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             std::size_t jmpAt = out.emit(Op::JUMP, 0);
             std::size_t elseStart = out.pos();
             std::size_t elseOffset =
-                (elseStart - (jifAt + kInstrSize)) / kInstrSize;
-            if (elseOffset > 255) {
-                throw CompileError("when: body too large for 1-byte offset");
-            }
-            out.patchOperand(jifAt, static_cast<std::uint8_t>(elseOffset));
+                elseStart - (jifAt + 1);
+            out.patchOperand(jifAt, elseOffset);
             out.emit(Op::PUSH_NIL, 0);
             std::size_t after = out.pos();
-            std::size_t jOff = (after - (jmpAt + kInstrSize)) / kInstrSize;
-            if (jOff > 255) {
-                throw CompileError("when: tail too large for 1-byte offset");
-            }
-            out.patchOperand(jmpAt, static_cast<std::uint8_t>(jOff));
+            std::size_t jOff = after - (jmpAt + 1);
+            out.patchOperand(jmpAt, jOff);
             return;
         }
 
@@ -615,22 +590,16 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 if (!isElse) {
                     std::size_t after = out.pos();
                     std::size_t off =
-                        (after - (skipAt + kInstrSize)) / kInstrSize;
-                    if (off > 255) {
-                        throw CompileError("cond: clause too large");
-                    }
-                    out.patchOperand(skipAt, static_cast<std::uint8_t>(off));
+                        after - (skipAt + 1);
+                    out.patchOperand(skipAt, off);
                 }
             }
             // Fall-through (no clause matched) yields nil.
             out.emit(Op::PUSH_NIL, 0);
             std::size_t end = out.pos();
             for (std::size_t at : endPatches) {
-                std::size_t off = (end - (at + kInstrSize)) / kInstrSize;
-                if (off > 255) {
-                    throw CompileError("cond: total length too large");
-                }
-                out.patchOperand(at, static_cast<std::uint8_t>(off));
+                std::size_t off = end - (at + 1);
+                out.patchOperand(at, off);
             }
             return;
         }
@@ -651,9 +620,8 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             }
             std::size_t end = out.pos();
             for (std::size_t at : shortAts) {
-                std::size_t off = (end - (at + kInstrSize)) / kInstrSize;
-                if (off > 255) throw CompileError("and: too large");
-                out.patchOperand(at, static_cast<std::uint8_t>(off));
+                std::size_t off = end - (at + 1);
+                out.patchOperand(at, off);
             }
             return;
         }
@@ -673,9 +641,8 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             }
             std::size_t end = out.pos();
             for (std::size_t at : shortAts) {
-                std::size_t off = (end - (at + kInstrSize)) / kInstrSize;
-                if (off > 255) throw CompileError("or: too large");
-                out.patchOperand(at, static_cast<std::uint8_t>(off));
+                std::size_t off = end - (at + 1);
+                out.patchOperand(at, off);
             }
             return;
         }
@@ -713,8 +680,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 std::size_t idx = out.addString(
                     reinterpret_cast<const proto::ProtoString*>(raw)
                         ->toStdString(ctx));
-                if (idx > 255) throw CompileError("quote: const-pool overflow");
-                out.emit(Op::PUSH_CONST, static_cast<std::uint8_t>(idx));
+                out.emit(Op::PUSH_CONST, idx);
                 return;
             }
             if (isStringy(q)) {
@@ -722,14 +688,12 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 const std::string spelling = asUtf8(ctx, q);
                 std::size_t idx = out.addNamed(
                     spelling, internNamed(ctx, markers.named, spelling.c_str()));
-                if (idx > 255) throw CompileError("quote: const-pool overflow");
-                out.emit(Op::PUSH_CONST, static_cast<std::uint8_t>(idx));
+                out.emit(Op::PUSH_CONST, idx);
                 return;
             }
             if (q->isInteger(ctx)) {
                 std::size_t idx = addIntegerConst(ctx, q, out);
-                if (idx > 255) throw CompileError("quote: const-pool overflow");
-                out.emit(Op::PUSH_CONST, static_cast<std::uint8_t>(idx));
+                out.emit(Op::PUSH_CONST, idx);
                 return;
             }
             throw CompileError("quote: only symbols, keywords, strings and integers can be quoted");
@@ -767,14 +731,11 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             }
 
             auto emitCapsThenOp = [&](std::size_t blockIdx, Op makeOp,
-                                      std::uint8_t makeOperand) {
+                                      std::size_t makeOperand) {
                 const auto& caps = out.block(blockIdx).captureSpecs();
                 for (const auto& c : caps) {
-                    if (c.parentSlot < 0 || c.parentSlot > 255) {
-                        throw CompileError("fn: capture parent-slot overflow");
-                    }
                     out.emit(Op::PUSH_LOCAL,
-                        static_cast<std::uint8_t>(c.parentSlot));
+                        c.parentSlot);
                 }
                 out.emit(makeOp, makeOperand);
             };
@@ -784,11 +745,8 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 std::unique_ptr<BytecodeModule> body =
                     compileFnBody(ctx, lst, markers);
                 std::size_t blockIdx = out.addBlock(std::move(body));
-                if (blockIdx > 255) {
-                    throw CompileError("fn: too many fn bodies (>255) in module");
-                }
                 emitCapsThenOp(blockIdx, Op::MAKE_FN,
-                               static_cast<std::uint8_t>(blockIdx));
+                               blockIdx);
             } else {
                 // Multi-arity — compile each `(params body...)` separately,
                 // push their captures (arity 0 first), emit MAKE_FN_MULTI.
@@ -814,9 +772,6 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                     std::unique_ptr<BytecodeModule> body =
                         compileArity(ctx, params, alist, 1, markers);
                     std::size_t blockIdx = out.addBlock(std::move(body));
-                    if (blockIdx > 255) {
-                        throw CompileError("fn: too many fn bodies (>255)");
-                    }
                     blockIdxs.push_back(blockIdx);
                 }
                 // Push captures in arity-emission order so the VM can pop
@@ -824,25 +779,18 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 for (std::size_t bi : blockIdxs) {
                     const auto& caps = out.block(bi).captureSpecs();
                     for (const auto& c : caps) {
-                        if (c.parentSlot < 0 || c.parentSlot > 255) {
-                            throw CompileError("fn: capture parent-slot overflow");
-                        }
                         out.emit(Op::PUSH_LOCAL,
-                            static_cast<std::uint8_t>(c.parentSlot));
+                            c.parentSlot);
                     }
                 }
                 std::size_t groupIdx = out.addArityGroup(std::move(blockIdxs));
-                if (groupIdx > 255) {
-                    throw CompileError("fn: too many arity groups (>255)");
-                }
                 out.emit(Op::MAKE_FN_MULTI,
-                         static_cast<std::uint8_t>(groupIdx));
+                         groupIdx);
             }
 
             if (headName == "defn") {
                 std::size_t nameIdx = out.addSymbol(asUtf8(ctx, nameForm));
-                if (nameIdx > 255) throw CompileError("defn: const-pool overflow");
-                out.emit(Op::STORE_GLOBAL, static_cast<std::uint8_t>(nameIdx));
+                out.emit(Op::STORE_GLOBAL, nameIdx);
             }
             return;
         }
@@ -880,11 +828,8 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 // pushed nested fn scopes and reallocated scopes_.
                 Scope& scope = scopes_.back();
                 int slot = scope.nextSlot++;
-                if (slot > 255) {
-                    throw CompileError("let: local-slot overflow (>255)");
-                }
                 scope.nameToSlot[asUtf8(ctx, nameForm)] = slot;
-                out.emit(Op::STORE_LOCAL, static_cast<std::uint8_t>(slot));
+                out.emit(Op::STORE_LOCAL, slot);
             }
             // Body — last expression's value stays on the stack as `let`'s
             // value.
@@ -930,11 +875,8 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 compileForm(ctx, valForm, out, markers);
                 Scope& scope = scopes_.back();    // re-acquire post-recursion
                 int slot = scope.nextSlot++;
-                if (slot > 255) {
-                    throw CompileError("loop: local-slot overflow (>255)");
-                }
                 scope.nameToSlot[asUtf8(ctx, nameForm)] = slot;
-                out.emit(Op::STORE_LOCAL, static_cast<std::uint8_t>(slot));
+                out.emit(Op::STORE_LOCAL, slot);
                 recurSlots.push_back(slot);
             }
             // Recur target = current bytecode position. recur jumps BACK here
@@ -971,8 +913,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             // building a small helper: emit a Fn whose body is the
             // remaining `(future ...)` forms.
             std::size_t hmIdx = out.addSymbol("make-future");
-            if (hmIdx > 255) throw CompileError("future: const-pool overflow");
-            out.emit(Op::PUSH_VAR, static_cast<std::uint8_t>(hmIdx));
+            out.emit(Op::PUSH_VAR, hmIdx);
 
             // Compile an inline (fn [] body...). compileArity expects
             // a params ProtoList; we pass an empty new ProtoList for
@@ -983,16 +924,12 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 compileArity(ctx, emptyParams, lst, /*bodyStartIdx=*/1,
                              markers);
             std::size_t blockIdx = out.addBlock(std::move(body));
-            if (blockIdx > 255)
-                throw CompileError("future: too many fn bodies");
             const auto& caps = out.block(blockIdx).captureSpecs();
             for (const auto& c : caps) {
-                if (c.parentSlot < 0 || c.parentSlot > 255)
-                    throw CompileError("future: capture parent-slot overflow");
                 out.emit(Op::PUSH_LOCAL,
-                    static_cast<std::uint8_t>(c.parentSlot));
+                    c.parentSlot);
             }
-            out.emit(Op::MAKE_FN, static_cast<std::uint8_t>(blockIdx));
+            out.emit(Op::MAKE_FN, blockIdx);
             out.emit(Op::CALL, 1);
             return;
         }
@@ -1032,19 +969,15 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             }
             for (int i = static_cast<int>(argc) - 1; i >= 0; --i) {
                 int slot = tgt.slots[i];
-                out.emit(Op::STORE_LOCAL, static_cast<std::uint8_t>(slot));
+                out.emit(Op::STORE_LOCAL, slot);
             }
             // JUMP_BACK: operand is the instruction count to subtract from
             // pc (pc was at the instruction AFTER JUMP_BACK when handler
             // runs — same arithmetic as JUMP / JUMP_IF_FALSE but in reverse).
             std::size_t jbAt = out.emit(Op::JUMP_BACK, 0);
-            std::size_t backOffsetBytes = (jbAt + kInstrSize) - tgt.bodyStart;
-            std::size_t backOffsetInstr = backOffsetBytes / kInstrSize;
-            if (backOffsetInstr > 255) {
-                throw CompileError("recur: loop body too large for 1-byte JUMP_BACK");
-            }
+            std::size_t backOffsetInstr = (jbAt + 1) - tgt.bodyStart;
             out.patchOperand(jbAt,
-                static_cast<std::uint8_t>(backOffsetInstr));
+                backOffsetInstr);
             // recur never falls through; the bytecode after it is unreachable.
             return;
         }
@@ -1102,13 +1035,10 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (headName[0] == ':') {
                 compileForm(ctx, head, out, markers);
             } else if (int slot = resolveLocal(headName); slot >= 0) {
-                out.emit(Op::PUSH_LOCAL, static_cast<std::uint8_t>(slot));
+                out.emit(Op::PUSH_LOCAL, slot);
             } else {
                 std::size_t headIdx = out.addSymbol(headName);
-                if (headIdx > 255) {
-                    throw CompileError("const-pool overflow on symbol");
-                }
-                out.emit(Op::PUSH_VAR, static_cast<std::uint8_t>(headIdx));
+                out.emit(Op::PUSH_VAR, headIdx);
             }
         } else {
             compileForm(ctx, head, out, markers);
@@ -1137,11 +1067,8 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         }
 
         unsigned long callArgc = n - 1;
-        if (callArgc > 255) {
-            throw CompileError("call with >255 args not supported");
-        }
         out.emit(hasKvSuffix ? Op::CALL_KW : Op::CALL,
-                 static_cast<std::uint8_t>(callArgc));
+                 callArgc);
         return;
     }
 
@@ -1153,13 +1080,11 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         const proto::ProtoList* entries = mapEntries(ctx, form, markers);
         unsigned long ne = entries->getSize(ctx);  // already validated even
         std::size_t headIdx = out.addSymbol("hash-map");
-        if (headIdx > 255) throw CompileError("hash-map: const-pool overflow");
-        out.emit(Op::PUSH_VAR, static_cast<std::uint8_t>(headIdx));
+        out.emit(Op::PUSH_VAR, headIdx);
         for (unsigned long i = 0; i < ne; ++i) {
             compileForm(ctx, entries->getAt(ctx, (int)i), out, markers);
         }
-        if (ne > 255) throw CompileError("hash-map: >255 items in literal");
-        out.emit(Op::CALL, static_cast<std::uint8_t>(ne));
+        out.emit(Op::CALL, ne);
         return;
     }
 
@@ -1171,13 +1096,11 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         const proto::ProtoList* items = vectorItems(ctx, form, markers);
         unsigned long ni = items->getSize(ctx);
         std::size_t headIdx = out.addSymbol("vector");
-        if (headIdx > 255) throw CompileError("vector: const-pool overflow");
-        out.emit(Op::PUSH_VAR, static_cast<std::uint8_t>(headIdx));
+        out.emit(Op::PUSH_VAR, headIdx);
         for (unsigned long i = 0; i < ni; ++i) {
             compileForm(ctx, items->getAt(ctx, (int)i), out, markers);
         }
-        if (ni > 255) throw CompileError("vector: >255 items in literal");
-        out.emit(Op::CALL, static_cast<std::uint8_t>(ni));
+        out.emit(Op::CALL, ni);
         return;
     }
 
@@ -1194,8 +1117,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         }
         std::size_t idx = out.addString(
             reinterpret_cast<const proto::ProtoString*>(raw)->toStdString(ctx));
-        if (idx > 255) throw CompileError("const-pool overflow on string");
-        out.emit(Op::PUSH_CONST, static_cast<std::uint8_t>(idx));
+        out.emit(Op::PUSH_CONST, idx);
         return;
     }
 
@@ -1210,18 +1132,16 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             // Interned once here; PUSH_CONST pushes the pointer (Named.h).
             std::size_t idx = out.addNamed(
                 name, internNamed(ctx, markers.named, name.c_str()));
-            if (idx > 255) throw CompileError("const-pool overflow on keyword");
-            out.emit(Op::PUSH_CONST, static_cast<std::uint8_t>(idx));
+            out.emit(Op::PUSH_CONST, idx);
             return;
         }
         int slot = resolveLocal(name);
         if (slot >= 0) {
-            out.emit(Op::PUSH_LOCAL, static_cast<std::uint8_t>(slot));
+            out.emit(Op::PUSH_LOCAL, slot);
             return;
         }
         std::size_t idx = out.addSymbol(name);
-        if (idx > 255) throw CompileError("const-pool overflow on symbol");
-        out.emit(Op::PUSH_VAR, static_cast<std::uint8_t>(idx));
+        out.emit(Op::PUSH_VAR, idx);
         return;
     }
 

@@ -126,7 +126,7 @@ private:
         // recur target — populated by `loop`. The slots vector tells
         // `recur` which locals to rebind, in left-to-right order.
         struct RecurTarget {
-            std::size_t  bodyStart;     // byte offset (PC) to JUMP_BACK to
+            std::size_t  bodyStart;     // instruction position to JUMP_BACK to
             std::vector<int> slots;     // local slot indices for the bindings
         };
         std::vector<RecurTarget> recurStack;

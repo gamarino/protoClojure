@@ -233,7 +233,9 @@ int runFile(const char* path) {
             forms->getAt(ctx, static_cast<int>(i));
         try {
             compiler.compileForm(ctx, form, mod, compilerMarkers);
-        } catch (const protoClojure::CompileError& e) {
+        } catch (const std::exception& e) {
+            // A CompileError, or a limit the bytecode itself enforces
+            // (BytecodeModule::emit).
             std::fprintf(stderr, "%s: compile error: %s\n", path, e.what());
             return 1;
         }

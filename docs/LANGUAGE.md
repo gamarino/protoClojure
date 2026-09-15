@@ -498,9 +498,11 @@ optimisation:
 `recur` may only appear in tail position. The v0.1 design has the
 compiler enforce this with a clear error; the 0.0.1 compiler does not
 check it yet, and a non-tail `recur` fails at run time. Without `recur`,
-deep self-recursion will overflow the operand stack — there is no
-automatic TCO for general calls, only at `recur` points (matches JVM
-Clojure exactly).
+deep self-recursion exhausts the stack — there is no automatic TCO for
+general calls, only at `recur` points (matches JVM Clojure exactly). In
+0.0.1 every non-tail call nests the interpreter on the native stack and
+the depth is not checked: a recursion between 1,000 and 2,000 calls deep
+crashes the process instead of raising an error (§17).
 
 ### 5.3 Closures
 
@@ -849,3 +851,30 @@ This example combines most v0.1 features and does not run on 0.0.1.
     (doseq [[w c] (top-n text 10)]
       (println (format "%4d  %s" c w)))))
 ```
+
+---
+
+## 17. Implementation limits
+
+The hard limits of protoClojure 0.0.1. Each instruction of the bytecode
+VM is a 32-bit word whose operand has 24 bits (`src/runtime/Opcodes.h`), so
+the limits that come from the bytecode are 16,777,215; exceeding one is a
+compile error naming the instruction. A function body has its own
+constant pool and local slots; the top level of a script, or of one REPL
+input, is one more body. Equal constants of the same kind share one pool
+entry (`1` and `1.0`, the string `"a"`, the keyword `:a` and the symbol `a`
+are four different kinds of constant).
+
+| Limit | Value | When exceeded |
+|---|---|---|
+| Distinct constants in one body | 16,777,216 | compile error |
+| Local slots in one function body (parameters, `let` and `loop` bindings, captured variables) | 16,777,216 | compile error |
+| `fn` / `defn` bodies and multi-arity groups written directly in one body | 16,777,216 each | compile error |
+| Arguments written in one call, vector literal or map literal (keys and values) | 16,777,215 | compile error |
+| Instructions jumped over by `if`, `when`, `cond`, `and`, `or`, an `:or` default, or `recur` back to its loop | 16,777,215 | compile error |
+| Parameters one call binds (a variadic fn binds its rest arguments as one) | 17 | runtime error |
+| Names in one `& {:keys [...]}` | 16 | runtime error |
+| Extra arguments to `swap!` | 15 | runtime error |
+| Operand stack of a call (arguments pushed by a call, a literal or `apply`) | grows on demand | memory |
+| Integer literals, strings, collections | none | memory |
+| Nesting depth of non-tail calls | native stack: 1,000 calls work and 2,000 crash with an 8 MiB stack | the process crashes (Known issues in `STATUS.md`) |

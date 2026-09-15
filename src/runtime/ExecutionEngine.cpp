@@ -7,6 +7,7 @@
 
 #include "protoCore.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <stdexcept>
 
@@ -14,10 +15,15 @@ namespace protoClojure {
 
 namespace {
 
-// Per-frame stack size budget. Locals (params + let-bindings) live in slots
-// 0..(arity + localCount - 1); the operand stack lives starting at offset
-// arity + localCount.
-constexpr unsigned int kOperandStackSize = 64;
+// Initial operand-stack capacity of a frame. Locals (params + let-bindings)
+// live in slots 0..(arity + localCount - 1); the operand stack lives starting
+// at offset arity + localCount and doubles whenever a push finds it full (a
+// call or a literal with many arguments, apply over a long list).
+constexpr unsigned int kInitialOperandStackSize = 64;
+
+// The most parameters one call binds (a variadic fn binds its rest
+// arguments as one).
+constexpr unsigned int kMaxBoundParameters = 17;
 
 // SmallInt tagged pointer constants — mirror of protoCore's
 // PROTO_SMALL_INT_TAG_MASK/VALUE for the hot-path checks. Re-declared here
@@ -238,9 +244,13 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
             if (variadic && static_cast<int>(posArgc) < fixed)
                 throw std::runtime_error("VM: invoke: variadic underflow");
         }
-        const proto::ProtoObject* callArgs[17];
+        const proto::ProtoObject* callArgs[kMaxBoundParameters];
         unsigned int passArgc = posArgc;
         if (variadic) passArgc = static_cast<unsigned int>(fixed) + 1;
+        if (passArgc > kMaxBoundParameters)
+            throw std::runtime_error(
+                "VM: a call may bind at most 17 parameters "
+                "(a variadic fn binds its rest arguments as one)");
         for (int i = 0; i < fixed; ++i) callArgs[i] = args[i];
         if (variadic) {
             const proto::ProtoObject* rest = ctx->newList()->asObject(ctx);
@@ -371,15 +381,15 @@ ExecutionEngine::run(proto::ProtoContext* parent,
     // One ProtoContext per frame. Layout of automaticLocals:
     //   [0 .. arity-1]                         — params (bound at call)
     //   [arity .. arity+localCount-1]          — lets / loops
-    //   [arity+localCount .. + kOperandStackSize-1]  — operand stack
+    //   [arity+localCount .. + stackCapacity-1]  — operand stack (grows)
     const unsigned int locBase   = 0;
     const unsigned int stackBase = static_cast<unsigned int>(mod.arity()
                                                               + mod.localCount());
-    const unsigned int totalSize = stackBase + kOperandStackSize;
+    unsigned int stackCapacity = kInitialOperandStackSize;
 
     proto::ProtoContext frame(parent->space, parent);
-    frame.resizeAutomaticLocals(totalSize);
-    unsigned int sp = 0;   // 0 means "stack empty"; max sp = kOperandStackSize
+    frame.resizeAutomaticLocals(stackBase + stackCapacity);
+    unsigned int sp = 0;   // 0 means "stack empty"; sp <= stackCapacity
 
     // Bind incoming args (call site is responsible for matching arity).
     for (unsigned int i = 0; i < argCount; ++i) {
@@ -435,8 +445,14 @@ ExecutionEngine::run(proto::ProtoContext* parent,
     frame.safepoint();
 
     auto pushVal = [&](const proto::ProtoObject* v) {
-        if (sp >= kOperandStackSize) {
-            throw std::runtime_error("VM: operand-stack overflow");
+        // The constant test first: below the initial capacity a push
+        // compares against an immediate and never reads stackCapacity.
+        if (sp >= kInitialOperandStackSize && sp >= stackCapacity) {
+            // Full: double the capacity. resizeAutomaticLocals copies the
+            // slots into a larger buffer and allocates no protoCore cell,
+            // so no collection can run in between.
+            stackCapacity *= 2;
+            frame.resizeAutomaticLocals(stackBase + stackCapacity);
         }
         frame.setAutomaticLocal(stackBase + sp, v);
         ++sp;
@@ -528,10 +544,10 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                         std::to_string(argc));
                 }
             }
-            const proto::ProtoObject* callArgs[17];
+            const proto::ProtoObject* callArgs[kMaxBoundParameters];
             unsigned int passArgc = posArgc;
             if (variadic) passArgc = static_cast<unsigned int>(fixed) + 1;
-            if (passArgc > 17)
+            if (passArgc > kMaxBoundParameters)
                 throw std::runtime_error(
                     "VM: a call may bind at most 17 parameters "
                     "(a variadic fn binds its rest arguments as one)");
@@ -633,13 +649,16 @@ ExecutionEngine::run(proto::ProtoContext* parent,
         pushVal(result);
     };
 
-    const auto& bytes = mod.bytes();
-    std::size_t pc = 0;
+    // The module is complete before it runs, so its code buffer is stable.
+    // `ip` points at the next instruction word; jumps move it by their
+    // operand, counted in instructions.
+    const Instr* const codeEnd = mod.code().data() + mod.code().size();
+    const Instr* ip = mod.code().data();
 
-    while (pc + 1 < bytes.size()) {
-        Op op = static_cast<Op>(bytes[pc]);
-        std::uint8_t operand = bytes[pc + 1];
-        pc += kInstrSize;
+    while (ip < codeEnd) {
+        const Instr word = *ip++;
+        const Op op = static_cast<Op>(word & 0xFF);
+        const std::uint32_t operand = word >> kOperandShift;
 
         switch (op) {
             case Op::NOP:
@@ -801,16 +820,25 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 const unsigned int kvItems = argc - fixed;
                 if (kvItems > 0) {
                     // The pairs stay rooted in their stack slots while the
-                    // map is built; the map is rooted into the first pair's
-                    // slot before anything else allocates.
-                    const proto::ProtoObject* kv[255];
-                    for (unsigned int i = 0; i < kvItems; ++i) {
-                        kv[i] = frame.getAutomaticLocal(
-                            stackBase + sp - kvItems + i);
+                    // map is built, at most kChunkItems at a time. After
+                    // each chunk the map built so far is rooted in the first
+                    // pair's slot, which no later chunk reads, before the
+                    // next chunk allocates.
+                    constexpr unsigned int kChunkItems = 256;  // even
+                    const proto::ProtoObject* kv[kChunkItems];
+                    const unsigned int firstPairSlot = stackBase + sp - kvItems;
+                    const proto::ProtoObject* kwMap = nullptr;
+                    for (unsigned int done = 0; done < kvItems; done += kChunkItems) {
+                        const unsigned int items =
+                            std::min(kChunkItems, kvItems - done);
+                        for (unsigned int i = 0; i < items; ++i) {
+                            kv[i] = frame.getAutomaticLocal(firstPairSlot + done + i);
+                        }
+                        kwMap = mapAssocPairs(
+                            &frame, MapLayout{mapMarkerProto, mapStateKey},
+                            kwMap, kv, items);
+                        frame.setAutomaticLocal(firstPairSlot, kwMap);
                     }
-                    const proto::ProtoObject* kwMap = mapAssocPairs(
-                        &frame, MapLayout{mapMarkerProto, mapStateKey},
-                        nullptr, kv, kvItems);
                     sp -= kvItems;
                     pushVal(kwMap);
                     dispatchCall(fixed + 1);
@@ -847,19 +875,19 @@ ExecutionEngine::run(proto::ProtoContext* parent,
             }
 
             case Op::JUMP:
-                pc += static_cast<std::size_t>(operand) * kInstrSize;
+                ip += operand;
                 break;
 
             case Op::JUMP_IF_FALSE: {
                 const proto::ProtoObject* v = popVal();
                 if (v == PROTO_NONE || v == PROTO_FALSE) {
-                    pc += static_cast<std::size_t>(operand) * kInstrSize;
+                    ip += operand;
                 }
                 break;
             }
 
             case Op::JUMP_BACK:
-                pc -= static_cast<std::size_t>(operand) * kInstrSize;
+                ip -= operand;
                 // GC safepoint on every loop back-edge (`recur`). A loop
                 // over the SmallInt fast-path opcodes allocates nothing and
                 // would otherwise never park for a cycle another thread
@@ -871,7 +899,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
             case Op::JUMP_IF_TRUE: {
                 const proto::ProtoObject* v = popVal();
                 if (v != PROTO_NONE && v != PROTO_FALSE) {
-                    pc += static_cast<std::size_t>(operand) * kInstrSize;
+                    ip += operand;
                 }
                 break;
             }

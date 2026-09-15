@@ -3,6 +3,7 @@
 # tests cover what is genuinely below the script-level interface.
 
 add_executable(protoclj_unit_tests
+    test_bytecode.cpp
     test_lexer.cpp
     test_mapops.cpp
     test_reader.cpp

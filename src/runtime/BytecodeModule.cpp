@@ -1,6 +1,8 @@
 #include "BytecodeModule.h"
 
+#include <cstring>
 #include <stdexcept>
+#include <string>
 
 namespace protoClojure {
 
@@ -44,66 +46,79 @@ std::size_t BytecodeModule::addBlock(std::unique_ptr<BytecodeModule> sub) {
     return blocks_.size() - 1;
 }
 
+namespace {
+
+// The index of the constant `key` names in `index`, appending `c` to the
+// pool first when the key is new.
+template <typename Key>
+std::size_t findOrAdd(std::unordered_map<Key, std::size_t>& index,
+                      const Key& key,
+                      std::vector<BytecodeModule::Const>& consts,
+                      BytecodeModule::Const c) {
+    const auto [it, inserted] = index.try_emplace(key, consts.size());
+    if (inserted) consts.push_back(std::move(c));
+    return it->second;
+}
+
+std::uint32_t checkedOperand(Op op, std::size_t operand) {
+    if (operand > kMaxOperand) {
+        throw std::length_error(
+            std::string(opName(op)) + " operand " + std::to_string(operand) +
+            " exceeds the bytecode limit of " + std::to_string(kMaxOperand) +
+            " (constants, locals, functions, arguments or instructions "
+            "jumped over in one function body)");
+    }
+    return static_cast<std::uint32_t>(operand);
+}
+
+} // namespace
+
 std::size_t BytecodeModule::addLong(long long v) {
-    consts_.push_back(Const{ConstKind::Long, v, 0.0, {}});
-    return consts_.size() - 1;
+    return findOrAdd(longIndex_, v, consts_, Const{ConstKind::Long, v, 0.0, {}});
 }
 
 std::size_t BytecodeModule::addBigInteger(const std::string& digits) {
-    consts_.push_back(Const{ConstKind::BigInteger, 0, 0.0, digits});
-    return consts_.size() - 1;
+    return findOrAdd(bigIntegerIndex_, digits, consts_,
+                     Const{ConstKind::BigInteger, 0, 0.0, digits});
 }
 
 std::size_t BytecodeModule::addDouble(double v) {
-    consts_.push_back(Const{ConstKind::Double, 0, v, {}});
-    return consts_.size() - 1;
+    // By bit pattern: 0.0 and -0.0 are two constants, and a NaN literal
+    // reuses the entry of an identical NaN.
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &v, sizeof bits);
+    return findOrAdd(doubleIndex_, bits, consts_,
+                     Const{ConstKind::Double, 0, v, {}});
 }
 
 std::size_t BytecodeModule::addString(const std::string& s) {
-    consts_.push_back(Const{ConstKind::String, 0, 0.0, s});
-    return consts_.size() - 1;
+    return findOrAdd(stringIndex_, s, consts_, Const{ConstKind::String, 0, 0.0, s});
 }
 
 std::size_t BytecodeModule::addSymbol(const std::string& s) {
-    // De-duplicate symbols: identical names produce the same const index.
-    // Matters because the compiler often references the same global (e.g.
-    // `println`) multiple times across a file; we should not multiply
-    // entries.
-    for (std::size_t i = 0; i < consts_.size(); ++i) {
-        if (consts_[i].kind == ConstKind::Symbol && consts_[i].sval == s) {
-            return i;
-        }
-    }
-    consts_.push_back(Const{ConstKind::Symbol, 0, 0.0, s});
-    return consts_.size() - 1;
+    return findOrAdd(symbolIndex_, s, consts_, Const{ConstKind::Symbol, 0, 0.0, s});
 }
 
 std::size_t BytecodeModule::addNamed(const std::string& spelling,
                                      const proto::ProtoObject* value) {
-    // One entry per spelling, as for addSymbol: interning maps a spelling
-    // to exactly one value.
-    for (std::size_t i = 0; i < consts_.size(); ++i) {
-        if (consts_[i].kind == ConstKind::Named && consts_[i].sval == spelling) {
-            return i;
-        }
-    }
-    consts_.push_back(Const{ConstKind::Named, 0, 0.0, spelling, value});
-    return consts_.size() - 1;
+    return findOrAdd(namedIndex_, spelling, consts_,
+                     Const{ConstKind::Named, 0, 0.0, spelling, value});
 }
 
-std::size_t BytecodeModule::emit(Op op, std::uint8_t operand) {
-    std::size_t at = bytes_.size();
-    bytes_.push_back(static_cast<std::uint8_t>(op));
-    bytes_.push_back(operand);
-    return at;
+std::size_t BytecodeModule::emit(Op op, std::size_t operand) {
+    const std::uint32_t checked = checkedOperand(op, operand);
+    code_.push_back((checked << kOperandShift) | static_cast<Instr>(op));
+    return code_.size() - 1;
 }
 
-void BytecodeModule::patchOperand(std::size_t opcodeOffset,
-                                  std::uint8_t newOperand) {
-    if (opcodeOffset + 1 >= bytes_.size()) {
-        throw std::runtime_error("patchOperand: out of range");
+void BytecodeModule::patchOperand(std::size_t at, std::size_t operand) {
+    if (at >= code_.size()) {
+        throw std::out_of_range("patchOperand: no instruction at " +
+                                std::to_string(at));
     }
-    bytes_[opcodeOffset + 1] = newOperand;
+    const Op op = static_cast<Op>(code_[at] & 0xFF);
+    code_[at] = (checkedOperand(op, operand) << kOperandShift) |
+                static_cast<Instr>(op);
 }
 
 } // namespace protoClojure

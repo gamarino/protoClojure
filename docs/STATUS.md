@@ -5,11 +5,12 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 270 test cases: 205
-conformance fixtures under `tests/conformance/`, 64 GoogleTest unit
-tests for the lexer, the reader, the runtime map and value equality and
-hashing (`tests/unit/`), and a CLI check of `--help` (`tests/cli/`); all
-pass. Benchmark numbers against Babashka 1.4.192
+scripts and an interactive REPL. `ctest` registers 284 test cases: 214
+conformance fixtures under `tests/conformance/`, 68 GoogleTest unit
+tests for the lexer, the reader, the bytecode module, the runtime map and
+value equality and hashing (`tests/unit/`), and two CLI checks
+(`tests/cli/`: `--help`, and a generated program with 70,000 distinct
+literals of each kind); all pass. Benchmark numbers against Babashka 1.4.192
 are in [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md). Shipped changes
 are listed in [`CHANGELOG.md`](../CHANGELOG.md).
 
@@ -23,15 +24,15 @@ directories that cover them.
 | Feature | Conformance directories | Fixtures |
 |---|---|---:|
 | Binary, lexer, reader, bytecode VM, `println` | `00-binary`, `01-literals` | 2 |
-| `def`, `if`, `do`, integer arithmetic, comparisons, `str` | `02-special-forms`, `03-arithmetic` | 12 |
-| `fn`, `defn`, `let`, `loop`, `recur` | `04-functions`, `05-recursion` | 8 |
+| `def`, `if`, `do`, integer arithmetic, comparisons, `str` | `02-special-forms`, `03-arithmetic` | 13 |
+| `fn`, `defn`, `let`, `loop`, `recur` | `04-functions`, `05-recursion` | 11 |
 | Closures with N-level lexical capture | `06-closures` | 6 |
-| Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 22 |
-| Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 19 |
-| IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 13 |
+| Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 23 |
+| Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 21 |
+| IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 14 |
 | LargeInteger promotion, big integer literals | `15-bigint` | 8 |
 | Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 40 |
-| Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 16 |
+| Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 17 |
 | `clojure.string`-shaped string functions | `20-strings` | 16 |
 | Atoms | `21-atoms` | 11 |
 | Futures and `pmap` on OS threads | `22-futures` | 14 |
@@ -175,6 +176,16 @@ The design specifications written during development are archived under
 ### Bytecode VM
 
 - [x] 29 opcodes — see `src/runtime/Opcodes.h`
+- [x] 32-bit instruction words with a 24-bit operand: constant-pool
+      indices, local slots, function bodies, argument counts and jump
+      offsets range up to 16,777,215 per function body or script top level
+      (a larger operand is a compile error); a script with 70,000 distinct
+      literals of each kind compiles and runs
+- [x] Constant pool de-duplicated by kind and value (`1` and `1.0`, `"a"`,
+      `:a` and a symbol `a` stay distinct; doubles by bit pattern)
+- [x] Operand stack grows on demand, so calls, vector and map literals and
+      `apply` take any number of arguments; the remaining hard limits are
+      listed in `LANGUAGE.md` §17
 - [x] `MAKE_FN` / `MAKE_FN_MULTI` — single + multi-arity wrappers
 - [x] `CALL_APPLY` — spread-arguments dispatch
 - [x] `CALL_KW` — trailing keyword/value pairs; ordinary callees receive the
@@ -393,6 +404,14 @@ See `LANGUAGE.md` for the full discussion. Summary:
   NaN equal to any number, so `(= nan 1)` is `true`. No hash can agree with
   that: NaN hashes like `0`, so a NaN map key is matched only by `0`, `0.0`,
   `-0.0`, NaN and integers that are multiples of 2^61 − 1, and vice versa.
+
+- **Deep non-tail recursion crashes.** Every call runs a nested
+  `ExecutionEngine::run` on the native C++ stack and the depth is not
+  checked: `(defn f [n] (if (= n 0) 0 (+ 1 (f (- n 1)))))` returns at
+  `(f 1000)` and crashes with SIGSEGV at `(f 2000)` with the default 8 MiB
+  stack, where JVM Clojure throws `StackOverflowError`. Use `loop` /
+  `recur` for deep iteration. The other hard limits are listed in
+  `LANGUAGE.md` §17.
 
 - **Promise `deref` polls.** A pending promise is checked every millisecond
   (with the thread marked unmanaged so garbage collection can proceed);
