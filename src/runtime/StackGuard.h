@@ -8,7 +8,9 @@
  * SIGSEGV; checkNativeStack turns it into a StackOverflowError, the analogue
  * of JVM Clojure's java.lang.StackOverflowError, which the script driver,
  * the REPL, future and pmap threads and actor workers handle like any other
- * runtime error.
+ * runtime error. The reader and the compiler recurse once per level of
+ * nested source forms and check with StackUse::Source; their callers report
+ * the error as a read or compile error.
  *
  * The check compares the address of a local variable with a per-thread
  * limit: the lowest address of the thread's stack, as the thread library
@@ -52,25 +54,34 @@ inline constexpr std::size_t kThreadStackBytes = 32u << 20;
 // times this keeps a quarter of its size free instead.
 inline constexpr std::size_t kStackReserveBytes = 256u << 10;
 
+// What recursion a check guards, which selects the wording of the error.
+enum class StackUse {
+    // Calls, and printing, comparing or hashing nested data (the VM and the
+    // runtime).
+    Evaluation,
+    // Nested source forms being read or compiled (the reader, the compiler).
+    Source,
+};
+
 namespace detail {
 // The lowest stack address a check accepts on this thread; UINTPTR_MAX until
 // the thread's first check computes it.
 extern constinit thread_local std::uintptr_t tl_stackLimit;
 
 // First check of a thread (computes tl_stackLimit), or an exhausted stack
-// (throws StackOverflowError).
+// (throws StackOverflowError worded for `use`).
 [[gnu::cold, gnu::noinline]]
-void checkNativeStackSlow(std::uintptr_t frameAddress);
+void checkNativeStackSlow(std::uintptr_t frameAddress, StackUse use);
 } // namespace detail
 
 // Throws StackOverflowError when the calling function's frame lies within
 // kStackReserveBytes of the end of the thread's stack. Cost: one
-// thread-local load and one compare.
-inline void checkNativeStack() {
+// thread-local load and one compare; `use` only reaches the cold path.
+inline void checkNativeStack(StackUse use = StackUse::Evaluation) {
     const char probe = 0;
     const auto frameAddress = reinterpret_cast<std::uintptr_t>(&probe);
     if (__builtin_expect(frameAddress < detail::tl_stackLimit, 0))
-        detail::checkNativeStackSlow(frameAddress);
+        detail::checkNativeStackSlow(frameAddress, use);
 }
 
 // Raises the default stack size of threads created from now on without an

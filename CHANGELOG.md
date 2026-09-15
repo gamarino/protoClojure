@@ -52,9 +52,10 @@ The project has no tagged releases yet; the version declared in
 - **Tests.** A glob-discovered conformance suite (262 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
   the bytecode module, the runtime map, value equality and hashing, the
-  native stack guard and the double printer (77 tests), and four CLI checks (`--help`, a
+  native stack guard and the double printer (78 tests), and five CLI checks (`--help`, a
   generated program with 70,000 distinct literals of each kind, a
-  stack overflow in the REPL, and globals bound to nil in the REPL).
+  stack overflow in the REPL, globals bound to nil in the REPL, and
+  deeply nested source).
 - **Benchmarks and examples.** `benchmarks/bench.sh` (comparison with
   Babashka), `benchmarks/actor-bench.sh` (actor throughput) and twelve
   example scripts under `examples/`.
@@ -267,3 +268,16 @@ The project has no tagged releases yet; the version declared in
   raises the error of the first failing element in input order, after
   waiting for every element. Errors in actor message handlers are still not
   reported.
+- Deeply nested source no longer crashes the reader or the compiler. Both
+  recursed once per level of nesting without checking the stack, so 100,000
+  nested lists, or 40,000 nested `fn` forms (which read but did not compile),
+  crashed the process with SIGSEGV, in a script and in the REPL. They now
+  check the native stack at every level: too deep a nesting is a read error,
+  reported where reading stopped, or a compile error, both
+  `StackOverflowError: forms nested too deeply for the 32 MiB thread stack`,
+  and the REPL keeps evaluating. The REPL also keeps the form it compiles,
+  and the forms `:load` reads, in a slot the garbage collector sees; they
+  were held only in C++ locals, so a collection could reclaim a form while it
+  was being compiled (after a read error on a deeply nested form, the next
+  deeply nested form failed with "compile: unsupported form" in 7 of 15
+  runs).

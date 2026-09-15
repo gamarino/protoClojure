@@ -27,6 +27,11 @@ public:
     // row return the same token; the next next() returns it.
     const Token& peek();
 
+    // The position after the last character consumed (1-based line and
+    // column, columns counting code points).
+    int line() const { return line_; }
+    int column() const { return column_; }
+
 private:
     std::string source_;
     std::size_t pos_  = 0;

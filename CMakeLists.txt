@@ -48,12 +48,20 @@ endif()
 
 include_directories(${PROTOCORE_INCLUDE_DIRS} include headers src)
 
+# --- protoClojure support library (native stack guard) ---
+# Used by the reader, the compiler and the runtime alike, so the reader does
+# not depend on the runtime.
+add_library(protoclj_support STATIC
+    src/runtime/StackGuard.cpp
+)
+target_compile_options(protoclj_support PRIVATE -Wall -Wextra -Wpedantic)
+
 # --- protoClojure reader library ---
 add_library(protoclj_reader STATIC
     src/reader/Lexer.cpp
     src/reader/Reader.cpp
 )
-target_link_libraries(protoclj_reader PUBLIC ${PROTOCORE_LIBRARY})
+target_link_libraries(protoclj_reader PUBLIC ${PROTOCORE_LIBRARY} protoclj_support)
 target_compile_options(protoclj_reader PRIVATE -Wall -Wextra -Wpedantic)
 
 # --- protoClojure runtime library (bytecode, VM, primitives) ---
@@ -64,9 +72,8 @@ add_library(protoclj_runtime STATIC
     src/runtime/MapOps.cpp
     src/runtime/Named.cpp
     src/runtime/Primitives.cpp
-    src/runtime/StackGuard.cpp
 )
-target_link_libraries(protoclj_runtime PUBLIC ${PROTOCORE_LIBRARY})
+target_link_libraries(protoclj_runtime PUBLIC ${PROTOCORE_LIBRARY} protoclj_support)
 target_compile_options(protoclj_runtime PRIVATE -Wall -Wextra -Wpedantic)
 
 # --- protoClojure compiler library ---

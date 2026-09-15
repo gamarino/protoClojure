@@ -1,5 +1,7 @@
 #include "Compiler.h"
 
+#include "runtime/StackGuard.h"
+
 #include "protoCore.h"
 
 #include <cstdio>
@@ -445,6 +447,10 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                            const proto::ProtoObject* form,
                            BytecodeModule& out,
                            const CompilerMarkers& markers) {
+    // Every nested form recurses through here: forms nested deeper than the
+    // thread's stack allows raise StackOverflowError, which the drivers
+    // report as a compile error.
+    checkNativeStack(StackUse::Source);
     if (form == nullptr || form == PROTO_NONE) {
         // nil literal — not yet emitting a PUSH_NIL opcode. For now we
         // represent nil as a const-pool entry with kind String "" until

@@ -5,14 +5,15 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 343 test cases: 262
-conformance fixtures under `tests/conformance/`, 77 GoogleTest unit
+scripts and an interactive REPL. `ctest` registers 345 test cases: 262
+conformance fixtures under `tests/conformance/`, 78 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 value equality and hashing, the native stack guard and the double printer
 (`tests/unit/`), and
-four CLI checks (`tests/cli/`: `--help`, a generated program with 70,000
-distinct literals of each kind, a stack overflow in the REPL, and globals
-bound to nil in the REPL); all pass. Benchmark numbers against Babashka 1.4.192
+five CLI checks (`tests/cli/`: `--help`, a generated program with 70,000
+distinct literals of each kind, a stack overflow in the REPL, globals
+bound to nil in the REPL, and source nested too deeply to read or compile);
+all pass. Benchmark numbers against Babashka 1.4.192
 are in [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md). Shipped changes
 are listed in [`CHANGELOG.md`](../CHANGELOG.md).
 
@@ -71,6 +72,13 @@ The design specifications written during development are archived under
 - [x] Maps `{...}`
 - [x] `@form` — read as `(deref form)`
 - [x] Line comments `;`; commas as whitespace
+- [x] Nesting depth — the reader and the compiler recurse once per level of
+      nesting and check the native stack at each level: forms nested deeper
+      than the 32 MiB stack allows are a read error, reported where reading
+      stopped, or a compile error, `StackOverflowError: forms nested too
+      deeply for the 32 MiB thread stack`, in a script and in the REPL.
+      80,000 nested lists read, compile and run and 100,000 do not; 20,000
+      nested `fn` forms compile and 40,000 do not
 
 ### Special forms
 

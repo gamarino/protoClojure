@@ -95,6 +95,9 @@ private:
     Lexer lexer_;
     ReaderMarkers markers_;
 
+    // readAll without the conversion of StackOverflowError to ReaderError.
+    const proto::ProtoList* readAllForms();
+
     // Dispatch on a token to read one form. Receives the parent context
     // so any child context it constructs is correctly chained for the GC.
     const proto::ProtoObject* readFromToken(proto::ProtoContext* parent,

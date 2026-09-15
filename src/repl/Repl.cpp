@@ -300,13 +300,20 @@ struct Session {
 
         auto modPtr = std::make_unique<BytecodeModule>();
         BytecodeModule& mod = *modPtr;
-        Compiler compiler;
-        try {
-            compiler.compileForm(ctx, form, mod, compilerMarkers);
-        } catch (const std::exception& e) {
-            // A CompileError, or a bytecode limit (BytecodeModule::emit).
-            std::fprintf(stderr, "compile error: %s\n", e.what());
-            return false;
+        {
+            // readOne returns the form unrooted: keep it in a slot while it
+            // is compiled, as runFile keeps the forms readAll returns.
+            proto::ProtoContext formScope(ctx->space, ctx);
+            formScope.resizeAutomaticLocals(1);
+            formScope.setAutomaticLocal(0, form);
+            Compiler compiler;
+            try {
+                compiler.compileForm(&formScope, form, mod, compilerMarkers);
+            } catch (const std::exception& e) {
+                // A CompileError, or a bytecode limit (BytecodeModule::emit).
+                std::fprintf(stderr, "compile error: %s\n", e.what());
+                return false;
+            }
         }
         mod.emit(Op::RETURN, 0);
         // Retain BEFORE run — the fn objects defn allocates carry a
@@ -381,15 +388,20 @@ void cmdLoad(Session& s, const std::string& path) {
                      path.c_str(), e.line, e.column, e.what());
         return;
     }
-    unsigned long n = forms->getSize(s.ctx);
+    // readAll returns the forms unrooted: keep them in a slot while they are
+    // compiled and run, as runFile does. The forms' contexts chain to it.
+    proto::ProtoContext formsScope(s.ctx->space, s.ctx);
+    formsScope.resizeAutomaticLocals(1);
+    formsScope.setAutomaticLocal(0, forms->asObject(&formsScope));
+    unsigned long n = forms->getSize(&formsScope);
     for (unsigned long i = 0; i < n; ++i) {
         const proto::ProtoObject* form =
-            forms->getAt(s.ctx, static_cast<int>(i));
+            forms->getAt(&formsScope, static_cast<int>(i));
         auto modPtr = std::make_unique<BytecodeModule>();
         BytecodeModule& mod = *modPtr;
         Compiler compiler;
         try {
-            compiler.compileForm(s.ctx, form, mod, s.compilerMarkers);
+            compiler.compileForm(&formsScope, form, mod, s.compilerMarkers);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "%s: compile error: %s\n",
                          path.c_str(), e.what());
@@ -399,7 +411,7 @@ void cmdLoad(Session& s, const std::string& path) {
         s.retainedModules.push_back(std::move(modPtr));
         ExecutionEngine eng;
         try {
-            eng.run(s.ctx, mod, s.globals,
+            eng.run(&formsScope, mod, s.globals,
                 s.fnSingleProto, s.fnMultiProto, s.mapMarker, s.atomMarker,
                 s.futureMarker, s.promiseMarker, s.actorMarker,
                 s.bytecodeKey, s.arityKey, s.capturesKey, s.aritiesKey,

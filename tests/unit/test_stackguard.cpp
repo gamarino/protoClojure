@@ -16,17 +16,19 @@ namespace {
 
 using protoClojure::StackOverflowError;
 
+using protoClojure::StackUse;
+
 // Recurses until checkNativeStack throws, counting the levels in `depth`.
 // Each level keeps a buffer alive across the call, so the recursion uses at
 // least 512 bytes of stack per level and cannot become a loop. The depth
 // bound is beyond any stack the tests create (it would take 512 GiB).
 [[gnu::noinline]]
-void recurse(std::size_t& depth) {
-    protoClojure::checkNativeStack();
+void recurse(std::size_t& depth, StackUse use = StackUse::Evaluation) {
+    protoClojure::checkNativeStack(use);
     volatile char pad[512];
     pad[0] = 1;
     if (++depth > (std::size_t{1} << 30)) return;
-    recurse(depth);
+    recurse(depth, use);
     pad[1] = pad[0];
 }
 
@@ -34,11 +36,13 @@ struct Probe {
     std::size_t depth = 0;
     bool overflowed = false;
     std::string message;
+    StackUse use = StackUse::Evaluation;
 };
 
 // Runs `recurse` on a new thread with a `stackBytes` stack.
-Probe probeThread(std::size_t stackBytes) {
+Probe probeThread(std::size_t stackBytes, StackUse use = StackUse::Evaluation) {
     Probe probe;
+    probe.use = use;
     pthread_attr_t attr;
     EXPECT_EQ(pthread_attr_init(&attr), 0);
     EXPECT_EQ(pthread_attr_setstacksize(&attr, stackBytes), 0);
@@ -47,7 +51,7 @@ Probe probeThread(std::size_t stackBytes) {
         [](void* p) -> void* {
             auto* pr = static_cast<Probe*>(p);
             try {
-                recurse(pr->depth);
+                recurse(pr->depth, pr->use);
             } catch (const StackOverflowError& e) {
                 pr->overflowed = true;
                 pr->message = e.what();
@@ -67,6 +71,21 @@ TEST(StackGuard, ExhaustedStackRaisesStackOverflowError) {
     EXPECT_EQ(p.message.rfind("StackOverflowError:", 0), 0u) << p.message;
     EXPECT_NE(p.message.find("1 MiB"), std::string::npos) << p.message;
     EXPECT_GT(p.depth, 100u);
+}
+
+TEST(StackGuard, SourceNestingNamesForms) {
+    // The reader and the compiler check with StackUse::Source: the same limit,
+    // worded for nested source forms.
+    const Probe evaluation = probeThread(1u << 20);
+    const Probe source = probeThread(1u << 20, StackUse::Source);
+    ASSERT_TRUE(source.overflowed);
+    EXPECT_EQ(source.message,
+              "StackOverflowError: forms nested too deeply for the 1 MiB thread stack");
+    EXPECT_NE(evaluation.message.find("calls or data nested too deeply"),
+              std::string::npos) << evaluation.message;
+    // Same limit: the two probes stop within a level or two of each other.
+    EXPECT_LE(source.depth, evaluation.depth + 2);
+    EXPECT_LE(evaluation.depth, source.depth + 2);
 }
 
 TEST(StackGuard, LimitFollowsTheThreadStackSize) {

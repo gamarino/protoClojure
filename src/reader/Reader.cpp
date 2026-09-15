@@ -1,5 +1,7 @@
 #include "Reader.h"
 
+#include "runtime/StackGuard.h"
+
 #include "protoCore.h"
 
 namespace protoClojure {
@@ -8,13 +10,29 @@ Reader::Reader(proto::ProtoContext* ctx, std::string source,
                const ReaderMarkers& markers)
     : ctx_(ctx), lexer_(std::move(source)), markers_(markers) {}
 
+// Forms nested deeper than the thread's stack allows raise StackOverflowError
+// in readFromToken; readOne and readAll report it as a read error at the
+// position where reading stopped, so every driver handles it like any other
+// read error.
 const proto::ProtoObject* Reader::readOne() {
-    Token tok = lexer_.next();
-    if (tok.kind == TokenKind::EndOfFile) return nullptr;
-    return readFromToken(ctx_, tok);
+    try {
+        Token tok = lexer_.next();
+        if (tok.kind == TokenKind::EndOfFile) return nullptr;
+        return readFromToken(ctx_, tok);
+    } catch (const StackOverflowError& e) {
+        throw ReaderError(e.what(), lexer_.line(), lexer_.column());
+    }
 }
 
 const proto::ProtoList* Reader::readAll() {
+    try {
+        return readAllForms();
+    } catch (const StackOverflowError& e) {
+        throw ReaderError(e.what(), lexer_.line(), lexer_.column());
+    }
+}
+
+const proto::ProtoList* Reader::readAllForms() {
     // One child context for the whole readAll session. Two slots: the
     // accumulator ProtoList (slot 0) and the most recently read form
     // (slot 1). Same shape as readList — the accumulator IS a ProtoList,
@@ -42,6 +60,8 @@ const proto::ProtoList* Reader::readAll() {
 
 const proto::ProtoObject*
 Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
+    // Every nested form recurses through here (readList, `@`).
+    checkNativeStack(StackUse::Source);
     switch (tok.kind) {
         case TokenKind::Integer:
             // Atomic — no intermediate state to protect. The caller takes

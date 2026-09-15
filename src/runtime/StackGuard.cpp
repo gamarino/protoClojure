@@ -73,7 +73,7 @@ std::size_t defaultThreadStackBytes() {
 
 namespace detail {
 
-void checkNativeStackSlow(std::uintptr_t frameAddress) {
+void checkNativeStackSlow(std::uintptr_t frameAddress, StackUse use) {
     if (tl_stackLimit == UINTPTR_MAX) {
         std::uintptr_t lowest = 0;
         std::size_t size = 0;
@@ -84,6 +84,11 @@ void checkNativeStackSlow(std::uintptr_t frameAddress) {
         tl_stackBytes = size;
         tl_stackLimit = lowest + std::min(kStackReserveBytes, size / 4);
         if (frameAddress >= tl_stackLimit) return;
+    }
+    if (use == StackUse::Source) {
+        throw StackOverflowError(
+            "StackOverflowError: forms nested too deeply for the " +
+            describeBytes(tl_stackBytes) + " thread stack");
     }
     throw StackOverflowError(
         "StackOverflowError: calls or data nested too deeply for the " +
