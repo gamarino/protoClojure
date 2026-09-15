@@ -6,8 +6,11 @@
 
 #include "protoCore.h"
 
+#include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstdio>
 #include <mutex>
 #include <stdexcept>
@@ -134,8 +137,9 @@ void appendReadableString(std::string& out, const std::string& bytes) {
 // The value printer. `println`, `str`, `join` and the REPL all render values
 // through printTo, so a value reads the same wherever it is printed. It
 // appends the printed form of `v` to `out`:
-//   - nil, booleans and numbers as literals; an integer-valued float with
-//     a trailing `.0`;
+//   - nil, booleans and integers as literals; floats as JVM Clojure prints
+//     them (formatDouble: `100.0`, `0.3333333333333333`, `1.0E21`, `-0.0`,
+//     `##Inf`);
 //   - strings as their characters when `readable` is false (Clojure's
 //     `print`), or quoted and escaped when it is true (Clojure's `pr`); the
 //     mode applies at every depth;
@@ -177,16 +181,7 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
         return;
     }
     if (v->isFloat(ctx)) {
-        double d = v->asDouble(ctx);
-        // Match Clojure-JVM: integer-valued floats print with `.0`.
-        if (d == static_cast<long long>(d)) {
-            out += std::to_string(static_cast<long long>(d));
-            out += ".0";
-        } else {
-            char buf[32];
-            std::snprintf(buf, sizeof buf, "%g", d);
-            out += buf;
-        }
+        out += formatDouble(v->asDouble(ctx));
         return;
     }
     if (isListTag(v)) {
@@ -305,13 +300,20 @@ void printValue(proto::ProtoContext* ctx, std::FILE* stream,
 // Appends `v` as `str` renders one argument: nil as nothing, a string as its
 // characters, and any other value in its readable form, so the strings
 // nested in a collection keep their quotes (`(str "a" ["b"])` is `a["b"]`).
-// `join` renders each element the same way.
+// `join` renders each element the same way. A bare infinity or NaN is
+// spelled `Infinity`, `-Infinity` or `NaN`, as Java's Double.toString gives
+// JVM Clojure's `str`; inside a collection it prints as `##Inf`.
 void appendStr(proto::ProtoContext* ctx, std::string& out,
                const proto::ProtoObject* v) {
     if (!v || v == PROTO_NONE) return;
     if (proto::ProtoObject::isStringTagFast(v)) {
         out += reinterpret_cast<const proto::ProtoString*>(v)->toStdString(ctx);
         return;
+    }
+    if (v->isDouble(ctx)) {
+        const double d = v->asDouble(ctx);
+        if (std::isnan(d)) { out += "NaN"; return; }
+        if (std::isinf(d)) { out += d > 0 ? "Infinity" : "-Infinity"; return; }
     }
     printTo(ctx, out, v, /*readable=*/true);
 }
@@ -2527,6 +2529,84 @@ void throwNotANumber(proto::ProtoContext* ctx, const char* operation,
                      const proto::ProtoObject* v) {
     throw std::runtime_error(std::string("ClassCastException: ") + operation +
                              " expects a number, got " + valueTypeName(ctx, v));
+}
+
+namespace {
+
+// `m` (finite, positive) in the scientific notation of std::to_chars,
+// "d[.ddd]e±XX": with the shortest digits that read back as `m` when
+// `precision` is negative, else with `precision` fractional digits,
+// correctly rounded.
+std::string toCharsScientific(double m, int precision) {
+    char buf[64];
+    const std::to_chars_result r = precision < 0
+        ? std::to_chars(buf, buf + sizeof buf, m, std::chars_format::scientific)
+        : std::to_chars(buf, buf + sizeof buf, m, std::chars_format::scientific,
+                        precision);
+    return std::string(buf, r.ptr);
+}
+
+// The significant digits (without the point) and the decimal exponent of a
+// toCharsScientific result.
+void splitScientific(const std::string& s, std::string& digits, int& exponent) {
+    const std::size_t e = s.find('e');
+    digits.clear();
+    for (std::size_t i = 0; i < e; ++i)
+        if (s[i] != '.') digits += s[i];
+    exponent = std::atoi(s.c_str() + e + 1);
+}
+
+} // namespace
+
+std::string formatDouble(double d) {
+    if (std::isnan(d)) return "##NaN";
+    if (std::isinf(d)) return d > 0 ? "##Inf" : "##-Inf";
+    std::string out = std::signbit(d) ? "-" : "";
+    const double m = std::fabs(d);
+    if (m == 0.0) return out + "0.0";
+
+    // Java's Double.toString (JDK 19 and later) selects the shortest decimal
+    // that rounds to the double; when that decimal has a single digit, it
+    // takes the two-digit decimal closest to the double instead, provided it
+    // still rounds to it (the smallest subnormal prints as 4.9E-324, not
+    // 5.0E-324). Trailing zeros are not significant digits.
+    std::string digits;
+    int exponent = 0;
+    splitScientific(toCharsScientific(m, -1), digits, exponent);
+    if (digits.size() == 1) {
+        const std::string two = toCharsScientific(m, 1);
+        if (std::strtod(two.c_str(), nullptr) == m)
+            splitScientific(two, digits, exponent);
+    }
+    while (digits.size() > 1 && digits.back() == '0') digits.pop_back();
+
+    // Plain notation for magnitudes in [1e-3, 1e7), with at least one
+    // fractional digit; otherwise <digit>.<digits>E<exponent>, with at least
+    // one digit after the point.
+    const int n = static_cast<int>(digits.size());
+    if (exponent >= -3 && exponent <= 6) {
+        if (exponent < 0) {
+            out += "0.";
+            out.append(static_cast<std::size_t>(-exponent - 1), '0');
+            out += digits;
+        } else if (n > exponent + 1) {
+            out.append(digits, 0, static_cast<std::size_t>(exponent + 1));
+            out += '.';
+            out.append(digits, static_cast<std::size_t>(exponent + 1));
+        } else {
+            out += digits;
+            out.append(static_cast<std::size_t>(exponent + 1 - n), '0');
+            out += ".0";
+        }
+    } else {
+        out += digits[0];
+        out += '.';
+        if (n > 1) out.append(digits, 1);
+        else       out += '0';
+        out += 'E';
+        out += std::to_string(exponent);
+    }
+    return out;
 }
 
 // Externally-visible value equality, declared in Primitives.h; shared by

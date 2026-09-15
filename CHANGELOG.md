@@ -49,10 +49,10 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (234 fixtures under
+- **Tests.** A glob-discovered conformance suite (240 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
-  the bytecode module, the runtime map, value equality and hashing and the
-  native stack guard (75 tests), and three CLI checks (`--help`, a
+  the bytecode module, the runtime map, value equality and hashing, the
+  native stack guard and the double printer (77 tests), and three CLI checks (`--help`, a
   generated program with 70,000 distinct literals of each kind, and a
   stack overflow in the REPL).
 - **Benchmarks and examples.** `benchmarks/bench.sh` (comparison with
@@ -214,6 +214,19 @@ The project has no tagged releases yet; the version declared in
   types for addition.". The opcodes and the `+ - * / < <= > >= inc dec`
   primitives now raise one error naming the operation and the offending
   type: `ClassCastException: + expects a number, got nil`.
+- Floats print as JVM Clojure prints them. The printer used `%g`, which
+  keeps six significant digits: `(/ 1.0 3)` printed `0.333333` and
+  `(+ 0.1 0.2)` printed `0.3`, and `1e21` printed `1e+21`. It also tested
+  whether a double equalled its `long long` cast, which is undefined
+  behaviour for a double beyond the `long long` range and true for `-0.0`,
+  so `(- 0.0)` printed `0.0`. Infinities and NaN printed as `inf`, `-inf`
+  and `-nan`. A float now prints with the shortest digits that read back as
+  the same double (`0.3333333333333333`, `0.30000000000000004`), in plain
+  notation from 0.001 up to 10,000,000 and as `1.0E21` or `1.5E-7` outside
+  that range, `-0.0` keeps its sign, and infinities and NaN print as
+  `##Inf`, `##-Inf` and `##NaN` (`str` of a bare one gives `Infinity`,
+  `-Infinity` or `NaN`, as in JVM Clojure). `println`, `str`, `join` and the
+  REPL share the one printer.
 - Symbols and keywords may contain non-ASCII letters. `:ñandú` or
   `(defn año [x] ...)` failed with "unexpected character: �": the lexer
   classified source bytes with `isalnum`, which rejects every byte of a

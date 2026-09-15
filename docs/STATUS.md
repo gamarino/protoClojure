@@ -5,10 +5,11 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 312 test cases: 234
-conformance fixtures under `tests/conformance/`, 75 GoogleTest unit
+scripts and an interactive REPL. `ctest` registers 320 test cases: 240
+conformance fixtures under `tests/conformance/`, 77 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
-value equality and hashing and the native stack guard (`tests/unit/`), and
+value equality and hashing, the native stack guard and the double printer
+(`tests/unit/`), and
 three CLI checks (`tests/cli/`: `--help`, a generated program with 70,000
 distinct literals of each kind, and a stack overflow in the REPL); all
 pass. Benchmark numbers against Babashka 1.4.192
@@ -30,7 +31,7 @@ directories that cover them.
 | Closures with N-level lexical capture | `06-closures` | 6 |
 | Variadic `& rest`, `apply`, list operations, `map` / `filter` / `reduce` | `07-variadic`, `08-collections`, `09-higher-order` | 24 |
 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 21 |
-| IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 14 |
+| IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 20 |
 | LargeInteger promotion, big integer literals | `15-bigint` | 8 |
 | Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 40 |
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 17 |
@@ -146,7 +147,14 @@ The design specifications written during development are archived under
 - [x] Integer division truncates: `(/ 10 4)` is `2`, exact at any magnitude
 - [x] `< <= > >=` compare integers exactly beyond 2^53; a comparison with a
       float compares doubles
-- [x] Print path handles SmallInteger, LargeInteger and floats
+- [x] Print path handles SmallInteger, LargeInteger and floats; a float
+      prints as JVM Clojure prints it (`formatDouble` in
+      `src/runtime/Primitives.h`): the shortest digits that read back as the
+      same double (`0.3333333333333333`, `0.30000000000000004`), plain
+      notation from 0.001 up to 10,000,000 and `1.0E21` / `1.5E-7` outside,
+      `-0.0` with its sign, `##Inf`, `##-Inf` and `##NaN`, in `println`,
+      `str`, `join` and the REPL alike; `str` of a bare infinity or NaN is
+      `Infinity`, `-Infinity` or `NaN`, as in JVM Clojure
 
 ### Closures
 
@@ -264,7 +272,8 @@ raises a read, compile or runtime error.
 - [ ] Var-quote `#'`
 - [ ] Discard `#_`
 - [ ] Metadata `^{...}` plus shorthands `^kw` `^Type`
-- [ ] Reader literals `#inst` `#uuid`, regex `#"..."`
+- [ ] Reader literals `#inst` `#uuid`, regex `#"..."`, and the symbolic
+      values `##Inf` `##-Inf` `##NaN` (they print, but do not read)
 - [ ] Ratio literal `1/3`
 - [ ] Character literal `\a`
 - [ ] Namespace-qualified symbols / keywords `foo/bar`, `:ns/kw`

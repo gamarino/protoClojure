@@ -34,7 +34,8 @@ if [[ $rc -ne 0 ]]; then
     exit 1
 fi
 expected_kinds='[1 1.0 "1" a "a" :a 1 1.0 "1" a "a" :a]'
-expected_sums="$N 2449965000 $N s$LAST $N 2450000000.0"
+# The float sum is 2.45e9, printed in JVM Clojure's scientific notation.
+expected_sums="$N 2449965000 $N s$LAST $N 2.45E9"
 if [[ "$(printf '%s\n' "$out" | sed -n 1p)" != "$expected_kinds" ]]; then
     echo "FAIL: literal kinds: expected $expected_kinds"
     printf '%s\n' "$out" | head -3

@@ -18,6 +18,7 @@
 #include "Named.h"
 
 #include <cstdio>
+#include <string>
 
 namespace proto {
 class ProtoContext;
@@ -121,6 +122,14 @@ const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v)
 // non-numeric operand of an arithmetic or ordering operation:
 // "ClassCastException: <operation> expects a number, got <type>", with the
 // type from valueTypeName (`(+ 1 nil)`: "+ expects a number, got nil").
+// A double as JVM Clojure prints it (Java's Double.toString, JDK 19 and
+// later): the shortest digits that read back as the same double, in plain
+// notation for magnitudes in [1e-3, 1e7) (`100.0`, `0.3333333333333333`)
+// and as <digit>.<digits>E<exponent> otherwise (`1.0E21`, `4.9E-324`);
+// `-0.0` keeps its sign; infinities and NaN are `##Inf`, `##-Inf` and
+// `##NaN`. The one float printer of println, str, join and the REPL.
+std::string formatDouble(double d);
+
 // Cold: call sites move out of the VM's dispatch loop.
 [[noreturn, gnu::cold]]
 void throwNotANumber(proto::ProtoContext* ctx, const char* operation,
