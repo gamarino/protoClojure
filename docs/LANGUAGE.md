@@ -354,7 +354,7 @@ All four core structures are persistent (every "modification" returns a
 new value; the old value is unchanged) and immutable by default.
 
 In 0.0.1, lists, vectors and maps are implemented with the primitives
-listed in `STATUS.md`. Sets, `conj`, `dissoc`, `update`, `merge`,
+listed in `STATUS.md`. Sets, `conj`, `update`, `merge`,
 vectors as functions, and the parts of the equality
 rules of §4.5 listed there as not implemented are planned.
 

@@ -3,11 +3,12 @@
 > **Implementation status.** protoClojure 0.0.1 implements vectors
 > (`[...]`, `vector`, `vec`, `nth`, `count`, `empty?`, `first`, `rest`,
 > `reverse`), lists (`list`, `cons`, `first`, `rest`) and maps (`{...}`,
-> `hash-map`, `get`, `assoc`, `contains?`, `keys`, `vals`). Not available
+> `hash-map`, `get`, `assoc`, `dissoc`, `contains?`, `keys`, `vals`,
+> `count`, `empty?`). Not available
 > yet: sets, the quote reader macro `'`, `conj`, `pop`, `peek`, `last`,
-> `assoc` on vectors, `dissoc`, `update`, `merge`, `select-keys`,
+> `assoc` on vectors, `update`, `merge`, `select-keys`,
 > `zipmap`, the `get-in` / `assoc-in` / `update-in` family, `seq`,
-> `into`, vectors as functions, `count` on maps, `==`,
+> `into`, vectors as functions, `==`,
 > `identical?`, `hash`, and the sequence and regex functions used in
 > §4.11. See
 > [STATUS.md](../STATUS.md).

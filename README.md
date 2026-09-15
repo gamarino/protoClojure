@@ -65,7 +65,7 @@ Multi-arity, variadic, the higher-order pipeline:
 (println (my-reduce + 100 (list 1 2 3)))   ;; => 106
 ```
 
-The 271 conformance fixtures under `tests/conformance/` are the executable reference for what the language accepts today.
+The 276 conformance fixtures under `tests/conformance/` are the executable reference for what the language accepts today.
 
 ## Concurrency — atoms, futures, actors
 
@@ -197,20 +197,20 @@ protoClojure runs scripts and an interactive REPL. Version 0.0.1; no tagged rele
 | Namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **358 test cases: 271 conformance fixtures, 82 unit tests** (lexer, reader, bytecode module, runtime map, value equality and hashing, native stack guard, double printer) **and 5 CLI checks** (`--help`, a generated program with 70,000 distinct literals of each kind, a stack overflow in the REPL, nil-valued globals in the REPL, and deeply nested source). All of them pass. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **363 test cases: 276 conformance fixtures, 82 unit tests** (lexer, reader, bytecode module, runtime map, value equality and hashing, native stack guard, double printer) **and 5 CLI checks** (`--help`, a generated program with 70,000 distinct literals of each kind, a stack overflow in the REPL, nil-valued globals in the REPL, and deeply nested source). All of them pass. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 
 - Reader: integers of any size (`12345678901234567890`, `42N`), floats (`3.14`, `1e6`), strings, symbols, keywords (`:foo`), `true` / `false` / `nil`, lists `(...)`, vectors `[...]`, maps `{...}`, `@form` as `(deref form)`, line comments (`;`), commas as whitespace.
 - Special forms: `def`, `defn` and `fn` (single- and multi-arity, variadic, named-argument destructuring), `let`, `loop`, `recur` (in `loop` and as the implicit function-body target), `if`, `do`, `quote` (of symbols, keywords and other atoms), `apply`, `when`, `when-not`, `cond`, `and`, `or`, `future`.
 - Closures: full N-level capture, including chained closures across `(fn ... (fn ... (fn ...)))`.
-- Primitives (75 registered at startup):
+- Primitives (76 registered at startup):
   - arithmetic and comparison: `+ - * / inc dec < <= > >= = not=` (`=` compares maps, vectors and lists by value; a vector and a list with equal elements are `=`)
   - output: `println str`
   - lists and vectors: `list vector vec nth first rest cons count empty? reverse`
   - higher-order: `map filter reduce pmap`
   - predicates: `nil? not vector? list? map? string?`
-  - maps: `hash-map assoc get contains? keys vals` (keys are hashed and matched by value, so a map or vector key is found with an equal map, vector or list)
+  - maps: `hash-map assoc dissoc get contains? keys vals`, and `count` / `empty?` on maps (keys are hashed and matched by value, so a map or vector key is found with an equal map, vector or list)
   - strings: `subs upper-case lower-case starts-with? ends-with? includes? index-of replace join split trim triml trimr blank?`
   - atoms and watches: `atom atom? deref reset! swap! compare-and-set! add-watch remove-watch`
   - futures and promises: `make-future future? realized? promise promise? deliver`
@@ -243,7 +243,7 @@ cmake --build build_release
 ./build_release/protoclj script.clj          # run a .clj file
 ./build_release/protoclj --version           # version
 
-ctest --test-dir build_release -j1           # 358 cases: 271 fixtures + 82 unit tests + 5 CLI checks
+ctest --test-dir build_release -j1           # 363 cases: 276 fixtures + 82 unit tests + 5 CLI checks
 ./benchmarks/bench.sh                        # benchmark against Babashka
 ./benchmarks/actor-bench.sh                  # actor throughput, varied worker counts
 ```

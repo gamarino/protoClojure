@@ -5,7 +5,7 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 358 test cases: 271
+scripts and an interactive REPL. `ctest` registers 363 test cases: 276
 conformance fixtures under `tests/conformance/`, 82 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 value equality and hashing, the native stack guard and the double printer
@@ -34,7 +34,7 @@ directories that cover them.
 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 21 |
 | IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 26 |
 | LargeInteger promotion, big integer literals | `15-bigint` | 9 |
-| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 40 |
+| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 45 |
 | Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 16 |
 | `clojure.string`-shaped string functions | `20-strings` | 20 |
 | Atoms | `21-atoms` | 11 |
@@ -110,8 +110,9 @@ The design specifications written during development are archived under
 - [x] Vectors — protoCore `ProtoTuple` (O(log N) `nth`)
 - [x] Maps — insertion-ordered at every size: a protoCore `ProtoSparseList`
       of keys indexed by a per-map sequence number plus a hash index holding
-      values (`src/runtime/MapOps.h`), with `hash-map` / `assoc` / `get` /
-      `contains?` / `keys` / `vals` / `map?`
+      values (`src/runtime/MapOps.h`), with `hash-map` / `assoc` / `dissoc` /
+      `get` / `contains?` / `keys` / `vals` / `map?`; `count` (O(1)) and
+      `empty?` accept maps
 - [x] Map equality — `=` / `not=` compare maps by value, ignoring insertion
       order (`mapEquals` in `src/runtime/MapOps.h`); values compare
       recursively, so nested collections compare by value; a map is never
@@ -198,7 +199,8 @@ The design specifications written during development are archived under
 - [x] Lists and vectors: `list vector vec nth first rest cons count empty? reverse`
 - [x] Higher-order: `map filter reduce pmap`
 - [x] Predicates: `nil? not vector? list? map? string?`
-- [x] Maps: `hash-map assoc get contains? keys vals`
+- [x] Maps: `hash-map assoc dissoc get contains? keys vals`; `count` and
+      `empty?` also accept maps
 - [x] Strings: `subs upper-case lower-case starts-with? ends-with?
       includes? index-of replace join split trim triml trimr blank?`;
       `count` / `empty?` / `reverse` also accept strings, and `nth` returns
@@ -405,7 +407,7 @@ for the rationale.
 - [ ] `quot rem mod`
 - [ ] More predicates: `true? false? zero? pos? neg? even? odd?`
 - [ ] More collection: `next conj seq into concat mapcat interleave interpose`
-- [ ] Map operations: `dissoc update merge select-keys get-in update-in assoc-in`
+- [ ] Map operations: `update merge select-keys get-in update-in assoc-in`
 - [ ] More higher-order: `comp partial juxt`
 - [ ] More predicates: `every? some not-any? not-every?`
 - [ ] Range / sequence: `range iterate repeat cycle take drop take-while drop-while partition partition-all`

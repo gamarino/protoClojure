@@ -27,8 +27,8 @@ The project has no tagged releases yet; the version declared in
   double when an operand is a float.
 - **Collections.** Vectors as a type distinct from lists; `list`, `vector`,
   `vec`, `nth`, `first`, `rest`, `cons`, `count`, `empty?`, `reverse`, `map`,
-  `filter`, `reduce`; maps with `hash-map`, `assoc`, `get`, `contains?`,
-  `keys`, `vals` and `map?`.
+  `filter`, `reduce`; maps with `hash-map`, `assoc`, `dissoc`, `get`,
+  `contains?`, `keys`, `vals` and `map?`; `count` and `empty?` accept maps.
 - **Named arguments.** Destructuring with `& {:keys [...] :or {...} :as name}`,
   and trailing keyword/value pairs at call sites (`CALL_KW` opcode).
 - **Strings.** `string?`, `subs`, `upper-case`, `lower-case`, `starts-with?`,
@@ -49,7 +49,7 @@ The project has no tagged releases yet; the version declared in
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (274 fixtures under
+- **Tests.** A glob-discovered conformance suite (276 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
   the bytecode module, the runtime map, value equality and hashing, the
   native stack guard and the double printer (82 tests), and five CLI checks (`--help`, a

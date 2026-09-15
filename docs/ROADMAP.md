@@ -102,7 +102,7 @@ Clojure. Macros become user-writable.
 ### Collections and sequences
 
 - Sets `#{...}` with `conj` / `disj`.
-- `dissoc`, `update`, `merge`, `select-keys`, `get-in`, `assoc-in`,
+- `update`, `merge`, `select-keys`, `get-in`, `assoc-in`,
   `update-in`, `merge-with`, `zipmap`.
 - Lazy sequences and the sequence library (`range`, `iterate`, `take`,
   `drop`, ...).

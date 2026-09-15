@@ -842,6 +842,39 @@ const proto::ProtoObject* prim_assoc(proto::ProtoContext* ctx,
     return mapAssocPairs(ctx, mapLayoutOf(cc), m, args, 1, n - 1);
 }
 
+// (dissoc m) / (dissoc m k & ks) — `m` without the given keys, matched by
+// value as `get` matches them. An absent key leaves the map unchanged,
+// (dissoc m) is `m` and (dissoc nil k ...) is nil, as in Clojure; any other
+// first argument raises the ClassCastException analogue.
+const proto::ProtoObject* prim_dissoc(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject*,
+                                      const proto::ParentLink*,
+                                      const proto::ProtoList* args,
+                                      const proto::ProtoSparseList*) {
+    unsigned long n = args ? args->getSize(ctx) : 0;
+    if (n < 1)
+        throw std::runtime_error("dissoc: expects (dissoc m k ...)");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throw std::runtime_error("dissoc: no active VM context");
+    const proto::ProtoObject* m = args->getAt(ctx, 0);
+    if (!m || m == PROTO_NONE) return PROTO_NONE;
+    if (!isMap(ctx, mapLayoutOf(cc), m)) {
+        throw std::runtime_error(std::string("ClassCastException: dissoc expects a map, got ") +
+                                 valueTypeName(ctx, m));
+    }
+    // mapDissoc returns an unrooted map: each intermediate map is rooted in
+    // the scope slot before the next key is removed.
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    scope.setAutomaticLocal(0, m);
+    for (unsigned long i = 1; i < n; ++i) {
+        scope.setAutomaticLocal(0,
+            mapDissoc(&scope, mapLayoutOf(cc), scope.getAutomaticLocal(0),
+                      args->getAt(&scope, static_cast<int>(i))));
+    }
+    return scope.getAutomaticLocal(0);
+}
+
 const proto::ProtoObject* prim_get(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
                                    const proto::ParentLink*,
@@ -989,6 +1022,13 @@ const proto::ProtoObject* prim_count(proto::ProtoContext* ctx,
     if (isStringLike(v)) {
         return ctx->fromLong(static_cast<long long>(asProtoString(v)->getSize(ctx)));
     }
+    // A map: its number of entries, O(1). Only object cells can be maps, so
+    // lists, vectors and strings skip the prototype check.
+    if (isObjectTag(v)) {
+        const ActiveCallContext* cc = activeCallContext();
+        if (cc && isMap(ctx, mapLayoutOf(cc), v))
+            return ctx->fromLong(static_cast<long long>(mapCount(ctx, mapLayoutOf(cc), v)));
+    }
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     return ctx->fromLong(lst ? static_cast<long long>(lst->getSize(ctx)) : 0);
 }
@@ -1004,6 +1044,11 @@ const proto::ProtoObject* prim_empty_p(proto::ProtoContext* ctx,
     if (!v || v == PROTO_NONE) return PROTO_TRUE;
     if (isStringLike(v)) {
         return asProtoString(v)->getSize(ctx) == 0 ? PROTO_TRUE : PROTO_FALSE;
+    }
+    if (isObjectTag(v)) {
+        const ActiveCallContext* cc = activeCallContext();
+        if (cc && isMap(ctx, mapLayoutOf(cc), v))
+            return mapCount(ctx, mapLayoutOf(cc), v) == 0 ? PROTO_TRUE : PROTO_FALSE;
     }
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     return (!lst || lst->getSize(ctx) == 0) ? PROTO_TRUE : PROTO_FALSE;
@@ -2393,6 +2438,7 @@ constexpr PrimitiveEntry kPrimitives[] = {
     // Maps.
     {"hash-map",  &prim_hash_map},
     {"assoc",     &prim_assoc},
+    {"dissoc",    &prim_dissoc},
     {"get",       &prim_get},
     {"contains?", &prim_contains_p},
     {"keys",      &prim_keys},
@@ -2461,7 +2507,7 @@ constexpr PrimitiveEntry kPrimitives[] = {
     {"reduce",  &prim_reduce},
 };
 
-// A linear scan of the 75 entries; printing a function is not a hot path.
+// A linear scan of the 76 entries; printing a function is not a hot path.
 const char* primitiveName(proto::ProtoMethod fn) {
     for (const PrimitiveEntry& p : kPrimitives) {
         if (p.fn == fn) return p.name;
