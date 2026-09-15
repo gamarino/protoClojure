@@ -1,5 +1,6 @@
 #include "ExecutionEngine.h"
 #include "BytecodeModule.h"
+#include "MapOps.h"
 #include "Opcodes.h"
 #include "Primitives.h"
 
@@ -72,7 +73,7 @@ static bool extractKwVals(proto::ProtoContext* ctx,
                           const BytecodeModule* subMod,
                           const proto::ProtoObject* maybeMap,
                           const proto::ProtoObject* mapMarkerProto,
-                          const proto::ProtoString* entriesKey,
+                          const proto::ProtoString* mapStateKey,
                           const proto::ProtoObject** out) {
     const auto& kkeys = subMod->kwKeys();
     if (!maybeMap || maybeMap == PROTO_NONE) {
@@ -83,32 +84,17 @@ static bool extractKwVals(proto::ProtoContext* ctx,
         for (std::size_t i = 0; i < kkeys.size(); ++i) out[i] = PROTO_NONE;
         return false;
     }
-    const proto::ProtoObject* eRaw = maybeMap->getAttribute(ctx, entriesKey);
-    const proto::ProtoSparseList* sparse = eRaw
-        ? reinterpret_cast<const proto::ProtoSparseList*>(eRaw)
-        : ctx->newSparseList();
+    const MapLayout layout{mapMarkerProto, mapStateKey};
     for (std::size_t i = 0; i < kkeys.size(); ++i) {
-        // Build the keyword key (`:name`) and probe the sparse map by
-        // hash + bucket linear scan, same shape as prim_get.
+        // Build the keyword key (`:name`) and look it up, same as prim_get.
         std::string kw = ":" + kkeys[i].name;
-        const proto::ProtoString* sym =
-            proto::ProtoString::createSymbol(ctx, kw.c_str());
         const proto::ProtoObject* symObj =
-            reinterpret_cast<const proto::ProtoObject*>(sym);
-        unsigned long h = symObj->getHash(ctx);
-        out[i] = PROTO_NONE;
-        if (!sparse->has(ctx, h)) continue;
-        const proto::ProtoObject* b = sparse->getAt(ctx, h);
-        if (!b) continue;
-        const proto::ProtoList* bucket = b->asList(ctx);
-        unsigned long bn = bucket->getSize(ctx);
-        for (unsigned long j = 0; j < bn; j += 2) {
-            const proto::ProtoObject* k = bucket->getAt(ctx, (int)j);
-            if (k->compare(ctx, symObj) == 0) {
-                out[i] = bucket->getAt(ctx, (int)(j + 1));
-                break;
-            }
-        }
+            reinterpret_cast<const proto::ProtoObject*>(
+                proto::ProtoString::createSymbol(ctx, kw.c_str()));
+        bool found = false;
+        const proto::ProtoObject* v =
+            mapGet(ctx, layout, maybeMap, symObj, &found);
+        out[i] = found ? v : PROTO_NONE;
     }
     return true;
 }
@@ -229,7 +215,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
             if (kwCount > 16)
                 throw std::runtime_error("VM: invoke: >16 kw-args not supported in v0.13");
             extractKwVals(ctx, subMod, kwArgsMap,
-                          cc->mapMarkerProto, cc->entriesKey, kwVals);
+                          cc->mapMarkerProto, cc->mapStateKey, kwVals);
         }
 
         return this->run(ctx, *subMod, cc->globals,
@@ -241,7 +227,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
                          const_cast<proto::ProtoObject*>(cc->promiseMarkerProto),
                          const_cast<proto::ProtoObject*>(cc->actorMarkerProto),
                          cc->bytecodeKey, cc->arityKey, cc->capturesKey,
-                         cc->aritiesKey, cc->entriesKey, cc->valueKey,
+                         cc->aritiesKey, cc->mapStateKey, cc->valueKey,
                          cc->watchesKey,
                          cc->thunkKey, cc->ccBlobKey, cc->threadKey,
                          cc->resultKey, cc->doneKey,
@@ -290,7 +276,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                      const proto::ProtoString* arityKey,
                      const proto::ProtoString* capturesKey,
                      const proto::ProtoString* aritiesKey,
-                     const proto::ProtoString* entriesKey,
+                     const proto::ProtoString* mapStateKey,
                      const proto::ProtoString* valueKey,
                      const proto::ProtoString* watchesKey,
                      const proto::ProtoString* thunkKey,
@@ -316,7 +302,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                          atomMarkerProto, futureMarkerProto, promiseMarkerProto,
                          actorMarkerProto,
                          bytecodeKey, arityKey, capturesKey, aritiesKey,
-                         entriesKey, valueKey, watchesKey,
+                         mapStateKey, valueKey, watchesKey,
                          thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
                          actorStateKey};
     setActiveCallContext(cc);
@@ -522,7 +508,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 if (kwCount > 16)
                     throw std::runtime_error("VM: >16 kw-args not supported in v0.13");
                 extractKwVals(&frame, subMod, kwArgsMap,
-                              mapMarkerProto, entriesKey, kwVals);
+                              mapMarkerProto, mapStateKey, kwVals);
             }
 
             sp -= (argc + 1);
@@ -532,7 +518,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                 atomMarkerProto, futureMarkerProto, promiseMarkerProto,
                 actorMarkerProto,
                 bytecodeKey, arityKey, capturesKey, aritiesKey,
-                entriesKey, valueKey, watchesKey,
+                mapStateKey, valueKey, watchesKey,
                 thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
                 actorStateKey,
                 callArgs, passArgc, capsVal,
@@ -750,8 +736,9 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                         kv[i] = frame.getAutomaticLocal(
                             stackBase + sp - kvItems + i);
                     }
-                    const proto::ProtoObject* kwMap =
-                        mapFromPairs(&frame, kv, kvItems);
+                    const proto::ProtoObject* kwMap = mapAssocPairs(
+                        &frame, MapLayout{mapMarkerProto, mapStateKey},
+                        nullptr, kv, kvItems);
                     sp -= kvItems;
                     pushVal(kwMap);
                     dispatchCall(fixed + 1);

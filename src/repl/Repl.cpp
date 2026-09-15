@@ -158,7 +158,8 @@ struct Session {
     const proto::ProtoString* capturesKey;
     const proto::ProtoString* aritiesKey;
     const proto::ProtoString* itemsKey;
-    const proto::ProtoString* entriesKey;
+    const proto::ProtoString* entriesKey;     // Reader map-literal entries
+    const proto::ProtoString* mapStateKey;    // runtime map state (MapOps.h)
     const proto::ProtoString* valueKey;
     const proto::ProtoString* watchesKey;
     const proto::ProtoString* thunkKey;
@@ -233,6 +234,7 @@ struct Session {
         aritiesKey    = proto::ProtoString::createSymbol(ctx, "__arities__");
         itemsKey      = proto::ProtoString::createSymbol(ctx, "__items__");
         entriesKey    = proto::ProtoString::createSymbol(ctx, "__entries__");
+        mapStateKey   = proto::ProtoString::createSymbol(ctx, "__map__");
         valueKey      = proto::ProtoString::createSymbol(ctx, "__value__");
         watchesKey    = proto::ProtoString::createSymbol(ctx, "__watches__");
         thunkKey      = proto::ProtoString::createSymbol(ctx, "__thunk__");
@@ -270,7 +272,7 @@ struct Session {
             fnSingleProto, fnMultiProto, mapMarker, atomMarker,
             futureMarker, promiseMarker, actorMarker,
             bytecodeKey, arityKey, capturesKey, aritiesKey,
-            entriesKey, valueKey, watchesKey,
+            mapStateKey, valueKey, watchesKey,
             thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
             actorStateKey};
         setActiveCallContext(printerCc);
@@ -315,7 +317,7 @@ struct Session {
                 fnSingleProto, fnMultiProto, mapMarker, atomMarker,
                 futureMarker, promiseMarker, actorMarker,
                 bytecodeKey, arityKey, capturesKey, aritiesKey,
-                entriesKey, valueKey, watchesKey,
+                mapStateKey, valueKey, watchesKey,
                 thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
                 actorStateKey);
         } catch (const std::exception& e) {
@@ -395,7 +397,7 @@ void cmdLoad(Session& s, const std::string& path) {
                 s.fnSingleProto, s.fnMultiProto, s.mapMarker, s.atomMarker,
                 s.futureMarker, s.promiseMarker, s.actorMarker,
                 s.bytecodeKey, s.arityKey, s.capturesKey, s.aritiesKey,
-                s.entriesKey, s.valueKey, s.watchesKey,
+                s.mapStateKey, s.valueKey, s.watchesKey,
                 s.thunkKey, s.ccBlobKey, s.threadKey, s.resultKey, s.doneKey,
                 s.actorStateKey);
         } catch (const std::exception& e) {

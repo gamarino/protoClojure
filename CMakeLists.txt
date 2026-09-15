@@ -61,6 +61,7 @@ add_library(protoclj_runtime STATIC
     src/runtime/ActorScheduler.cpp
     src/runtime/BytecodeModule.cpp
     src/runtime/ExecutionEngine.cpp
+    src/runtime/MapOps.cpp
     src/runtime/Primitives.cpp
 )
 target_link_libraries(protoclj_runtime PUBLIC ${PROTOCORE_LIBRARY})

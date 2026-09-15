@@ -24,7 +24,7 @@ the substrate rather than from an adapter layer.
 |------------|-------------------|------------|------------|---------------|-------------------------------------|
 | List       | `'(1 2 3)`        | sequential | yes        | `O(log n)`    | code-as-data, head-add accumulators |
 | Vector     | `[1 2 3]`         | sequential | yes        | `O(log n)`    | the workhorse — almost everything   |
-| Map        | `{:a 1 :b 2}`     | unordered  | keys no    | `O(log n)`    | structured records, lookups         |
+| Map        | `{:a 1 :b 2}`     | insertion  | keys no    | `O(log n)`    | structured records, lookups         |
 | Set        | `#{1 2 3}`        | unordered  | no         | `O(log n)`    | membership, deduplication           |
 
 The fast version of "which one do I reach for?":
@@ -257,7 +257,7 @@ defines a cross-type equivalence:
 ```clojure
 (= [1 2 3] [1 2 3])            ;; => true
 (= [1 2 3] '(1 2 3))           ;; => true   — vectors and lists are seq-equal
-(= {:a 1 :b 2} {:b 2 :a 1})    ;; => true   — maps are unordered
+(= {:a 1 :b 2} {:b 2 :a 1})    ;; => true   — map equality ignores order
 (= #{1 2 3} #{3 2 1})          ;; => true   — sets are unordered
 
 (= [1 2 3] '(1 2 3) (seq [1 2 3]))

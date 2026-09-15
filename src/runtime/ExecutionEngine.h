@@ -69,7 +69,7 @@ public:
                                   const proto::ProtoString* arityKey,
                                   const proto::ProtoString* capturesKey,
                                   const proto::ProtoString* aritiesKey,
-                                  const proto::ProtoString* entriesKey,
+                                  const proto::ProtoString* mapStateKey,
                                   const proto::ProtoString* valueKey,
                                   const proto::ProtoString* watchesKey,
                                   const proto::ProtoString* thunkKey,

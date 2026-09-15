@@ -158,8 +158,13 @@ int runFile(const char* path) {
         proto::ProtoString::createSymbol(ctx, "__arities__");
     const proto::ProtoString* itemsKey =
         proto::ProtoString::createSymbol(ctx, "__items__");
+    // `__entries__` holds the source-order entries of a map literal between
+    // the Reader and the Compiler; `__map__` holds the state of a runtime
+    // map (src/runtime/MapOps.h). Distinct names keep the two shapes apart.
     const proto::ProtoString* entriesKey =
         proto::ProtoString::createSymbol(ctx, "__entries__");
+    const proto::ProtoString* mapStateKey =
+        proto::ProtoString::createSymbol(ctx, "__map__");
     const proto::ProtoString* valueKey =
         proto::ProtoString::createSymbol(ctx, "__value__");
     const proto::ProtoString* watchesKey =
@@ -233,7 +238,7 @@ int runFile(const char* path) {
                 ctx->getAutomaticLocal(kSlotPromiseMarker),
                 ctx->getAutomaticLocal(kSlotActorMarker),
                 bytecodeKey, arityKey, capturesKey, aritiesKey,
-                entriesKey, valueKey, watchesKey,
+                mapStateKey, valueKey, watchesKey,
                 thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
                 actorStateKey);
     } catch (const std::exception& e) {

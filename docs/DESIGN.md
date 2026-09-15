@@ -121,9 +121,13 @@ strings, booleans, nil, lists, vectors, maps and `@` (read as
 and metadata are rejected with a "reserved-for-later token" error.
 
 Every reader output is a protoCore object. In the implementation, a
-list is a `ProtoList`, a vector is a `ProtoTuple`, and a map is a
-`ProtoSparseList` keyed by hash under a map marker prototype. Symbols
-are interned `ProtoString`s.
+list is a `ProtoList`, a vector is a `ProtoTuple`, and a map literal is a
+map-marker child holding its entries as a source-order `ProtoList`. The
+compiler turns that literal into a `hash-map` call; the runtime map it
+builds keeps insertion order with two `ProtoSparseList`s: keys indexed by
+a per-map sequence number, and a hash index holding each key's value and
+sequence number (`src/runtime/MapOps.h`). Symbols are interned
+`ProtoString`s.
 
 The reader is the place where "code is data" becomes literal: the result
 of `(read-string "(+ 1 2)")` is a real `ProtoList` of three elements that

@@ -1,6 +1,7 @@
 #include "Primitives.h"
 #include "ExecutionEngine.h"
 #include "ActorScheduler.h"
+#include "MapOps.h"
 
 #include "protoCore.h"
 
@@ -89,6 +90,10 @@ bool isListTag(const proto::ProtoObject* v) {
     unsigned int t =
         static_cast<unsigned int>(reinterpret_cast<uintptr_t>(v) & 0x3F);
     return t == kTagList || t == kTagListSmall;
+}
+
+inline MapLayout mapLayoutOf(const ActiveCallContext* cc) {
+    return MapLayout{cc->mapMarkerProto, cc->mapStateKey};
 }
 
 // Print a single value in `println` / `str` form. No surrounding quotes on
@@ -212,28 +217,17 @@ void printValue(proto::ProtoContext* ctx, std::FILE* out,
         return;
     }
     if (cc && v->getPrototype(ctx) == cc->mapMarkerProto) {
-        const proto::ProtoObject* eRaw =
-            v->getAttribute(ctx, cc->entriesKey);
-        const proto::ProtoSparseList* sparse = eRaw
-            ? reinterpret_cast<const proto::ProtoSparseList*>(eRaw)
-            : ctx->newSparseList();
         std::fputc('{', out);
-        struct Acc { proto::ProtoContext* ctx; std::FILE* out; bool first; };
-        Acc acc{ctx, out, true};
-        sparse->processElements(ctx, &acc,
-            [](proto::ProtoContext* c, void* self, unsigned long /*hash*/,
-               const proto::ProtoObject* bucketObj) {
+        struct Acc { std::FILE* out; bool first; } acc{out, true};
+        mapForEach(ctx, mapLayoutOf(cc), v, &acc,
+            [](proto::ProtoContext* c, void* self,
+               const proto::ProtoObject* k, const proto::ProtoObject* val) {
                 auto* a = static_cast<Acc*>(self);
-                if (!bucketObj) return;
-                const proto::ProtoList* bucket = bucketObj->asList(c);
-                unsigned long n = bucket->getSize(c);
-                for (unsigned long i = 0; i < n; i += 2) {
-                    if (!a->first) std::fputs(", ", a->out);
-                    a->first = false;
-                    printValue(c, a->out, bucket->getAt(c, (int)i));
-                    std::fputc(' ', a->out);
-                    printValue(c, a->out, bucket->getAt(c, (int)(i + 1)));
-                }
+                if (!a->first) std::fputs(", ", a->out);
+                a->first = false;
+                printValue(c, a->out, k);
+                std::fputc(' ', a->out);
+                printValue(c, a->out, val);
             });
         std::fputc('}', out);
         return;
@@ -710,29 +704,10 @@ const proto::ProtoObject* prim_list_p(proto::ProtoContext* ctx,
     return (v && isListTag(v)) ? PROTO_TRUE : PROTO_FALSE;
 }
 
-// Session 13 — map primitives. Wire shape: a map is a child of
-// `mapMarkerProto` with `__entries__` = a protoCore `ProtoSparseList`
-// indexed by `key->getHash(ctx)`. Each slot stores a small "bucket"
-// `ProtoList` of (k,v,k,v,...) alternating, so two keys with a hash
-// collision both land in the same bucket and a linear scan resolves
-// them. Most buckets hold exactly one (k,v) pair.
-//
-// Cost model: assoc / get / contains? = O(log N) for the SparseList
-// AVL walk + O(B) for the bucket where B is the collision count
-// (typically 1). keys / vals = O(N) iteration.
-//
-// Key equality uses `compare(ctx, other) == 0`, which handles
-// SmallInt / LargeInt / Float / Symbol / String identity AND value
-// equivalence per the kernel.
-//
-// Hash fast-path TODO: for interned symbols / keywords
-// the canonical pattern across protoCore (see ProtoObject::getAttribute,
-// THREAD_CACHE_DEPTH index) is `(reinterpret_cast<uintptr_t>(key) >> 6)`
-// directly — the symbol-table guarantees pointer-stability, and the
-// 64-byte cell alignment makes the low 6 bits zero. That avoids the
-// virtual `getHash` call entirely for the dominant case. Today we use
-// `getHash(ctx)` which is correct for every value type but slower for
-// symbols. Switch when the bench says it matters.
+// Session 13 — map primitives. The representation (insertion-ordered
+// entries plus a hash index), its cost model and its GC-rooting rules
+// live in src/runtime/MapOps.h; the primitives below only validate
+// arguments and delegate. Key equality is `compare(ctx, other) == 0`.
 
 const proto::ProtoObject* prim_map_p(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
@@ -748,64 +723,8 @@ const proto::ProtoObject* prim_map_p(proto::ProtoContext* ctx,
     return (v->getPrototype(ctx) == cc->mapMarkerProto) ? PROTO_TRUE : PROTO_FALSE;
 }
 
-// Returns the underlying ProtoSparseList of the map wrapper. The wrapper
-// stores it as a `__entries__` attribute pointing at a ProtoSparseList's
-// asObject form; we round-trip via newSparseList() when the map is fresh.
-static const proto::ProtoSparseList* mapEntriesSparse(proto::ProtoContext* ctx,
-                                                      const proto::ProtoObject* m,
-                                                      const proto::ProtoString* entriesKey) {
-    const proto::ProtoObject* raw = m->getAttribute(ctx, entriesKey);
-    if (!raw || raw == PROTO_NONE) return ctx->newSparseList();
-    return reinterpret_cast<const proto::ProtoSparseList*>(raw);
-}
-
-// Inside a hash bucket (a flat ProtoList of k,v,k,v,...), scan for `key`.
-// Returns the index of the K cell (always even) for which compare ==
-// 0, or -1 if not found.
-static long long bucketFindKey(proto::ProtoContext* ctx,
-                               const proto::ProtoList* bucket,
-                               const proto::ProtoObject* key) {
-    if (!bucket) return -1;
-    unsigned long n = bucket->getSize(ctx);
-    for (unsigned long i = 0; i < n; i += 2) {
-        const proto::ProtoObject* k = bucket->getAt(ctx, (int)i);
-        if (k->compare(ctx, key) == 0) return (long long)i;
-    }
-    return -1;
-}
-
-static const proto::ProtoObject* buildMap(proto::ProtoContext* ctx,
-                                          const ActiveCallContext* cc,
-                                          const proto::ProtoSparseList* sparse) {
-    proto::ProtoObject* wrap = const_cast<proto::ProtoObject*>(
-        cc->mapMarkerProto->newChild(ctx, /*isMutable=*/true));
-    wrap->setAttribute(ctx, cc->entriesKey, sparse->asObject(ctx));
-    return wrap;
-}
-
-// Insert / update (k,v) into a sparse list and return the new sparse.
-// Buckets are flat (k,v,k,v,...) ProtoLists keyed by k->getHash(ctx).
-static const proto::ProtoSparseList* sparseAssoc(proto::ProtoContext* ctx,
-                                                 const proto::ProtoSparseList* sparse,
-                                                 const proto::ProtoObject* k,
-                                                 const proto::ProtoObject* v) {
-    unsigned long h = k->getHash(ctx);
-    const proto::ProtoList* bucket = nullptr;
-    if (sparse->has(ctx, h)) {
-        const proto::ProtoObject* b = sparse->getAt(ctx, h);
-        if (b) bucket = b->asList(ctx);
-    }
-    if (!bucket) bucket = ctx->newList();
-    long long idx = bucketFindKey(ctx, bucket, k);
-    const proto::ProtoList* newBucket = nullptr;
-    if (idx >= 0) {
-        newBucket = bucket->setAt(ctx, (int)(idx + 1), v);
-    } else {
-        newBucket = bucket->appendLast(ctx, k)->appendLast(ctx, v);
-    }
-    return sparse->setAt(ctx, h, newBucket->asObject(ctx));
-}
-
+// Also the target of every `{...}` literal, whose entries the compiler
+// passes in source order.
 const proto::ProtoObject* prim_hash_map(proto::ProtoContext* ctx,
                                         const proto::ProtoObject*,
                                         const proto::ParentLink*,
@@ -816,13 +735,7 @@ const proto::ProtoObject* prim_hash_map(proto::ProtoContext* ctx,
         throw std::runtime_error("hash-map: needs an even number of args");
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("hash-map: no active VM context");
-    const proto::ProtoSparseList* sparse = ctx->newSparseList();
-    for (unsigned long i = 0; i < n; i += 2) {
-        sparse = sparseAssoc(ctx, sparse,
-                             args->getAt(ctx, (int)i),
-                             args->getAt(ctx, (int)(i + 1)));
-    }
-    return buildMap(ctx, cc, sparse);
+    return mapAssocPairs(ctx, mapLayoutOf(cc), nullptr, args, 0, n);
 }
 
 const proto::ProtoObject* prim_assoc(proto::ProtoContext* ctx,
@@ -836,16 +749,9 @@ const proto::ProtoObject* prim_assoc(proto::ProtoContext* ctx,
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("assoc: no active VM context");
     const proto::ProtoObject* m = args->getAt(ctx, 0);
-    if (!m || m == PROTO_NONE || m->getPrototype(ctx) != cc->mapMarkerProto)
+    if (!isMap(ctx, mapLayoutOf(cc), m))
         throw std::runtime_error("assoc: first arg must be a map");
-    const proto::ProtoSparseList* sparse =
-        mapEntriesSparse(ctx, m, cc->entriesKey);
-    for (unsigned long i = 1; i < n; i += 2) {
-        sparse = sparseAssoc(ctx, sparse,
-                             args->getAt(ctx, (int)i),
-                             args->getAt(ctx, (int)(i + 1)));
-    }
-    return buildMap(ctx, cc, sparse);
+    return mapAssocPairs(ctx, mapLayoutOf(cc), m, args, 1, n - 1);
 }
 
 const proto::ProtoObject* prim_get(proto::ProtoContext* ctx,
@@ -861,18 +767,10 @@ const proto::ProtoObject* prim_get(proto::ProtoContext* ctx,
     const proto::ProtoObject* m = args->getAt(ctx, 0);
     const proto::ProtoObject* k = args->getAt(ctx, 1);
     const proto::ProtoObject* nf = (n == 3) ? args->getAt(ctx, 2) : PROTO_NONE;
-    if (!m || m == PROTO_NONE) return nf;
-    if (m->getPrototype(ctx) != cc->mapMarkerProto) return nf;
-    const proto::ProtoSparseList* sparse =
-        mapEntriesSparse(ctx, m, cc->entriesKey);
-    unsigned long h = k->getHash(ctx);
-    if (!sparse->has(ctx, h)) return nf;
-    const proto::ProtoObject* b = sparse->getAt(ctx, h);
-    if (!b) return nf;
-    const proto::ProtoList* bucket = b->asList(ctx);
-    long long idx = bucketFindKey(ctx, bucket, k);
-    if (idx < 0) return nf;
-    return bucket->getAt(ctx, (int)(idx + 1));
+    if (!isMap(ctx, mapLayoutOf(cc), m)) return nf;
+    bool found = false;
+    const proto::ProtoObject* v = mapGet(ctx, mapLayoutOf(cc), m, k, &found);
+    return found ? v : nf;
 }
 
 const proto::ProtoObject* prim_contains_p(proto::ProtoContext* ctx,
@@ -886,52 +784,35 @@ const proto::ProtoObject* prim_contains_p(proto::ProtoContext* ctx,
     if (!cc) throw std::runtime_error("contains?: no active VM context");
     const proto::ProtoObject* m = args->getAt(ctx, 0);
     const proto::ProtoObject* k = args->getAt(ctx, 1);
-    if (!m || m == PROTO_NONE) return PROTO_FALSE;
-    if (m->getPrototype(ctx) != cc->mapMarkerProto) return PROTO_FALSE;
-    const proto::ProtoSparseList* sparse =
-        mapEntriesSparse(ctx, m, cc->entriesKey);
-    unsigned long h = k->getHash(ctx);
-    if (!sparse->has(ctx, h)) return PROTO_FALSE;
-    const proto::ProtoObject* b = sparse->getAt(ctx, h);
-    if (!b) return PROTO_FALSE;
-    return bucketFindKey(ctx, b->asList(ctx), k) >= 0 ? PROTO_TRUE : PROTO_FALSE;
+    if (!isMap(ctx, mapLayoutOf(cc), m)) return PROTO_FALSE;
+    bool found = false;
+    mapGet(ctx, mapLayoutOf(cc), m, k, &found);
+    return found ? PROTO_TRUE : PROTO_FALSE;
 }
 
-// Walk every (k,v) in every bucket of the sparse list; return a fresh
-// ProtoList of either keys or values depending on `wantValues`. Order
-// is sparse-list iteration order (sorted by hash key); within a bucket
-// it is insertion order.
+// Return a fresh ProtoList of the keys or the values of `m`, in insertion
+// order. The list under construction lives in an automatic local (P1).
 static const proto::ProtoObject* mapWalk(proto::ProtoContext* ctx,
                                          const ActiveCallContext* cc,
                                          const proto::ProtoObject* m,
                                          bool wantValues) {
-    if (!m || m == PROTO_NONE || m->getPrototype(ctx) != cc->mapMarkerProto)
+    if (!isMap(ctx, mapLayoutOf(cc), m))
         return ctx->newList()->asObject(ctx);
-    const proto::ProtoSparseList* sparse =
-        mapEntriesSparse(ctx, m, cc->entriesKey);
-
-    // protoCore's SparseList exposes processElements for ordered walk;
-    // each callback receives (key=hash, value=bucket-list-as-object).
-    struct Acc {
-        proto::ProtoContext* ctx;
-        const proto::ProtoObject* out;
-        bool wantValues;
-    } acc{ctx, ctx->newList()->asObject(ctx), wantValues};
-
-    sparse->processElements(ctx, &acc,
-        [](proto::ProtoContext* c, void* self, unsigned long /*hash*/,
-           const proto::ProtoObject* bucketObj) {
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    scope.setAutomaticLocal(0, scope.newList()->asObject(&scope));
+    struct Acc { proto::ProtoContext* scope; bool wantValues; }
+        acc{&scope, wantValues};
+    mapForEach(&scope, mapLayoutOf(cc), m, &acc,
+        [](proto::ProtoContext* c, void* self,
+           const proto::ProtoObject* k, const proto::ProtoObject* v) {
             auto* a = static_cast<Acc*>(self);
-            if (!bucketObj) return;
-            const proto::ProtoList* bucket = bucketObj->asList(c);
-            unsigned long n = bucket->getSize(c);
-            for (unsigned long i = 0; i < n; i += 2) {
-                const proto::ProtoObject* x = bucket->getAt(c,
-                    (int)(a->wantValues ? i + 1 : i));
-                a->out = a->out->asList(c)->appendLast(c, x)->asObject(c);
-            }
+            const proto::ProtoList* cur =
+                a->scope->getAutomaticLocal(0)->asList(c);
+            a->scope->setAutomaticLocal(0,
+                cur->appendLast(c, a->wantValues ? v : k)->asObject(c));
         });
-    return acc.out;
+    return scope.getAutomaticLocal(0);
 }
 
 const proto::ProtoObject* prim_keys(proto::ProtoContext* ctx,
@@ -1620,40 +1501,28 @@ static void fireWatches(proto::ProtoContext* ctx,
     const proto::ProtoObject* watchesObj =
         atomObj->getAttribute(ctx, cc->watchesKey);
     if (!watchesObj || watchesObj == PROTO_NONE) return;
-    if (watchesObj->getPrototype(ctx) != cc->mapMarkerProto) return;
-    const proto::ProtoObject* entriesRaw =
-        watchesObj->getAttribute(ctx, cc->entriesKey);
-    if (!entriesRaw || entriesRaw == PROTO_NONE) return;
-    const proto::ProtoSparseList* sparse =
-        reinterpret_cast<const proto::ProtoSparseList*>(entriesRaw);
+    if (!isMap(ctx, mapLayoutOf(cc), watchesObj)) return;
+    // Watches fire in the order they were added (map insertion order).
     struct Acc {
-        proto::ProtoContext* ctx;
         const ActiveCallContext* cc;
         const proto::ProtoObject* atomObj;
         const proto::ProtoObject* oldV;
         const proto::ProtoObject* newV;
-    } acc{ctx, cc, atomObj, oldV, newV};
-    sparse->processElements(ctx, &acc,
-        [](proto::ProtoContext* c, void* self, unsigned long /*h*/,
-           const proto::ProtoObject* bucketObj) {
+    } acc{cc, atomObj, oldV, newV};
+    mapForEach(ctx, mapLayoutOf(cc), watchesObj, &acc,
+        [](proto::ProtoContext* c, void* self,
+           const proto::ProtoObject* k, const proto::ProtoObject* f) {
             auto* a = static_cast<Acc*>(self);
-            if (!bucketObj) return;
-            const proto::ProtoList* bucket = bucketObj->asList(c);
-            unsigned long n = bucket->getSize(c);
-            for (unsigned long i = 0; i < n; i += 2) {
-                const proto::ProtoObject* k = bucket->getAt(c, (int)i);
-                const proto::ProtoObject* f = bucket->getAt(c, (int)(i + 1));
-                const proto::ProtoObject* four[4] = {
-                    k, a->atomObj,
-                    a->oldV ? a->oldV : PROTO_NONE,
-                    a->newV ? a->newV : PROTO_NONE
-                };
-                try {
-                    a->cc->engine->invoke(c, f, four, 4);
-                } catch (...) {
-                    // v0.18: swallow exceptions in a watcher; capturing
-                    // them is a follow-up.
-                }
+            const proto::ProtoObject* four[4] = {
+                k, a->atomObj,
+                a->oldV ? a->oldV : PROTO_NONE,
+                a->newV ? a->newV : PROTO_NONE
+            };
+            try {
+                a->cc->engine->invoke(c, f, four, 4);
+            } catch (...) {
+                // v0.18: swallow exceptions in a watcher; capturing
+                // them is a follow-up.
             }
         });
 }
@@ -2222,18 +2091,16 @@ const proto::ProtoObject* prim_actor_stats(proto::ProtoContext* ctx,
     auto s = ActorScheduler::instance().stats();
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("actor-stats: no active VM context");
-    const proto::ProtoSparseList* sparse = ctx->newSparseList();
-    const proto::ProtoString* wk =
-        proto::ProtoString::createSymbol(ctx, ":workers");
-    const proto::ProtoString* mk =
-        proto::ProtoString::createSymbol(ctx, ":messages-processed");
-    sparse = sparseAssoc(ctx, sparse,
-        reinterpret_cast<const proto::ProtoObject*>(wk),
-        ctx->fromLong(s.numWorkers));
-    sparse = sparseAssoc(ctx, sparse,
-        reinterpret_cast<const proto::ProtoObject*>(mk),
-        ctx->fromLong(s.messagesProcessed));
-    return buildMap(ctx, cc, sparse);
+    // Counts are SmallInts and keywords are interned symbols: nothing here
+    // needs rooting before the map is built.
+    const proto::ProtoObject* kv[4] = {
+        reinterpret_cast<const proto::ProtoObject*>(
+            proto::ProtoString::createSymbol(ctx, ":workers")),
+        ctx->fromLong(s.numWorkers),
+        reinterpret_cast<const proto::ProtoObject*>(
+            proto::ProtoString::createSymbol(ctx, ":messages-processed")),
+        ctx->fromLong(static_cast<long long>(s.messagesProcessed))};
+    return mapAssocPairs(ctx, mapLayoutOf(cc), nullptr, kv, 4);
 }
 
 const proto::ProtoObject* prim_deliver(proto::ProtoContext* ctx,
@@ -2291,26 +2158,20 @@ const proto::ProtoObject* prim_add_watch(proto::ProtoContext* ctx,
     const proto::ProtoObject* k = args->getAt(ctx, 1);
     const proto::ProtoObject* f = args->getAt(ctx, 2);
 
-    // CAS the watches map. The map is a child of mapMarkerProto with
-    // entries as a sparse list; reuse `sparseAssoc` to insert the
-    // (key, fn) pair.
+    // CAS the watches map (key -> fn). `neu` is rooted in an automatic
+    // local across the CAS, which allocates.
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    const proto::ProtoObject* kf[2] = {k, f};
     for (;;) {
         const proto::ProtoObject* old =
-            a->getOwnAttributeDirect(ctx, cc->watchesKey);
-        const proto::ProtoSparseList* sparse = nullptr;
-        if (old && old != PROTO_NONE &&
-            old->getPrototype(ctx) == cc->mapMarkerProto) {
-            const proto::ProtoObject* eRaw =
-                old->getAttribute(ctx, cc->entriesKey);
-            sparse = eRaw
-                ? reinterpret_cast<const proto::ProtoSparseList*>(eRaw)
-                : ctx->newSparseList();
-        } else {
-            sparse = ctx->newSparseList();
-        }
-        sparse = sparseAssoc(ctx, sparse, k, f);
-        const proto::ProtoObject* neu = buildMap(ctx, cc, sparse);
-        if (a->setAttributeIfEqual(ctx, cc->watchesKey, old, neu)) break;
+            a->getOwnAttributeDirect(&scope, cc->watchesKey);
+        const proto::ProtoObject* base =
+            isMap(&scope, mapLayoutOf(cc), old) ? old : nullptr;
+        scope.setAutomaticLocal(0,
+            mapAssocPairs(&scope, mapLayoutOf(cc), base, kf, 2));
+        if (a->setAttributeIfEqual(&scope, cc->watchesKey, old,
+                                   scope.getAutomaticLocal(0))) break;
     }
     return a;
 }
@@ -2329,37 +2190,18 @@ const proto::ProtoObject* prim_remove_watch(proto::ProtoContext* ctx,
         throw std::runtime_error("remove-watch: not an atom");
     const proto::ProtoObject* k = args->getAt(ctx, 1);
 
+    // CAS the watches map without `k`. mapDissoc keeps the order of the
+    // remaining watches; `neu` is rooted across the CAS, which allocates.
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
     for (;;) {
         const proto::ProtoObject* old =
-            a->getOwnAttributeDirect(ctx, cc->watchesKey);
-        if (!old || old == PROTO_NONE) return a;
-        if (old->getPrototype(ctx) != cc->mapMarkerProto) return a;
-        const proto::ProtoObject* eRaw =
-            old->getAttribute(ctx, cc->entriesKey);
-        if (!eRaw) return a;
-        const proto::ProtoSparseList* sparse =
-            reinterpret_cast<const proto::ProtoSparseList*>(eRaw);
-        // Find and drop k from its bucket.
-        unsigned long h = k->getHash(ctx);
-        const proto::ProtoSparseList* newSparse = sparse;
-        if (sparse->has(ctx, h)) {
-            const proto::ProtoObject* b = sparse->getAt(ctx, h);
-            if (b) {
-                const proto::ProtoList* bucket = b->asList(ctx);
-                long long idx = bucketFindKey(ctx, bucket, k);
-                if (idx >= 0) {
-                    const proto::ProtoList* newBucket =
-                        bucket->removeAt(ctx, (int)idx)->removeAt(ctx, (int)idx);
-                    if (newBucket->getSize(ctx) == 0) {
-                        newSparse = sparse->removeAt(ctx, h);
-                    } else {
-                        newSparse = sparse->setAt(ctx, h, newBucket->asObject(ctx));
-                    }
-                }
-            }
-        }
-        const proto::ProtoObject* neu = buildMap(ctx, cc, newSparse);
-        if (a->setAttributeIfEqual(ctx, cc->watchesKey, old, neu)) break;
+            a->getOwnAttributeDirect(&scope, cc->watchesKey);
+        if (!isMap(&scope, mapLayoutOf(cc), old)) return a;
+        scope.setAutomaticLocal(0, mapDissoc(&scope, mapLayoutOf(cc), old, k));
+        if (scope.getAutomaticLocal(0) == old) return a;   // key absent
+        if (a->setAttributeIfEqual(&scope, cc->watchesKey, old,
+                                   scope.getAutomaticLocal(0))) break;
     }
     return a;
 }
@@ -2382,32 +2224,6 @@ void shutdownFutures(proto::ProtoContext* ctx) {
 void replPrintValue(proto::ProtoContext* ctx, std::FILE* out,
                     const proto::ProtoObject* v) {
     printValue(ctx, out, v);
-}
-
-// Externally-visible map builder for keyword arguments; see Primitives.h.
-// The accumulating entries list lives in an automatic local of a child
-// context (P1/P2), so every intermediate is rooted across the allocations
-// of the next assoc.
-const proto::ProtoObject* mapFromPairs(proto::ProtoContext* ctx,
-                                       const proto::ProtoObject* const* kv,
-                                       unsigned int n) {
-    const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("keyword arguments: no active VM context");
-    if (n % 2 != 0)
-        throw std::runtime_error("keyword arguments: a key has no value");
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, scope.newSparseList()->asObject(&scope));
-    for (unsigned int i = 0; i < n; i += 2) {
-        const proto::ProtoSparseList* sparse =
-            reinterpret_cast<const proto::ProtoSparseList*>(
-                scope.getAutomaticLocal(0));
-        scope.setAutomaticLocal(0,
-            sparseAssoc(&scope, sparse, kv[i], kv[i + 1])->asObject(&scope));
-    }
-    return buildMap(&scope, cc,
-        reinterpret_cast<const proto::ProtoSparseList*>(
-            scope.getAutomaticLocal(0)));
 }
 
 void installPrimitives(proto::ProtoContext* ctx,

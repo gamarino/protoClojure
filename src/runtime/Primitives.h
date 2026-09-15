@@ -52,9 +52,9 @@ struct ActiveCallContext {
     // arity-shape on every single-arity call.
     const proto::ProtoObject*  fnSingleProto;
     const proto::ProtoObject*  fnMultiProto;
-    // Session 13 — map runtime values use mapMarkerProto with the
-    // entries list (k,v,k,v,...) under entriesKey. Primitives that
-    // build / read maps fetch the proto from here.
+    // Session 13 — map runtime values are children of mapMarkerProto
+    // carrying their state under mapStateKey. Only src/runtime/MapOps
+    // reads or writes that state (layout documented in MapOps.h).
     const proto::ProtoObject*  mapMarkerProto;
     // Session 16 — atomMarkerProto identifies atoms; valueKey stores
     // the current value as an attribute. swap! / reset! mutate via
@@ -80,7 +80,7 @@ struct ActiveCallContext {
     const proto::ProtoString*  arityKey;
     const proto::ProtoString*  capturesKey;
     const proto::ProtoString*  aritiesKey;       // multi-arity dispatch list
-    const proto::ProtoString*  entriesKey;       // map entries list
+    const proto::ProtoString*  mapStateKey;      // map state (MapOps.h)
     const proto::ProtoString*  valueKey;         // atom value
     const proto::ProtoString*  watchesKey;       // atom watches
     // Session 17 keys.
@@ -101,16 +101,6 @@ const ActiveCallContext* activeCallContext();
 // flight worker dereferencing a now-freed Cell crashes the process at
 // exit. Mirrors `ActorScheduler::shutdown`, idempotent.
 void shutdownFutures(proto::ProtoContext* ctx);
-
-// Build a map from `n` alternating keys and values (`kv[0]` is the first
-// key), in order; a repeated key keeps its last value. Used by the VM to
-// fold trailing `:key value` call arguments into the kwArgs map of a
-// keyword-argument fn. The values in `kv` must be rooted by the caller;
-// the returned map is UNROOTED (P1: root it before the next allocation).
-// Requires an active call context.
-const proto::ProtoObject* mapFromPairs(proto::ProtoContext* ctx,
-                                       const proto::ProtoObject* const* kv,
-                                       unsigned int n);
 
 // Same value-formatter `println` / `prn` use. Exposed so the REPL can
 // echo evaluated results in the canonical Clojure shape without

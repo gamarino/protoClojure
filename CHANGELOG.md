@@ -91,3 +91,10 @@ The project has no tagged releases yet; the version declared in
   positionals, in order, with the last duplicate winning, so keywords passed
   to its positional parameters (`(f :p 1 :x 10)` for `[a b & {:keys [x]}]`)
   no longer raise an arity error.
+- Maps keep insertion order at every size. Iteration order used to be the
+  ascending order of key hashes, so after protoCore switched string hashing
+  to FNV-1a `{:a 1 :b 2 :c 3}` printed as `{:a 1, :c 3, :b 2}` and three
+  conformance fixtures failed. `assoc` of an existing key keeps its position,
+  `remove-watch` keeps the order of the remaining watches, and `keys`, `vals`,
+  printing, `:as` maps, watches and `actor-stats` all follow insertion order.
+  All map operations now live in `src/runtime/MapOps.{h,cpp}`.

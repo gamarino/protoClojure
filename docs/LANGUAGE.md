@@ -202,7 +202,8 @@ truthy).
   reader position is a *call form*: the first element is the function /
   macro / special form, the rest are arguments.
 - **Vector**: `[a b c]` — always a literal value, never a call form.
-- **Map**: `{:a 1 :b 2}` — pairs (key value), unordered.
+- **Map**: `{:a 1 :b 2}` — pairs (key value); iteration and printing
+  follow insertion order, equality ignores order.
 - **Set**: `#{:a :b :c}` — unordered, deduplicated.
 
 ### 2.8 Reader macros
@@ -313,8 +314,22 @@ Indexed sequential collection, backed by protoCore `ProtoTuple`.
 
 ### 4.3 Map
 
-Hash-keyed map of key→value pairs, backed by protoCore
-`ProtoSparseList`. Keys can be any value supporting `=` / `hash`.
+Map of key→value pairs. Keys can be any value supporting `=` / `hash`.
+
+**Order.** A map keeps insertion order at every size: `keys`, `vals`,
+printing and every other walk visit entries in the order their keys were
+first added. `assoc` of a new key appends it; `assoc` of an existing key
+replaces the value and keeps the key's position; removing a key keeps the
+order of the others. Equality and hashing ignore order. (JVM Clojure
+guarantees insertion order only for array maps of at most 8 entries;
+deviation D19 in `docs/STATUS.md`.)
+
+**Representation.** A map holds a protoCore `ProtoSparseList` of keys
+indexed by a per-map sequence number (the insertion-order store) and a
+second `ProtoSparseList` indexed by key hash whose buckets hold each key's
+value and sequence number. Lookup, `assoc` and removal are `O(log n)`;
+iteration looks each value up and is `O(n log n)`. The implementation is
+`src/runtime/MapOps.{h,cpp}`.
 
 ```clojure
 (assoc {:a 1} :b 2)            ;; => {:a 1, :b 2}

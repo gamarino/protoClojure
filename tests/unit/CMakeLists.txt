@@ -4,11 +4,12 @@
 
 add_executable(protoclj_unit_tests
     test_lexer.cpp
+    test_mapops.cpp
     test_reader.cpp
 )
 
 target_link_libraries(protoclj_unit_tests
-    PRIVATE protoclj_reader gtest gtest_main)
+    PRIVATE protoclj_reader protoclj_runtime gtest gtest_main)
 
 target_compile_options(protoclj_unit_tests PRIVATE -Wall -Wextra -Wpedantic)
 

@@ -5,11 +5,10 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 170 test cases: 139
-conformance fixtures under `tests/conformance/` and 31 GoogleTest unit
-tests for the lexer and reader (`tests/unit/`). Against the current
-protoCore, 167 pass; the three failures are described under
-[Known issues](#known-issues). Benchmark numbers against Babashka 1.4.192
+scripts and an interactive REPL. `ctest` registers 184 test cases: 147
+conformance fixtures under `tests/conformance/` and 37 GoogleTest unit
+tests for the lexer, the reader and the runtime map (`tests/unit/`); all
+pass. Benchmark numbers against Babashka 1.4.192
 are in [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md). Shipped changes
 are listed in [`CHANGELOG.md`](../CHANGELOG.md).
 
@@ -30,12 +29,12 @@ directories that cover them.
 | Multi-arity `defn`, `cond` / `when` / `and` / `or`, booleans, keywords | `10-multi-arity`, `11-sugar-forms`, `12-literals` | 14 |
 | IEEE-754 floats, vectors distinct from lists | `13-floats`, `14-vectors` | 10 |
 | LargeInteger promotion | `15-bigint` | 3 |
-| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 10 |
-| Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 15 |
+| Maps, `& {:keys [...]}` named-argument destructuring | `16-maps`, `17-kw-destructuring` | 16 |
+| Trailing keyword/value pairs, `:or`, `:as` | `18-kw-callsite`, `19-or-and-as` | 16 |
 | `clojure.string`-shaped string functions | `20-strings` | 13 |
 | Atoms | `21-atoms` | 10 |
 | Futures and `pmap` on OS threads | `22-futures` | 13 |
-| Watches, promises | `23-watches`, `24-promises` | 7 |
+| Watches, promises | `23-watches`, `24-promises` | 8 |
 | Actors | `25-actors` | 9 |
 | Interactive REPL | — (no conformance fixtures) | — |
 
@@ -84,8 +83,10 @@ The design specifications written during development are archived under
 
 - [x] Lists — protoCore `ProtoList`
 - [x] Vectors — protoCore `ProtoTuple` (O(log N) `nth`)
-- [x] Maps — protoCore `ProtoSparseList` keyed by `key->getHash`, with
-      `hash-map` / `assoc` / `get` / `contains?` / `keys` / `vals` / `map?`
+- [x] Maps — insertion-ordered at every size: a protoCore `ProtoSparseList`
+      of keys indexed by a per-map sequence number plus a hash index holding
+      values (`src/runtime/MapOps.h`), with `hash-map` / `assoc` / `get` /
+      `contains?` / `keys` / `vals` / `map?`
 - [x] Strings — protoCore `ProtoString`
 - [x] Integers — `SmallInteger` tagged + auto-promoted `LargeInteger`
 - [x] Floats — `ProtoObject::fromDouble`
@@ -333,15 +334,10 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D16 | `:or` defaults fire on **explicit nil** as well as missing keys (CONTRA JVM-Clojure where only missing keys take the default) | v0.2 |
 | D17 | String ops (`upper-case`, `lower-case`, `split`, `reverse`, `trim`, `index-of`) are byte-level / ASCII-correct only; multi-byte UTF-8 codepoints traverse as bytes (CONTRA JVM-Clojure which is codepoint-aware) | v0.2 |
 | D18 | `(fn name [args] body)` — the name is accepted by the compiler but dropped; self-reference via `name` inside the body is not supported (use `defn` for self-recursion). Planned for v0.2 via wrapper-into-slot capture. | v0.2 |
+| D19 | Maps iterate and print in insertion order at every size, including maps built with `hash-map` (JVM Clojure guarantees insertion order only for array maps of at most 8 entries and leaves it unspecified beyond that and for `hash-map`) | (perm) |
 
 ## Known issues
 
-- **Three conformance fixtures fail against the current protoCore:**
-  `16-maps/assoc-multi.clj`, `18-kw-callsite/assoc-still-works.clj` and
-  `19-or-and-as/as-snapshot.clj`. Maps print their entries in the
-  iteration order of the underlying `ProtoSparseList`, which is keyed by
-  hash, and the fixtures expect a specific order: `assoc-multi.clj`
-  expects `{:a 1, :b 2, :c 3}` and the binary prints `{:a 1, :c 3, :b 2}`.
 - **Promise `deref` polls.** A pending promise is checked every millisecond
   (with the thread marked unmanaged so garbage collection can proceed);
   adequate for hand-off latency, not for sub-millisecond waits.
