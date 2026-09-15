@@ -384,6 +384,16 @@ ExecutionEngine::run(proto::ProtoContext* parent,
         }
     }
 
+    // GC safepoint on function entry. A garbage-collection cycle requested
+    // by another thread starts only when every running thread parks, and
+    // a thread parks only at allocations or safepoints. Recursion over the
+    // SmallInt fast-path opcodes allocates nothing, so without this poll a
+    // deep call tree would hold up every other thread's cycle for its whole
+    // duration. Every incoming value is already bound into a frame slot
+    // here, so the poll cannot expose an unrooted object. The fast path is
+    // one atomic load.
+    frame.safepoint();
+
     auto pushVal = [&](const proto::ProtoObject* v) {
         if (sp >= kOperandStackSize) {
             throw std::runtime_error("VM: operand-stack overflow");
@@ -794,6 +804,12 @@ ExecutionEngine::run(proto::ProtoContext* parent,
 
             case Op::JUMP_BACK:
                 pc -= static_cast<std::size_t>(operand) * kInstrSize;
+                // GC safepoint on every loop back-edge (`recur`). A loop
+                // over the SmallInt fast-path opcodes allocates nothing and
+                // would otherwise never park for a cycle another thread
+                // requested; a loop waiting for that thread would deadlock.
+                // Between instructions every live value is in a frame slot.
+                frame.safepoint();
                 break;
 
             case Op::JUMP_IF_TRUE: {

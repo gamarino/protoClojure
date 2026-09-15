@@ -65,7 +65,7 @@ Multi-arity, variadic, the higher-order pipeline:
 (println (my-reduce + 100 (list 1 2 3)))   ;; => 106
 ```
 
-The 133 conformance fixtures under `tests/conformance/` are the executable reference for what the language accepts today.
+The 134 conformance fixtures under `tests/conformance/` are the executable reference for what the language accepts today.
 
 ## Concurrency — atoms, futures, actors
 
@@ -197,7 +197,7 @@ protoClojure runs scripts and an interactive REPL. Version 0.0.1; no tagged rele
 | Namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **164 test cases: 133 conformance fixtures and 31 unit tests** (lexer and reader). Against the current protoCore, three map-printing fixtures fail because printed map entries no longer come out in the order the fixtures expect; see *Known issues* in [docs/STATUS.md](docs/STATUS.md). The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **165 test cases: 134 conformance fixtures and 31 unit tests** (lexer and reader). Against the current protoCore, three map-printing fixtures fail because printed map entries no longer come out in the order the fixtures expect; see *Known issues* in [docs/STATUS.md](docs/STATUS.md). The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 
@@ -243,7 +243,7 @@ cmake --build build_release
 ./build_release/protoclj script.clj          # run a .clj file
 ./build_release/protoclj --version           # version
 
-ctest --test-dir build_release -j1           # 164 cases: 133 conformance fixtures + 31 unit tests
+ctest --test-dir build_release -j1           # 165 cases: 134 conformance fixtures + 31 unit tests
 ./benchmarks/bench.sh                        # benchmark against Babashka
 ./benchmarks/actor-bench.sh                  # actor throughput, varied worker counts
 ```
@@ -322,7 +322,7 @@ Four language runtimes (protoJS, protoPython, protoST, protoClojure) and protoCp
 
 protoClojure is designed and maintained by a single architect, Gustavo Marino, working with AI coding agents that draft code, tests and documentation under human review.
 
-The work proceeds as a measured loop — design, implement, compile, measure, keep or discard, commit — and the repository keeps the evidence: the conformance suite grew with the implementation to 133 fixtures, performance changes record their `perf stat` measurements in the commit history, and every benchmark figure in this README can be reproduced with the scripts in [`benchmarks/`](benchmarks/).
+The work proceeds as a measured loop — design, implement, compile, measure, keep or discard, commit — and the repository keeps the evidence: the conformance suite grew with the implementation to 134 fixtures, performance changes record their `perf stat` measurements in the commit history, and every benchmark figure in this README can be reproduced with the scripts in [`benchmarks/`](benchmarks/).
 
 ## License
 

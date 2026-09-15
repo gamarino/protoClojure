@@ -79,3 +79,7 @@ The project has no tagged releases yet; the version declared in
   parks. Idle actor workers waiting for work, `deref` of a pending future,
   `pmap` joining its workers, the shutdown joins of futures and actor workers,
   and the REPL waiting for input now run in protoCore unmanaged regions.
+- A `loop` or a recursion that allocates nothing no longer holds up a
+  garbage-collection cycle requested by another thread. The VM polls the
+  protoCore safepoint on every `recur` back-edge and on function entry; a
+  loop that waited for the thread requesting the cycle used to deadlock.
