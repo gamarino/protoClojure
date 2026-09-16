@@ -281,9 +281,9 @@ The design specifications written during development are archived under
       `actor-stats`) on a configurable worker pool (`PROTOCLJ_ACTOR_WORKERS`,
       default `max(2, cores-2)`, cap 16). Three priority bands, single-method
       invariant, lock-free per-actor mailbox. Peak throughput with a trivial
-      body, 1,000,000 messages per mode: 215,100 msg/s (single), 218,341
-      (fan-out), 171,851 (MPSC), 125,424 (MPMC) — see the README benchmark
-      section.
+      body, 1,000,000 messages per mode (2026-09-16, idle machine): 313,578
+      msg/s (single), 554,939 (fan-out), 282,886 (MPSC), 359,197 (MPMC) — see
+      the README benchmark section.
 
 ### REPL
 

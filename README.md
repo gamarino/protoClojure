@@ -106,18 +106,18 @@ The per-actor mailbox is **lock-free** (three atomic-pointer MPSC stacks plus on
 
 #### Benchmark — actors
 
-Numbers below were measured on 2026-06-14 on an AMD Ryzen 5 5500U (6 cores, 12 threads). Each row is **1,000,000 messages** with the trivial body `(inc v)`; runs take 4-10 seconds. The runner is [`benchmarks/actor-bench.sh`](benchmarks/actor-bench.sh), which verifies that every script reports the expected message count before computing a rate.
+Numbers below were measured on 2026-09-16 on an AMD Ryzen 5 5500U (6 cores, 12 threads), with the machine otherwise idle. Each row is **1,000,000 messages** with the trivial body `(inc v)`; runs take 2-4 seconds. The runner is [`benchmarks/actor-bench.sh`](benchmarks/actor-bench.sh), which verifies that every script reports the expected message count before computing a rate. The peak column is the best of the worker counts 1, 2, 4, 6, 8 and 16, with the count in brackets.
 
 | mode      | what it measures                                              | peak msg/s |
 |-----------|---------------------------------------------------------------|-----------:|
-| `single`  | 1 sender × 1 actor — per-actor pipeline floor                 |   215,100  |
-| `fan-out` | 1 sender × 1000 actors (1000 msgs each) — ready queue stress  |   218,341  |
-| `MPSC`    | 4 senders × 1 actor — per-actor sender contention             |   171,851  |
-| `MPMC`    | 4 senders × 4 actors (round-robin) — both contention paths    |   125,424  |
+| `single`  | 1 sender × 1 actor — per-actor pipeline floor                 | 313,578 (w=8) |
+| `fan-out` | 1 sender × 1000 actors (1000 msgs each) — ready queue stress  | 554,939 (w=4) |
+| `MPSC`    | 4 senders × 1 actor — per-actor sender contention             | 282,886 (w=6) |
+| `MPMC`    | 4 senders × 4 actors (round-robin) — both contention paths    | 359,197 (w=16) |
 
-These are upper bounds for a single-operation message body. Worker-count scaling: **`fan-out` peaks at `PROTOCLJ_ACTOR_WORKERS=6`** (the physical-core count) and degrades at 8 and 16 workers, when the extra workers land on SMT siblings.
+These are upper bounds for a single-operation message body. Worker-count scaling on this machine: `fan-out` peaks at `PROTOCLJ_ACTOR_WORKERS=4` and stays within 6% of that peak at 6, 8 and 16 workers; `single` peaks at 8; `MPSC` is flat between 264,062 and 282,886 at every worker count; `MPMC` grows with the worker count up to 16.
 
-Compared with the earlier mailbox (per-actor `std::mutex` + `std::deque`), the lock-free mailbox measured **+4-17% (single)**, **+30-41% (fan-out at 2-4 workers)**, **+11-19% (MPSC at 2 or more workers)** and **±0-3% (MPMC)**. The flat MPMC result is consistent with the global ready queue, not the per-actor mailbox, being MPMC's bottleneck.
+Measured on 2026-06-14, compared with the earlier mailbox (per-actor `std::mutex` + `std::deque`), the lock-free mailbox measured **+4-17% (single)**, **+30-41% (fan-out at 2-4 workers)**, **+11-19% (MPSC at 2 or more workers)** and **±0-3% (MPMC)**. The flat MPMC result is consistent with the global ready queue, not the per-actor mailbox, being MPMC's bottleneck.
 
 ## Performance — what is measured
 
