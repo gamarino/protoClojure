@@ -501,8 +501,10 @@ See `LANGUAGE.md` for the full discussion. Summary:
   the list grows, which halved what the program needs, but they are still
   allocated: `tests/cli/large-program` runs in about 3,000,000 cells where
   its live data is nearer 200,000, and it is the one check that does not pass
-  under `PROTOCORE_HEAP_LIMIT_CELLS=2000000`. Removing the rest needs a bulk
-  `ProtoList` constructor in protoCore, which would benefit every embedder.
+  under `PROTOCORE_HEAP_LIMIT_CELLS=2000000`. This is accepted: a call with
+  tens of thousands of arguments is an unusual program shape, and ordinary
+  calls pass few arguments, which `ProtoContext::newList` already builds in a
+  single cell.
 - **`pmap` spawns one OS thread per element**, which is wasteful for large
   collections.
 - **Actor `MPMC` throughput** is limited by the global ready-queue mutex.
