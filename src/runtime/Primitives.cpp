@@ -1,6 +1,7 @@
 #include "Primitives.h"
 #include "ExecutionEngine.h"
 #include "ActorScheduler.h"
+#include "ListBuilder.h"
 #include "MapOps.h"
 #include "StackGuard.h"
 
@@ -656,14 +657,12 @@ const proto::ProtoObject* prim_list(proto::ProtoContext* ctx,
                                     const proto::ParentLink*,
                                     const proto::ProtoList* args,
                                     const proto::ProtoSparseList*) {
-    const proto::ProtoObject* out = ctx->newList()->asObject(ctx);
-    unsigned long n = args ? args->getSize(ctx) : 0;
-    for (unsigned long i = 0; i < n; ++i) {
-        out = out->asList(ctx)
-            ->appendLast(ctx, args->getAt(ctx, static_cast<int>(i)))
-            ->asObject(ctx);
-    }
-    return out;
+    // The call already handed us the positional arguments AS a ProtoList, and
+    // every ProtoList is immutable, so `(list ...)` simply IS that list.
+    // Copying it element by element rebuilt the whole tree and left one
+    // root-to-leaf path of garbage behind per element.
+    if (!args) return ctx->newList()->asObject(ctx);
+    return args->asObject(ctx);
 }
 
 // Session 9 — `(vector x y z)` builds a ProtoTuple. The bytecode form
@@ -674,16 +673,14 @@ const proto::ProtoObject* prim_vector(proto::ProtoContext* ctx,
                                       const proto::ParentLink*,
                                       const proto::ProtoList* args,
                                       const proto::ProtoSparseList*) {
-    unsigned long n = args ? args->getSize(ctx) : 0;
-    // Build via newList → appendLast → asTuple-equivalent path.
-    // The cheapest path is `newTupleFromList(list)` once we have the list.
-    const proto::ProtoObject* lstObj = ctx->newList()->asObject(ctx);
-    for (unsigned long i = 0; i < n; ++i) {
-        lstObj = lstObj->asList(ctx)
-            ->appendLast(ctx, args->getAt(ctx, static_cast<int>(i)))
-            ->asObject(ctx);
-    }
-    return ctx->newTupleFromList(lstObj->asList(ctx))->asObject(ctx);
+    // `newTupleFromList` builds the tuple bottom-up in one pass over the
+    // argument list, so no intermediate version of anything is created.
+    // Re-growing a second ProtoList first — the old shape here — cost about
+    // log2(N) cells of garbage per element, and none of it could be collected
+    // before the primitive returned: a 70,000-element vector literal pinned
+    // ~1.2M dead cells and exhausted a 2,000,000-cell heap.
+    if (!args) return ctx->newTuple()->asObject(ctx);
+    return ctx->newTupleFromList(args)->asObject(ctx);
 }
 
 // (vec coll) — converts any seqable (list or vector) to a vector.
@@ -931,21 +928,17 @@ static const proto::ProtoObject* mapWalk(proto::ProtoContext* ctx,
                                          bool wantValues) {
     if (!isMap(m))
         return ctx->newList()->asObject(ctx);
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, scope.newList()->asObject(&scope));
-    struct Acc { proto::ProtoContext* scope; bool wantValues; }
-        acc{&scope, wantValues};
-    mapForEach(&scope, m, &acc,
-        [](proto::ProtoContext* c, void* self,
+    // One entry per map entry, so the result grows with user data: chunked.
+    ListBuilder out(ctx);
+    struct Acc { ListBuilder* out; bool wantValues; }
+        acc{&out, wantValues};
+    mapForEach(out.context(), m, &acc,
+        [](proto::ProtoContext*, void* self,
            const proto::ProtoObject* k, const proto::ProtoObject* v) {
             auto* a = static_cast<Acc*>(self);
-            const proto::ProtoList* cur =
-                a->scope->getAutomaticLocal(0)->asList(c);
-            a->scope->setAutomaticLocal(0,
-                cur->appendLast(c, a->wantValues ? v : k)->asObject(c));
+            a->out->push(a->wantValues ? v : k);
         });
-    return scope.getAutomaticLocal(0);
+    return out.finish();
 }
 
 const proto::ProtoObject* prim_keys(proto::ProtoContext* ctx,
@@ -1098,15 +1091,15 @@ const proto::ProtoObject* prim_reverse(proto::ProtoContext* ctx,
             proto::ProtoString::fromStdString(ctx, r));
     }
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
-    const proto::ProtoObject* out = ctx->newList()->asObject(ctx);
-    if (!lst) return out;
-    unsigned long n = lst->getSize(ctx);
-    for (unsigned long i = 0; i < n; ++i) {
-        out = out->asList(ctx)
-            ->appendFirst(ctx, lst->getAt(ctx, static_cast<int>(i)))
-            ->asObject(ctx);
+    if (!lst) return ctx->newList()->asObject(ctx);
+    // Walk the source backwards and append at the END, which lets the build
+    // run through ListBuilder; appending at the front produces the same list
+    // but has no chunked form.
+    ListBuilder out(ctx);
+    for (unsigned long i = lst->getSize(out.context()); i-- > 0;) {
+        out.push(lst->getAt(out.context(), static_cast<int>(i)));
     }
-    return out;
+    return out.finish();
 }
 
 // Higher-order primitives --------------------------------------
@@ -1122,18 +1115,20 @@ const proto::ProtoObject* prim_map(proto::ProtoContext* ctx,
     const proto::ProtoObject* f    = args->getAt(ctx, 0);
     const proto::ProtoObject* coll = args->getAt(ctx, 1);
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
-    const proto::ProtoObject* out = ctx->newList()->asObject(ctx);
-    if (!lst) return out;
+    if (!lst) return ctx->newList()->asObject(ctx);
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("map: no active VM context");
     unsigned long n = lst->getSize(ctx);
+    // The result grows with the input, so it is built in chunks: `invoke` runs
+    // in the builder's context (it pushes frames, and the context stack is
+    // LIFO — see ListBuilder.h).
+    ListBuilder out(ctx);
     for (unsigned long i = 0; i < n; ++i) {
-        const proto::ProtoObject* arg = lst->getAt(ctx, static_cast<int>(i));
-        const proto::ProtoObject* one[1] = { arg };
-        const proto::ProtoObject* y = cc->engine->invoke(ctx, f, one, 1);
-        out = out->asList(ctx)->appendLast(ctx, y)->asObject(ctx);
+        const proto::ProtoObject* one[1] = {
+            lst->getAt(out.context(), static_cast<int>(i)) };
+        out.push(cc->engine->invoke(out.context(), f, one, 1));
     }
-    return out;
+    return out.finish();
 }
 
 const proto::ProtoObject* prim_filter(proto::ProtoContext* ctx,
@@ -1146,20 +1141,21 @@ const proto::ProtoObject* prim_filter(proto::ProtoContext* ctx,
     const proto::ProtoObject* pred = args->getAt(ctx, 0);
     const proto::ProtoObject* coll = args->getAt(ctx, 1);
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
-    const proto::ProtoObject* out = ctx->newList()->asObject(ctx);
-    if (!lst) return out;
+    if (!lst) return ctx->newList()->asObject(ctx);
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("filter: no active VM context");
     unsigned long n = lst->getSize(ctx);
+    ListBuilder out(ctx);
     for (unsigned long i = 0; i < n; ++i) {
-        const proto::ProtoObject* x = lst->getAt(ctx, static_cast<int>(i));
+        const proto::ProtoObject* x = lst->getAt(out.context(), static_cast<int>(i));
         const proto::ProtoObject* one[1] = { x };
-        const proto::ProtoObject* keep = cc->engine->invoke(ctx, pred, one, 1);
+        const proto::ProtoObject* keep =
+            cc->engine->invoke(out.context(), pred, one, 1);
         if (keep && keep != PROTO_NONE && keep != PROTO_FALSE) {
-            out = out->asList(ctx)->appendLast(ctx, x)->asObject(ctx);
+            out.push(x);
         }
     }
-    return out;
+    return out.finish();
 }
 
 const proto::ProtoObject* prim_reduce(proto::ProtoContext* ctx,
@@ -1423,18 +1419,18 @@ const proto::ProtoObject* prim_split(proto::ProtoContext* ctx,
         throw std::runtime_error("split: both args must be strings");
     std::string s = asProtoString(sv)->toStdString(ctx);
     std::string d = asProtoString(dv)->toStdString(ctx);
-    const proto::ProtoObject* out = ctx->newList()->asObject(ctx);
+    // One piece per delimiter occurrence: the result grows with the input
+    // string, so the build is chunked.
+    ListBuilder out(ctx);
     if (d.empty()) {
         // Split into individual codepoints would be ideal; v0.15
         // splits per byte.
         for (char c : s) {
             std::string one(1, c);
-            const proto::ProtoString* piece =
-                proto::ProtoString::fromStdString(ctx, one);
-            out = out->asList(ctx)->appendLast(ctx,
-                reinterpret_cast<const proto::ProtoObject*>(piece))->asObject(ctx);
+            out.push(reinterpret_cast<const proto::ProtoObject*>(
+                proto::ProtoString::fromStdString(out.context(), one)));
         }
-        return out;
+        return out.finish();
     }
     std::size_t pos = 0;
     while (true) {
@@ -1442,14 +1438,12 @@ const proto::ProtoObject* prim_split(proto::ProtoContext* ctx,
         std::string piece = (found == std::string::npos)
             ? s.substr(pos)
             : s.substr(pos, found - pos);
-        const proto::ProtoString* p =
-            proto::ProtoString::fromStdString(ctx, piece);
-        out = out->asList(ctx)->appendLast(ctx,
-            reinterpret_cast<const proto::ProtoObject*>(p))->asObject(ctx);
+        out.push(reinterpret_cast<const proto::ProtoObject*>(
+            proto::ProtoString::fromStdString(out.context(), piece)));
         if (found == std::string::npos) break;
         pos = found + d.size();
     }
-    return out;
+    return out.finish();
 }
 
 static bool isAsciiWs(unsigned char c) {
@@ -2103,34 +2097,39 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
         proto::ProtoString::createSymbol(ctx, "protoclj-pmap");
 
     // Phase 1 — spawn all N workers. Collect the future wrappers
-    // into a transient ProtoList so the GC can trace them.
+    // into a transient ProtoList so the GC can trace them. Both that list and
+    // the result list below have one entry per element of the collection, so
+    // each is built in chunks; each builder is closed before the next phase
+    // starts, because while one is open it must stay the innermost context on
+    // this thread (see ListBuilder.h).
     proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    constexpr unsigned int kSlotFs = 0;
-    scope.setAutomaticLocal(kSlotFs,
-        scope.newList()->asObject(&scope));
+    scope.resizeAutomaticLocals(2);
+    constexpr unsigned int kSlotFs  = 0;
+    constexpr unsigned int kSlotOut = 1;
+    {
+        ListBuilder futures(&scope);
+        proto::ProtoContext* fctx = futures.context();
+        for (unsigned long i = 0; i < n; ++i) {
+            const proto::ProtoObject* x = lst->getAt(fctx, (int)i);
+            proto::ProtoObject* fut = const_cast<proto::ProtoObject*>(
+                cc->futureMarkerProto->newChild(fctx, /*isMutable=*/true));
+            fut->setAttribute(fctx, fKey, f);
+            fut->setAttribute(fctx, xKey, x);
+            fut->setAttribute(fctx, cc->ccBlobKey,
+                fctx->fromLong(reinterpret_cast<long long>(cc)));
+            fut->setAttribute(fctx, cc->doneKey, PROTO_FALSE);
+            fut->setAttribute(fctx, cc->resultKey, PROTO_NONE);
 
-    for (unsigned long i = 0; i < n; ++i) {
-        const proto::ProtoObject* x = lst->getAt(ctx, (int)i);
-        proto::ProtoObject* fut = const_cast<proto::ProtoObject*>(
-            cc->futureMarkerProto->newChild(ctx, /*isMutable=*/true));
-        fut->setAttribute(ctx, fKey, f);
-        fut->setAttribute(ctx, xKey, x);
-        fut->setAttribute(ctx, cc->ccBlobKey,
-            ctx->fromLong(reinterpret_cast<long long>(cc)));
-        fut->setAttribute(ctx, cc->doneKey, PROTO_FALSE);
-        fut->setAttribute(ctx, cc->resultKey, PROTO_NONE);
-
-        const proto::ProtoList* targs =
-            ctx->newList()->appendLast(ctx, fut);
-        const proto::ProtoThread* t =
-            ctx->space->newThread(ctx, threadName, &pmapWorkerMain,
-                                  targs, nullptr);
-        fut->setAttribute(ctx, cc->threadKey,
-            ctx->fromLong(reinterpret_cast<long long>(t)));
-        scope.setAutomaticLocal(kSlotFs,
-            scope.getAutomaticLocal(kSlotFs)->asList(&scope)
-                ->appendLast(&scope, fut)->asObject(&scope));
+            const proto::ProtoList* targs =
+                fctx->newList()->appendLast(fctx, fut);
+            const proto::ProtoThread* t =
+                fctx->space->newThread(fctx, threadName, &pmapWorkerMain,
+                                       targs, nullptr);
+            fut->setAttribute(fctx, cc->threadKey,
+                fctx->fromLong(reinterpret_cast<long long>(t)));
+            futures.push(fut);
+        }
+        scope.setAutomaticLocal(kSlotFs, futures.finish());
     }
 
     // Phase 2 — join in order, collect results. An element whose call raised
@@ -2138,32 +2137,33 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
     // consuming that element of JVM Clojure's pmap does: the first failing
     // element in input order is the one raised, after the loop has waited
     // for every element.
-    const proto::ProtoObject* out = ctx->newList()->asObject(ctx);
     const proto::ProtoList* fs =
         scope.getAutomaticLocal(kSlotFs)->asList(&scope);
     std::string firstError;
     bool anyFailed = false;
-    for (unsigned long i = 0; i < n; ++i) {
-        const proto::ProtoObject* fut = fs->getAt(&scope, (int)i);
-        const proto::ProtoObject* done =
-            fut->getAttribute(ctx, cc->doneKey);
-        if (done != PROTO_TRUE) {
-            const proto::ProtoObject* tObj =
-                fut->getAttribute(ctx, cc->threadKey);
-            if (tObj && tObj->isInteger(ctx)) {
-                proto::ProtoThread* t =
-                    reinterpret_cast<proto::ProtoThread*>(tObj->asLong(ctx));
-                if (t) t->join(ctx);
+    {
+        ListBuilder results(&scope);
+        proto::ProtoContext* rctx = results.context();
+        for (unsigned long i = 0; i < n; ++i) {
+            const proto::ProtoObject* fut = fs->getAt(rctx, (int)i);
+            const proto::ProtoObject* done =
+                fut->getAttribute(rctx, cc->doneKey);
+            if (done != PROTO_TRUE) {
+                const proto::ProtoObject* tObj =
+                    fut->getAttribute(rctx, cc->threadKey);
+                if (tObj && tObj->isInteger(rctx)) {
+                    proto::ProtoThread* t =
+                        reinterpret_cast<proto::ProtoThread*>(tObj->asLong(rctx));
+                    if (t) t->join(rctx);
+                }
             }
+            if (!anyFailed) anyFailed = threadFailed(rctx, fut, &firstError);
+            results.push(fut->getAttribute(rctx, cc->resultKey));
         }
-        if (!anyFailed) anyFailed = threadFailed(ctx, fut, &firstError);
-        const proto::ProtoObject* r =
-            fut->getAttribute(ctx, cc->resultKey);
-        out = out->asList(ctx)->appendLast(ctx,
-            r ? r : PROTO_NONE)->asObject(ctx);
+        scope.setAutomaticLocal(kSlotOut, results.finish());
     }
     if (anyFailed) throwExecutionException(firstError);
-    return out;
+    return scope.getAutomaticLocal(kSlotOut);
 }
 
 // Session 18 — promises. A promise is a child of promiseMarkerProto
@@ -2282,12 +2282,18 @@ static const proto::ProtoObject* sendCore(proto::ProtoContext* ctx,
     ActorState* state = actorStateFrom(ctx, cc, args->getAt(ctx, 0), primName);
     const proto::ProtoObject* f = args->getAt(ctx, 1);
 
-    // Pack the extra args (positions 2..N-1) into a fresh ProtoList.
-    const proto::ProtoObject* extras = ctx->newList()->asObject(ctx);
-    unsigned long n = args->getSize(ctx);
-    for (unsigned long i = 2; i < n; ++i) {
-        extras = extras->asList(ctx)
-            ->appendLast(ctx, args->getAt(ctx, (int)i))->asObject(ctx);
+    // Pack the extra args (positions 2..N-1) into a fresh ProtoList. Their
+    // number is the call's arity, which `apply` can make arbitrarily large,
+    // so the pack is chunked; the builder is closed before anything else on
+    // this thread pushes a context (see ListBuilder.h).
+    const proto::ProtoObject* extras;
+    {
+        ListBuilder b(ctx);
+        unsigned long n = args->getSize(b.context());
+        for (unsigned long i = 2; i < n; ++i) {
+            b.push(args->getAt(b.context(), static_cast<int>(i)));
+        }
+        extras = b.finish();
     }
 
     // Build the per-send promise — same wire shape as `promise`.

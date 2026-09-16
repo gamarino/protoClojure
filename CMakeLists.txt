@@ -48,12 +48,14 @@ endif()
 
 include_directories(${PROTOCORE_INCLUDE_DIRS} include headers src)
 
-# --- protoClojure support library (native stack guard) ---
+# --- protoClojure support library (native stack guard, bulk list builder) ---
 # Used by the reader, the compiler and the runtime alike, so the reader does
 # not depend on the runtime.
 add_library(protoclj_support STATIC
+    src/runtime/ListBuilder.cpp
     src/runtime/StackGuard.cpp
 )
+target_link_libraries(protoclj_support PUBLIC ${PROTOCORE_LIBRARY})
 target_compile_options(protoclj_support PRIVATE -Wall -Wextra -Wpedantic)
 
 # --- protoClojure reader library ---

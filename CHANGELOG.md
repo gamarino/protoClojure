@@ -52,8 +52,9 @@ The project has no tagged releases yet; the version declared in
 - **Tests.** A glob-discovered conformance suite (291 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
   the bytecode module, the runtime map, value equality and hashing, the
-  native stack guard and the double printer (86 tests), and five CLI checks (`--help`, a
-  generated program with 70,000 distinct literals of each kind, a
+  native stack guard and the double printer (86 tests), and six CLI checks (`--help`, a
+  generated program with 70,000 distinct literals of each kind, the native
+  bulk builders under a heap ceiling, a
   stack overflow in the REPL, globals bound to nil in the REPL, and
   deeply nested source).
 - **Benchmarks and examples.** `benchmarks/bench.sh` (comparison with
@@ -78,6 +79,39 @@ The project has no tagged releases yet; the version declared in
 
 ### Fixed
 
+- Native primitives that build a large collection no longer exhaust the heap.
+  protoCore reclaims a context's allocations only once that context is
+  destroyed, or once the embedder reaches a safepoint with everything live
+  rooted; `ProtoList` is immutable, so each `appendLast` leaves a root-to-leaf
+  path (~log2 N cells) behind. A primitive that appended N times inside one
+  long-lived context therefore pinned ~N·log2(N) cells of unreachable garbage
+  until it returned, and under a heap ceiling
+  (`PROTOCORE_HEAP_LIMIT_CELLS`) ran out of memory with a live set of a few
+  hundred thousand cells.
+
+  `vector` and `list` no longer rebuild anything: the positional arguments
+  already are a `ProtoList`, so `vector` hands it straight to
+  `newTupleFromList`, which builds the tuple bottom-up in one pass, and
+  `list` returns it as it stands. Every builder whose size the program
+  controls — `map`, `filter`, `reverse`, `keys` / `vals`, `split`, `pmap`,
+  `send`, the reader's list and top-level form accumulators, and the VM's
+  call-argument packing — now grows through `ListBuilder`
+  (`src/runtime/ListBuilder.{h,cpp}`), which keeps the accumulator in an
+  automatic local and folds elements in inside a short-lived child context so
+  each chunk's garbage becomes collectable while the build is still running.
+  Calls of five arguments or fewer — that is, nearly all of them — now build
+  their argument list in a single cell instead of one per argument.
+
+  Measured as the `PROTOCORE_HEAP_LIMIT_CELLS` needed to run a
+  70,000-element vector literal: read and compiled but never evaluated,
+  1,500,000 → 200,000 cells; evaluated, 3,000,000 → 1,500,000;
+  `tests/cli/large-program`, 4,000,000 → 3,000,000. `fib` and `tak` are
+  unchanged. The rule this follows is written down in `docs/DESIGN.md` § 1.1.
+- The reader gets about twice as deep before the native stack guard fires,
+  because `readList` no longer keeps a whole `ProtoContext` in its native
+  frame. The guard measures remaining stack rather than nesting level, so the
+  protection is unchanged; `tests/cli/deeply-nested-source` now uses 200,000
+  nested forms where it used 100,000.
 - `reset!` replaces the value with one compare-and-set. It read the old value
   and then wrote the new one in two steps, so under concurrent writers two
   `reset!` calls could hand their watches the same old value, and a replaced

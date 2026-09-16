@@ -5,14 +5,15 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 382 test cases: 291
+scripts and an interactive REPL. `ctest` registers 383 test cases: 291
 conformance fixtures under `tests/conformance/`, 86 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 value equality and hashing, the native stack guard and the double printer
 (`tests/unit/`), and
-five CLI checks (`tests/cli/`: `--help`, a generated program with 70,000
-distinct literals of each kind, a stack overflow in the REPL, globals
-bound to nil in the REPL, and source nested too deeply to read or compile);
+six CLI checks (`tests/cli/`: `--help`, a generated program with 70,000
+distinct literals of each kind, the native bulk builders under a heap
+ceiling, a stack overflow in the REPL, globals bound to nil in the REPL,
+and source nested too deeply to read or compile);
 all pass. Benchmark numbers against Babashka 1.4.192
 are in [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md). Shipped changes
 are listed in [`CHANGELOG.md`](../CHANGELOG.md).
@@ -489,6 +490,19 @@ See `LANGUAGE.md` for the full discussion. Summary:
 - **Promise `deref` polls.** A pending promise is checked every millisecond
   (with the thread marked unmanaged so garbage collection can proceed);
   adequate for hand-off latency, not for sub-millisecond waits.
+- **A call with tens of thousands of arguments still needs a large heap.**
+  Every C++ primitive receives its positional arguments as a `ProtoList`, and
+  protoCore has no bulk bottom-up `ProtoList` constructor —
+  `ProtoContext::newList(n, items)` is a single cell only up to five elements
+  and an `appendLast` loop above that. So `[0 … 69999]`, which compiles to
+  `(vector …)` with 70,000 arguments, must materialise a 70,000-element AVL
+  list purely to hand it to `newTupleFromList`, and each append leaves a
+  root-to-leaf path behind. Those intermediate versions are now reclaimed as
+  the list grows, which halved what the program needs, but they are still
+  allocated: `tests/cli/large-program` runs in about 3,000,000 cells where
+  its live data is nearer 200,000, and it is the one check that does not pass
+  under `PROTOCORE_HEAP_LIMIT_CELLS=2000000`. Removing the rest needs a bulk
+  `ProtoList` constructor in protoCore, which would benefit every embedder.
 - **`pmap` spawns one OS thread per element**, which is wasteful for large
   collections.
 - **Actor `MPMC` throughput** is limited by the global ready-queue mutex.

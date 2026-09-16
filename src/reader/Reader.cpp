@@ -1,5 +1,6 @@
 #include "Reader.h"
 
+#include "runtime/ListBuilder.h"
 #include "runtime/StackGuard.h"
 
 #include "protoCore.h"
@@ -33,29 +34,21 @@ const proto::ProtoList* Reader::readAll() {
 }
 
 const proto::ProtoList* Reader::readAllForms() {
-    // One child context for the whole readAll session. Two slots: the
-    // accumulator ProtoList (slot 0) and the most recently read form
-    // (slot 1). Same shape as readList — the accumulator IS a ProtoList,
-    // the protoCore GC traces it, no std container in sight.
-    proto::ProtoContext scope(ctx_->space, ctx_);
-    scope.resizeAutomaticLocals(2);
-    constexpr unsigned int kSlotAcc  = 0;
-    constexpr unsigned int kSlotForm = 1;
-    scope.setAutomaticLocal(kSlotAcc,
-                            scope.newList()->asObject(&scope));
+    // The accumulator IS a ProtoList the protoCore GC traces — no std
+    // container in sight — and it is grown in chunks, so the intermediate
+    // versions a long file produces are reclaimed while the file is still
+    // being read instead of being pinned until the last form is parsed.
+    // Forms are read through the builder's context: a thread's contexts form
+    // a LIFO stack and the builder must stay its innermost frame while it is
+    // open (see ListBuilder.h).
+    ListBuilder forms(ctx_);
 
     while (true) {
         Token tok = lexer_.next();
         if (tok.kind == TokenKind::EndOfFile) break;
-        scope.setAutomaticLocal(kSlotForm,
-                                readFromToken(&scope, tok));
-        const proto::ProtoList* cur =
-            scope.getAutomaticLocal(kSlotAcc)->asList(&scope);
-        const proto::ProtoList* updated =
-            cur->appendLast(&scope, scope.getAutomaticLocal(kSlotForm));
-        scope.setAutomaticLocal(kSlotAcc, updated->asObject(&scope));
+        forms.push(readFromToken(forms.context(), tok));
     }
-    return scope.getAutomaticLocal(kSlotAcc)->asList(&scope);
+    return forms.finishList();
 }
 
 const proto::ProtoObject*
@@ -214,21 +207,20 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
 const proto::ProtoObject*
 Reader::readList(proto::ProtoContext* parent, TokenKind closeKind,
                  int openLine, int openColumn) {
-    // One ProtoContext per recursive read scope. Child of `parent`, with two
-    // slots: the in-progress list (slot 0) and the most recent element
-    // (slot 1). Both are GC-visible until this context destructs.
+    // One read scope per recursive call, as a ListBuilder: it owns a child
+    // context of `parent` that roots the in-progress list, and it folds the
+    // elements in in chunks so a large literal — `[0 1 … 69999]` — does not
+    // pin every intermediate version of the list until the form is closed.
     //
-    // When destructs, the returned ProtoObject* is no longer rooted by us.
-    // The caller's contract is to put it in its OWN slot immediately. This is
-    // the protoCore calling convention — returns are unrooted, the caller
-    // takes responsibility.
-    proto::ProtoContext frame(parent->space, parent);
-    frame.resizeAutomaticLocals(2);
-    constexpr unsigned int kSlotList = 0;
-    constexpr unsigned int kSlotElem = 1;
-
-    frame.setAutomaticLocal(kSlotList,
-                            frame.newList()->asObject(&frame));
+    // The builder's context is the innermost one on this thread while it is
+    // open, so nested forms are read through `items.context()`; a context
+    // chained to `parent` instead would unlink the builder from the thread's
+    // root chain when it destructs (see ListBuilder.h).
+    //
+    // The returned ProtoObject* is not rooted by us. The caller's contract is
+    // to put it in its OWN slot immediately — the protoCore calling
+    // convention: returns are unrooted, the caller takes responsibility.
+    ListBuilder items(parent);
 
     while (true) {
         Token tok = lexer_.next();
@@ -239,7 +231,7 @@ Reader::readList(proto::ProtoContext* parent, TokenKind closeKind,
             throw ReaderError(what, openLine, openColumn);
         }
         if (tok.kind == closeKind) {
-            return frame.getAutomaticLocal(kSlotList);
+            return items.finish();
         }
         if (tok.kind == TokenKind::RParen ||
             tok.kind == TokenKind::RBracket ||
@@ -249,20 +241,10 @@ Reader::readList(proto::ProtoContext* parent, TokenKind closeKind,
                 tok.line, tok.column);
         }
 
-        // Read the next element into a slot IMMEDIATELY after the call
-        // returns it, so an allocation in appendLast below cannot reclaim
-        // it via concurrent mark.
-        frame.setAutomaticLocal(kSlotElem,
-                                readFromToken(&frame, tok));
-
-        // Append: read both pointers from slots, build the new list, store
-        // back into the list slot. The intermediate `cur` and `updated`
-        // exist only for the next statement, never across an allocation.
-        const proto::ProtoList* cur =
-            frame.getAutomaticLocal(kSlotList)->asList(&frame);
-        const proto::ProtoList* updated =
-            cur->appendLast(&frame, frame.getAutomaticLocal(kSlotElem));
-        frame.setAutomaticLocal(kSlotList, updated->asObject(&frame));
+        // `push` parks the form in a GC-visible slot as its FIRST action,
+        // before anything allocates, so the element cannot be reclaimed
+        // between the read that produced it and the append that consumes it.
+        items.push(readFromToken(items.context(), tok));
     }
 }
 

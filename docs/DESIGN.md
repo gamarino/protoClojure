@@ -46,6 +46,49 @@ The implementation cost we therefore pay is *interpretation*, *the reader*,
 *the standard library*, *the REPL*, and *the macro system* — but **not**
 the data model, the memory model, or concurrency.
 
+### 1.1 Building large collections in native code
+
+Immutability is not free on the way *in*. `appendLast` returns a new list
+that shares structure with the old one and leaves one root-to-leaf path —
+about log2(N) cells — behind as garbage, so growing an N-element list one
+element at a time allocates on the order of N·log2(N) cells while only O(N)
+of them survive.
+
+That garbage becomes *collectable* only once protoCore has been shown it. A
+context's allocations — its young generation — reach the collector when the
+context is **destroyed**, or when the embedder calls
+`ProtoContext::safepoint()` at a point where every live value is reachable
+from a real GC root (an automatic local of a live context, a root set, or
+another rooted structure — never a C++ local alone). A native primitive that
+appends N times inside one long-lived context therefore offers the collector
+nothing until it returns: the heap fills with garbage that is unreachable but
+has never been submitted. Under a heap ceiling
+(`PROTOCORE_HEAP_LIMIT_CELLS`) such a build runs out of memory with a live
+set of a few hundred thousand cells.
+
+**The rule.** A native primitive that builds a structure whose size the
+program controls must:
+
+1. **Prefer a bulk construction that never creates the intermediates.**
+   `newTupleFromList` builds a whole tuple in one bottom-up pass, and the
+   positional arguments a primitive is handed already *are* a `ProtoList` —
+   so `(vector …)` and `(list …)` need no rebuild at all.
+2. **Where the size is not known ahead, keep the accumulator in an automatic
+   local (P1) and let each chunk's young generation be reclaimed as the build
+   proceeds**, by folding the elements in inside a short-lived child context.
+
+`src/runtime/ListBuilder.{h,cpp}` implements (2) and is the type to reach for.
+`map`, `filter`, `reverse`, `keys` / `vals`, `split`, `pmap`, `send`, the
+reader and the VM's argument packing all build through it. Its header
+documents the single ordering rule it imposes: a thread's contexts are a LIFO
+stack, so while a builder is open every nested call must be passed
+`builder.context()`, and the builder must be closed before the caller hands
+its own context back to code that pushes contexts.
+
+Two habits follow, and neither is optional: never let a C++ local be the only
+reference to a value across an allocation (P1), and never assume that an
+object nothing points at has been reclaimed.
+
 ## 2. The hybrid module system — UMD as the invisible motor (planned)
 
 This is the most consequential architectural decision in the language.

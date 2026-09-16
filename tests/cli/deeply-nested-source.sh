@@ -3,9 +3,18 @@
 # CLI check: source forms nested deeper than the thread's stack allows raise
 # a read or compile error instead of crashing, in a script and in the REPL,
 # and moderately deep nesting still evaluates. The reader and the compiler
-# recurse once per level of nesting; 100,000 nested lists, or 40,000 nested
+# recurse once per level of nesting; 200,000 nested lists, or 40,000 nested
 # `fn` forms (which read but do not compile), crashed the process with
-# SIGSEGV. The programs are generated on the fly and read from standard
+# SIGSEGV.
+#
+# The read-error depth is 200,000 rather than the 100,000 this check used
+# originally: `readList` no longer keeps a whole `ProtoContext` in its native
+# frame (it builds through a `ListBuilder`, whose context is on the heap), so
+# the reader gets roughly twice as deep before the stack guard fires. The
+# guard measures the stack it has left, not the nesting level, so the
+# protection is unchanged — only the depth that trips it moved.
+#
+# The programs are generated on the fly and read from standard
 # input, so the check writes no files. Registered as the
 # `cli/deeply-nested-source` ctest case by tests/CMakeLists.txt.
 #
@@ -45,9 +54,9 @@ expect_script_error() {
 reads='read error: StackOverflowError: forms nested too deeply'
 compiles='compile error: StackOverflowError: forms nested too deeply'
 
-nested 100000 '(+ 1 ' 0 ')' | expect_script_error "100,000 nested lists" "$reads"
-{ printf '(println '; nested 100000 '[' '' ']'; printf ')\n'; } |
-    expect_script_error "100,000 nested vectors" "$reads"
+nested 200000 '(+ 1 ' 0 ')' | expect_script_error "200,000 nested lists" "$reads"
+{ printf '(println '; nested 200000 '[' '' ']'; printf ')\n'; } |
+    expect_script_error "200,000 nested vectors" "$reads"
 nested 40000 '(fn [] ' 0 ')' | expect_script_error "40,000 nested fn forms" "$compiles"
 
 # Nesting within the limit still reads, compiles and runs.
@@ -57,7 +66,7 @@ rc=$?
 [[ $rc -eq 0 && "$out" == "20000" ]] || fail "20,000 nested lists: exit $rc" "$out"
 
 # The REPL reports both errors and keeps evaluating.
-out=$({ nested 100000 '(+ 1 ' 0 ')'; echo '(+ 40 2)';
+out=$({ nested 200000 '(+ 1 ' 0 ')'; echo '(+ 40 2)';
         nested 40000 '(fn [] ' 0 ')'; echo '(+ 40 3)'; } |
       timeout 90s "$PROTOCLJ" 2>"$err_file")
 rc=$?

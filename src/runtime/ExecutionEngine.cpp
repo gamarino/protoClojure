@@ -1,5 +1,6 @@
 #include "ExecutionEngine.h"
 #include "BytecodeModule.h"
+#include "ListBuilder.h"
 #include "MapOps.h"
 #include "Named.h"
 #include "Opcodes.h"
@@ -157,6 +158,35 @@ const proto::ProtoObject* foldKeywordPairs(proto::ProtoContext* frame,
         frame->setAutomaticLocal(firstPairSlot, kwMap);
     }
     return kwMap;
+}
+
+// Packs `argc` arguments into a ProtoList stored in `scope`'s slot `slot` —
+// the positional-argument list every C++ primitive is called with.
+//
+// Up to kBulkArgs, protoCore builds the list straight from the contiguous
+// source array: at five arguments or fewer — every ordinary call — that is a
+// single cell, where the old append-one-at-a-time loop cost one cell per
+// argument plus one.
+//
+// Beyond kBulkArgs the list is grown through a ListBuilder, which hands each
+// chunk's dead intermediate versions to the collector as it goes. The
+// argument count is under the program's control (a 70,000-element vector
+// literal compiles to `(vector ...)` with 70,000 arguments, and `apply`
+// spreads a list of any length), and appending N times inside this one
+// context used to pin ~N*log2(N) cells until the primitive returned: under a
+// heap ceiling the call ran out of memory with a tiny live set.
+[[gnu::noinline]]
+void packArguments(proto::ProtoContext& scope, unsigned int slot,
+                   const proto::ProtoObject* const* args, unsigned int argc) {
+    constexpr unsigned int kBulkArgs = 256;
+    if (argc <= kBulkArgs) {
+        scope.setAutomaticLocal(slot,
+            scope.newList(argc, args)->asObject(&scope));
+        return;
+    }
+    ListBuilder packed(&scope);
+    for (unsigned int i = 0; i < argc; ++i) packed.push(args[i]);
+    scope.setAutomaticLocal(slot, packed.finish());
 }
 
 } // namespace
@@ -325,15 +355,8 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
     callScope.resizeAutomaticLocals(2);
     constexpr unsigned int kSlotArgs     = 0;
     constexpr unsigned int kSlotCallable = 1;
-    callScope.setAutomaticLocal(kSlotArgs,
-        callScope.newList()->asObject(&callScope));
     callScope.setAutomaticLocal(kSlotCallable, callable);
-    for (unsigned int i = 0; i < argc; ++i) {
-        const proto::ProtoList* cur =
-            callScope.getAutomaticLocal(kSlotArgs)->asList(&callScope);
-        callScope.setAutomaticLocal(kSlotArgs,
-            cur->appendLast(&callScope, args[i])->asObject(&callScope));
-    }
+    packArguments(callScope, kSlotArgs, args, argc);
     const proto::ProtoObject* primCallable =
         callScope.getAutomaticLocal(kSlotCallable);
     proto::ProtoMethod fn = primCallable->asMethod(&callScope);
@@ -641,19 +664,11 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
         callScope.resizeAutomaticLocals(2);
         constexpr unsigned int kSlotArgs     = 0;
         constexpr unsigned int kSlotCallable = 1;
-        callScope.setAutomaticLocal(kSlotArgs,
-            callScope.newList()->asObject(&callScope));
         callScope.setAutomaticLocal(kSlotCallable, callable);
-        for (unsigned int i = 0; i < argc; ++i) {
-            const proto::ProtoObject* arg =
-                frame.getAutomaticLocal(stackBase + sp - argc + i);
-            const proto::ProtoList* cur =
-                callScope.getAutomaticLocal(kSlotArgs)->asList(&callScope);
-            const proto::ProtoList* updated =
-                cur->appendLast(&callScope, arg);
-            callScope.setAutomaticLocal(kSlotArgs,
-                updated->asObject(&callScope));
-        }
+        // The arguments already sit contiguously in the frame's operand
+        // stack, so they can be packed straight from there.
+        packArguments(callScope, kSlotArgs,
+                      frame.getAutomaticLocals() + stackBase + sp - argc, argc);
         const proto::ProtoObject* primCallable =
             callScope.getAutomaticLocal(kSlotCallable);
         proto::ProtoMethod fn = primCallable->asMethod(&callScope);
