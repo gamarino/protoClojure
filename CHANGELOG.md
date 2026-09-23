@@ -65,6 +65,18 @@ The project has no tagged releases yet; the version declared in
 
 ### Changed
 
+- **Built against protoCore 2.0.0** (soname `libprotoCore.so.2`). No source
+  change was needed: protoClojure calls none of the APIs whose semantics
+  changed — a repo-wide search finds no `setParents`, `addParent`,
+  `hasParent`, `isInstanceOf` or `getParents` call site at all — and every
+  `newChild` receiver is `ProtoSpace::objectPrototype` or an immutable marker
+  prototype that is itself a child of it, so no parent chain in protoClojure
+  is ever mutated after construction and 2.0.0's chain flattening and
+  current-chain capture are both no-ops here. The ABI bump means an existing
+  build directory must be recreated from clean; a stale object now fails to
+  load with a missing-soname error rather than linking against an
+  incompatible `ProtoSpace` layout. Verified: clean `build_release`, `ldd`
+  confirming `libprotoCore.so.2`, `ctest -j1` 383/383.
 - Function wrappers use separate single-arity and multi-arity prototypes, and
   the captures attribute is read only when a body has captures, reducing the
   attribute lookups per call.
