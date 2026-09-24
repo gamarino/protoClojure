@@ -106,18 +106,20 @@ The per-actor mailbox is **lock-free and GC-visible**: three protoCore `ProtoMPS
 
 #### Benchmark — actors
 
-Numbers below were measured on 2026-09-16 on an AMD Ryzen 5 5500U (6 cores, 12 threads), with the machine otherwise idle. Each row is **1,000,000 messages** with the trivial body `(inc v)`; runs take 2-4 seconds. The runner is [`benchmarks/actor-bench.sh`](benchmarks/actor-bench.sh), which verifies that every script reports the expected message count before computing a rate. The peak column is the best of the worker counts 1, 2, 4, 6, 8 and 16, with the count in brackets.
+Numbers below were measured on 2026-09-24 on an AMD Ryzen 5 5500U (6 cores, 12 threads), on a machine shared with a desktop session (load average 5.8 at the start of the run, no other benchmark running). Each row is **1,000,000 messages** with the trivial body `(inc v)`; runs take 2-5 seconds. The runner is [`benchmarks/actor-bench.sh`](benchmarks/actor-bench.sh), which verifies that every script reports the expected message count before computing a rate. The peak column is the best of the worker counts 1, 2, 4, 6, 8 and 16, with the count in brackets.
 
 | mode      | what it measures                                              | peak msg/s |
 |-----------|---------------------------------------------------------------|-----------:|
-| `single`  | 1 sender × 1 actor — per-actor pipeline floor                 | 313,578 (w=8) |
-| `fan-out` | 1 sender × 1000 actors (1000 msgs each) — ready queue stress  | 554,939 (w=4) |
-| `MPSC`    | 4 senders × 1 actor — per-actor sender contention             | 282,886 (w=6) |
-| `MPMC`    | 4 senders × 4 actors (round-robin) — both contention paths    | 359,197 (w=16) |
+| `single`  | 1 sender × 1 actor — per-actor pipeline floor                 | 222,074 (w=2) |
+| `fan-out` | 1 sender × 1000 actors (1000 msgs each) — ready queue stress  | 552,486 (w=8) |
+| `MPSC`    | 4 senders × 1 actor — per-actor sender contention             | 201,329 (w=1) |
+| `MPMC`    | 4 senders × 4 actors (round-robin) — both contention paths    | 329,817 (w=16) |
 
-These are upper bounds for a single-operation message body. Worker-count scaling on this machine: `fan-out` peaks at `PROTOCLJ_ACTOR_WORKERS=4` and stays within 6% of that peak at 6, 8 and 16 workers; `single` peaks at 8; `MPSC` is flat between 264,062 and 282,886 at every worker count; `MPMC` grows with the worker count up to 16.
+These are upper bounds for a single-operation message body. Worker-count scaling on this machine: `single` and `MPSC` are flat across worker counts (the single consumer is the bound); `fan-out` peaks at 4-8 workers and stays within 4% of the peak up to 16; `MPMC` grows with the worker count.
 
-Measured on 2026-06-14, compared with the earlier mailbox (per-actor `std::mutex` + `std::deque`), the lock-free mailbox measured **+4-17% (single)**, **+30-41% (fan-out at 2-4 workers)**, **+11-19% (MPSC at 2 or more workers)** and **±0-3% (MPMC)**. The flat MPMC result is consistent with the global ready queue, not the per-actor mailbox, being MPMC's bottleneck.
+Against the pre-migration mailbox (three atomic-pointer stacks of C++ heap nodes), measured back to back on the same machine: **fan-out is 34-80% faster** — a push now takes one cell from protoCore's per-thread arena instead of one `new` from the process-wide allocator — while **single, MPSC and MPMC are 6-33% slower**, because all three are bounded by one consumer and the consumer now materialises each batch as a `ProtoList`. The full before/after tables, the contention notes and the mechanism are in [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md). What the migration bought is mailboxes the collector can see: the old nodes held the message's function, arguments and promise as pointers nothing rooted.
+
+Measured on 2026-06-14, the move from a per-actor `std::mutex` + `std::deque` to the lock-free atomic-pointer stacks (the representation the queues replaced) had measured **+4-17% (single)**, **+30-41% (fan-out at 2-4 workers)**, **+11-19% (MPSC at 2 or more workers)** and **±0-3% (MPMC)**.
 
 ## Performance — what is measured
 

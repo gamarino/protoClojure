@@ -201,3 +201,121 @@ Plus `benchmarks/factorial-100.clj` for the demo.
 ./benchmarks/bench.sh                  # uses /tmp/proto-bench/bb by default
 ./benchmarks/bench.sh path/to/protoclj path/to/bb
 ```
+
+---
+
+# Actor mailboxes: three `ProtoMPSCQueue`s per actor (2026-09-24)
+
+**What changed.** Each actor's three priority mailboxes moved from
+`std::atomic<ActorMessage*>` stacks of C++ heap nodes to three protoCore
+`ProtoMPSCQueue`s (platform Track C; PMQ-SPEC §6 step 4). The point of the
+change is GC safety, not speed: the old heap nodes held the message's
+function, arguments and promise as pointers **nothing rooted**, so a
+collection between a send and its handler could free a payload the mailbox
+was the only reference to.
+
+**Setup.** AMD Ryzen 5 5500U (6 cores, 12 threads), Linux 7.0.0.
+`benchmarks/actor-bench.sh`, 1,000,000 messages per mode, both binaries built
+Release against protoCore 2.1.0. BEFORE is `a6b722d~1`, AFTER is `a6b722d`.
+
+**Contention.** The machine was shared with a desktop session (editor,
+browser) throughout; two sibling agents were benchmarking other runtimes in
+the same workspace, so a first pair of runs was measured at load average 12
+and is discarded — the tables below are the second pair, taken back to back
+with the load average at 5.6 (BEFORE) and 5.8 (AFTER) when each started, in
+the order AFTER then BEFORE so the order cannot flatter the new code. The
+BEFORE column reproduces the numbers recorded on an idle machine on
+2026-09-16 (313,578 msg/s single, 554,939 fan-out, 282,886 MPSC, 359,197
+MPMC) to within a few percent, which is the check that these runs were not
+themselves contended. Every run self-reports the messages it processed and
+the runner verifies the count, so none of these rows is a crash.
+
+| mode | workers | BEFORE msg/s | AFTER msg/s | change |
+|---|---|---|---|---|
+| single | 1 | 298,063 | 201,288 | −32% |
+| single | 2 | 313,775 | 222,074 | −29% |
+| single | 4 | 312,695 | 220,751 | −29% |
+| single | 6 | 310,270 | 219,829 | −29% |
+| single | 8 | 293,513 | 213,265 | −27% |
+| single | 16 | 303,859 | 211,149 | −31% |
+| fan-out | 1 | 241,371 | 249,750 | +3% |
+| fan-out | 2 | 274,424 | 402,091 | +47% |
+| fan-out | 4 | 304,229 | 548,246 | +80% |
+| fan-out | 6 | 366,569 | 515,198 | +41% |
+| fan-out | 8 | 395,570 | 552,486 | +40% |
+| fan-out | 16 | 398,565 | 533,903 | +34% |
+| MPSC | 1 | 199,960 | 201,329 | +1% |
+| MPSC | 2 | 254,388 | 187,547 | −26% |
+| MPSC | 4 | 294,899 | 198,649 | −33% |
+| MPSC | 6 | 290,360 | 200,683 | −31% |
+| MPSC | 8 | 272,406 | 201,329 | −26% |
+| MPSC | 16 | 287,109 | 199,005 | −31% |
+| MPMC | 1 | 242,132 | 190,187 | −21% |
+| MPMC | 2 | 327,119 | 268,891 | −18% |
+| MPMC | 4 | 326,692 | 329,708 | +1% |
+| MPMC | 6 | 350,141 | 324,466 | −7% |
+| MPMC | 8 | 366,034 | 300,302 | −18% |
+| MPMC | 16 | 351,619 | 329,817 | −6% |
+
+**Reading it.** The split is consistent and has a plausible mechanism, which
+is worth more than the individual percentages:
+
+- **Fan-out is 34–80% faster.** 1,000 actors × 1,000 messages is dominated by
+  the *producer* side. A push now takes one cell from protoCore's per-thread
+  arena; it used to take one `new ActorMessage`, i.e. the process-wide
+  allocator, from several threads at once.
+- **Single-actor, MPSC and MPMC are 6–33% slower.** All three are bounded by
+  one *consumer*, and the consumer got more work: `takeAll` builds a
+  `ProtoList` of the batch (one node per message) and each message is a
+  three-element `ProtoList` read by index, where the old drain walked an
+  intrusive pointer chain and read three struct fields.
+- Resident memory on the single-actor run rises from 2.5 GB to 3.9 GB, for the
+  same reason: a message is now two cells the collector can see rather than
+  one malloc'd node the worker freed by hand.
+
+**Verdict.** A 6–33% throughput cost on single-consumer workloads, a 34–80%
+gain on many-actor workloads, and mailboxes whose payloads the collector can
+see. The cost is on the side of the pipeline that a `ProtoMPSCQueue` cannot
+make cheaper — protoCore's `takeAll` returns a `ProtoList`, and building it is
+inherent — so closing the remaining gap would be a protoCore change (a drain
+that hands back the node chain without materialising a list), not a
+protoClojure one.
+
+---
+
+# Vectors off the interned `ProtoTuple` (2026-09-24, decision R2)
+
+**What changed.** A vector became the `ProtoList` of its elements inside a
+one-entry `ProtoSparseList` box, where it was an interned `ProtoTuple` that
+protoCore never frees (`CHANGELOG.md`, Decisions, R2).
+
+**Setup.** Same machine as the actor tables above, settled (load average 4.7
+at the start of the run, no other benchmark running). `/usr/bin/time`, three
+runs of the access probe and two of the build probe, both self-reporting the
+work done (`:count`, `:sum`) so a crash cannot read as a win. The scripts are
+reproduced below rather than committed, because they probe a representation
+rather than a language feature.
+
+| probe | BEFORE (interned tuple) | AFTER (boxed ProtoList) |
+|---|---|---|
+| build a 200,000-element vector with `vec`, then one full `nth` scan | 0.76, 0.81 s / 545 MB | 0.47, 0.49 s / 296 MB |
+| build a 20,000-element vector, then 50 full `nth` scans | 0.73, 0.65, 0.59 s | 0.65, 0.61, 0.69 s |
+
+**Reading it.** Construction dominates the first probe and the box wins it
+outright: `vec` of a list is now O(1), where building a tuple hashed and
+interned every node. The second probe isolates indexed access, where the new
+representation is structurally worse — a `ProtoList` node holds one element
+against a `ProtoTuple` node's four, so about twice the node hops — and the two
+are indistinguishable: at 20,000 elements the extra hops sit below the
+interpreter's own per-iteration cost. A random-access workload on a vector of
+millions of elements is where the difference would show; no such workload
+exists in the suite or the benchmarks.
+
+```clojure
+;; access probe (vec-nth): one build, R full scans
+(defn build [n] (loop [i 0 acc (list)] (if (>= i n) (vec acc) (recur (+ i 1) (cons i acc)))))
+(defn scan  [v n] (loop [i 0 sum 0] (if (>= i n) sum (recur (+ i 1) (+ sum (nth v i))))))
+(defn scans [v n r] (loop [k 0 sum 0] (if (>= k r) sum (recur (+ k 1) (+ sum (scan v n))))))
+(def N 20000) (def R 50) (def v (build N))
+(println :count (count v) :scans R :sum (scans v N R))
+```

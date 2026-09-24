@@ -398,9 +398,12 @@ interns every tuple node and frees none, so **every vector a program ever
 built stayed in memory until it exited**. Vectors are now ordinary garbage.
 The cost of the change is indexed access: a `ProtoList` node holds one
 element where a `ProtoTuple` node holds four, so `nth` takes about twice the
-node hops, and a large vector about three times the cells — while sequential
-access, construction and `vec` all got cheaper, and a large vector now costs
-less memory overall than the interned tuple plus its interner entry did. Two
+node hops, and the payload of a large vector about three times the cells —
+while sequential access, construction and `vec` all got cheaper, and a large
+vector costs less memory overall than the interned tuple plus its interner
+entry did. Measured, the extra hops do not show: 50 full `nth` scans of a
+20,000-element vector are indistinguishable from the tuple's, and a build plus
+one full scan of a 200,000-element vector is 40% faster in half the memory. Two
 equal vectors are no longer one pointer, so `=` walks their elements like
 every other sequential comparison. (Decision R2, `CHANGELOG.md`.)
 

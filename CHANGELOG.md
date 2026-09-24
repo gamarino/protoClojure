@@ -80,11 +80,14 @@ The project has no tagged releases yet; the version declared in
   node holds one element where a `ProtoTuple` node holds four, so `nth` takes
   about twice the node hops. Two equal vectors are no longer one pointer, so
   `=` walks their elements like every other sequential comparison. Measured on
-  a build-plus-full-scan of a 200,000-element vector: 0.46 s against 0.75 s
-  and 296 MB against 545 MB resident, both in the new representation's favour,
-  because the interner's own cost outweighs the extra node hops; an
+  a settled machine (`benchmarks/RESULTS.md` records the conditions): a build
+  plus one full `nth` scan of a 200,000-element vector takes 0.47-0.49 s and
+  296 MB where the interned tuple took 0.76-0.81 s and 545 MB, and an
   access-only probe (one build, 50 full `nth` scans of a 20,000-element
-  vector) was within the noise of a loaded machine.
+  vector) is indistinguishable at 0.61-0.69 s against 0.59-0.73 s. So the
+  extra node hops are real but below the interpreter's own per-iteration cost
+  at these sizes, while the interner's cost is not: the new representation is
+  faster and half the memory on everything measured.
 
 - **Actor mailboxes are protoCore `ProtoMPSCQueue`s** (PMQ-SPEC §6 step 4):
   three per actor, one per priority band, in place of the three
@@ -522,8 +525,15 @@ already are.
 (log2 N against log4 N) and a large vector about three times the cells of the
 tuple's payload, offset by the box's single cell and by no interner entry.
 Construction, `vec`, and every sequential operation are cheaper — O(1) where
-they were O(N). Equal vectors stopped being pointer-equal. Measured: see the
-Changed entry above.
+they were O(N). Equal vectors stopped being pointer-equal. Measured on a
+settled machine: 50 full `nth` scans of a 20,000-element vector are
+indistinguishable from the tuple (0.61-0.69 s against 0.59-0.73 s), so the
+extra hops sit below the interpreter's per-iteration cost at that size, while
+a build plus one full scan of a 200,000-element vector is 0.47-0.49 s and
+296 MB against 0.76-0.81 s and 545 MB. Nothing measured is slower; a
+random-access-dominated workload on a vector of millions of elements is where
+the extra hops would show, and no such workload exists in the suite or the
+benchmarks.
 
 **What reversing it would cost.** The representation is confined to
 `src/runtime/VectorOps.{h,cpp}` and its callers in `Primitives.cpp` and

@@ -290,9 +290,12 @@ The design specifications written during development are archived under
       invariant, and three protoCore `ProtoMPSCQueue` mailboxes per actor —
       lock-free on the send path and traced by the collector. Peak throughput
       with a trivial
-      body, 1,000,000 messages per mode (2026-09-16, idle machine): 313,578
-      msg/s (single), 554,939 (fan-out), 282,886 (MPSC), 359,197 (MPMC) — see
-      the README benchmark section.
+      body, 1,000,000 messages per mode (2026-09-24, shared machine at load
+      average 5.8): 222,074 msg/s (single), 552,486 (fan-out), 201,329
+      (MPSC), 329,817 (MPMC). Against the pre-migration mailbox the
+      single-consumer modes are 6-33% slower and fan-out is 34-80% faster —
+      the full before/after tables and why are in
+      [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md).
 
 ### REPL
 
