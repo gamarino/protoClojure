@@ -1,4 +1,5 @@
-// Map keys are ordinary garbage (src/runtime/MapOps.h).
+// Values that protoCore used to intern are ordinary garbage now: map keys
+// (src/runtime/MapOps.h) and vectors (src/runtime/VectorOps.h).
 //
 // The layer this one replaced reduced every key to an INTERNED canonical key
 // — a protoCore symbol for a string, an interned tuple for a collection — and
@@ -27,6 +28,7 @@
 // lift the limit again.
 
 #include "runtime/MapOps.h"
+#include "runtime/VectorOps.h"
 
 #include "protoCore.h"
 #include <gtest/gtest.h>
@@ -107,4 +109,74 @@ TEST(MapKeyLifetime, DistinctCollectionKeysDoNotAccumulate) {
     EXPECT_LT(growth, perKeyBudget() * kChurnKeys)
         << "the live set went from " << before << " to " << after << " cells over "
         << kChurnKeys << " distinct collection keys: keys are being retained";
+}
+
+// A vector used to be an interned ProtoTuple, which protoCore never frees, so
+// every vector a program ever built stayed in memory until it exited
+// (protoScala DESIGN risk R2). It is now a ProtoList in a one-entry
+// sparse-list box, and both are collected. Building the box's payload with
+// ctx->newTupleFromList instead makes this fail with the live set up by about
+// one cell per element, which is how it was checked.
+namespace {
+
+void churnVectors(proto::ProtoSpace& space, proto::ProtoContext* parent, int from, int n) {
+    for (int base = 0; base < n; base += 500) {
+        proto::ProtoContext batch(&space, parent, nullptr, nullptr, nullptr, nullptr);
+        const int end = base + 500 < n ? base + 500 : n;
+        for (int i = base; i < end; ++i) {
+            // Four distinct elements, so the vector is not one protoCore
+            // would have shared with an earlier one anyway.
+            const proto::ProtoList* items = batch.newList()
+                                                ->appendLast(&batch, batch.fromLong(from + i))
+                                                ->appendLast(&batch, batch.fromLong(from + i + 1))
+                                                ->appendLast(&batch, batch.fromLong(from + i + 2))
+                                                ->appendLast(&batch, batch.fromLong(from + i + 3));
+            const proto::ProtoObject* v = protoClojure::newVector(&batch, items);
+            ASSERT_TRUE(protoClojure::isVector(v));
+            ASSERT_EQ(protoClojure::vectorItems(&batch, v)->getSize(&batch), 4u);
+        }
+    }
+}
+
+}  // namespace
+
+TEST(VectorLifetime, DistinctVectorsDoNotAccumulate) {
+    proto::ProtoSpace space;
+    proto::ProtoContext live(&space, space.rootContext, nullptr, nullptr, nullptr, nullptr);
+
+    churnVectors(space, &live, 0, kWarmupKeys);
+    const unsigned long before = liveCellsAfterCollections(space, &live, 3);
+
+    churnVectors(space, &live, 1000000, kChurnKeys);
+    const unsigned long after = liveCellsAfterCollections(space, &live, 3);
+
+    const double growth = static_cast<double>(after) - static_cast<double>(before);
+    EXPECT_LT(growth, perKeyBudget() * kChurnKeys)
+        << "the live set went from " << before << " to " << after << " cells over "
+        << kChurnKeys << " distinct vectors: vectors are being retained";
+}
+
+TEST(VectorRepresentation, IsVectorIsATagTestAndItemsAreNotCopied) {
+    proto::ProtoSpace space;
+    proto::ProtoContext* ctx = space.rootContext;
+    const proto::ProtoList* items =
+        ctx->newList()->appendLast(ctx, ctx->fromLong(1))->appendLast(ctx, ctx->fromLong(2));
+    const proto::ProtoObject* v = protoClojure::newVector(ctx, items);
+
+    EXPECT_TRUE(protoClojure::isVector(v));
+    // The box stores the list as it is: building a vector is O(1).
+    EXPECT_EQ(protoClojure::vectorItems(ctx, v), items);
+    EXPECT_EQ(protoClojure::vectorItems(ctx, v)->getSize(ctx), 2u);
+    EXPECT_TRUE(protoClojure::isVector(protoClojure::newVector(ctx, ctx->newList())));
+
+    // Nothing else the runtime hands out is a vector, and in particular not a
+    // map (which is what used to occupy this pointer tag) or a list.
+    EXPECT_FALSE(protoClojure::isVector(nullptr));
+    EXPECT_FALSE(protoClojure::isVector(PROTO_NONE));
+    EXPECT_FALSE(protoClojure::isVector(items->asObject(ctx)));
+    EXPECT_FALSE(protoClojure::isVector(ctx->newMap()->asObject(ctx)));
+    EXPECT_FALSE(protoClojure::isVector(ctx->fromLong(7)));
+    EXPECT_FALSE(protoClojure::isVector(
+        reinterpret_cast<const proto::ProtoObject*>(proto::ProtoString::fromUTF8(ctx, "ab"))));
+    EXPECT_FALSE(protoClojure::isMap(v)) << "a vector must not read as a map";
 }

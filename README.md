@@ -158,7 +158,7 @@ protoClojure does not try to replace it. The places where protoClojure is **arch
 
 The places where JVM Clojure wins on substance, not just legacy:
 
-- **Mature persistent-collection performance** — HAMT, RRB-tree, transient batching, well-tuned hashing. protoClojure uses protoCore's `ProtoList` / `ProtoTuple` / `ProtoSparseList` shapes, which are competent but not yet at the level of `clojure.lang.PersistentHashMap`.
+- **Mature persistent-collection performance** — HAMT, RRB-tree, transient batching, well-tuned hashing. protoClojure uses protoCore's `ProtoList` / `ProtoMap` shapes, which are competent but not yet at the level of `clojure.lang.PersistentHashMap`.
 - **JIT**. On any inner-loop workload that benefits from method-call inlining, the JVM goes through code paths protoClojure does not have.
 - **Ecosystem**. Two decades of libraries, Datomic, Leiningen and deps, editors with deep CIDER / Calva integration. protoClojure has none of that today.
 
@@ -197,7 +197,7 @@ protoClojure runs scripts and an interactive REPL. Version 0.0.1; no tagged rele
 | Namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **389 test cases: 291 conformance fixtures, 91 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics and lifetime, value equality and hashing, native stack guard, double printer) **and 7 CLI checks** (`--help`, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, and deeply nested source). All of them pass, against protoCore 2.1.0. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **391 test cases: 291 conformance fixtures, 93 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics, value lifetime, the vector representation, value equality and hashing, native stack guard, double printer) **and 7 CLI checks** (`--help`, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, and deeply nested source). All of them pass, against protoCore 2.1.0. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 
@@ -207,7 +207,7 @@ What is implemented:
 - Primitives (76 registered at startup):
   - arithmetic and comparison: `+ - * / inc dec < <= > >= = not=` (`=` compares maps, vectors and lists by value; a vector and a list with equal elements are `=`)
   - output: `println str`
-  - lists and vectors: `list vector vec nth first rest cons count empty? reverse`
+  - lists and vectors: `list vector vec nth first rest cons count empty? reverse`. A vector is a protoCore `ProtoList` of its elements in a one-entry `ProtoSparseList` box, which is what carries its type; `nth` is O(log n), `vector` / `vec` are O(1), and a vector is collected like any other value (it used to be an interned `ProtoTuple`, which protoCore never frees — decision R2)
   - higher-order: `map filter reduce pmap`
   - predicates: `nil? not vector? list? map? string?`
   - maps: `hash-map assoc dissoc get contains? keys vals`, and `count` / `empty?` on maps. A map is an immutable protoCore `ProtoMap` driven through protoCore's shared hashed-collection helper: keys match by value (a map or vector key is found with an equal map, vector or list, a string key with an equal string built at run time), numbers of different types are different keys, iteration order is unspecified, keys are ordinary garbage, and `count` is O(n) ([LANGUAGE.md §4.3](docs/LANGUAGE.md))
@@ -243,7 +243,7 @@ cmake --build build_release
 ./build_release/protoclj script.clj          # run a .clj file
 ./build_release/protoclj --version           # version
 
-ctest --test-dir build_release -j1           # 389 cases: 291 fixtures + 91 unit tests + 7 CLI checks
+ctest --test-dir build_release -j1           # 391 cases: 291 fixtures + 93 unit tests + 7 CLI checks
 ./benchmarks/bench.sh                        # benchmark against Babashka
 ./benchmarks/actor-bench.sh                  # actor throughput, varied worker counts
 ```

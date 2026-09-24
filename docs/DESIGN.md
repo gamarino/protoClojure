@@ -164,7 +164,9 @@ strings, booleans, nil, lists, vectors, maps and `@` (read as
 and metadata are rejected with a "reserved-for-later token" error.
 
 Every reader output is a protoCore object. In the implementation, a
-list is a `ProtoList`, a vector is a `ProtoTuple`, and a map literal is a
+list is a `ProtoList`, a vector is a `ProtoList` inside a one-entry
+`ProtoSparseList` box (`src/runtime/VectorOps.h`, decision R2), and a map
+literal is a
 map-marker child holding its entries as a source-order `ProtoList`. The
 compiler turns that literal into a `hash-map` call. The runtime map it builds
 is an immutable `ProtoMap`, with no wrapper object and no mutable state,

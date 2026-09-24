@@ -7,7 +7,7 @@ add_executable(protoclj_unit_tests
     test_format_double.cpp
     test_lexer.cpp
     test_mapops.cpp
-    test_mapops_gc.cpp
+    test_value_lifetime.cpp
     test_reader.cpp
     test_stackguard.cpp
     test_values.cpp

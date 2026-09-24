@@ -1,5 +1,6 @@
 #include "MapOps.h"
 #include "StackGuard.h"
+#include "VectorOps.h"
 
 #include "protoCore.h"
 
@@ -16,7 +17,6 @@ constexpr unsigned long kTagMask         = 0x3F;
 constexpr unsigned long kTagObject       = 0;
 constexpr unsigned long kTagEmbedded     = 1;
 constexpr unsigned long kTagList         = 2;
-constexpr unsigned long kTagTuple        = 4;
 constexpr unsigned long kTagLargeInteger = 14;
 constexpr unsigned long kTagDouble       = 15;
 constexpr unsigned long kTagListSmall    = 25;
@@ -47,36 +47,28 @@ inline const proto::ProtoMap* asMapFast(const proto::ProtoObject* m) {
     return reinterpret_cast<const proto::ProtoMap*>(m);
 }
 
-inline bool isVectorTag(const proto::ProtoObject* v) {
-    return tagOf(v) == kTagTuple;
-}
-
 inline bool isListTag(const proto::ProtoObject* v) {
     const unsigned long tag = tagOf(v);
     return tag == kTagList || tag == kTagListSmall;
 }
 
 inline bool isSequential(const proto::ProtoObject* v) {
-    return v != nullptr && (isVectorTag(v) || isListTag(v));
+    return v != nullptr && (isVector(v) || isListTag(v));
 }
 
-// A list or a vector read by index, so both forms share one walk.
+// A list or a vector read by index. A vector's elements are a ProtoList
+// too (VectorOps.h), so one view covers both.
 struct SequenceView {
-    const proto::ProtoTuple* tuple = nullptr;
-    const proto::ProtoList*  list  = nullptr;
+    const proto::ProtoList* list = nullptr;
 
     static SequenceView of(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
         SequenceView s;
-        if (isVectorTag(v)) s.tuple = reinterpret_cast<const proto::ProtoTuple*>(v);
-        else                s.list  = v->asList(ctx);
+        s.list = isVector(v) ? vectorItems(ctx, v) : v->asList(ctx);
         return s;
     }
-    unsigned long size(proto::ProtoContext* ctx) const {
-        return tuple ? tuple->getSize(ctx) : list->getSize(ctx);
-    }
+    unsigned long size(proto::ProtoContext* ctx) const { return list->getSize(ctx); }
     const proto::ProtoObject* at(proto::ProtoContext* ctx, unsigned long i) const {
-        const int index = static_cast<int>(i);
-        return tuple ? tuple->getAt(ctx, index) : list->getAt(ctx, index);
+        return list->getAt(ctx, static_cast<int>(i));
     }
 };
 
@@ -248,17 +240,16 @@ bool keyIsIdentity(proto::ProtoContext* /*ctx*/, const proto::ProtoObject* key) 
         case kTagLargeInteger:
         case kTagList:
         case kTagListSmall:
-        case kTagTuple:
             return false;
         case kTagObject:
             // Keywords and symbols (interned Named values), atoms, futures,
             // promises, actors: equal only to themselves.
             return true;
         default:
-            // A map is matched by value; anything else protoCore may hand
-            // out (a method, a thread, a byte buffer) is equal only to
-            // itself.
-            return !isMap(key);
+            // A map and a vector are matched by value; anything else
+            // protoCore may hand out (a method, a thread, a byte buffer) is
+            // equal only to itself.
+            return !isMap(key) && !isVector(key);
     }
 }
 
@@ -285,10 +276,13 @@ unsigned long keyHash(proto::ProtoContext* ctx, const proto::ProtoObject* key) {
             return combine(kSaltBigInt, key->getHash(ctx));
         case kTagList:
         case kTagListSmall:
-        case kTagTuple:
             checkNativeStack();
             return sequenceHash(ctx, key);
         default:
+            if (isVector(key)) {
+                checkNativeStack();
+                return sequenceHash(ctx, key);
+            }
             if (isMap(key)) {
                 checkNativeStack();
                 return mapHash(ctx, key);

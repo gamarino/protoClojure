@@ -65,6 +65,27 @@ The project has no tagged releases yet; the version declared in
 
 ### Changed
 
+- **Vectors are protoCore `ProtoList`s, not interned `ProtoTuple`s**
+  (decision R2 below). A vector is now the `ProtoList` of its elements inside
+  a one-entry `ProtoSparseList` box — the box is what carries a pointer tag of
+  its own, so `vector?`, `list?`, `conj` and printing still tell a vector from
+  a list in O(1), and it costs one cell per vector. protoCore interns every
+  `ProtoTuple` node and frees none, so **every vector a program ever built
+  used to stay in memory until the process exited**; vectors are now ordinary
+  garbage, which `tests/unit/test_value_lifetime.cpp` fails to observe if the
+  interning comes back. Building a vector from a call's arguments and `vec` of
+  a list became O(1), and coercing a vector to a sequence — which `map`,
+  `filter`, `reduce`, `first` and `rest` all do — became O(1) instead of an
+  O(N) tuple-to-list conversion. Indexed access pays for it: a `ProtoList`
+  node holds one element where a `ProtoTuple` node holds four, so `nth` takes
+  about twice the node hops. Two equal vectors are no longer one pointer, so
+  `=` walks their elements like every other sequential comparison. Measured on
+  a build-plus-full-scan of a 200,000-element vector: 0.46 s against 0.75 s
+  and 296 MB against 545 MB resident, both in the new representation's favour,
+  because the interner's own cost outweighs the extra node hops; an
+  access-only probe (one build, 50 full `nth` scans of a 20,000-element
+  vector) was within the noise of a loaded machine.
+
 - **Actor mailboxes are protoCore `ProtoMPSCQueue`s** (PMQ-SPEC §6 step 4):
   three per actor, one per priority band, in place of the three
   `std::atomic<ActorMessage*>` stacks of C++ heap nodes. A message is now a
@@ -452,3 +473,67 @@ The project has no tagged releases yet; the version declared in
   `false`, `not=` is `true`, and a NaN is `=` only to the identical object,
   as in JVM Clojure. Numbers still compare exactly across integer and float
   representations, and `-0.0` is still `=` to `0.0`.
+
+## Decisions
+
+protoClojure has no separate decisions log; design decisions that were not
+taken by the maintainer are recorded here.
+
+### R2 — vectors off `ProtoTuple` *(agent, pending review)*
+
+**Taken by the implementing agent on 2026-09-24**, under the maintainer's
+authorisation for the overnight run of platform Track C
+(`protoScala/docs/ROADMAP.md`). It had not been decided; protoScala's DESIGN
+risk R2 lists it as "maintainer + platform track".
+
+**The decision.** A vector is the `ProtoList` of its elements inside a
+one-entry `ProtoSparseList` box (`src/runtime/VectorOps.h`).
+
+**Why.** `ProtoList` is what a vector wants: an immutable AVL list with
+structural sharing, an O(N) bulk constructor, O(log N) indexed access, and
+ordinary garbage collection. `ProtoTuple` gave compactness (four elements per
+node) and interning — and interning is the defect: protoCore never frees an
+interned tuple node, so a long-running program retained every vector it ever
+built. Verified against how protoClojure actually uses vectors before
+committing to it: `nth` is one indexed read, `count` is O(1) either way,
+`vector` / `vec` receive their elements *as a `ProtoList` already* (so they
+became O(1) boxes instead of O(N) tuple builds), every seq operation went
+through an O(N) `ProtoTuple::asList` conversion that is now an O(1) unbox, and
+`conj`, `assoc` on a vector and `subvec` are not implemented at all, so no
+tail-append or update path was affected.
+
+**Why the box.** A bare `ProtoList` was not possible: a Clojure *list* is
+already a `ProtoList`, and `vector?`, `list?`, `conj` and printing (`[1 2]`
+against `(1 2)`) must keep telling the two apart in O(1). protoClojure cannot
+mint a protoCore pointer tag, and the alternatives — a wrapper object with an
+`__items__` attribute, or a marker element inside the list — cost an attribute
+lookup or an index shift on every access, and a wrapper would have to be
+mutable and so would enter protoCore's mutables tree, which is walked at every
+stop-the-world. The one-entry sparse list is immutable, costs one Small-form
+cell and an inline scan of up to three slots, and reuses the very pointer tag
+that protoClojure's maps vacated when they moved to `ProtoMap` in this same
+release. Keying the sparse list by element index instead — a vector as a dense
+`ProtoSparseList` — was rejected: protoCore has no bulk sparse-list builder,
+so building an N-element vector would be N `setAt` calls, O(N log N) with
+log N cells of garbage each, against the one-pass `ProtoList` the arguments
+already are.
+
+**The access-cost change.** Indexed access costs about twice the node hops
+(log2 N against log4 N) and a large vector about three times the cells of the
+tuple's payload, offset by the box's single cell and by no interner entry.
+Construction, `vec`, and every sequential operation are cheaper — O(1) where
+they were O(N). Equal vectors stopped being pointer-equal. Measured: see the
+Changed entry above.
+
+**What reversing it would cost.** The representation is confined to
+`src/runtime/VectorOps.{h,cpp}` and its callers in `Primitives.cpp` and
+`MapOps.cpp`; `isVector` / `newVector` / `vectorItems` are the whole seam, so
+going back to `ProtoTuple` is re-implementing those three functions plus the
+`vector?` tag test — a day's work at most, and the test suite pins the
+behaviour either way. What would come back with it is the perennial retention
+of every vector, and what would be lost is the O(1) construction and seq
+coercion. A third option, if the maintainer wants the tuple's compactness
+without its interning, is a non-interned tuple type in protoCore; that is a
+protoCore change and needs a pointer tag, which this decision deliberately
+did not take.
+

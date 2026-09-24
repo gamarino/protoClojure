@@ -53,7 +53,7 @@ tell at a glance which parts of the surface are runnable today. The
 | Symbols, keywords, booleans, nil literals | Implemented |
 | Reader macros `'`, `` ` ``, `~`, `~@`, `#(...)`, `#'`, `#_`, `^` | Planned (only `@` today; `(quote atom)` works as a special form) |
 | Lists `(...)` | Implemented |
-| Vectors `[...]` | Implemented (ProtoTuple, distinct from list) |
+| Vectors `[...]` | Implemented (a `ProtoList` in a one-entry sparse-list box, distinct from list) |
 | Maps `{...}` | Implemented (`hash-map`, `assoc`, `dissoc`, `get`, `contains?`, `keys`, `vals`; `count` and `empty?` accept maps) |
 | Sets `#{...}` | Planned |
 | `def`, `defn`, `fn`, `let`, `loop`, `recur` | Implemented (`let` and `loop` inside function bodies only) |
@@ -372,15 +372,37 @@ head, `O(1)` `first` / `rest`, `O(n)` random access.
 
 ### 4.2 Vector
 
-Indexed sequential collection, backed by protoCore `ProtoTuple`.
-`O(log n)` random access, `O(log n)` `conj` at tail, `O(log n)` `assoc`.
+Indexed sequential collection. `O(log n)` random access with `nth`, `O(1)`
+`count`, and `O(1)` coercion to a sequence, so `map`, `filter`, `reduce`,
+`first` and `rest` on a vector cost what they cost on a list.
 
 ```clojure
-(conj [1 2] 3)         ;; => [1 2 3]
-(assoc [10 20 30] 1 0) ;; => [10 0 30]
 (nth [1 2 3] 0)        ;; => 1
-([1 2 3] 0)            ;; => 1 (vectors are functions of their indices)
+(count [1 2 3])        ;; => 3
+(vec (list 1 2))       ;; => [1 2]
+(vector? [1 2])        ;; => true, and (list? [1 2]) is false
+(= [1 2] (list 1 2))   ;; => true (sequential equality, §4.5)
 ```
+
+`conj`, `assoc` on a vector, `subvec` and calling a vector as a function of
+its index are **not implemented yet** (`STATUS.md`).
+
+**Representation.** A vector is a protoCore `ProtoList` of its elements inside
+a one-entry `ProtoSparseList` box, which is what gives it a pointer tag of its
+own and so tells `vector?` from `list?` in O(1). The box costs one cell per
+vector. Building a vector from a call's arguments, and `vec` of a list, are
+O(1): the elements already are the `ProtoList` that the box stores.
+
+Up to protoClojure 0.0.1 a vector was a protoCore `ProtoTuple`. protoCore
+interns every tuple node and frees none, so **every vector a program ever
+built stayed in memory until it exited**. Vectors are now ordinary garbage.
+The cost of the change is indexed access: a `ProtoList` node holds one
+element where a `ProtoTuple` node holds four, so `nth` takes about twice the
+node hops, and a large vector about three times the cells — while sequential
+access, construction and `vec` all got cheaper, and a large vector now costs
+less memory overall than the interned tuple plus its interner entry did. Two
+equal vectors are no longer one pointer, so `=` walks their elements like
+every other sequential comparison. (Decision R2, `CHANGELOG.md`.)
 
 ### 4.3 Maps
 

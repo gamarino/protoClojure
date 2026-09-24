@@ -12,6 +12,7 @@
 
 #include "runtime/MapOps.h"
 #include "runtime/Named.h"
+#include "runtime/VectorOps.h"
 
 #include "protoCore.h"
 #include <gtest/gtest.h>
@@ -67,8 +68,12 @@ struct MapOpsFixture : ::testing::Test {
         for (const auto* item : items) l = l->appendLast(ctx, item);
         return l->asObject(ctx);
     }
+    // A vector is a protoCore ProtoList in a one-entry sparse-list box
+    // (VectorOps.h), not an interned tuple.
     const proto::ProtoObject* vec(std::vector<const proto::ProtoObject*> items) const {
-        return ctx->newTuple(items)->asObject(ctx);
+        const proto::ProtoList* l = ctx->newList();
+        for (const auto* item : items) l = l->appendLast(ctx, item);
+        return protoClojure::newVector(ctx, l);
     }
 
     // Two keys name one entry, and then they must hash alike: a keyEquals

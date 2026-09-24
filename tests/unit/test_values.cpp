@@ -7,6 +7,7 @@
 
 #include "runtime/MapOps.h"
 #include "runtime/Named.h"
+#include "runtime/VectorOps.h"
 #include "runtime/Primitives.h"
 
 #include "protoCore.h"
@@ -49,8 +50,10 @@ struct ValuesFixture : ::testing::Test {
     const proto::ProtoObject* obj(const proto::ProtoList* l) const {
         return l->asObject(ctx);
     }
+    // A vector is a protoCore ProtoList in a one-entry sparse-list box
+    // (VectorOps.h), not an interned tuple.
     const proto::ProtoObject* tuple(const proto::ProtoList* l) const {
-        return ctx->newTupleFromList(l)->asObject(ctx);
+        return protoClojure::newVector(ctx, l);
     }
     const proto::ProtoObject* assoc(const proto::ProtoObject* m, const proto::ProtoObject* k,
                                     const proto::ProtoObject* v) const {
@@ -89,11 +92,11 @@ TEST_F(ValuesFixture, ListsAndTuplesCompareElementWiseBeyondTheSmallForm) {
 
 TEST_F(ValuesFixture, EmptySequentialCollectionsAreEqual) {
     const proto::ProtoObject* emptyList = obj(ctx->newList());
-    const proto::ProtoObject* emptyTuple = ctx->newTuple()->asObject(ctx);
-    EXPECT_TRUE(eq(emptyList, emptyTuple));
-    EXPECT_TRUE(eq(emptyTuple, emptyList));
+    const proto::ProtoObject* emptyVector = tuple(ctx->newList());
+    EXPECT_TRUE(eq(emptyList, emptyVector));
+    EXPECT_TRUE(eq(emptyVector, emptyList));
     EXPECT_FALSE(eq(emptyList, PROTO_NONE));
-    EXPECT_FALSE(eq(nullptr, emptyTuple));
+    EXPECT_FALSE(eq(nullptr, emptyVector));
 }
 
 TEST_F(ValuesFixture, NestedSequentialCollectionsCompareByValue) {
@@ -226,7 +229,7 @@ TEST_F(ValuesFixture, EqualValuesAreOneMapKeyExceptAcrossNumericTypes) {
         {floats12, 11},
         {tuple(floats12->asList(ctx)), 11},
         {obj(ctx->newList()), 12},
-        {ctx->newTuple()->asObject(ctx), 12},
+        {tuple(ctx->newList()), 12},
         {assoc(nullptr, num(1), list12), 13},
         {assoc(nullptr, num(1), tuple(list(1, 2))), 13},
         {assoc(nullptr, ctx->fromDouble(1.0), tuple(list(1, 2))), 14},

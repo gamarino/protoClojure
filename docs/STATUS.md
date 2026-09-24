@@ -5,10 +5,11 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 389 test cases: 291
-conformance fixtures under `tests/conformance/`, 91 GoogleTest unit
+scripts and an interactive REPL. `ctest` registers 391 test cases: 291
+conformance fixtures under `tests/conformance/`, 93 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
-its key semantics and key lifetime, value equality and hashing, the
+its key semantics, the lifetime of values that used to be interned, the
+vector representation, value equality and hashing, the
 native stack guard and the double printer (`tests/unit/`), and
 seven CLI checks (`tests/cli/`: `--help`, a generated program with 70,000
 distinct literals of each kind, the native bulk builders under a heap
@@ -109,7 +110,11 @@ The design specifications written during development are archived under
 ### Data structures
 
 - [x] Lists — protoCore `ProtoList`
-- [x] Vectors — protoCore `ProtoTuple` (O(log N) `nth`)
+- [x] Vectors — a protoCore `ProtoList` of the elements in a one-entry
+      `ProtoSparseList` box (`src/runtime/VectorOps.h`): O(log N) `nth`,
+      O(1) `count`, O(1) construction and O(1) coercion to a sequence, and
+      collected like any other value. They were interned `ProtoTuple`s, which
+      protoCore never frees (decision R2, CHANGELOG)
 - [x] Maps — an immutable protoCore `ProtoMap`, read and written through
       protoCore's shared hashed-collection helper with protoClojure's key
       semantics (`src/runtime/MapOps.h`), with `hash-map` / `assoc` /

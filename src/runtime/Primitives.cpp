@@ -3,6 +3,7 @@
 #include "ActorScheduler.h"
 #include "ListBuilder.h"
 #include "MapOps.h"
+#include "VectorOps.h"
 #include "StackGuard.h"
 
 #include "protoCore.h"
@@ -216,14 +217,13 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
         out += ')';
         return;
     }
-    if (v->isTuple(ctx)) {
-        const proto::ProtoTuple* t =
-            reinterpret_cast<const proto::ProtoTuple*>(v);
+    if (isVector(v)) {
+        const proto::ProtoList* items = vectorItems(ctx, v);
         out += '[';
-        unsigned long n = t->getSize(ctx);
+        unsigned long n = items->getSize(ctx);
         for (unsigned long i = 0; i < n; ++i) {
             if (i > 0) out += ' ';
-            printTo(ctx, out, t->getAt(ctx, static_cast<int>(i)), readable);
+            printTo(ctx, out, items->getAt(ctx, static_cast<int>(i)), readable);
         }
         out += ']';
         return;
@@ -620,31 +620,16 @@ const proto::ProtoObject* prim_str(proto::ProtoContext* ctx,
 
 // List + predicate primitives -----------------------------------
 
-// Treat nil as the empty seq. Vectors (ProtoTuple) are seq-coerced via
-// ProtoTuple::asList, which converts in O(N) but is fine for v0.9
-// benchmarks (consumers walk linearly anyway). Strings stay opaque for
-// the first version; later changes added string support.
+// Treat nil as the empty seq. A vector's elements already ARE a ProtoList
+// (VectorOps.h), so seq-coercing one is an unbox, not a conversion. Strings
+// stay opaque for the first version; later changes added string support.
 const proto::ProtoList* asSeqOrNull(proto::ProtoContext* ctx,
                                     const proto::ProtoObject* v) {
     if (!v || v == PROTO_NONE) return nullptr;
     if (isListTag(v)) return v->asList(ctx);
-    if (v->isTuple(ctx)) {
-        // v->asTuple() not exposed by handle API; route via the tuple
-        // protocol on the object.
-        const proto::ProtoTuple* t =
-            reinterpret_cast<const proto::ProtoTuple*>(v);
-        return t->asList(ctx);
-    }
+    if (isVector(v)) return vectorItems(ctx, v);
     throw std::runtime_error(
         "seq op: argument is not a list or vector");
-}
-
-// Returns the ProtoTuple* underlying `v` if it's a vector; nullptr otherwise.
-const proto::ProtoTuple* asTupleOrNull(proto::ProtoContext* ctx,
-                                       const proto::ProtoObject* v) {
-    if (!v) return nullptr;
-    if (!v->isTuple(ctx)) return nullptr;
-    return reinterpret_cast<const proto::ProtoTuple*>(v);
 }
 
 const proto::ProtoObject* prim_list(proto::ProtoContext* ctx,
@@ -660,22 +645,17 @@ const proto::ProtoObject* prim_list(proto::ProtoContext* ctx,
     return args->asObject(ctx);
 }
 
-// Session 9 — `(vector x y z)` builds a ProtoTuple. The bytecode form
-// `[x y z]` desugars to a call here, so vector-literal performance is
-// dominated by tuple build cost (O(N)).
+// `(vector x y z)`, and the bytecode form `[x y z]`, which desugars to a
+// call here. The call already handed us the positional arguments AS an
+// immutable ProtoList, and a vector's elements ARE a ProtoList
+// (VectorOps.h), so building one is a box: O(1), whatever the literal's
+// length. It used to be an O(N) tuple build.
 const proto::ProtoObject* prim_vector(proto::ProtoContext* ctx,
                                       const proto::ProtoObject*,
                                       const proto::ParentLink*,
                                       const proto::ProtoList* args,
                                       const proto::ProtoSparseList*) {
-    // `newTupleFromList` builds the tuple bottom-up in one pass over the
-    // argument list, so no intermediate version of anything is created.
-    // Re-growing a second ProtoList first — the old shape here — cost about
-    // log2(N) cells of garbage per element, and none of it could be collected
-    // before the primitive returned: a 70,000-element vector literal pinned
-    // ~1.2M dead cells and exhausted a 2,000,000-cell heap.
-    if (!args) return ctx->newTuple()->asObject(ctx);
-    return ctx->newTupleFromList(args)->asObject(ctx);
+    return newVector(ctx, args ? args : ctx->newList());
 }
 
 // (vec coll) — converts any seqable (list or vector) to a vector.
@@ -687,10 +667,9 @@ const proto::ProtoObject* prim_vec(proto::ProtoContext* ctx,
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("vec: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
-    if (v->isTuple(ctx)) return v;  // already a vector
+    if (isVector(v)) return v;  // already a vector
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
-    if (!lst) return ctx->newTuple()->asObject(ctx);
-    return ctx->newTupleFromList(lst)->asObject(ctx);
+    return newVector(ctx, lst ? lst : ctx->newList());
 }
 
 // `v` as println prints it, for error messages (an index argument keeps all
@@ -748,26 +727,16 @@ const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
             s->getSlice(ctx, static_cast<int>(idx), static_cast<int>(idx) + 1));
     }
 
-    const bool isVector = coll->isTuple(ctx);
-    if (!isVector && !isListTag(coll)) {
+    const bool vector = isVector(coll);
+    if (!vector && !isListTag(coll)) {
         throw std::runtime_error(
             std::string("UnsupportedOperationException: nth not supported on ") +
             valueTypeName(ctx, coll));
     }
 
-    // Vector path: O(log N).
-    if (isVector) {
-        const proto::ProtoTuple* t =
-            reinterpret_cast<const proto::ProtoTuple*>(coll);
-        long long sz = static_cast<long long>(t->getSize(ctx));
-        if (idx < 0 || idx >= sz) {
-            if (notFound) return notFound;
-            throwNthOutOfBounds(ctx, args->getAt(ctx, 1), sz);
-        }
-        return t->getAt(ctx, static_cast<int>(idx));
-    }
-    // List path: O(N).
-    const proto::ProtoList* lst = coll->asList(ctx);
+    // Both paths are one indexed read of a ProtoList, O(log N); a vector
+    // costs one unbox on top.
+    const proto::ProtoList* lst = vector ? vectorItems(ctx, coll) : coll->asList(ctx);
     long long sz = static_cast<long long>(lst->getSize(ctx));
     if (idx < 0 || idx >= sz) {
         if (notFound) return notFound;
@@ -784,7 +753,7 @@ const proto::ProtoObject* prim_vector_p(proto::ProtoContext* ctx,
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("vector?: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
-    return (v && v->isTuple(ctx)) ? PROTO_TRUE : PROTO_FALSE;
+    return isVector(v) ? PROTO_TRUE : PROTO_FALSE;
 }
 
 const proto::ProtoObject* prim_list_p(proto::ProtoContext* ctx,
@@ -2630,26 +2599,22 @@ namespace {
 // rules below treat both concrete types alike. Every sequence the runtime
 // produces (`rest`, `map`, `filter`, `keys`, `cons`, ...) is one of the two.
 struct SequentialView {
-    const proto::ProtoList*  list  = nullptr;
-    const proto::ProtoTuple* tuple = nullptr;
+    const proto::ProtoList* list = nullptr;
 
-    explicit operator bool() const { return list || tuple; }
-    unsigned long size(proto::ProtoContext* ctx) const {
-        return list ? list->getSize(ctx) : tuple->getSize(ctx);
-    }
+    explicit operator bool() const { return list != nullptr; }
+    unsigned long size(proto::ProtoContext* ctx) const { return list->getSize(ctx); }
     // O(log n): protoCore exposes no allocation-free sequential walk of a
-    // ProtoList or a ProtoTuple, so elements are read by index.
+    // ProtoList, so elements are read by index.
     const proto::ProtoObject* at(proto::ProtoContext* ctx, unsigned long i) const {
-        const int idx = static_cast<int>(i);
-        return list ? list->getAt(ctx, idx) : tuple->getAt(ctx, idx);
+        return list->getAt(ctx, static_cast<int>(i));
     }
 };
 
 SequentialView sequentialView(proto::ProtoContext* ctx,
                               const proto::ProtoObject* v) {
     SequentialView s;
-    if (isListTag(v)) s.list = v->asList(ctx);
-    else              s.tuple = asTupleOrNull(ctx, v);
+    if (isListTag(v))      s.list = v->asList(ctx);
+    else if (isVector(v))  s.list = vectorItems(ctx, v);
     return s;
 }
 
@@ -2662,7 +2627,7 @@ const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v)
     if (v->isDouble(ctx))                   return "a float";
     if (proto::ProtoObject::isStringTagFast(v)) return "a string";
     if (isListTag(v))                       return "a list";
-    if (v->isTuple(ctx))                    return "a vector";
+    if (isVector(v))                        return "a vector";
     if (isMap(v))                           return "a map";
     if (v->isMethod(ctx))                   return "a fn";
     const ActiveCallContext* cc = activeCallContext();
@@ -2791,15 +2756,16 @@ bool valuesEqual(proto::ProtoContext* ctx,
 
     // Any other object — keywords and symbols (interned, Named.h), atoms,
     // functions, ... — is equal only to itself. Decided by the pointer tag:
-    // protoCore's isTuple, isString and compare would first probe the
+    // protoCore's isString and compare would first probe the
     // object for a `__data__` wrapper attribute, which the runtime never sets.
     if (isObjectTag(a) || isObjectTag(b)) return false;
 
     // Sequential collections (lists and vectors) are equal when they hold
     // equal elements in the same order, whatever their concrete types, and
     // are never equal to anything else. One pass over the elements that
-    // stops at the first mismatch. (protoCore shares equal tuples of
-    // identical elements, which the pointer test above already accepts.)
+    // stops at the first mismatch. Since vectors stopped being interned
+    // tuples, two equal vectors are no longer one pointer, so this walk is
+    // what decides them.
     const SequentialView sa = sequentialView(ctx, a);
     const SequentialView sb = sequentialView(ctx, b);
     if (sa || sb) {

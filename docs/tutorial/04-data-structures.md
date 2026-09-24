@@ -100,9 +100,10 @@ The core operations:
 (vec (reverse [1 2 3]))    ;; => [3 2 1]      — back to vector
 ```
 
-**Performance feel.** A vector is a protoCore `ProtoTuple`, an
-immutable tree of four-slot nodes, so `nth` walks `O(log n)` levels.
-`vector` and `vec` copy their elements into a new tuple.
+**Performance feel.** A vector is a protoCore `ProtoList` of its elements in
+a one-entry box, so `nth` walks `O(log n)` levels of an immutable balanced
+tree. `vector` and `vec` do not copy anything: the elements already are that
+list, so making a vector out of them is a constant-time box.
 
 ## 4.4 Maps
 
@@ -370,8 +371,10 @@ Brief, because it matters when you are debugging or profiling:
 
 - **List** → protoCore `ProtoList` (an immutable balanced tree; `cons`
   adds at the head).
-- **Vector** → protoCore `ProtoTuple` (an immutable tree of four-slot
-  nodes; `nth` is `O(log n)`).
+- **Vector** → a protoCore `ProtoList` of the elements inside a one-entry
+  `ProtoSparseList` box, which is what carries the "this is a vector"
+  pointer tag (`nth` is `O(log n)`; making a vector from a list is `O(1)`).
+  It used to be an interned `ProtoTuple`, which protoCore never frees.
 - **Map** → a protoCore `ProtoMap`, with no wrapper (an immutable balanced
   tree whose slots are keyed by the key itself when it is matched by
   identity, and by its hash otherwise; each entry holds the original key and
