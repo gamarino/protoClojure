@@ -105,10 +105,9 @@ const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
 // when `coll` is not a map. `callableIsMap` tells the two shapes apart; the
 // caller has checked that `callable` is a named value or a map.
 //
-// Cost: one mapGet, which canonicalizes the key (MapOps.h); `callable` and
+// Cost: one mapGet, which hashes the key (MapOps.h); `callable` and
 // `args` must be rooted by the caller.
 const proto::ProtoObject* callLookup(proto::ProtoContext* ctx,
-                                     const MapKeyMarkers& mapKeys,
                                      const NamedLayout& named,
                                      const proto::ProtoObject* callable,
                                      bool callableIsMap,
@@ -130,7 +129,7 @@ const proto::ProtoObject* callLookup(proto::ProtoContext* ctx,
     const proto::ProtoObject* notFound = (argc == 2) ? args[1] : PROTO_NONE;
     if (!callableIsMap && !isMap(m)) return notFound;
     bool found = false;
-    const proto::ProtoObject* v = mapGet(ctx, mapKeys, m, key, &found);
+    const proto::ProtoObject* v = mapGet(ctx, m, key, &found);
     return found ? v : notFound;
 }
 
@@ -143,7 +142,6 @@ const proto::ProtoObject* callLookup(proto::ProtoContext* ctx,
 // does not enlarge the native frame of every call (StackGuard.h).
 [[gnu::noinline]]
 const proto::ProtoObject* foldKeywordPairs(proto::ProtoContext* frame,
-                                           const MapKeyMarkers& mapKeys,
                                            unsigned int firstPairSlot,
                                            unsigned int kvItems) {
     constexpr unsigned int kChunkItems = 256;  // even
@@ -154,7 +152,7 @@ const proto::ProtoObject* foldKeywordPairs(proto::ProtoContext* frame,
         for (unsigned int i = 0; i < items; ++i) {
             kv[i] = frame->getAutomaticLocal(firstPairSlot + done + i);
         }
-        kwMap = mapAssocPairs(frame, mapKeys, kwMap, kv, items);
+        kwMap = mapAssocPairs(frame, kwMap, kv, items);
         frame->setAutomaticLocal(firstPairSlot, kwMap);
     }
     return kwMap;
@@ -199,7 +197,6 @@ void packArguments(proto::ProtoContext& scope, unsigned int slot,
 static bool extractKwVals(proto::ProtoContext* ctx,
                           const BytecodeModule* subMod,
                           const proto::ProtoObject* maybeMap,
-                          const MapKeyMarkers& mapKeys,
                           const proto::ProtoObject** out) {
     const auto& kkeys = subMod->kwKeys();
     if (!isMap(maybeMap)) {
@@ -211,7 +208,7 @@ static bool extractKwVals(proto::ProtoContext* ctx,
         // prim_get does.
         bool found = false;
         const proto::ProtoObject* v =
-            mapGet(ctx, mapKeys, maybeMap, kkeys[i].keyword, &found);
+            mapGet(ctx, maybeMap, kkeys[i].keyword, &found);
         out[i] = found ? v : PROTO_NONE;
     }
     return true;
@@ -336,7 +333,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
             kwCount = static_cast<unsigned int>(subMod->kwKeys().size());
             if (kwCount > 16)
                 throw std::runtime_error("VM: a function may declare at most 16 :keys parameters");
-            extractKwVals(ctx, subMod, kwArgsMap, cc->mapKeys, kwVals);
+            extractKwVals(ctx, subMod, kwArgsMap, kwVals);
         }
 
         return execute(ctx, *subMod, *cc, callArgs, passArgc, capsVal,
@@ -346,7 +343,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
 
     // Keywords, quoted symbols and maps are functions: a map lookup.
     if (proto == cc->named.marker || isMap(callable)) {
-        return callLookup(ctx, cc->mapKeys, cc->named, callable,
+        return callLookup(ctx, cc->named, callable,
                           isMap(callable), args, argc);
     }
 
@@ -389,7 +386,6 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                      const proto::ProtoString* resultKey,
                      const proto::ProtoString* doneKey,
                      const proto::ProtoString* actorStateKey,
-                     const MapKeyMarkers& mapKeys,
                      const NamedLayout& named,
                      const proto::ProtoObject* const* args,
                      unsigned int argCount,
@@ -411,7 +407,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                          bytecodeKey, arityKey, capturesKey, aritiesKey,
                          valueKey, watchesKey,
                          thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-                         actorStateKey, mapKeys, named};
+                         actorStateKey, named};
     setActiveCallContext(cc);
     struct Guard {
         const ActiveCallContext* prior; ActiveCallContext saved;
@@ -630,7 +626,7 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
                 kwCount = static_cast<unsigned int>(subMod->kwKeys().size());
                 if (kwCount > 16)
                     throw std::runtime_error("VM: a function may declare at most 16 :keys parameters");
-                extractKwVals(&frame, subMod, kwArgsMap, env.mapKeys, kwVals);
+                extractKwVals(&frame, subMod, kwArgsMap, kwVals);
             }
 
             sp -= (argc + 1);
@@ -652,7 +648,7 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
                 lookupArgs[i] = frame.getAutomaticLocal(stackBase + sp - argc + i);
             }
             const proto::ProtoObject* result = callLookup(
-                &frame, env.mapKeys, env.named, callable, callableIsMap,
+                &frame, env.named, callable, callableIsMap,
                 lookupArgs, argc);
             sp -= (argc + 1);
             pushVal(result);
@@ -863,7 +859,7 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
                 const unsigned int kvItems = argc - fixed;
                 if (kvItems > 0) {
                     const proto::ProtoObject* kwMap = foldKeywordPairs(
-                        &frame, env.mapKeys, stackBase + sp - kvItems, kvItems);
+                        &frame, stackBase + sp - kvItems, kvItems);
                     sp -= kvItems;
                     pushVal(kwMap);
                     dispatchCall(fixed + 1);

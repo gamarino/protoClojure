@@ -20,8 +20,8 @@
  * setAttributeIfEqual (a lock-free compare-and-set), so threads interning
  * the same spelling concurrently all obtain the pointer that won. Two named
  * values are equal exactly when they are the same pointer: valuesEqual
- * (Primitives.h) compares them by identity, and a named value is its own
- * canonical map key (MapOps.h).
+ * (Primitives.h) compares them by identity, and a named value is a map key
+ * matched by identity (MapOps.h).
  *
  * GC rooting: the runtime roots `marker` and `table` for the lifetime of the
  * ProtoSpace. Every named value is reachable through the table and is never

@@ -10,3 +10,5 @@ build-dbg/
 .DS_Store
 docs/_build/
 docs/venv/
+build_pkg/
+tasks/

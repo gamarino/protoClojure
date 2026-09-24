@@ -1,5 +1,5 @@
 // Unit tests for value equality (valuesEqual in src/runtime/Primitives.h)
-// and its relation to canonical map keys (src/runtime/MapOps.h). The
+// and its relation to map key equality (src/runtime/MapOps.h). The
 // conformance fixtures under tests/conformance/08-collections and
 // tests/conformance/16-maps cover the Clojure-visible behaviour; these tests
 // exercise collections built directly with protoCore, past the small inline
@@ -16,7 +16,6 @@
 #include <cmath>
 #include <cstddef>
 
-using protoClojure::MapKeyMarkers;
 using protoClojure::valueTypeName;
 using protoClojure::valuesEqual;
 
@@ -25,11 +24,7 @@ namespace {
 struct ValuesFixture : ::testing::Test {
     proto::ProtoSpace space;
     proto::ProtoContext* ctx = space.rootContext;
-    // Markers are immutable, as in src/main.cpp; the Named intern table is
-    // mutated and stays mutable.
-    MapKeyMarkers markers{space.objectPrototype->newChild(ctx),
-                          space.objectPrototype->newChild(ctx),
-                          space.objectPrototype->newChild(ctx)};
+    // The Named intern table is mutated and stays mutable.
     protoClojure::NamedLayout named{
         space.objectPrototype->newChild(ctx),
         space.objectPrototype->newChild(ctx, /*isMutable=*/true),
@@ -60,7 +55,7 @@ struct ValuesFixture : ::testing::Test {
     const proto::ProtoObject* assoc(const proto::ProtoObject* m, const proto::ProtoObject* k,
                                     const proto::ProtoObject* v) const {
         const proto::ProtoObject* kv[2] = {k, v};
-        return protoClojure::mapAssocPairs(ctx, markers, m, kv, 2);
+        return protoClojure::mapAssocPairs(ctx, m, kv, 2);
     }
     bool eq(const proto::ProtoObject* a, const proto::ProtoObject* b) const {
         return valuesEqual(ctx, a, b);
@@ -157,15 +152,15 @@ TEST_F(ValuesFixture, KeywordsAndSymbolsAreInternedAndNeverEqualStrings) {
     const proto::ProtoObject* kv[4] = {
         kw(":a"), num(1), ctx->fromUTF8String(":a"), num(2)};
     const proto::ProtoObject* m =
-        protoClojure::mapAssocPairs(ctx, markers, nullptr, kv, 4);
+        protoClojure::mapAssocPairs(ctx, nullptr, kv, 4);
     EXPECT_EQ(protoClojure::mapCount(ctx, m), 2u);
     bool found = false;
-    EXPECT_EQ(protoClojure::mapGet(ctx, markers, m, kw(":a"), &found), num(1));
+    EXPECT_EQ(protoClojure::mapGet(ctx, m, kw(":a"), &found), num(1));
     EXPECT_TRUE(found);
-    EXPECT_EQ(protoClojure::mapGet(ctx, markers, m, ctx->fromUTF8String(":a"), &found),
+    EXPECT_EQ(protoClojure::mapGet(ctx, m, ctx->fromUTF8String(":a"), &found),
               num(2));
     EXPECT_TRUE(found);
-    protoClojure::mapGet(ctx, markers, m, kw("a"), &found);
+    protoClojure::mapGet(ctx, m, kw("a"), &found);
     EXPECT_FALSE(found);
 }
 
@@ -198,9 +193,9 @@ TEST_F(ValuesFixture, NaNIsEqualOnlyToItself) {
     EXPECT_TRUE(eq(dbl(-0.0), num(0)));
 }
 
-TEST_F(ValuesFixture, EqualValuesShareACanonicalKeyExceptAcrossNumericTypes) {
-    // Every value carries a group number: two values must have the same
-    // canonical map key exactly when their groups are equal. Values equal
+TEST_F(ValuesFixture, EqualValuesAreOneMapKeyExceptAcrossNumericTypes) {
+    // Every value carries a group number: two values must name one map entry
+    // exactly when their groups are equal. Values equal
     // under `=` share a group, except numbers of different types (1 and 1.0,
     // D15), which are different keys at every depth of a collection key.
     const proto::ProtoObject* list12 = obj(list(1, 2));
@@ -244,12 +239,16 @@ TEST_F(ValuesFixture, EqualValuesShareACanonicalKeyExceptAcrossNumericTypes) {
     for (std::size_t i = 0; i < n; ++i) {
         for (std::size_t j = 0; j < n; ++j) {
             const bool sameKey =
-                protoClojure::canonicalKey(ctx, markers, pool[i].value) ==
-                protoClojure::canonicalKey(ctx, markers, pool[j].value);
+                protoClojure::keyEquals(ctx, pool[i].value, pool[j].value);
             EXPECT_EQ(sameKey, pool[i].group == pool[j].group)
                 << "pool[" << i << "] and pool[" << j << "]";
-            // One canonical key implies `=`.
             if (sameKey) {
+                // Keys that name one entry must hash alike, or the entry is
+                // in a slot the lookup never reaches.
+                EXPECT_EQ(protoClojure::keyHash(ctx, pool[i].value),
+                          protoClojure::keyHash(ctx, pool[j].value))
+                    << "pool[" << i << "] and pool[" << j << "]";
+                // One key implies `=`.
                 EXPECT_TRUE(eq(pool[i].value, pool[j].value))
                     << "pool[" << i << "] and pool[" << j << "]";
             }

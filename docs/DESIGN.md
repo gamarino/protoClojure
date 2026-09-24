@@ -167,33 +167,39 @@ Every reader output is a protoCore object. In the implementation, a
 list is a `ProtoList`, a vector is a `ProtoTuple`, and a map literal is a
 map-marker child holding its entries as a source-order `ProtoList`. The
 compiler turns that literal into a `hash-map` call. The runtime map it builds
-is an immutable `ProtoSparseList`, with no wrapper object and no mutable
-state (`src/runtime/MapOps.h`):
+is an immutable `ProtoMap`, with no wrapper object and no mutable state,
+read and written through protoCore's shared hashed-collection helper
+(`hashedPut` / `hashedGet` / `hashedRemove` / `hashedForEach`) with one
+`KeySemantics` (`src/runtime/MapOps.h`):
 
-- **Index.** Each entry is indexed by the address of its key's canonical
-  key, and it holds a two-element `ProtoList` of the original key and the
-  value.
-- **Canonical keys.** Every key is canonicalized so that equal keys share
-  one pointer:
-  - SmallIntegers, booleans, `nil`, keywords, symbols and other objects
-    stand for themselves;
-  - strings become protoCore symbols;
-  - lists and vectors become the tuple of their elements' canonical keys
-    (protoCore interns every tuple);
-  - doubles, big integers and maps become tuples headed by one of three
-    private marker objects: the double's 64-bit pattern, the big integer's
-    sign and 52-bit limbs, or the map's canonical entries.
-- **Private markers.** The markers are immutable children of
-  `objectPrototype`, rooted with the runtime markers and never keywords. No
-  user vector can equal a marker tuple, and canonical keys never reach user
-  code.
-- **Costs.** `count` is `getSize`; `get` is a `getAt` after
-  canonicalization; `assoc` and `dissoc` are `setAt` and `removeAt`.
-- **Order and equality.** Walks follow the ascending index order, which
-  depends on addresses, so iteration order is unspecified and varies between
-  runs. Map `=` walks one map and probes the other by index.
-- **Memory.** Interned symbols and tuples are never freed, so canonical keys
-  stay alive until the program ends.
+- **Slots.** A key whose Clojure map-key equality is pointer identity —
+  keywords, symbols, `nil`, booleans, atoms, functions, futures, promises,
+  actors — is its own slot key. Every other key goes under a slot keyed by
+  the low 54 bits of `keyHash`, whose value is a flat `ProtoList` `[k v]`,
+  or `[k0 v0 k1 v1 …]` when two keys collide in those 54 bits. Both kinds
+  hold the original key object, which is what walks return.
+- **Key semantics.** `keyIsIdentity` / `keyHash` / `keyEquals` implement the
+  table of `LANGUAGE.md` §4.3: strings by content whatever form protoCore
+  stores them in, doubles by their exact bit pattern, big integers by value,
+  lists and vectors element by element (so a list and a vector with equal
+  elements are one key), maps by their entries with each value matched as a
+  key would be. Each class carries its own hash salt, so keys of different
+  classes are never confused. The two slot kinds cannot collide either: a
+  hashed slot key is always a SmallInteger word and an identity slot key
+  never is.
+- **Costs.** `get` is one `keyHash` plus a `getAt`; `assoc` and `dissoc` are
+  a probe plus a `setAt` / `removeAt`. `count` is O(n) (D25): a collision
+  slot holds more than one entry, so the slot count would undercount.
+  `empty?` is the O(1) slot count, because a slot always holds at least one
+  entry.
+- **Order and equality.** Walks follow the ascending slot-word order — an
+  address for an identity key, a hash for every other — so iteration order is
+  unspecified and varies between runs, which is what Clojure guarantees. Map
+  `=` walks one map and probes the other.
+- **Memory.** Nothing is interned: a key is stored as the object the caller
+  passed and dies with the last map that holds it. The interned canonical-key
+  layer this replaced kept every key alive for the life of the process
+  (deviation D23, withdrawn).
 
 The user-facing rules are in `LANGUAGE.md` §4.3. Symbols are interned
 `ProtoString`s.

@@ -65,6 +65,27 @@ The project has no tagged releases yet; the version declared in
 
 ### Changed
 
+- **Maps are protoCore `ProtoMap`s** (protoCore 2.1.0), read and written
+  through protoCore's shared hashed-collection helper (`hashedPut` /
+  `hashedGet` / `hashedRemove` / `hashedForEach`) with one Clojure
+  `KeySemantics`. The interned canonical-key layer is gone: a key is now
+  stored as the object the caller passed, so **map keys are ordinary garbage**
+  and deviation D23 (every distinct key ever used stays in memory until the
+  program exits) is withdrawn. Key semantics are unchanged — strings by
+  content, a list and a vector with equal elements as one key, maps by their
+  entries, doubles by bit pattern, big integers by value, keywords, symbols
+  and other objects by identity, numbers of different types apart (D15) —
+  and `keyHash` agrees with `keyEquals` at every depth. Iteration order stays
+  unspecified, as Clojure requires; it is now the ascending order of a slot
+  word (an address for a key matched by identity, a hash for every other),
+  where it used to be the address of the canonical key. `count` of a map
+  becomes **O(n)** (new deviation D25): two keys whose hashes collide in
+  their low 54 bits share a slot, so the slot count is a lower bound, not the
+  count; `empty?` stays O(1). Which slot kind a key lands in is invisible
+  through the language, so the new tests for it are white box
+  (`tests/unit/test_mapops.cpp`), and `tests/unit/test_mapops_gc.cpp` fails
+  if collection keys are retained.
+
 - **Built against protoCore 2.0.0** (soname `libprotoCore.so.2`). No source
   change was needed: protoClojure calls none of the APIs whose semantics
   changed — a repo-wide search finds no `setParents`, `addParent`,

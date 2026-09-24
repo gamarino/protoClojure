@@ -131,11 +131,6 @@ const proto::ProtoObject* promiseValue(proto::ProtoContext* ctx,
     return box ? box->asList(ctx)->getAt(ctx, 0) : nullptr;
 }
 
-// The canonical-key markers maps are built with (MapOps.h).
-inline const MapKeyMarkers& mapKeysOf(const ActiveCallContext* cc) {
-    return cc->mapKeys;
-}
-
 // The name a built-in function is installed under, or nullptr when `fn` is
 // not one of the primitives in kPrimitives (defined after the primitives).
 const char* primitiveName(proto::ProtoMethod fn);
@@ -803,11 +798,11 @@ const proto::ProtoObject* prim_list_p(proto::ProtoContext* ctx,
     return (v && isListTag(v)) ? PROTO_TRUE : PROTO_FALSE;
 }
 
-// Session 13 — map primitives. The representation (a ProtoSparseList
-// indexed by canonical keys), its cost model and its GC-rooting rules live
-// in src/runtime/MapOps.h; the primitives below only validate arguments and
-// delegate. Keys match by canonical key; map equality under `=` is
-// mapEquals, reached through valuesEqual.
+// Session 13 — map primitives. The representation (a ProtoMap driven
+// through protoCore's hashed-collection helper), the key semantics, the cost
+// model and the GC-rooting rules live in src/runtime/MapOps.h; the
+// primitives below only validate arguments and delegate. Map equality under
+// `=` is mapEquals, reached through valuesEqual.
 
 const proto::ProtoObject* prim_map_p(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
@@ -831,7 +826,7 @@ const proto::ProtoObject* prim_hash_map(proto::ProtoContext* ctx,
         throw std::runtime_error("hash-map: needs an even number of args");
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("hash-map: no active VM context");
-    return mapAssocPairs(ctx, mapKeysOf(cc), nullptr, args, 0, n);
+    return mapAssocPairs(ctx, nullptr, args, 0, n);
 }
 
 const proto::ProtoObject* prim_assoc(proto::ProtoContext* ctx,
@@ -847,7 +842,7 @@ const proto::ProtoObject* prim_assoc(proto::ProtoContext* ctx,
     const proto::ProtoObject* m = args->getAt(ctx, 0);
     if (!isMap(m))
         throw std::runtime_error("assoc: first arg must be a map");
-    return mapAssocPairs(ctx, mapKeysOf(cc), m, args, 1, n - 1);
+    return mapAssocPairs(ctx, m, args, 1, n - 1);
 }
 
 // (dissoc m) / (dissoc m k & ks) — `m` without the given keys, matched by
@@ -877,7 +872,7 @@ const proto::ProtoObject* prim_dissoc(proto::ProtoContext* ctx,
     scope.setAutomaticLocal(0, m);
     for (unsigned long i = 1; i < n; ++i) {
         scope.setAutomaticLocal(0,
-            mapDissoc(&scope, mapKeysOf(cc), scope.getAutomaticLocal(0),
+            mapDissoc(&scope, scope.getAutomaticLocal(0),
                       args->getAt(&scope, static_cast<int>(i))));
     }
     return scope.getAutomaticLocal(0);
@@ -898,7 +893,7 @@ const proto::ProtoObject* prim_get(proto::ProtoContext* ctx,
     const proto::ProtoObject* nf = (n == 3) ? args->getAt(ctx, 2) : PROTO_NONE;
     if (!isMap(m)) return nf;
     bool found = false;
-    const proto::ProtoObject* v = mapGet(ctx, mapKeysOf(cc), m, k, &found);
+    const proto::ProtoObject* v = mapGet(ctx, m, k, &found);
     return found ? v : nf;
 }
 
@@ -915,7 +910,7 @@ const proto::ProtoObject* prim_contains_p(proto::ProtoContext* ctx,
     const proto::ProtoObject* k = args->getAt(ctx, 1);
     if (!isMap(m)) return PROTO_FALSE;
     bool found = false;
-    mapGet(ctx, mapKeysOf(cc), m, k, &found);
+    mapGet(ctx, m, k, &found);
     return found ? PROTO_TRUE : PROTO_FALSE;
 }
 
@@ -2356,7 +2351,7 @@ const proto::ProtoObject* prim_actor_stats(proto::ProtoContext* ctx,
         ctx->fromLong(s.numWorkers),
         internNamed(ctx, cc->named, ":messages-processed"),
         ctx->fromLong(static_cast<long long>(s.messagesProcessed))};
-    return mapAssocPairs(ctx, mapKeysOf(cc), nullptr, kv, 4);
+    return mapAssocPairs(ctx, nullptr, kv, 4);
 }
 
 const proto::ProtoObject* prim_deliver(proto::ProtoContext* ctx,
@@ -2423,7 +2418,7 @@ const proto::ProtoObject* prim_add_watch(proto::ProtoContext* ctx,
         const proto::ProtoObject* base =
             isMap(old) ? old : nullptr;
         scope.setAutomaticLocal(0,
-            mapAssocPairs(&scope, mapKeysOf(cc), base, kf, 2));
+            mapAssocPairs(&scope, base, kf, 2));
         if (a->setAttributeIfEqual(&scope, cc->watchesKey, old,
                                    scope.getAutomaticLocal(0))) break;
     }
@@ -2452,7 +2447,7 @@ const proto::ProtoObject* prim_remove_watch(proto::ProtoContext* ctx,
         const proto::ProtoObject* old =
             a->getOwnAttributeDirect(&scope, cc->watchesKey);
         if (!isMap(old)) return a;
-        scope.setAutomaticLocal(0, mapDissoc(&scope, mapKeysOf(cc), old, k));
+        scope.setAutomaticLocal(0, mapDissoc(&scope, old, k));
         if (scope.getAutomaticLocal(0) == old) return a;   // key absent
         if (a->setAttributeIfEqual(&scope, cc->watchesKey, old,
                                    scope.getAutomaticLocal(0))) break;
@@ -2759,7 +2754,7 @@ bool valuesEqual(proto::ProtoContext* ctx,
     // Recurses once per level of nesting (StackGuard.h).
     checkNativeStack();
 
-    // Maps: the same canonical keys, with `=` values (MapOps.h).
+    // Maps: the same keys, with `=` values (MapOps.h).
     const bool aMap = isMap(a);
     const bool bMap = isMap(b);
     if (aMap || bMap) {

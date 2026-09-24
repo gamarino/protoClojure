@@ -109,15 +109,15 @@ The design specifications written during development are archived under
 
 - [x] Lists — protoCore `ProtoList`
 - [x] Vectors — protoCore `ProtoTuple` (O(log N) `nth`)
-- [x] Maps — an immutable protoCore `ProtoSparseList` indexed by the
-      interned canonical key of each key, holding the original key and the
-      value (`src/runtime/MapOps.h`), with `hash-map` / `assoc` / `dissoc` /
-      `get` / `contains?` / `keys` / `vals` / `map?`; `count` (O(1)) and
-      `empty?` accept maps. Iteration and print order are unspecified and can
-      change between runs. `assoc` of an equal key keeps the stored key
-      object and replaces the value
+- [x] Maps — an immutable protoCore `ProtoMap`, read and written through
+      protoCore's shared hashed-collection helper with protoClojure's key
+      semantics (`src/runtime/MapOps.h`), with `hash-map` / `assoc` /
+      `dissoc` / `get` / `contains?` / `keys` / `vals` / `map?`; `count`
+      (O(n), D25) and `empty?` (O(1)) accept maps. Iteration and print order
+      are unspecified and can change between runs. `assoc` of an equal key
+      keeps the stored key object and replaces the value
 - [x] Map equality — `=` / `not=` compare maps by value, whatever the order
-      (`mapEquals` in `src/runtime/MapOps.h`): the same canonical keys with
+      (`mapEquals` in `src/runtime/MapOps.h`): the same keys with
       `=` values; values compare recursively, so nested collections compare
       by value; a map is never `=` to a vector or a list
 - [x] Sequential equality — `=` / `not=` compare lists and vectors element
@@ -125,15 +125,16 @@ The design specifications written during development are archived under
       `(= [] (list))` are true, nested collections compare by value, and a
       list or vector is never `=` to a map, a string or `nil`
       (`valuesEqual` in `src/runtime/Primitives.h`)
-- [x] Canonical map keys — every key is reduced to an interned canonical
-      key (`canonicalKey` in `src/runtime/MapOps.h`; table in LANGUAGE.md
-      §4.3): strings by content, a list and a vector with equal elements as
-      one key, maps by their entries in any order, doubles by bit pattern,
-      big integers by exact value, keywords, symbols and other objects by
-      identity; so `(get {{:a 1} :x} {:a 1})`, `(get {[1 2] :x} (list 1 2))`
-      and `(get {"ab-cd-ef" 1} (str "ab-" "cd-ef"))` find their entries.
-      Numbers of different types are different keys (D15), `##NaN` finds
-      itself (D22), and canonical keys are never freed (D23)
+- [x] Map key semantics — `keyEquals` / `keyHash` in
+      `src/runtime/MapOps.h` (table in LANGUAGE.md §4.3): strings by
+      content, a list and a vector with equal elements as one key, maps by
+      their entries in any order, doubles by bit pattern, big integers by
+      exact value, keywords, symbols and other objects by identity; so
+      `(get {{:a 1} :x} {:a 1})`, `(get {[1 2] :x} (list 1 2))` and
+      `(get {"ab-cd-ef" 1} (str "ab-" "cd-ef"))` find their entries.
+      Numbers of different types are different keys (D15) and `##NaN` finds
+      itself (D22). Keys are ordinary garbage: nothing on the key path is
+      interned (D23, withdrawn)
 - [x] Strings — protoCore `ProtoString`
 - [x] Keywords and symbols — interned runtime values distinct from strings
       (`src/runtime/Named.h`): `(= :a ":a")` and `(= (quote a) "a")` are
@@ -340,7 +341,8 @@ raises a read, compile or runtime error.
 
 ### Data structures (not yet)
 
-- [ ] Sets — `ProtoSparseList` based, with `conj` / `disj`
+- [ ] Sets — `ProtoMap` based, through the same hashed-collection helper
+      the map uses, with `conj` / `disj`
 - [ ] Lazy seqs — `LazySeq` wrapper
 - [ ] `hash` as a function
 - [ ] Vectors as functions (`(v 0)`)
@@ -466,21 +468,19 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D20 | Atoms, futures, promises, actors and fns print as tags such as `#<atom 1>`, `#<fn>` and `#<fn println>` in `println`, `str` and the REPL (JVM Clojure: `#object[clojure.lang.Atom 0x... {:status :ready, :val 1}]` when printed, and `clojure.lang.Atom@...` or the class name under `str`) | v0.x |
 | D21 | Beyond ASCII, symbols and keywords accept only Unicode letters, combining marks and decimal digits: `a→b`, or a symbol containing a no-break space, is a read error (CONTRA JVM-Clojure, whose reader accepts any character that is neither whitespace nor a macro character) | v0.x |
 | D22 | A NaN map key is found by a NaN with exactly the same 64-bit pattern: `(get {##NaN :n} ##NaN)` is `:n` (CONTRA JVM-Clojure, which never finds a NaN key). A NaN produced by arithmetic can have a different bit pattern and then does not find a `##NaN` key: on x86-64, `(/ 0 0.0)` has its sign bit set | (perm) |
-| D23 | Map keys are interned and never freed: every distinct string, double, big integer or collection used as a map key, including keys only looked up and keys of removed entries, stays in memory until the program ends (keywords, symbols, SmallIntegers, booleans, `nil` and ASCII strings of up to 6 bytes cost nothing). Long-running programs should not use unbounded run-time-generated values as keys (CONTRA JVM-Clojure, where keys are ordinary garbage-collected objects) | (perm) |
+| ~~D23~~ | **Withdrawn.** Map keys used to be interned and never freed. Since maps moved onto protoCore's `ProtoMap` and its hashed-collection helper, a key is stored as the object the caller passed and dies with the last map that holds it, as in JVM Clojure | — |
 | D24 | Map iteration and print order is unspecified for maps of every size and can change between runs of the same program (JVM Clojure keeps insertion order for array maps of up to 8 entries) | (perm) |
+| D25 | `count` of a map is O(n), not O(1) (JVM Clojure: O(1)). Two keys whose hashes collide in their low 54 bits share one slot of the underlying `ProtoMap`, so the slot count is a lower bound on the number of entries, not the number itself; `count` therefore walks the entries. `empty?` stays O(1), because a slot always holds at least one entry | (perm) |
 
 ## Known issues
 
-- **String map keys leak memory in this version.** An operation that takes
-  a string key of more than 6 bytes, or a non-ASCII one, interns it with
+- **Long global names leak memory on every access.** Resolving a global
+  whose name is longer than 6 bytes, or non-ASCII, interns it with
   protoCore's `createSymbol`. When the symbol already exists, `createSymbol`
   still builds two permanent copies of the string and drops them: about
-  500 bytes per call for a 25-byte string (200,000 lookups of one existing
-  key grow memory by 100 MB). String literals are re-created on every
-  execution, so `(get m "username")` in a loop leaks too. The fix belongs in
-  protoCore (look the symbol up before building the permanent copy). Until
-  then, prefer keywords as map keys in loops. The same `createSymbol` call
-  runs on every access to a global whose name is longer than 6 bytes.
+  500 bytes per call for a 25-byte name. The fix belongs in protoCore (look
+  the symbol up before building the permanent copy). Map keys no longer go
+  through `createSymbol`, so this no longer affects string keys.
 
 - **Errors on actor threads are silent.** An actor message whose handler
   throws (a `StackOverflowError` included) sets the actor's value to `nil`

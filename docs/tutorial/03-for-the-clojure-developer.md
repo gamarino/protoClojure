@@ -226,7 +226,7 @@ tutorial and in [`INTEROP.md`](../INTEROP.md).
 
 In JVM Clojure, `assoc` is a method call on a Java class that
 implements `IPersistentMap`. In protoClojure, `assoc` returns a new map
-whose entries are a new `ProtoSparseList`, the persistent structure the
+whose entries are a new `ProtoMap`, the persistent structure the
 kernel uses; the original map is unchanged. Vectors are protoCore
 `ProtoTuple`s. There is no separate persistent-collection library
 between the language and the kernel.

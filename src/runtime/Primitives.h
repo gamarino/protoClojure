@@ -34,8 +34,8 @@ class ExecutionEngine;
 
 // Value equality as `=` defines it, shared by the `=` / `not=` primitives
 // and the VM's EQ opcode. Maps are equal when they have the same number of
-// entries and every key of one has an entry in the other under the same
-// canonical key (MapOps.h) with an equal value (mapEquals). Sequential
+// entries and every key of one names an entry of the other (MapOps.h) with
+// an equal value (mapEquals). Sequential
 // collections — lists and vectors, and so every sequence the runtime
 // produces — are equal when they hold equal elements in the same order,
 // whatever their concrete types: `[1 2]` equals `(1 2)` and `[]` equals
@@ -159,9 +159,6 @@ struct ActiveCallContext {
     const proto::ProtoString*  doneKey;
     // Session 19.
     const proto::ProtoString*  actorStateKey;
-    // The private markers of canonical map keys. A map is a protoCore sparse
-    // list recognised by its pointer tag (MapOps.h).
-    MapKeyMarkers              mapKeys;
     // Keyword and symbol values (Named.h).
     NamedLayout                named;
 };

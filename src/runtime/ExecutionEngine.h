@@ -33,7 +33,6 @@ namespace protoClojure {
 
 class BytecodeModule;
 struct ActiveCallContext;
-struct MapKeyMarkers;
 struct NamedLayout;
 
 class ExecutionEngine {
@@ -82,9 +81,6 @@ public:
                                   const proto::ProtoString* resultKey,
                                   const proto::ProtoString* doneKey,
                                   const proto::ProtoString* actorStateKey,
-                                  // The private markers of canonical map
-                                  // keys (MapOps.h).
-                                  const MapKeyMarkers& mapKeys,
                                   // Keyword and symbol values (Named.h),
                                   // installed in the ActiveCallContext for
                                   // printing and for primitives that build

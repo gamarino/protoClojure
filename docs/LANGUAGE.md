@@ -385,8 +385,9 @@ Indexed sequential collection, backed by protoCore `ProtoTuple`.
 ### 4.3 Maps
 
 **Representation, in one sentence.** A map is an immutable protoCore
-`ProtoSparseList` indexed by the interned *canonical key* of each key, whose
-entries hold the original key and the value.
+`ProtoMap`, driven through protoCore's shared hashed-collection helper: a key
+matched by identity is stored under itself, every other key under its hash,
+and both hold the original key object.
 
 ```clojure
 (assoc {:a 1} :b 2)            ;; => {:a 1, :b 2}  (or {:b 2, :a 1}: order is unspecified)
@@ -400,9 +401,9 @@ entries hold the original key and the value.
 ```
 
 **Operations.**
-- `count` is O(1).
+- `count` is O(n) (deviation D25); `empty?` is O(1).
 - `get`, `contains?`, calling a map or a keyword, `assoc` and `dissoc` are
-  O(log n), plus the cost of canonicalizing the key (below).
+  O(log n), plus the cost of hashing the key (below).
 - Every operation returns a new map and leaves its argument unchanged.
 - `assoc` of a key that is already present replaces the value and keeps the
   key object first stored: `(assoc {[1 2] :a} (list 1 2) :b)` is `{[1 2] :b}`.
@@ -413,39 +414,39 @@ entries hold the original key and the value.
 
 **Order is unspecified and can change between runs.**
 - `keys`, `vals`, printing and every other walk over a map visit the entries
-  in an unspecified order. That order is the order of the memory addresses of
-  the canonical keys, so the same program can print the same map differently
-  on two runs.
+  in an unspecified order. That order is the ascending order of the words the
+  entries are stored under — a memory address for a key matched by identity,
+  a hash for every other key — so the same program can print the same map
+  differently on two runs.
 - Within one run, `keys` and `vals` of one map value walk its entries in the
   same order, so `(= (map m (keys m)) (vals m))` holds.
 - Never rely on the order of a map; sort the keys when output must be stable.
 - Watches (`add-watch`) live in a map and fire in the same unspecified
   order, as on the JVM.
 
-**Key equality.** Two keys name the same entry exactly when they have the
-same canonical key. The canonical key of each key type:
+**Key equality.** Two keys name the same entry exactly when they match under
+the rules below:
 
-| Key type | Canonical key | Same key as | A different key from |
+| Key type | Matched by | Same key as | A different key from |
 |---|---|---|---|
 | Integer in the SmallInteger range (−2^53 to 2^53 − 1), `true`, `false`, `nil` | the value itself | the same value | `1.0` for `1`; an equal double |
-| Big integer (beyond the SmallInteger range) | an interned tuple of a private marker, the sign and the exact magnitude in 52-bit limbs | the same value however computed: `(* 10000000000 10000000000)` and `100000000000000000000` | an equal double: `1.0e20` |
-| Double | an interned tuple of a private marker and the two halves of its 64-bit pattern | a double with the same bit pattern: `1.5` and `(/ 3.0 2)`; `##NaN` and `##NaN` | `-0.0` for `0.0` (as in JVM Clojure); `1` for `1.0`; a NaN with another bit pattern |
-| String | the interned symbol of its characters | a string with the same characters, however built: `"user-1"` and `(str "user-" 1)` | a keyword or a symbol with the same spelling: `":a"` and `:a` |
-| Keyword, symbol | the keyword or symbol itself (always interned) | the same spelling | the string of its spelling |
-| Vector | the vector itself, or the interned tuple of its elements' canonical keys | a vector or a list with equal elements: `[1 2]` and `(list 1 2)` | a vector whose elements differ in numeric type: `[1]` and `[1.0]` |
-| List | the interned tuple of its elements' canonical keys | as for a vector | as for a vector |
-| Map | an interned tuple of a private marker and the canonical keys and values of its entries | a map with the same entries, built in any order | a map whose keys or values differ in numeric type: `{:a 1}` and `{:a 1.0}` |
-| Atom, function, future, promise, actor | the object itself | only itself | every other object |
+| Big integer (beyond the SmallInteger range) | its exact value | the same value however computed: `(* 10000000000 10000000000)` and `100000000000000000000` | an equal double: `1.0e20` |
+| Double | its exact 64-bit pattern | a double with the same bit pattern: `1.5` and `(/ 3.0 2)`; `##NaN` and `##NaN` | `-0.0` for `0.0` (as in JVM Clojure); `1` for `1.0`; a NaN with another bit pattern |
+| String | its characters | a string with the same characters, however built: `"user-1"` and `(str "user-" 1)` | a keyword or a symbol with the same spelling: `":a"` and `:a` |
+| Keyword, symbol | identity (they are interned) | the same spelling | the string of its spelling |
+| Vector | its elements, element by element | a vector or a list with equal elements: `[1 2]` and `(list 1 2)` | a vector whose elements differ in numeric type: `[1]` and `[1.0]` |
+| List | as for a vector | as for a vector | as for a vector |
+| Map | its entries, each value matched as a key would be | a map with the same entries, built in any order | a map whose keys or values differ in numeric type: `{:a 1}` and `{:a 1.0}` |
+| Atom, function, future, promise, actor | identity | only itself | every other object |
 
 These rules hold at every depth of a collection key. A big integer never
-holds a value in the SmallInteger range, so every integer has one
-canonical key. The markers of the double, big-integer and map tuples are
-private objects that user code cannot obtain, so a user vector is never
-mistaken for such a key: `(get {1.0 :d} [:double 1072693248 0])` is `nil`.
+holds a value in the SmallInteger range, so every integer is matched one way
+only. Each key type carries its own hash salt, so keys of different types are
+never confused whatever they are built from:
+`(get {1.0 :d} [:double 1072693248 0])` is `nil`.
 
 **Map equality.** Two maps are `=` when they have the same number of
-entries and every key of one has an entry under the same canonical key in
-the other, with `=` values. Values are compared with `=` (§4.5), so
+entries and every key of one names an entry of the other, with `=` values. Values are compared with `=` (§4.5), so
 `(= {:a 1} {:a 1.0})` is true, while `(= {1 :a} {1.0 :a})` is false because
 `1` and `1.0` are different keys. A map is never `=` to a vector or a list.
 
@@ -463,36 +464,26 @@ the other, with `=` values. Values are compared with `=` (§4.5), so
 - **Order.** Unspecified for every map, and it can differ between runs.
   (JVM Clojure keeps insertion order for array maps of up to 8 entries.)
 
-**Keys stay in memory until the program ends.**
-- Canonical keys are interned, and protoCore never frees interned strings
-  and tuples.
-- So every distinct string, double, big integer or collection that has ever
-  been used as a key stays in memory until the program exits. That includes
-  keys only looked up, and keys whose entries were removed.
-- Keywords, symbols, integers in the SmallInteger range, booleans, `nil`
-  and ASCII strings of up to 6 bytes cost no memory as keys.
-- Practical advice: in a long-running program, do not use an unbounded
-  stream of run-time-generated values as keys, such as
-  `(str "request-" id)` for every request. Prefer keywords, integers, or a
-  key drawn from a bounded set.
-- In this version, an operation with a string key of more than 6 bytes, or
-  one with non-ASCII characters, also allocates memory that is never freed,
-  even when that key is already interned. This is a protoCore defect (see
-  Known issues in `STATUS.md`); prefer keywords as keys inside loops.
+**Keys are ordinary garbage.** A key is stored as the object the caller
+passed and dies with the last map that holds it, exactly as in JVM Clojure.
+Nothing on the key path is interned. (Up to protoClojure 0.0.1 every key was
+reduced to an interned canonical key that protoCore never freed, so any
+distinct string, double, big integer or collection ever used as a key —
+keys only looked up included — stayed in memory until the program exited.
+That was deviation D23; it is withdrawn.)
 
-**Collection keys cost time.** The key is canonicalized on every operation
-that takes it:
+**Collection keys cost time.** The key is hashed on every operation that
+takes it, and compared element by element inside its slot:
 - O(1) for integers in the SmallInteger range, booleans, `nil`, keywords and
   symbols;
 - proportional to the length for strings, doubles and big integers;
 - proportional to the total size, at every depth, for vectors, lists and
   maps.
 
-A large collection used as a key is walked and interned again on each
-lookup.
+A large collection used as a key is walked again on each lookup.
 
-**Limit.** A map holds at most 16,777,215 (2^24 − 1) entries, the size limit
-of protoCore's sparse list.
+**Limit.** A map holds at most 16,777,215 (2^24 − 1) slots, the size limit of
+protoCore's `ProtoMap`.
 
 **Keywords and maps as functions.** A keyword is a function of a map and a
 map is a function of its keys, both with the semantics of `get`:
@@ -504,17 +495,23 @@ returns `nil`, not `not-found`. Calling either with any other number of
 arguments is an error. Keywords, quoted symbols and maps are ordinary
 function values: `(map :a [{:a 1} {:a 2}])` is `(1 2)`.
 
-**Representation.** A map is a protoCore `ProtoSparseList` with no wrapper
-object. The index of an entry is the address of its canonical key, and the
-value stored there is a two-element `ProtoList` holding the original key and
-the value. Printing and `keys` show that original key, so a list key prints
-as `(1 2)` and a string key as a string. A map is immutable: the garbage
-collector scans it like any other value, and it never enters protoCore's
-mutables tree. The implementation is `src/runtime/MapOps.{h,cpp}`.
+**Representation.** A map is a protoCore `ProtoMap` with no wrapper object,
+read and written through protoCore's shared hashed-collection helper
+(`hashedPut` / `hashedGet` / `hashedRemove` / `hashedForEach`) with
+protoClojure's key semantics. A key matched by identity — a keyword, a
+symbol, `nil`, a boolean, an atom, a function, an actor — is its own slot
+key; every other key goes under a slot keyed by the low 54 bits of its hash,
+whose value is a flat list `[k v]`, or `[k0 v0 k1 v1 …]` on the hash
+collision that gives `count` its O(n). Printing and `keys` show the original
+key object, so a list key prints as `(1 2)` and a string key as a string. A
+map is immutable: the garbage collector scans it like any other value, and it
+never enters protoCore's mutables tree. The implementation is
+`src/runtime/MapOps.{h,cpp}`.
 
 ### 4.4 Set (planned)
 
-Persistent hash set, backed by a `ProtoSparseList` keyed on the element.
+Persistent hash set, backed by a `ProtoMap` keyed on the element (the same
+hashed-collection helper the map uses).
 
 ```clojure
 (conj #{:a :b} :c)             ;; => #{:a :b :c}

@@ -59,7 +59,7 @@ Every operation we cover in this chapter follows that rule. There are
 **no in-place mutators** in the collection API. The substrate keeps
 this affordable: protoCore collections are balanced trees that share
 structure between versions, so `assoc` on a map updates its
-`ProtoSparseList` in `O(log n)` instead of copying every entry (§4.10).
+`ProtoMap` in `O(log n)` instead of copying every entry (§4.10).
 
 The one tool for genuinely mutable state is the `atom` (Chapter 6),
 which is a *deliberate* tool, not a default.
@@ -356,13 +356,13 @@ In practice, this matters if you put your own types (records, when v0.2
 adds them) into sets and as map keys. Implement structural hash properly
 and equality / set membership just work.
 
-> **In protoClojure 0.0.1** `hash` is not available as a function, and maps
-> do not hash their keys. Each key is reduced to an interned *canonical key*
-> shared by every equal key (§4.4, "Keys, order and memory"), so
-> `(get {{:a 1} :x} {:a 1})` and `(get {[1 2] :x} (list 1 2))` return `:x`.
-> Numbers of different types have different canonical keys: although
-> `(= 1 1.0)` is true in protoClojure (deviation D15), `1` and `1.0` are
-> different map keys, as in JVM Clojure. Sets are not implemented.
+> **In protoClojure 0.0.1** `hash` is not available as a function, but maps
+> do hash their keys, structurally: every key is matched by value at every
+> depth (§4.4, "Keys, order and memory"), so `(get {{:a 1} :x} {:a 1})` and
+> `(get {[1 2] :x} (list 1 2))` return `:x`. Numbers of different types are
+> different keys: although `(= 1 1.0)` is true in protoClojure (deviation
+> D15), `1` and `1.0` are different map keys, as in JVM Clojure. Sets are not
+> implemented.
 
 ## 4.10 The substrate underneath
 
@@ -372,9 +372,10 @@ Brief, because it matters when you are debugging or profiling:
   adds at the head).
 - **Vector** → protoCore `ProtoTuple` (an immutable tree of four-slot
   nodes; `nth` is `O(log n)`).
-- **Map** → a protoCore `ProtoSparseList`, with no wrapper (an immutable
-  balanced tree indexed by the address of each key's interned canonical
-  key; each entry holds the original key and the value).
+- **Map** → a protoCore `ProtoMap`, with no wrapper (an immutable balanced
+  tree whose slots are keyed by the key itself when it is matched by
+  identity, and by its hash otherwise; each entry holds the original key and
+  the value).
 - **Set** → not implemented yet.
 - **String** → protoCore `ProtoString` (rope-backed UTF-8, structurally
   shared on concatenation).

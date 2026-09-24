@@ -210,7 +210,7 @@ What is implemented:
   - lists and vectors: `list vector vec nth first rest cons count empty? reverse`
   - higher-order: `map filter reduce pmap`
   - predicates: `nil? not vector? list? map? string?`
-  - maps: `hash-map assoc dissoc get contains? keys vals`, and `count` / `empty?` on maps. A map is an immutable protoCore `ProtoSparseList` indexed by interned canonical keys: keys match by value (a map or vector key is found with an equal map, vector or list, a string key with an equal string built at run time), numbers of different types are different keys, iteration order is unspecified, and keys stay in memory until the program ends ([LANGUAGE.md §4.3](docs/LANGUAGE.md))
+  - maps: `hash-map assoc dissoc get contains? keys vals`, and `count` / `empty?` on maps. A map is an immutable protoCore `ProtoMap` driven through protoCore's shared hashed-collection helper: keys match by value (a map or vector key is found with an equal map, vector or list, a string key with an equal string built at run time), numbers of different types are different keys, iteration order is unspecified, keys are ordinary garbage, and `count` is O(n) ([LANGUAGE.md §4.3](docs/LANGUAGE.md))
   - strings: `subs upper-case lower-case starts-with? ends-with? includes? index-of replace join split trim triml trimr blank?`
   - atoms and watches: `atom atom? deref reset! swap! compare-and-set! add-watch remove-watch`
   - futures and promises: `make-future future? realized? promise promise? deliver`

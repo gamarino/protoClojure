@@ -18,7 +18,7 @@ include(GNUInstallDirs)
 
 # --- protoCore -----------------------------------------------------------------
 # Resolution order (Phase I, decision D-I1):
-#   1. An installed protoCore CMake package: find_package(protoCore 2.0 CONFIG).
+#   1. An installed protoCore CMake package: find_package(protoCore 2.1 CONFIG).
 #      The only mode that checks protoCore's version and ABI, and therefore the
 #      only mode a distributable package may be built in. Name a prefix with
 #      -DPROTO_CORE_PREFIX=<prefix> or -DCMAKE_PREFIX_PATH=<prefix>.
@@ -27,12 +27,12 @@ include(GNUInstallDirs)
 #      package was found and no prefix was named; refused by
 #      -DPROTOCORE_REQUIRE_PACKAGE=ON.
 #
-# The version floor is 2.0: protoClojure uses no protoCore API newer than 2.0.0
-# (its actor mailbox is built on lock-free MPSC stacks of its own, not on
-# protoCore's ProtoMPSCQueue). The ceiling is the next major, because
-# protoCore's major version and its soname move together.
-set(PROTOCORE_MIN_VERSION      "2.0")
-set(PROTOCORE_MIN_VERSION_FULL "2.0.0")
+# The version floor is 2.1: protoClojure's maps are protoCore `ProtoMap`s
+# driven through its hashed-collection helper, both added in 2.1.0. The
+# ceiling is the next major, because protoCore's major version and its soname
+# move together.
+set(PROTOCORE_MIN_VERSION      "2.1")
+set(PROTOCORE_MIN_VERSION_FULL "2.1.0")
 set(PROTOCORE_NEXT_MAJOR       "3.0.0")
 set(PROTOCORE_ABI_SOVERSION    "2")
 option(PROTOCORE_REQUIRE_PACKAGE

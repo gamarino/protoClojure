@@ -156,7 +156,6 @@ struct Session {
     const proto::ProtoString* aritiesKey;
     const proto::ProtoString* itemsKey;
     const proto::ProtoString* entriesKey;     // Reader map-literal entries
-    MapKeyMarkers             mapKeys;        // canonical-key markers (MapOps.h)
     const proto::ProtoString* valueKey;
     const proto::ProtoString* watchesKey;
     const proto::ProtoString* thunkKey;
@@ -194,7 +193,7 @@ struct Session {
 
     Session()
         : ctx(space.rootContext) {
-        ctx->resizeAutomaticLocals(16);
+        ctx->resizeAutomaticLocals(13);
 
         globals = const_cast<proto::ProtoObject*>(
             space.objectPrototype->newChild(ctx, /*isMutable=*/true));
@@ -233,14 +232,6 @@ struct Session {
         named.table = space.objectPrototype->newChild(ctx, true);
         ctx->setAutomaticLocal(12, named.table);
 
-        // The private first slots of the canonical map keys of doubles, big
-        // integers and maps (MapOps.h): immutable, never keywords.
-        mapKeys.doubleKey = space.objectPrototype->newChild(ctx);
-        ctx->setAutomaticLocal(13, mapKeys.doubleKey);
-        mapKeys.bigIntegerKey = space.objectPrototype->newChild(ctx);
-        ctx->setAutomaticLocal(14, mapKeys.bigIntegerKey);
-        mapKeys.mapKey = space.objectPrototype->newChild(ctx);
-        ctx->setAutomaticLocal(15, mapKeys.mapKey);
         named.spellingKey = proto::ProtoString::createSymbol(ctx, "__spelling__");
 
         bytesKey      = proto::ProtoString::createSymbol(ctx, "__bytes__");
@@ -289,7 +280,7 @@ struct Session {
             bytecodeKey, arityKey, capturesKey, aritiesKey,
             valueKey, watchesKey,
             thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-            actorStateKey, mapKeys, named};
+            actorStateKey, named};
         setActiveCallContext(printerCc);
     }
 
@@ -342,7 +333,7 @@ struct Session {
                 bytecodeKey, arityKey, capturesKey, aritiesKey,
                 valueKey, watchesKey,
                 thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-                actorStateKey, mapKeys, named);
+                actorStateKey, named);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "error: %s\n", e.what());
             return false;
@@ -427,7 +418,7 @@ void cmdLoad(Session& s, const std::string& path) {
                 s.bytecodeKey, s.arityKey, s.capturesKey, s.aritiesKey,
                 s.valueKey, s.watchesKey,
                 s.thunkKey, s.ccBlobKey, s.threadKey, s.resultKey, s.doneKey,
-                s.actorStateKey, s.mapKeys, s.named);
+                s.actorStateKey, s.named);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "%s: runtime error: %s\n",
                          path.c_str(), e.what());
