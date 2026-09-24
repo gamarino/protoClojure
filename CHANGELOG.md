@@ -65,6 +65,22 @@ The project has no tagged releases yet; the version declared in
 
 ### Changed
 
+- **Actor mailboxes are protoCore `ProtoMPSCQueue`s** (PMQ-SPEC §6 step 4):
+  three per actor, one per priority band, in place of the three
+  `std::atomic<ActorMessage*>` stacks of C++ heap nodes. A message is now a
+  three-element `ProtoList` — the function, its arguments, the promise — and
+  the three queues hang off the actor's wrapper object, which is mutable and
+  therefore a GC root. **This closes a GC-safety defect**: the old heap nodes
+  held protoCore pointers that nothing rooted, so a collection between a send
+  and its handler could free a payload nothing else referenced.
+  `tests/cli/actor-payloads-survive-gc.sh` is the fixture with that premise —
+  it segfaults when the one line that roots the queues is removed. Sends
+  allocate and free their message in a scope of their own, and a worker runs
+  each actor turn in a context of its own, so neither side pins a message in
+  a long-lived young generation. Cost, measured on the 1,000,000-message
+  single-actor benchmark: about 29% throughput and about 50% more resident
+  memory, against a mailbox whose payloads the collector could not see.
+
 - **Maps are protoCore `ProtoMap`s** (protoCore 2.1.0), read and written
   through protoCore's shared hashed-collection helper (`hashedPut` /
   `hashedGet` / `hashedRemove` / `hashedForEach`) with one Clojure
@@ -111,6 +127,20 @@ The project has no tagged releases yet; the version declared in
   symbol intern table, atoms, futures, promises and actors.
 
 ### Fixed
+
+- **An idle actor worker could deadlock the whole process at a collection.**
+  Workers are protoCore threads, so a stop-the-world phase waits for every
+  one of them to park at a safepoint — and a `std::condition_variable` wait
+  is not a safepoint. A worker idling in `popReady_` therefore never parked,
+  the collector waited for it for ever, and every other thread waited for the
+  collector. It needed only one idle worker and one collection; the
+  conformance fixtures never hit it because they allocate too little to
+  collect. The wait now runs inside a `ProtoContext::UnmanagedScope`, as the
+  promise poll in `deref` already did, and releases `queueMtx_` before
+  rejoining the quorum — rejoining blocks while a stop-the-world is in
+  progress, and holding that mutex across the block would stall every sender.
+  Found by `tests/cli/actor-payloads-survive-gc.sh`, which hangs the
+  pre-migration binary.
 
 - Native primitives that build a large collection no longer exhaust the heap.
   protoCore reclaims a context's allocations only once that context is

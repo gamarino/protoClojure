@@ -8,14 +8,20 @@
  * itself). Workers are protoCore threads (`ProtoSpace::newThread`)
  * so they participate in the GC quorum.
  *
- * Per-actor mailbox: lock-free MPSC stack per priority band. Senders
- * push with a relaxed CAS on `head[band]`; the running worker pops
- * the entire stack with a single atomic exchange, reverses to FIFO
- * order, and processes. A `claimed` atomic bool replaces the old
- * `running`/`scheduled` booleans and per-actor std::mutex: it is the
- * single source of truth for "this actor is being handled (queued or
- * running) — do not re-enqueue". Borrowed from protoST's lock-free
- * mailbox (`76ae764`); see project memory.
+ * Per-actor mailbox: one protoCore `ProtoMPSCQueue` per priority band
+ * (PMQ-SPEC). Senders push lock-free and in O(1) from any thread; the
+ * running worker drains a whole band with one `takeAll`, which returns
+ * the batch in FIFO order as an immutable `ProtoList`. A `claimed`
+ * atomic bool replaces the old `running`/`scheduled` booleans and
+ * per-actor std::mutex: it is the single source of truth for "this
+ * actor is being handled (queued or running) — do not re-enqueue".
+ *
+ * The three queues are held as an attribute of the actor's wrapper
+ * object, which is mutable and therefore a GC root, so the queues —
+ * and every message in them, with its function, its arguments and its
+ * promise — are reachable by the collector. They used to be
+ * `std::atomic<ActorMessage*>` stacks of C++ heap nodes holding
+ * unrooted protoCore pointers.
  *
  * Global ready queues remain mutex-protected — only touched once per
  * actor activation, not once per message.
@@ -42,6 +48,7 @@ class ProtoContext;
 class ProtoObject;
 class ProtoSpace;
 class ProtoList;
+class ProtoMPSCQueue;
 class ProtoThread;
 }
 
@@ -55,27 +62,35 @@ enum class ActorPriority {
     Low    = 2,
 };
 
-// One enqueued send. Each lives on the heap; the running worker is
-// responsible for deleting it once processed. The `next` link makes
-// these intrusive nodes in the per-priority lock-free stacks below.
-struct ActorMessage {
-    const proto::ProtoObject* fn;
-    const proto::ProtoObject* args;     // ProtoList (may be nil)
-    const proto::ProtoObject* promise;  // Promise to deliver into
-    ActorPriority             priority;
-    ActorMessage*             next = nullptr;
-};
+// One enqueued send, as a three-element ProtoList so the collector
+// traces it: the function, its extra arguments (a ProtoList, or nil)
+// and the promise to deliver the result into (or nil). Built by
+// newMessage below and read back with these indices.
+namespace message {
+constexpr int kFn      = 0;
+constexpr int kArgs    = 1;
+constexpr int kPromise = 2;
+constexpr int kSize    = 3;
+}  // namespace message
+
+// The message list for one send. Allocated in `ctx`; the caller pushes
+// it onto a mailbox, which is what roots it from then on.
+const proto::ProtoObject* newMessage(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject* fn,
+                                     const proto::ProtoObject* args,
+                                     const proto::ProtoObject* promise);
 
 // One actor's runtime state. Pinned by the wrapper ProtoObject's
 // `__actor_state__` attribute (long pointer). The scheduler owns
 // these via unique_ptr; they live for the process lifetime.
 //
 // Lock-free model:
-//   * Senders push onto `head[band]` with a CAS-retry loop. No mutex,
-//     no allocator contention on the actor itself.
-//   * The running worker (guaranteed unique by `claimed`) exchanges
-//     each head to nullptr in turn, reverses each stack to recover
-//     FIFO order, and processes the messages.
+//   * Senders push onto `mailbox[band]`, protoCore's lock-free
+//     multi-producer queue. No mutex, no allocator contention on the
+//     actor itself.
+//   * The running worker (guaranteed unique by `claimed`) drains each
+//     band in turn with one `takeAll`, which hands back that band's
+//     messages in FIFO order, and processes them.
 //   * `claimed` toggles 0→1 when an actor enters the ready queue
 //     (whether the trigger is a sender or the running worker at
 //     end-of-batch) and 1→0 when a worker finishes its batch with
@@ -83,12 +98,12 @@ struct ActorMessage {
 //     the schedule path — the running/queued worker will see their
 //     message at end-of-batch.
 struct ActorState {
-    std::atomic<ActorMessage*>  head[3]{{nullptr}, {nullptr}, {nullptr}};
-    std::atomic<bool>           claimed{false};
-    const proto::ProtoObject*   value      = nullptr;  // mirrored under wrapper __value__
-    const proto::ProtoObject*   wrapper    = nullptr;
-
-    ~ActorState();
+    // Rooted through the wrapper's __mailbox__ attribute, never through
+    // these raw pointers.
+    const proto::ProtoMPSCQueue* mailbox[3]{nullptr, nullptr, nullptr};
+    std::atomic<bool>            claimed{false};
+    const proto::ProtoObject*    value      = nullptr;  // mirrored under wrapper __value__
+    const proto::ProtoObject*    wrapper    = nullptr;
 };
 
 class ActorScheduler {
@@ -105,12 +120,18 @@ public:
     // the ProtoSpace destructs.
     void shutdown(proto::ProtoContext* ctx);
 
+    // The three queues must already be reachable from `wrapper`, which
+    // is what keeps them and their messages alive.
     ActorState* newActor(const proto::ProtoObject* wrapper,
-                         const proto::ProtoObject* initialValue);
+                         const proto::ProtoObject* initialValue,
+                         const proto::ProtoMPSCQueue* high,
+                         const proto::ProtoMPSCQueue* medium,
+                         const proto::ProtoMPSCQueue* low);
 
-    // Enqueue a message; schedule the actor if not already running
-    // or scheduled.
-    void send(ActorState* actor, ActorMessage&& msg);
+    // Enqueue a message (newMessage above); schedule the actor if not
+    // already running or scheduled. Callable from any thread.
+    void send(proto::ProtoContext* ctx, ActorState* actor,
+              ActorPriority priority, const proto::ProtoObject* message);
 
     struct Stats {
         unsigned numWorkers;
@@ -135,7 +156,7 @@ private:
     ActorScheduler& operator=(const ActorScheduler&) = delete;
 
     void enqueueReady_(ActorState* actor, ActorPriority p);
-    ActorState* popReady_();
+    ActorState* popReady_(proto::ProtoContext* ctx);
 
     std::once_flag startFlag_;
     std::atomic<bool> started_{false};

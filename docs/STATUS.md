@@ -5,15 +5,16 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 383 test cases: 291
-conformance fixtures under `tests/conformance/`, 86 GoogleTest unit
+scripts and an interactive REPL. `ctest` registers 389 test cases: 291
+conformance fixtures under `tests/conformance/`, 91 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
-value equality and hashing, the native stack guard and the double printer
-(`tests/unit/`), and
-six CLI checks (`tests/cli/`: `--help`, a generated program with 70,000
+its key semantics and key lifetime, value equality and hashing, the
+native stack guard and the double printer (`tests/unit/`), and
+seven CLI checks (`tests/cli/`: `--help`, a generated program with 70,000
 distinct literals of each kind, the native bulk builders under a heap
-ceiling, a stack overflow in the REPL, globals bound to nil in the REPL,
-and source nested too deeply to read or compile);
+ceiling, actor message payloads under a heap ceiling, a stack overflow in
+the REPL, globals bound to nil in the REPL, and source nested too deeply
+to read or compile);
 all pass. Benchmark numbers against Babashka 1.4.192
 are in [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md). Shipped changes
 are listed in [`CHANGELOG.md`](../CHANGELOG.md).
@@ -281,7 +282,9 @@ The design specifications written during development are archived under
 - [x] **Actors** (`actor`, `send`, `send-h` / `send-m` / `send-l`, `actor?`,
       `actor-stats`) on a configurable worker pool (`PROTOCLJ_ACTOR_WORKERS`,
       default `max(2, cores-2)`, cap 16). Three priority bands, single-method
-      invariant, lock-free per-actor mailbox. Peak throughput with a trivial
+      invariant, and three protoCore `ProtoMPSCQueue` mailboxes per actor —
+      lock-free on the send path and traced by the collector. Peak throughput
+      with a trivial
       body, 1,000,000 messages per mode (2026-09-16, idle machine): 313,578
       msg/s (single), 554,939 (fan-out), 282,886 (MPSC), 359,197 (MPMC) — see
       the README benchmark section.

@@ -35,6 +35,8 @@ add_test(NAME cli/large-program
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/large-program.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/bulk-builders-under-heap-limit
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/bulk-builders-under-heap-limit.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/actor-payloads-survive-gc
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/actor-payloads-survive-gc.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/repl-stack-overflow
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/repl-stack-overflow.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/repl-nil-global

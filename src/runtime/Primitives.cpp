@@ -2244,7 +2244,20 @@ const proto::ProtoObject* prim_actor(proto::ProtoContext* ctx,
         cc->actorMarkerProto->newChild(ctx, /*isMutable=*/true));
     wrap->setAttribute(ctx, cc->valueKey, init);
 
-    ActorState* state = sched.newActor(wrap, init);
+    // The three mailboxes (PMQ-SPEC §2.1: one queue per priority band).
+    // They go on the wrapper BEFORE the ActorState exists: the wrapper is
+    // mutable and therefore a GC root, and that attribute is the only thing
+    // that keeps the queues — and every message in them, with its function,
+    // its arguments and its promise — reachable by the collector.
+    const proto::ProtoMPSCQueue* high   = ctx->newMPSCQueue();
+    const proto::ProtoMPSCQueue* medium = ctx->newMPSCQueue();
+    const proto::ProtoMPSCQueue* low    = ctx->newMPSCQueue();
+    const proto::ProtoObject* mailboxes[3] = {
+        high->asObject(ctx), medium->asObject(ctx), low->asObject(ctx)};
+    wrap->setAttribute(ctx, cc->mailboxKey,
+                       ctx->newList(3, mailboxes)->asObject(ctx));
+
+    ActorState* state = sched.newActor(wrap, init, high, medium, low);
     wrap->setAttribute(ctx, cc->actorStateKey,
         ctx->fromLong(reinterpret_cast<long long>(state)));
     return wrap;
@@ -2277,28 +2290,38 @@ static const proto::ProtoObject* sendCore(proto::ProtoContext* ctx,
     ActorState* state = actorStateFrom(ctx, cc, args->getAt(ctx, 0), primName);
     const proto::ProtoObject* f = args->getAt(ctx, 1);
 
-    // Pack the extra args (positions 2..N-1) into a fresh ProtoList. Their
-    // number is the call's arity, which `apply` can make arbitrarily large,
-    // so the pack is chunked; the builder is closed before anything else on
-    // this thread pushes a context (see ListBuilder.h).
-    const proto::ProtoObject* extras;
-    {
-        ListBuilder b(ctx);
-        unsigned long n = args->getSize(b.context());
-        for (unsigned long i = 2; i < n; ++i) {
-            b.push(args->getAt(b.context(), static_cast<int>(i)));
-        }
-        extras = b.finish();
-    }
-
     // Build the per-send promise — same wire shape as `promise`.
     // A pending promise has no own value attribute: deliverPromise installs
     // it with one compare-and-set, which is why the promise is mutable.
+    // Being mutable also makes it a GC root, so it survives the scope below.
     const proto::ProtoObject* p =
         cc->promiseMarkerProto->newChild(ctx, /*isMutable=*/true);
 
-    ActorMessage msg{f, extras, p, priority};
-    ActorScheduler::instance().send(state, std::move(msg));
+    // The extra arguments, the message list and the queue node it is pushed
+    // into are all allocated in a scope that ends here, so protoCore sees
+    // them as candidates as soon as the send returns. Through `ctx` they
+    // would stay in the young generation of the caller's frame, which in a
+    // `(loop … (send a f))` is one context for every message the loop sends.
+    {
+        proto::ProtoContext scope(ctx->space, ctx);
+        // Pack the extra args (positions 2..N-1) into a fresh ProtoList.
+        // Their number is the call's arity, which `apply` can make
+        // arbitrarily large, so the pack is chunked; the builder is closed
+        // before anything else on this thread pushes a context
+        // (see ListBuilder.h). A send with no extra arguments — the common
+        // case, and the one the actor benchmarks measure — skips it.
+        const proto::ProtoObject* extras = PROTO_NONE;
+        const unsigned long n = args->getSize(&scope);
+        if (n > 2) {
+            ListBuilder b(&scope);
+            for (unsigned long i = 2; i < n; ++i) {
+                b.push(args->getAt(b.context(), static_cast<int>(i)));
+            }
+            extras = b.finish();
+        }
+        ActorScheduler::instance().send(
+            &scope, state, priority, newMessage(&scope, f, extras, p));
+    }
     return p;
 }
 

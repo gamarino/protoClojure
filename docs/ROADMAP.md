@@ -64,7 +64,7 @@ follow-ups below.
 - `future` on OS threads, `promise` / `deliver`, `realized?`, and `pmap`
   running one thread per element.
 - Actors on a worker pool, with three priority bands, a single-method
-  invariant and a lock-free per-actor mailbox.
+  invariant and three protoCore `ProtoMPSCQueue` mailboxes per actor.
 
 ### Local REPL and packaging
 

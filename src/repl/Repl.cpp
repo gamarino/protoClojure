@@ -164,6 +164,7 @@ struct Session {
     const proto::ProtoString* resultKey;
     const proto::ProtoString* doneKey;
     const proto::ProtoString* actorStateKey;
+    const proto::ProtoString* mailboxKey;
 
     const proto::ProtoString* star1Key;
     const proto::ProtoString* star2Key;
@@ -249,6 +250,7 @@ struct Session {
         resultKey     = proto::ProtoString::createSymbol(ctx, "__result__");
         doneKey       = proto::ProtoString::createSymbol(ctx, "__done__");
         actorStateKey = proto::ProtoString::createSymbol(ctx, "__actor_state__");
+        mailboxKey    = proto::ProtoString::createSymbol(ctx, "__mailbox__");
 
         star1Key      = proto::ProtoString::createSymbol(ctx, "*1");
         star2Key      = proto::ProtoString::createSymbol(ctx, "*2");
@@ -280,7 +282,7 @@ struct Session {
             bytecodeKey, arityKey, capturesKey, aritiesKey,
             valueKey, watchesKey,
             thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-            actorStateKey, named};
+            actorStateKey, mailboxKey, named};
         setActiveCallContext(printerCc);
     }
 
@@ -333,7 +335,7 @@ struct Session {
                 bytecodeKey, arityKey, capturesKey, aritiesKey,
                 valueKey, watchesKey,
                 thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-                actorStateKey, named);
+                actorStateKey, mailboxKey, named);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "error: %s\n", e.what());
             return false;
@@ -418,7 +420,7 @@ void cmdLoad(Session& s, const std::string& path) {
                 s.bytecodeKey, s.arityKey, s.capturesKey, s.aritiesKey,
                 s.valueKey, s.watchesKey,
                 s.thunkKey, s.ccBlobKey, s.threadKey, s.resultKey, s.doneKey,
-                s.actorStateKey, s.named);
+                s.actorStateKey, s.mailboxKey, s.named);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "%s: runtime error: %s\n",
                          path.c_str(), e.what());

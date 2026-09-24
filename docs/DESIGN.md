@@ -271,8 +271,11 @@ but mechanical. v0.2.
 
 **Agents** are deferred to v0.3. protoClojure 0.0.1 already ships a
 protoCore-native `actor` — a worker pool, three priority bands, a
-single-method invariant and a lock-free per-actor mailbox — whose `send`
-returns a promise. The Clojure `send` / `send-off` agent API has
+single-method invariant and three protoCore `ProtoMPSCQueue` mailboxes per
+actor, one per band — whose `send` returns a promise. A message is a
+three-element `ProtoList` of the function, its arguments and the promise, and
+the three queues hang off the actor's (mutable, and therefore root) wrapper
+object, so the collector traces every queued message. The Clojure `send` / `send-off` agent API has
 scheduling semantics we want to align with that actor model
 thoughtfully.
 

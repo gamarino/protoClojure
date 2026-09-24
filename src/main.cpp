@@ -197,6 +197,8 @@ int runFile(const char* path) {
         proto::ProtoString::createSymbol(ctx, "__done__");
     const proto::ProtoString* actorStateKey =
         proto::ProtoString::createSymbol(ctx, "__actor_state__");
+    const proto::ProtoString* mailboxKey =
+        proto::ProtoString::createSymbol(ctx, "__mailbox__");
     const protoClojure::NamedLayout namedLayout{
         ctx->getAutomaticLocal(kSlotNamedMarker),
         ctx->getAutomaticLocal(kSlotNamedTable),
@@ -261,7 +263,7 @@ int runFile(const char* path) {
                 bytecodeKey, arityKey, capturesKey, aritiesKey,
                 valueKey, watchesKey,
                 thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-                actorStateKey, namedLayout);
+                actorStateKey, mailboxKey, namedLayout);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s: runtime error: %s\n", path, e.what());
         // Drain the actor scheduler before unwinding so worker

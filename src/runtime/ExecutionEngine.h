@@ -81,6 +81,7 @@ public:
                                   const proto::ProtoString* resultKey,
                                   const proto::ProtoString* doneKey,
                                   const proto::ProtoString* actorStateKey,
+                                  const proto::ProtoString* mailboxKey,
                                   // Keyword and symbol values (Named.h),
                                   // installed in the ActiveCallContext for
                                   // printing and for primitives that build

@@ -102,7 +102,7 @@ protoClojure exposes the GIL-free concurrency that protoCore already has underne
 
 Actors run on a configurable worker pool (`PROTOCLJ_ACTOR_WORKERS`, default `max(2, cores − 2)`, cap 16). The scheduler enforces a **single-method invariant**: at most one message per actor is being processed at any instant, so the function body sees no concurrent access to the actor's state. Three priority bands (`send-h` / `send` / `send-l`) drain highest-priority-non-empty first.
 
-The per-actor mailbox is **lock-free** (three atomic-pointer MPSC stacks plus one `claimed` flag), following protoST's mailbox design. Senders never take a per-actor mutex; the running worker drains each stack with one atomic exchange and a reversal, then processes the batch.
+The per-actor mailbox is **lock-free and GC-visible**: three protoCore `ProtoMPSCQueue`s, one per priority band, plus one `claimed` flag. Senders never take a per-actor mutex; the running worker drains a whole band with one `takeAll`, which hands back that band's messages in FIFO order. The queues hang off the actor's wrapper object, so the collector traces every queued message — its function, its arguments and its promise. (Up to 0.0.1 the mailboxes were `std::atomic<ActorMessage*>` stacks of C++ heap nodes whose protoCore payloads were not rooted at all.)
 
 #### Benchmark — actors
 
@@ -197,7 +197,7 @@ protoClojure runs scripts and an interactive REPL. Version 0.0.1; no tagged rele
 | Namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **383 test cases: 291 conformance fixtures, 86 unit tests** (lexer, reader, bytecode module, runtime map, value equality and hashing, native stack guard, double printer) **and 6 CLI checks** (`--help`, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, and deeply nested source). All of them pass, against protoCore 2.0.0. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **389 test cases: 291 conformance fixtures, 91 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics and lifetime, value equality and hashing, native stack guard, double printer) **and 7 CLI checks** (`--help`, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, and deeply nested source). All of them pass, against protoCore 2.1.0. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 
@@ -243,7 +243,7 @@ cmake --build build_release
 ./build_release/protoclj script.clj          # run a .clj file
 ./build_release/protoclj --version           # version
 
-ctest --test-dir build_release -j1           # 383 cases: 291 fixtures + 86 unit tests + 6 CLI checks
+ctest --test-dir build_release -j1           # 389 cases: 291 fixtures + 91 unit tests + 7 CLI checks
 ./benchmarks/bench.sh                        # benchmark against Babashka
 ./benchmarks/actor-bench.sh                  # actor throughput, varied worker counts
 ```

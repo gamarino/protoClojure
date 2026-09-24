@@ -159,6 +159,9 @@ struct ActiveCallContext {
     const proto::ProtoString*  doneKey;
     // Session 19.
     const proto::ProtoString*  actorStateKey;
+    // The actor wrapper attribute holding its three mailboxes, one
+    // ProtoMPSCQueue per priority band (ActorScheduler.h).
+    const proto::ProtoString*  mailboxKey;
     // Keyword and symbol values (Named.h).
     NamedLayout                named;
 };

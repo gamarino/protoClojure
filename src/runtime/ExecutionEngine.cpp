@@ -386,6 +386,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                      const proto::ProtoString* resultKey,
                      const proto::ProtoString* doneKey,
                      const proto::ProtoString* actorStateKey,
+                     const proto::ProtoString* mailboxKey,
                      const NamedLayout& named,
                      const proto::ProtoObject* const* args,
                      unsigned int argCount,
@@ -407,7 +408,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                          bytecodeKey, arityKey, capturesKey, aritiesKey,
                          valueKey, watchesKey,
                          thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-                         actorStateKey, named};
+                         actorStateKey, mailboxKey, named};
     setActiveCallContext(cc);
     struct Guard {
         const ActiveCallContext* prior; ActiveCallContext saved;
