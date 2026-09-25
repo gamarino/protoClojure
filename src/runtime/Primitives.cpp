@@ -1595,7 +1595,13 @@ const proto::ProtoObject* prim_deref(proto::ProtoContext* ctx,
             if (tObj && tObj->isInteger(ctx)) {
                 proto::ProtoThread* t =
                     reinterpret_cast<proto::ProtoThread*>(tObj->asLong(ctx));
-                if (t) t->join(ctx);
+                if (t) {
+                    // See the note at shutdownFuturesImpl: a joining thread
+                    // must leave protoCore's running set or the future it is
+                    // waiting for can never get a collection cycle.
+                    proto::ProtoContext::UnmanagedScope parked(ctx);
+                    t->join(ctx);
+                }
             }
         }
         // A body that raised an error makes every deref raise it, wrapped as
@@ -1921,8 +1927,16 @@ static void shutdownFuturesImpl(proto::ProtoContext* ctx) {
         std::lock_guard<std::mutex> g(g_futureRegistryMtx);
         snapshot.swap(g_futureThreads);
     }
-    for (const proto::ProtoThread* t : snapshot) {
-        if (t) const_cast<proto::ProtoThread*>(t)->join(ctx);
+    {
+        // A joining thread still counts in protoCore's runningThreads, so it never
+        // parks: the stop-the-world quorum can never be met, no collection cycle can
+        // start, and the thread being joined waits for memory that a cycle would have
+        // freed. Leaving the running set for the duration of the block is what makes
+        // this a join and not a deadlock. Pinned by tests/cli/blocking-joins-park-for-gc.sh.
+        proto::ProtoContext::UnmanagedScope parked(ctx);
+        for (const proto::ProtoThread* t : snapshot) {
+            if (t) const_cast<proto::ProtoThread*>(t)->join(ctx);
+        }
     }
 }
 
@@ -2118,7 +2132,13 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
                 if (tObj && tObj->isInteger(rctx)) {
                     proto::ProtoThread* t =
                         reinterpret_cast<proto::ProtoThread*>(tObj->asLong(rctx));
-                    if (t) t->join(rctx);
+                    if (t) {
+                        // See the note at shutdownFuturesImpl. pmap joins in
+                        // order, so without this the first element that needs
+                        // a cycle deadlocks the whole call.
+                        proto::ProtoContext::UnmanagedScope parked(rctx);
+                        t->join(rctx);
+                    }
                 }
             }
             if (!anyFailed) anyFailed = threadFailed(rctx, fut, &firstError);

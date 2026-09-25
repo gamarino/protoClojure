@@ -74,8 +74,16 @@ void ActorScheduler::shutdown(proto::ProtoContext* ctx) {
     if (!started_) return;
     shuttingDown_ = true;
     queueCv_.notify_all();
-    for (auto* t : workers_) {
-        if (t) const_cast<proto::ProtoThread*>(t)->join(ctx);
+    {
+        // A joining thread still counts in protoCore's runningThreads, so it never
+        // parks: the stop-the-world quorum can never be met, no collection cycle can
+        // start, and the thread being joined waits for memory that a cycle would have
+        // freed. Leaving the running set for the duration of the block is what makes
+        // this a join and not a deadlock. Pinned by tests/cli/blocking-joins-park-for-gc.sh.
+        proto::ProtoContext::UnmanagedScope parked(ctx);
+        for (auto* t : workers_) {
+            if (t) const_cast<proto::ProtoThread*>(t)->join(ctx);
+        }
     }
     workers_.clear();
 }

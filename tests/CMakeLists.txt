@@ -41,6 +41,11 @@ add_test(NAME cli/bulk-builders-under-heap-limit
 # disabled and fails if THAT run succeeds.
 add_test(NAME cli/loop-garbage-is-reclaimed
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/loop-garbage-is-reclaimed.sh" "$<TARGET_FILE:protoclj>")
+# `ProtoThread::join` does not leave protoCore's running set, so a thread that
+# blocks there holds the stop-the-world quorum and no collection can start.
+# Four cases, one per join site, each under a heap ceiling so a cycle is needed.
+add_test(NAME cli/blocking-joins-park-for-gc
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/blocking-joins-park-for-gc.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/actor-payloads-survive-gc
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/actor-payloads-survive-gc.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/repl-stack-overflow
