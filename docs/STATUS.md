@@ -5,15 +5,16 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 391 test cases: 291
+scripts and an interactive REPL. `ctest` registers 392 test cases: 291
 conformance fixtures under `tests/conformance/`, 93 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 its key semantics, the lifetime of values that used to be interned, the
 vector representation, value equality and hashing, the
 native stack guard and the double printer (`tests/unit/`), and
-seven CLI checks (`tests/cli/`: `--help`, a generated program with 70,000
+eight CLI checks (`tests/cli/`: `--help`, a generated program with 70,000
 distinct literals of each kind, the native bulk builders under a heap
-ceiling, actor message payloads under a heap ceiling, a stack overflow in
+ceiling, the garbage a `loop` makes under a heap ceiling, actor message
+payloads under a heap ceiling, a stack overflow in
 the REPL, globals bound to nil in the REPL, and source nested too deeply
 to read or compile);
 all pass. Benchmark numbers against Babashka 1.4.192
@@ -484,6 +485,39 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D25 | `count` of a map is O(n), not O(1) (JVM Clojure: O(1)). Two keys whose hashes collide in their low 54 bits share one slot of the underlying `ProtoMap`, so the slot count is a lower bound on the number of entries, not the number itself; `count` therefore walks the entries. `empty?` stays O(1), because a slot always holds at least one entry | (perm) |
 
 ## Known issues
+
+- **Nothing is ever collected unless a heap ceiling is set. Severity: high.
+  The fix belongs in protoCore, so it is not made here.** protoCore starts a
+  collection cycle from exactly one place, the heap-limit enforcement path
+  (`ProtoSpace::reclaimWaitLocked`, reached from `waitForHeapHeadroom`).
+  `triggerGC()` is advisory — it raises the request only when the free-cell
+  ratio is under 0.2 or one is already pending — and, since the
+  allocation-budget trigger was reverted (protoCore `d8ceb7e7`, `c9320180`),
+  *nothing inside protoCore calls it at all*. So with no `softHeapLimit` and
+  no `maxHeapSize`, protoClojure grows the heap for ever and never collects,
+  however faithfully the VM submits its young generations.
+
+  Reproduction, on a build with the VM's safepoint working:
+
+      $ churn() { cat <<'CLJ'
+      (defn churn [n]
+        (loop [i 0 acc 0]
+          (if (>= i n) acc
+            (recur (+ i 1) (+ acc (count (str "garbage-" i)))))))
+      (println (churn 1600000))
+      CLJ
+      }
+      $ churn | PROTOCLJ_GC_STATS=1 protoclj /dev/stdin
+      22888890
+      protoclj gc: cycles=0 ... heap=9699328 heap-start=262144     # 710 MB resident
+      $ churn | PROTOCLJ_GC_STATS=1 PROTOCORE_HEAP_LIMIT_CELLS=1000000 protoclj /dev/stdin
+      22888890
+      protoclj gc: cycles=9 reclaimed-total=7772740 ... live-last=2753 heap=1000000
+
+  The live set of that program is two SmallIntegers. Whether a runtime should
+  install a default soft heap limit of its own, or whether protoCore should
+  start cycles from allocation again, is protoCore's call and the maintainer's:
+  it affects five runtimes, so nothing was changed here in either project.
 
 - **Long global names leak memory on every access.** Resolving a global
   whose name is longer than 6 bytes, or non-ASCII, interns it with

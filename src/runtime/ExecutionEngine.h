@@ -116,6 +116,91 @@ private:
                                       const proto::ProtoObject* const* kwVals,
                                       unsigned int kwCount,
                                       const proto::ProtoObject* kwMap);
+
+    // protoClojure's garbage-collection safepoint.
+    //
+    // protoCore reclaims nothing a context has not handed over. Every cell a
+    // context allocates is chained onto that context's *young generation*,
+    // and the collector's root scan records the chain head as a root and
+    // marks the whole chain — so until the chain is submitted, every cell the
+    // context ever allocated is live by definition. A context submits its
+    // chain in exactly two places: when it is destroyed, and from
+    // `ProtoContext::safepoint()` once it has crossed
+    // `ProtoSpace::maxAllocatedCellsPerContext` (10,000 cells by default,
+    // `PROTOCORE_GC_CONTEXT_THRESHOLD` to change it).
+    //
+    // The VM builds one `ProtoContext` per frame, so a call that returns
+    // shows the collector its garbage. A `loop` / `recur` does not: it is one
+    // frame, and its context lives as long as the loop. Before this hook the
+    // VM called `safepoint()` nowhere, so a loop's garbage accumulated in an
+    // un-submitted chain for the loop's whole duration. Measured on
+    // `(loop [i 0 acc 0] ... (str "garbage-" i) ...)` over 1,600,000
+    // iterations, whose live set is two SmallIntegers: zero collection cycles,
+    // the heap grown from 262,144 to 9,699,328 cells, 710 MB resident. Under
+    // `PROTOCORE_HEAP_LIMIT_CELLS` the same program aborted with protoCore's
+    // "live set 996519 cells, last cycle reclaimed 0 — out of memory": cycles
+    // ran, and every one of them reclaimed exactly nothing.
+    //
+    // The loop back-edge (`Op::JUMP_BACK`) and frame entry are the two points
+    // where the engine holds no half-built value in a C++ local: every live
+    // value is in a frame slot — locals, or the operand stack, which IS the
+    // frame context's `automaticLocals` — and therefore traced. That is
+    // exactly the precondition `ProtoContext::safepoint()` documents, and it
+    // is why the submission may not be made from `allocCell` instead.
+    //
+    // Frame entry submits nothing (a fresh frame has allocated nothing); it
+    // is there because `safepoint()` is also protoCore's stop-the-world park
+    // point, and recursion over the SmallInt fast-path opcodes allocates
+    // nothing at all, so without it an allocation-free call tree would hold
+    // up every other thread's collection for its whole duration.
+    //
+    // Polled on a stride, for cost. `ProtoContext::safepoint()` is a call
+    // across protoCore's shared-library boundary that reads five fields of
+    // the space and the context and takes `std::this_thread::get_id()` before
+    // it can decide to do nothing, and protoClojure's loop body can be as
+    // short as five opcodes — so on a 20,000,000-iteration loop that does
+    // nothing but add, one call per back-edge costs +9.4 % instructions and
+    // +17.0 % cycles. Measured, `perf stat -r 3`, against the same source
+    // with both call sites removed.
+    //
+    // Neither of the safepoint's two jobs needs polling on every event.
+    // Submission is threshold-gated at 10,000 cells inside protoCore, so it
+    // is inherently amortised; parking needs bounded latency, not zero. One
+    // poll per `kGcSafepointStride` events gives both: at 64 — the same
+    // stride protoCore's own `allocCell` uses for its stop-the-world poll — a
+    // loop allocating the six cells per iteration this project's own garbage
+    // workload allocates overshoots the submission threshold by under 4 %,
+    // and a stop-the-world waits at most 64 iterations longer. What a
+    // back-edge pays drops to a decrement and a branch: +0.7 % instructions
+    // and +1.3 % cycles on that same worst case.
+    //
+    // The counter is per thread, not per frame, so it also bounds the poll
+    // rate of deep allocation-free recursion, where the events are frame
+    // entries rather than back-edges.
+    //
+    // `PROTOCLJ_NO_GC_SAFEPOINT=1` disables the hook for A/B measurement and
+    // is read once per process.
+    void gcSafepoint(proto::ProtoContext* ctx) const {
+        if (--gcSafepointCountdown_ == 0) gcSafepointSlow(ctx);
+    }
+
+    // The strided path: resets the countdown and, unless disabled, calls
+    // `ProtoContext::safepoint()` on `ctx`. Defined in ExecutionEngine.cpp,
+    // because this header only forward-declares `proto::ProtoContext`.
+    void gcSafepointSlow(proto::ProtoContext* ctx) const;
+
+    // Events between polls; see gcSafepoint. A power of two, so the countdown
+    // reload is an immediate.
+    static constexpr unsigned kGcSafepointStride = 64;
+
+    // Counts down to the next poll on this thread. Seeded at 1 so the first
+    // event on a thread polls, which keeps a short program's behaviour
+    // independent of the stride.
+    static thread_local unsigned gcSafepointCountdown_;
+
+    // Read once from PROTOCLJ_NO_GC_SAFEPOINT at static-init time; see
+    // gcSafepoint.
+    static const bool gcSafepointEnabled_;
 };
 
 } // namespace protoClojure

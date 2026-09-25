@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 
 namespace protoClojure {
@@ -236,6 +237,22 @@ static int pickArity(proto::ProtoContext* ctx,
         if (variadic && static_cast<long long>(argc) >= a) return (int)k;
     }
     return -1;
+}
+
+// See the contract on the declarations in ExecutionEngine.h.
+const bool ExecutionEngine::gcSafepointEnabled_ =
+    (std::getenv("PROTOCLJ_NO_GC_SAFEPOINT") == nullptr);
+
+thread_local unsigned ExecutionEngine::gcSafepointCountdown_ = 1;
+
+void ExecutionEngine::gcSafepointSlow(proto::ProtoContext* ctx) const {
+    // Reload first, unconditionally: leaving the countdown at zero would wrap
+    // it to UINT_MAX on the next event and silence the hook for the rest of
+    // the thread's life. The reload happens whether or not the poll does, so
+    // PROTOCLJ_NO_GC_SAFEPOINT=1 leaves the loop's instruction mix as close to
+    // the enabled build's as the escape hatch can.
+    gcSafepointCountdown_ = kGcSafepointStride;
+    if (gcSafepointEnabled_ && ctx) ctx->safepoint();
 }
 
 const proto::ProtoObject*
@@ -491,6 +508,15 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
                 clist->getAt(&frame, static_cast<int>(i)));
         }
     }
+
+    // Garbage-collection safepoint on frame entry. Every incoming value —
+    // arguments, `:keys` values, the `:as` map, the captures — is already
+    // bound into a traced frame slot, so this poll cannot expose an unrooted
+    // object. It submits nothing (this frame has allocated nothing yet); it
+    // is here because `safepoint()` is also protoCore's stop-the-world park
+    // point, and recursion over the SmallInt fast-path opcodes allocates
+    // nothing at all. See ExecutionEngine.h::gcSafepoint.
+    gcSafepoint(&frame);
 
     auto pushVal = [&](const proto::ProtoObject* v) {
         // The constant test first: below the initial capacity a push
@@ -910,6 +936,14 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
 
             case Op::JUMP_BACK:
                 ip -= operand;
+                // The loop back-edge is protoClojure's garbage-collection
+                // safepoint. A `loop` / `recur` is ONE frame, so its context
+                // — and with it every cell the loop ever allocated — lives
+                // for the loop's whole duration; without this the collector
+                // is never shown a loop's garbage and reclaims none of it.
+                // Between instructions every live value is in a traced frame
+                // slot. See ExecutionEngine.h::gcSafepoint.
+                gcSafepoint(&frame);
                 break;
 
             case Op::JUMP_IF_TRUE: {

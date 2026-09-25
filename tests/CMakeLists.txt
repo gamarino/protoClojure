@@ -35,6 +35,12 @@ add_test(NAME cli/large-program
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/large-program.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/bulk-builders-under-heap-limit
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/bulk-builders-under-heap-limit.sh" "$<TARGET_FILE:protoclj>")
+# A `loop` is one call frame, so its garbage is reclaimed only if the VM hands
+# the frame's young generation to the collector at the back-edge. The fixture
+# is two-directional: it also runs the workload with the safepoint hook
+# disabled and fails if THAT run succeeds.
+add_test(NAME cli/loop-garbage-is-reclaimed
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/loop-garbage-is-reclaimed.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/actor-payloads-survive-gc
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/actor-payloads-survive-gc.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/repl-stack-overflow

@@ -72,6 +72,67 @@ The project has no tagged releases yet; the version declared in
   "the collector is working" a measurement rather than an assumption. Inert
   without the variable, and it starts no thread.
 
+### Fixed
+
+- **A `loop`'s garbage is reclaimed while the loop runs.** protoCore chains
+  every cell a context allocates onto that context's young generation, and its
+  root scan records the chain head as a root and marks the whole chain — so
+  until a context submits its chain, every cell it ever allocated is live *by
+  definition*. A context submits in exactly two places: when it is destroyed,
+  and from `ProtoContext::safepoint()` past
+  `ProtoSpace::maxAllocatedCellsPerContext`. The VM builds one context per
+  frame, so a call that returns shows the collector its garbage; a `loop` is
+  ONE frame, and the VM called `safepoint()` nowhere at all. Measured on a
+  1,600,000-iteration loop that allocates one string per iteration and keeps
+  two SmallIntegers: zero collection cycles, the heap grown from 262,144 to
+  9,699,328 cells, 710 MB resident; and under
+  `PROTOCORE_HEAP_LIMIT_CELLS=1000000` the same program aborted with
+  protoCore's "live set 996519 cells, last cycle reclaimed 0 — out of memory",
+  so cycles did run and every one of them reclaimed exactly nothing. The VM
+  now polls a garbage-collection safepoint at the loop back-edge
+  (`Op::JUMP_BACK`) and at frame entry, the two points where it holds no
+  half-built value in a C++ local — every live value is in a frame slot, which
+  *is* the frame context's traced `automaticLocals`. The same program now
+  completes inside the ceiling: 9 cycles, 7,772,740 cells reclaimed, a live
+  set of 2,753 cells, 77 MB resident. `PROTOCLJ_NO_GC_SAFEPOINT=1` disables
+  the hook, and `tests/cli/loop-garbage-is-reclaimed.sh` fails without it —
+  two-directionally, since it also requires the disabled run to abort.
+
+  The safepoint is polled on a **stride of 64 events per thread**, not on
+  every event: `ProtoContext::safepoint()` is a call across protoCore's
+  shared-library boundary that reads five fields and takes
+  `std::this_thread::get_id()` before it can decide to do nothing, and a
+  protoClojure loop body can be five opcodes long. One call per back-edge cost
+  +9.4 % instructions and +17.0 % cycles on a 20,000,000-iteration loop that
+  does nothing but add (`perf stat -r 3`, against the same source with both
+  call sites removed); the stride brings that to +0.75 % instructions with
+  cycles at or below the unhooked build, and +0.67 % instructions on an
+  allocation-free `fib 30`. Neither of the safepoint's jobs needs a poll per
+  event — submission is threshold-gated at 10,000 cells inside protoCore, and
+  parking needs bounded latency rather than none — and 64 is the stride
+  protoCore's own `allocCell` uses for its stop-the-world poll.
+
+  An earlier attempt at this hook (`1bcc433`) was reverted in `dde94c8`
+  because it "only served the allocation-budget GC trigger being reverted in
+  protoCore". That reading covered one of the safepoint's three effects. The
+  young-generation submission has happened *only* inside
+  `ProtoContext::safepoint()` since protoCore `b5fa8d31` moved it out of
+  `allocCell`, and the stop-the-world park is independent of any trigger;
+  neither depends on the reverted allocation budget.
+
+  `dde94c8` also removed the fixture `22-futures/spin-loop-allows-gc.clj`, and
+  it is **not** restored, because its premise no longer holds: its program was
+  re-run with the hook disabled and it completed, twice, rather than
+  deadlocking. A protoClojure loop that looks allocation-free is not one — the
+  `@stop` in `(loop [i 0] (if (= @stop 0) (recur (+ i 1)) :released))` is a
+  primitive call, every primitive call builds a child context, and that
+  context allocates, so the loop already parks at protoCore's own every-64
+  allocation poll. The stop-the-world park is a real effect of this hook and
+  the reason frame entry is one of its two sites, but it is asserted by no
+  test here, for the same reason protoST could not close its S3. Writing a
+  fixture for it would need a loop shape whose body provably allocates
+  nothing, and no such shape exists in the language today.
+
 ### Changed
 
 - **Vectors are protoCore `ProtoList`s, not interned `ProtoTuple`s**

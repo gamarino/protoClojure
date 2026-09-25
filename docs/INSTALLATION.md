@@ -84,7 +84,12 @@ Installed layout, relative to the prefix:
 and the core namespaces are compiled into the binary; the examples and the
 benchmarks are reference material a user can run, not a runtime dependency. The
 only paths `protoclj` reads from the environment are `PROTOCLJ_ACTOR_WORKERS`
-(the actor pool size) and `HOME` (the REPL history file).
+(the actor pool size) and `HOME` (the REPL history file). Two further variables
+are diagnostics, not configuration: `PROTOCLJ_GC_STATS=1` prints a one-line
+census of the collector's work to standard error when a script ends, and
+`PROTOCLJ_NO_GC_SAFEPOINT=1` disables the VM's garbage-collection safepoint so
+its cost can be measured — it makes a long-running loop retain everything it
+allocates, and is for A/B measurement only.
 
 protoClojure installs **no** copy of protoCore. `bin/protoclj` carries the
 install RPATH `$ORIGIN/../<libdir>` (`@executable_path/../<libdir>` on macOS),
