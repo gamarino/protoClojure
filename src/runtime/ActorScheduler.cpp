@@ -80,6 +80,17 @@ void ActorScheduler::shutdown(proto::ProtoContext* ctx) {
         // start, and the thread being joined waits for memory that a cycle would have
         // freed. Leaving the running set for the duration of the block is what makes
         // this a join and not a deadlock. Pinned by tests/cli/blocking-joins-park-for-gc.sh.
+        // Kept although protoCore's ProtoThread::join now brackets itself
+        // (2026-09-25, protoCore >= 2.3).  Nesting is provably idempotent:
+        // unmanagedDepth is a counter and only the outermost pair moves
+        // parkedThreads, so this guard costs one atomic increment.  It is kept
+        // because it protects against a version skew protoClojure's build CANNOT
+        // detect -- the build checks SOVERSION (3) and the fix changed no ABI, so a
+        // protoClojure linked against protoCore 2.2.0 would deadlock here with no
+        // warning.  Verified by experiment: with all four guards removed,
+        // tests/cli/blocking-joins-park-for-gc.sh passes in 8.3 s against a fixed
+        // kernel and is killed at 90 s against protoCore 9e85a4c0.  Remove these
+        // four guards once every embedder requires protoCore 2.3.
         proto::ProtoContext::UnmanagedScope parked(ctx);
         for (auto* t : workers_) {
             if (t) const_cast<proto::ProtoThread*>(t)->join(ctx);

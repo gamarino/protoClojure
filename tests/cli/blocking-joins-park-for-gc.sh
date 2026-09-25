@@ -2,13 +2,23 @@
 #
 # CLI check: a thread that blocks on a join leaves protoCore's running set.
 #
-# `ProtoThread::join` is a bare `std::thread::join` — it does NOT leave
-# protoCore's running set. A registered thread that blocks there is still
-# counted in `runningThreads` and never parks, so the stop-the-world quorum
-# (`parkedThreads >= runningThreads`) can never be met and no collection cycle
-# can start. Every thread that then needs memory waits for a cycle that cannot
-# begin, and one of them is usually the thread being joined: a deadlock, not a
-# slow shutdown.
+# A registered thread that blocks in a join without leaving protoCore's running
+# set is still counted in `runningThreads` and never parks, so the
+# stop-the-world quorum (`parkedThreads >= runningThreads`) can never be met and
+# no collection cycle can start. Every thread that then needs memory waits for a
+# cycle that cannot begin, and one of them is usually the thread being joined: a
+# deadlock, not a slow shutdown.
+#
+# UPDATED 2026-09-25: `ProtoThread::join` used to be a bare `std::thread::join`,
+# and this fixture's original premise was that protoClojure had to bracket every
+# join itself. protoCore >= 2.3 brackets `ProtoThread::join` inside the kernel,
+# so the obligation now belongs there and protoClojure's four guards are
+# redundant-but-kept insurance against a version skew the build cannot detect
+# (see the comment at each guard). This fixture is therefore now a check on the
+# KERNEL as much as on protoClojure, and it still earns its place: re-verified by
+# removing all four guards, which passes in 8.3 s against a fixed kernel and is
+# killed at 90 s against protoCore 9e85a4c0. Keep it: it is the only end-to-end
+# evidence in the family that the kernel guard works under real GC pressure.
 #
 # protoClojure blocked on four unbracketed joins — `deref` of a future, `pmap`,
 # `shutdownFutures` and `ActorScheduler::shutdown` — and this fixture covers
