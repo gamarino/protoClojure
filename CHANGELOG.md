@@ -62,6 +62,15 @@ The project has no tagged releases yet; the version declared in
   example scripts under `examples/`.
 - **Documentation.** Language reference, architectural design, interop design,
   status tracker, roadmap and a thirteen-chapter tutorial.
+- **Garbage-collection census (`PROTOCLJ_GC_STATS=1`).** Prints one line to
+  standard error when a script ends: cycles completed, cells reclaimed
+  (total, per-cycle maximum and mean), the live set of the last cycle, and
+  the heap's high-water mark against its starting size. protoCore publishes
+  `reclaimedLastCycle` per cycle and overwrites it, so a run that reclaimed
+  millions of cells and one that reclaimed none can end with the same value;
+  the census samples the counters as they are published, which is what makes
+  "the collector is working" a measurement rather than an assumption. Inert
+  without the variable, and it starts no thread.
 
 ### Changed
 

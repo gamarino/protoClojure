@@ -131,6 +131,7 @@ add_library(protoclj_runtime STATIC
     src/runtime/ActorScheduler.cpp
     src/runtime/BytecodeModule.cpp
     src/runtime/ExecutionEngine.cpp
+    src/runtime/GCCensus.cpp
     src/runtime/MapOps.cpp
     src/runtime/VectorOps.cpp
     src/runtime/Named.cpp

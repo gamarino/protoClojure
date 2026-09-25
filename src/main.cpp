@@ -14,6 +14,7 @@
 #include "runtime/ActorScheduler.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/ExecutionEngine.h"
+#include "runtime/GCCensus.h"
 #include "runtime/Named.h"
 #include "runtime/Primitives.h"
 #include "runtime/StackGuard.h"
@@ -72,6 +73,10 @@ std::string slurp(const char* path) {
 int runFile(const char* path) {
     proto::ProtoSpace space;
     proto::ProtoContext* ctx = space.rootContext;
+
+    // Declared after the space so it is joined and printed BEFORE the space it
+    // samples is destroyed. Inert unless PROTOCLJ_GC_STATS=1.
+    protoClojure::GCCensus gcCensus(space);
 
     // Slots layout (kept stable for the whole run, rooted via the root ctx):
     //   0 : globals namespace (mutable child of objectPrototype).
