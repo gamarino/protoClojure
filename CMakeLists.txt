@@ -34,7 +34,7 @@ include(GNUInstallDirs)
 set(PROTOCORE_MIN_VERSION      "2.1")
 set(PROTOCORE_MIN_VERSION_FULL "2.1.0")
 set(PROTOCORE_NEXT_MAJOR       "3.0.0")
-set(PROTOCORE_ABI_SOVERSION    "2")
+set(PROTOCORE_ABI_SOVERSION    "3")
 option(PROTOCORE_REQUIRE_PACKAGE
     "Require an installed protoCore CMake package; never fall back to ../protoCore" OFF)
 
