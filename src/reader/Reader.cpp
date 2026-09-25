@@ -83,7 +83,9 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
         }
 
         case TokenKind::Symbol: {
-            // createSymbol — interned for the lifetime of the ProtoSpace.
+            // createSymbol — interned for the lifetime of the PROCESS.
+            // protoCore 2.2.0 (P3) made interning process-global: one canonical
+            // pointer per spelling per process, not per ProtoSpace.
             // Two reads of `foo` in the same session return THE SAME pointer.
             // That identity is what the evaluator will use to look up vars.
             return reinterpret_cast<const proto::ProtoObject*>(
