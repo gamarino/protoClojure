@@ -1,7 +1,8 @@
-;; Fan-out throughput. 1000 actors × 100 inc messages each = 100_000
-;; total. With many actors, the scheduler distributes work across the
-;; worker pool and we should see wall-clock scaling roughly with
-;; min(workers, ACTORS).
+;; Fan-out throughput. 1000 actors × 1000 inc messages each = 1_000_000
+;; total (ACTORS and MSGS-EACH below are the two operands; this header was
+;; stale by a factor of ten until 2026-09-25). With many actors, the
+;; scheduler distributes work across the worker pool and we should see
+;; wall-clock scaling roughly with min(workers, ACTORS).
 
 (defn drain [futures]
   (loop [fs futures]

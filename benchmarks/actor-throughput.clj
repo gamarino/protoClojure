@@ -2,7 +2,9 @@
 ;;
 ;; Mode is selected by the env var `PROTOCLJ_BENCH_MODE`:
 ;;
-;;   single  — one actor, 100_000 inc messages. Stresses the actor's
+;;   single  — one actor, 1_000_000 inc messages (`N` in `single-mode`
+;;             below; this line said 100_000 until 2026-09-25).
+;;             Stresses the actor's
 ;;             own mailbox lock — more workers DON'T help here
 ;;             because of the single-method invariant.
 ;;
