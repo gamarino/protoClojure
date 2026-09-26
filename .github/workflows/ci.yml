@@ -1,0 +1,138 @@
+name: CI
+
+# protoClojure had no continuous integration until this file existed: every test
+# count this repository has published was produced by one person running one
+# command once.  This workflow builds protoCore and protoClojure from clean and
+# runs the whole ctest suite on every push and pull request.
+#
+# HOW protoCore IS OBTAINED: checked out as a SIBLING directory and built into
+# ../protoCore/build_release, which is the first path protoClojure's developer
+# fallback searches (CMakeLists.txt, decision D-I1).  No `cmake --install` is
+# involved.  The installed-package mode exists to check version and ABI against
+# a prefix that may be stale; on a runner nothing is stale, because both trees
+# are built from source in the same job -- so the hazard that mode protects
+# against cannot arise here, and the configuration CI runs is the one every
+# contributor runs locally.
+#
+# WHICH protoCore REF: pinned for push and pull_request, `master` for the
+# nightly schedule.  A pinned ref makes a red pull request unambiguous -- the
+# pull request is the only thing that changed.  Tracking master catches
+# integration breaks, which is worth having, but a red build would then have two
+# possible authors; the schedule keeps that signal separate, and the summary
+# below always records the protoCore commit actually used.
+#
+# WHAT IS NOT GATED HERE: nothing.  protoClojure's suite contains no wall-clock
+# or throughput assertion (the per-fixture `timeout 90s` in
+# tests/conformance/run.sh bounds a hang, it does not measure speed), and its
+# benchmarks are not registered as ctest tests.  If a timing assertion is ever
+# added, it belongs in a separate non-gating job, not in this one: a runner is a
+# shared machine, and a flaky gate gets disabled.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # 04:17 UTC daily: the integration run against protoCore master.
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+# The workflow reads source and runs tests; it needs nothing else.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROTOCORE_REPO: numaes/protoCore
+  # protoCore 2.5.0, SOVERSION 3 (master, 2026-09-25).  Bump this deliberately.
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'df8406a3f44f2a7c8505251bf6887e0ad6e60809' }}
+
+jobs:
+  test:
+    name: Build and test suite
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out protoClojure
+        uses: actions/checkout@v4
+        with:
+          path: protoClojure
+
+      - name: Check out protoCore as a sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PROTOCORE_REPO }}
+          ref: ${{ env.PROTOCORE_REF }}
+          path: protoCore
+
+      - name: Record what is being built
+        run: |
+          cmake --version | head -1
+          g++ --version | head -1
+          CORE_SHA=$(git -C protoCore rev-parse HEAD)
+          echo "protoCore ref: $PROTOCORE_REF ($CORE_SHA)"
+          {
+            echo "protoCore ref \`$PROTOCORE_REF\` at \`$CORE_SHA\`"
+            echo "protoClojure at \`$(git -C protoClojure rev-parse HEAD)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install libreadline
+        # protoClojure's REPL links readline; CMakeLists.txt fails the configure
+        # without it.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libreadline-dev
+
+      - name: Build protoCore
+        # Only the library: protoCore's own test binary is protoCore's CI's job,
+        # and building it here would download GoogleTest for nothing.
+        run: |
+          cmake -S protoCore -B protoCore/build_release -DCMAKE_BUILD_TYPE=Release
+          cmake --build protoCore/build_release --target protoCore --parallel "$(nproc)"
+
+      - name: Configure protoClojure
+        working-directory: protoClojure
+        run: cmake -B build_release -S .
+
+      - name: Build protoClojure
+        working-directory: protoClojure
+        run: cmake --build build_release --parallel "$(nproc)"
+
+      - name: Report the registered test count
+        # Printed, never asserted.  This family's counts moved four times in
+        # three days; a hard-coded total turns every new test into a red build.
+        working-directory: protoClojure
+        run: |
+          COUNT=$(ctest --test-dir build_release -N | tail -1)
+          echo "$COUNT"
+          echo "protoClojure ctest: $COUNT" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Test suite
+        # stdin at EOF for every ctest invocation in this family: a test that
+        # reads standard input hangs for the whole job timeout and reports
+        # nothing (protoST bug S18 is exactly that).
+        # `--timeout 300` is a hang bound, not a measurement: this repository sets
+        # no TIMEOUT property on any test, the whole suite finishes in about 20
+        # seconds, and without a bound a hung test consumes the job and is
+        # reported as nothing.  -j2 rather than -j$(nproc): the CLI fixtures run
+        # their own workers under a heap ceiling, and saturating a 4-vCPU runner
+        # with ctest workers is the load this family has already been burned by.
+        working-directory: protoClojure
+        run: ctest --test-dir build_release -j2 --timeout 300 --output-on-failure < /dev/null
+
+      - name: Static conformance ratchet
+        # The static half of the embedder conformance suite, driven from
+        # protoCore's checker against this repo's conformance-allow.txt.  It is a
+        # delta gate, not a count gate: a finding with no justification exits 1,
+        # a justification whose site is gone exits 2.  Measured green on this
+        # tree before this workflow was added.
+        #
+        # The twelve RUNTIME conformance cases are NOT run here, and that is not
+        # an omission by this workflow: protoClojure has no
+        # proto::conformance::Host yet, so no embedder-conformance test is
+        # registered in its ctest suite at all (docs/CONFORMANCE.md).
+        working-directory: protoClojure
+        run: python3 ../protoCore/scripts/conformance/check_static.py --repo .
