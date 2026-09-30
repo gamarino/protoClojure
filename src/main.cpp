@@ -15,6 +15,7 @@
 #include "runtime/BytecodeModule.h"
 #include "runtime/ExecutionEngine.h"
 #include "runtime/GCCensus.h"
+#include "runtime/IO.h"
 #include "runtime/Named.h"
 #include "runtime/Primitives.h"
 #include "runtime/StackGuard.h"
@@ -24,6 +25,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 namespace protoClojure {
 
@@ -45,11 +47,14 @@ void printVersion() {
 
 void printHelp() {
     std::printf(
-        "Usage: protoclj [options] [script.clj]\n"
+        "Usage: protoclj [options] [script.clj [args...]]\n"
         "\n"
         "Options:\n"
         "  --version       Print version and exit.\n"
         "  --help, -h      Print this help and exit.\n"
+        "\n"
+        "Arguments after the script's path are bound, as strings, to\n"
+        "*command-line-args* (nil when there are none).\n"
         "\n"
         "Interactive:\n"
         "  (no args)       Start the interactive REPL (libreadline).\n"
@@ -70,7 +75,12 @@ std::string slurp(const char* path) {
 // Run a .clj file end-to-end: read every top-level form, compile each into a
 // shared BytecodeModule with statement-level POP separators, terminate with
 // RETURN, then execute. Returns the program's exit code.
-int runFile(const char* path) {
+struct ScriptRun {
+    const char* path;
+    std::vector<std::string> args;  // *command-line-args*
+};
+
+int runFile(const char* path, const std::vector<std::string>& scriptArgs) {
     proto::ProtoSpace space;
     proto::ProtoContext* ctx = space.rootContext;
 
@@ -105,6 +115,9 @@ int runFile(const char* path) {
     protoClojure::installPrimitives(
         ctx, const_cast<proto::ProtoObject*>(
             ctx->getAutomaticLocal(kSlotGlobals)));
+    protoClojure::setCommandLineArgs(
+        ctx, const_cast<proto::ProtoObject*>(
+            ctx->getAutomaticLocal(kSlotGlobals)), scriptArgs);
 
     // The prototype markers below are never mutated, so they are immutable
     // objects. Only the globals namespace and the Named intern table are
@@ -271,8 +284,9 @@ int runFile(const char* path) {
                 actorStateKey, mailboxKey, namedLayout);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s: runtime error: %s\n", path, e.what());
-        // Drain the actor scheduler before unwinding so worker
-        // threads don't outlive the ProtoSpace.
+        // Stop HTTP servers and drain the actor scheduler before
+        // unwinding so worker threads don't outlive the ProtoSpace.
+        protoClojure::shutdownIO(ctx);
         protoClojure::shutdownFutures(ctx);
         protoClojure::ActorScheduler::instance().shutdown(ctx);
         return 1;
@@ -281,7 +295,10 @@ int runFile(const char* path) {
     // pending work, then join. Without this, a script that fires off
     // futures or actor sends without explicit @ may segfault at exit
     // when the ProtoSpace destructor runs while workers still hold
-    // pointers. Same root cause for both, same fix: join first.
+    // pointers. Same root cause for both, same fix: join first. HTTP
+    // servers still running are stopped first: their handlers may use
+    // futures and actors.
+    protoClojure::shutdownIO(ctx);
     protoClojure::shutdownFutures(ctx);
     protoClojure::ActorScheduler::instance().shutdown(ctx);
     return 0;
@@ -319,10 +336,16 @@ int main(int argc, char** argv) {
                 "protoclj: unknown flag '%s'. Try --help.\n", a);
             return 1;
         }
-        // Positional: a file to run.
+        // Positional: a file to run. Every argument after it belongs to the
+        // script (`*command-line-args*`), flags included.
+        ScriptRun run{argv[i], {}};
+        for (int j = i + 1; j < argc; ++j) run.args.emplace_back(argv[j]);
         return protoClojure::runOnEvaluatorThread(
-            [](void* path) { return runFile(static_cast<const char*>(path)); },
-            static_cast<void*>(argv[i]));
+            [](void* p) {
+                auto* r = static_cast<ScriptRun*>(p);
+                return runFile(r->path, r->args);
+            },
+            static_cast<void*>(&run));
     }
     return 0;
 }

@@ -83,6 +83,23 @@ follow-ups below.
   errors of the built-in functions JVM Clojure's classes (D26); decide how
   an exception escaping an actor handler should surface.
 
+### Input and output
+
+- On the shared protoIO library (linked statically; OpenSSL is the only new
+  runtime dependency): `slurp` (files and `http(s)` URLs), `spit`,
+  `reader` / `writer` / `with-open`, `read-line`, `line-seq`, `file-seq`,
+  the `clojure.java.io` helpers `file`, `copy`, `delete-file`,
+  `make-parents`, and `exists?` / `directory?`; `sh`; `getenv`, `exit`,
+  `*command-line-args*`.
+- HTTP: a client in babashka http-client's shape and a Ring server whose
+  connections run on ProtoThreads of their own, never on the actor pool
+  (`DESIGN.md` §4.2).
+- TCP, UDP and TLS sockets under protoClojure's own names (D30).
+- Follow-ups: move the functions into `clojure.java.io`,
+  `clojure.java.shell` and `babashka.http-client` once namespaces exist
+  (D28); a lazy `line-seq` once lazy seqs exist (D29); a connection limit
+  for the HTTP server; `*in*` / `*out*` with `binding`; byte streams.
+
 ### Local REPL and packaging
 
 - Interactive `protoclj` REPL on libreadline: multi-line input, history,

@@ -58,6 +58,16 @@ add_test(NAME cli/uncaught-exception
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/uncaught-exception.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/exceptions-survive-gc
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/exceptions-survive-gc.sh" "$<TARGET_FILE:protoclj>")
+# Input and output (src/runtime/IO.cpp): standard input in a pipeline, the
+# script's arguments, exit statuses, and an HTTP server under a heap ceiling.
+add_test(NAME cli/io-stdin-read-line
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/io-stdin-read-line.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/io-command-line-args
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/io-command-line-args.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/io-exit-codes
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/io-exit-codes.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/http-server-under-heap-limit
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/http-server-under-heap-limit.sh" "$<TARGET_FILE:protoclj>")
 
 foreach(conf_file ${PROTOCLJ_CONFORMANCE_FILES})
     # Module-helper files prefixed with `_` are loaded by other fixtures, not

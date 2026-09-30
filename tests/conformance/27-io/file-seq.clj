@@ -1,0 +1,10 @@
+;; EXPECT: (d d/a.txt d/sub d/sub/b.txt d/z.txt)
+;; file-seq walks a tree depth first, each directory's entries in name order.
+(def dir (trim (:out (sh "mktemp" "-d"))))
+(sh "mkdir" "-p" "d/sub" :dir dir)
+(spit (str dir "/d/z.txt") "z")
+(spit (str dir "/d/a.txt") "a")
+(spit (str dir "/d/sub/b.txt") "b")
+(def names (map (fn [f] (subs (str f) (+ 1 (count dir)))) (file-seq (file dir "d"))))
+(sh "rm" "-rf" dir)
+(println names)

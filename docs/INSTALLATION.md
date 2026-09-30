@@ -17,6 +17,17 @@ dependency on protoCore's own package instead of shipping a copy.
   and configuration fails with a `FATAL_ERROR` when it is missing.
 - **protoCore 2.1.0 or newer**, installed, with its CMake package
   configuration. See protoCore's `docs/INSTALLATION.md`.
+- **protoIO 0.1** (the input and output library shared by the protoCore
+  runtimes), either installed (the `protoio-dev` package, or any prefix
+  given with `-DCMAKE_PREFIX_PATH`, or a build tree given with
+  `-DprotoIO_DIR=<path>/protoIO/build_release`) or checked out next to
+  protoClojure as `../protoIO`, in which case it is built as part of
+  protoClojure's build. It is linked statically: the installed `protoclj`
+  does not need it.
+- **OpenSSL 3** development files (`libssl-dev` on Debian/Ubuntu,
+  `openssl-devel` on Fedora/RHEL, `brew install openssl@3` on macOS), for
+  TLS sockets and `https`. `libssl` becomes a runtime dependency of
+  `protoclj`.
 
 ---
 
@@ -121,8 +132,15 @@ dependency on protoCore's own package:
 | DEB | `Depends: protocore (>= 2.1.0), protocore (<< 3.0.0)` |
 | RPM | `Requires: protoCore >= 2.1.0, protoCore < 3.0.0` |
 
-`libreadline` is a real runtime dependency of `protoclj` and is **not** declared
-in the DEB; `CPACK_DEBIAN_PACKAGE_SHLIBDEPS` is not enabled for protoClojure.
+`CPACK_DEBIAN_PACKAGE_SHLIBDEPS` is enabled, so `dpkg-shlibdeps` adds the
+shared libraries `protoclj` links to the DEB's `Depends`: `libc6`,
+`libstdc++6`, `libgcc-s1`, `libreadline8t64` and, since input and output
+landed, `libssl3t64` (OpenSSL, pulled in by the statically linked protoIO).
+protoIO itself is not a dependency: `protoio-dev` is needed to build, never
+to run. Verified 2026-09-30 with `cpack -G DEB`: `Depends: protocore (>=
+2.1.0), protocore (<< 3.0.0), libc6 (>= 2.38), libgcc-s1 (>= 3.0),
+libreadline8t64 (>= 6.0), libssl3t64 (>= 3.0.0), libstdc++6 (>= 13),
+protocore (>= 2.6.2)`.
 
 ### Platform verification status
 

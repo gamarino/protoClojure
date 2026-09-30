@@ -17,9 +17,9 @@ the current `protoclj` binary.
 > **What runs today (protoClojure 0.0.1).** Functions, closures,
 > multi-arity and variadic functions, lists, vectors, maps and strings
 > (chapters 2, 4 and 5, in part); atoms, watches, futures and promises
-> (chapter 6, in part); the local REPL (chapter 10, in part); and actors
-> (chapter 13). Chapters 7, 8, 9, 11 and 12 describe planned features
-> that are not implemented yet. Each chapter that uses unimplemented
+> (chapter 6, in part); the local REPL (chapter 10, in part); actors
+> (chapter 13); and input and output (chapter 14). Chapters 7, 8, 9, 11
+> and 12 describe planned features that are not implemented yet. Each chapter that uses unimplemented
 > features opens with a note listing them; [`STATUS.md`](STATUS.md) is
 > the authoritative list.
 
@@ -54,6 +54,7 @@ of the underlying object model, the protoCore concurrency primitives.
 | 11 | [Macros](tutorial/11-macros.md)                                               | *Planned.* Code as data. `defmacro`. Why this is the language's leverage point.                           |
 | 12 | [A worked example](tutorial/12-worked-example.md)                             | *Planned.* The tri-runtime demo from `INTEROP.md`, walked through one line at a time.                     |
 | 13 | [Actors](tutorial/13-actors.md)                                               | `actor` / `send` / `send-h` / `send-l` / `actor?` / `actor-stats`. Single-method invariant, priority bands, worker pool. |
+| 14 | [Input and output](tutorial/14-input-and-output.md)                           | Files and `with-open`, standard input, `sh`, the environment, an HTTP client and Ring server, TCP and UDP sockets. |
 
 ## A note on running the examples
 

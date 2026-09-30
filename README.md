@@ -21,7 +21,7 @@ What protoClojure offers that JVM Clojure does not:
 
 What protoClojure does **not** offer:
 
-- **JVM interop.** No Java classes, no `clojure.java.io`, no Maven, no Leiningen. The intended substitute, where applicable, is calling the Python or JavaScript ecosystem through UMD.
+- **JVM interop.** No Java classes, no Maven, no Leiningen; the input and output functions of `clojure.java.io` and `clojure.java.shell` are provided as globals instead. The intended substitute, where applicable, is calling the Python or JavaScript ecosystem through UMD.
 - **100% Clojure-JVM compatibility.** This is a *dialect*. The reader, the core forms, and the standard library try to feel like Clojure; details intentionally do not match where the JVM-specific design would not earn its keep on this substrate.
 - **`core.async` channels.** The protoCore actor and future primitives give a different concurrency model. A CSP layer is a possible follow-up, not an immediate goal.
 
@@ -196,11 +196,12 @@ protoClojure runs scripts and an interactive REPL. Version 0.0.1; no tagged rele
 | Local REPL on libreadline | Implemented |
 | CPack packaging | Configured; TGZ and DEB verified on Linux |
 | Exceptions: `try` / `catch` / `finally`, `throw`, `ex-info` | Implemented |
+| Input and output: files, `with-open`, `sh`, `getenv`, HTTP client and Ring server, TCP / UDP / TLS sockets (on protoIO) | Implemented |
 | Quote reader macro, macros, sets, lazy sequences | Planned |
 | Namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **447 test cases: 338 conformance fixtures, 98 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics, value lifetime, the vector representation, value equality and hashing, native stack guard, double printer, exception values) **and 11 CLI checks** (`--help`, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, the garbage a `loop` makes under a heap limit, joins that park for the collector, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, deeply nested source, an uncaught exception, and exceptions under a heap limit). All of them pass, against protoCore 2.2.0. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **520 test cases: 407 conformance fixtures, 98 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics, value lifetime, the vector representation, value equality and hashing, native stack guard, double printer, exception values) **and 15 CLI checks** (`--help`, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, the garbage a `loop` makes under a heap limit, joins that park for the collector, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, deeply nested source, an uncaught exception, exceptions under a heap limit, `read-line` in pipelines, `*command-line-args*`, exit statuses, and an HTTP server under a heap limit). All of them pass, against protoCore 2.6.2. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 
@@ -219,6 +220,12 @@ What is implemented:
   - futures and promises: `make-future future? realized? promise promise? deliver`
   - actors: `actor actor? send send-h send-m send-l actor-stats`
   - exceptions: `ex-info ex-data ex-message ex-cause`
+- Input and output (36 more globals, [LANGUAGE.md §18](docs/LANGUAGE.md#18-input-and-output)), on the shared [protoIO](https://github.com/gamarino/protoIO) library:
+  - files: `slurp` (also of `http(s)` URLs), `spit` (`:append`), `reader`, `writer`, `with-open`, `read-line`, `write`, `close`, `line-seq`, `file`, `file-seq`, `exists?`, `directory?`, `delete-file`, `make-parents`, `copy`
+  - programs and the process: `sh` (`:in`, `:dir`, `:env`) answering `{:exit :out :err}`, `getenv`, `exit`, `*command-line-args*`
+  - HTTP client in babashka http-client's shape (`http-get`, `http-post`, `http-put`, `http-delete`, `http-head`, `http-request`) and a Ring server (`run-server`, `stop-server`, `server-port`), each connection on its own thread
+  - sockets: `tcp-connect` (with `:tls`), `tcp-listen`, `tcp-accept`, `socket-read-line`, `socket-write`, `socket-close`, `udp-socket`, `udp-send`, `udp-receive`
+  - failures are `FileNotFoundException`, `ConnectException`, `SocketTimeoutException`, `UnknownHostException`, ... with ex-data `{:type :file-not-found :errno 2}`
 - Exceptions: `catch` by class over a built-in hierarchy mirroring the Java classes (`Exception`, `ExceptionInfo`, `ArithmeticException`, `IOException`, `StackOverflowError`, …, simple or qualified names); errors raised by built-in functions are catchable exceptions of the class their message names; `deref` of a failed future raises `ExecutionException` with the original as its cause ([LANGUAGE.md §14](docs/LANGUAGE.md#14-exceptions)).
 - VM: 33 opcodes, including SmallInteger fast-path binary opcodes (`ADD SUB MUL LT LE GT GE EQ`), arity dispatch (`MAKE_FN` / `MAKE_FN_MULTI`), `CALL_APPLY` for spread arguments, `CALL_KW` for trailing keyword arguments, `DUP` / `JUMP_IF_TRUE` for short-circuit forms, and `TRY_BEGIN` / `TRY_END` / `THROW` / `EXC_MATCH` for exceptions.
 - Numeric semantics: SmallInteger for values that fit a tagged pointer, automatic promotion to LargeInteger on overflow (no integer operation wraps around, whether compiled to an opcode or called through `apply` / `reduce`), automatic promotion to double when any operand is a float.
@@ -237,7 +244,7 @@ The live tracker is [docs/STATUS.md](docs/STATUS.md); the roadmap is [docs/ROADM
 
 ## Getting started
 
-protoClojure depends on [protoCore](https://github.com/numaes/protoCore), which must be built first, and on the readline development package (`libreadline-dev` on Debian / Ubuntu, `readline-devel` on Fedora / RHEL, `readline` from Homebrew on macOS).
+protoClojure depends on [protoCore](https://github.com/numaes/protoCore), which must be built first; on [protoIO](https://github.com/gamarino/protoIO), installed or checked out next to protoClojure as `../protoIO` (then built as part of protoClojure's build and linked statically); and on the readline and OpenSSL development packages (`libreadline-dev libssl-dev` on Debian / Ubuntu, `readline-devel openssl-devel` on Fedora / RHEL, `readline openssl@3` from Homebrew on macOS). See [docs/INSTALLATION.md](docs/INSTALLATION.md).
 
 ```bash
 cd protoClojure
@@ -245,10 +252,10 @@ cmake -B build_release -S .
 cmake --build build_release
 
 ./build_release/protoclj                     # interactive REPL
-./build_release/protoclj script.clj          # run a .clj file
+./build_release/protoclj script.clj a b      # run a .clj file; *command-line-args* is ("a" "b")
 ./build_release/protoclj --version           # version
 
-ctest --test-dir build_release -j1           # 447 cases: 338 fixtures + 98 unit tests + 11 CLI checks
+ctest --test-dir build_release -j1           # 520 cases: 407 fixtures + 98 unit tests + 15 CLI checks
 ./benchmarks/bench.sh                        # benchmark against Babashka
 ./benchmarks/actor-bench.sh                  # actor throughput, varied worker counts
 ```

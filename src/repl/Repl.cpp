@@ -8,6 +8,7 @@
 #include "runtime/ActorScheduler.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/ExecutionEngine.h"
+#include "runtime/IO.h"
 #include "runtime/Named.h"
 #include "runtime/Opcodes.h"
 #include "runtime/Primitives.h"
@@ -566,8 +567,10 @@ int runRepl() {
         ::write_history(histPath.c_str());
     }
 
-    // Same shutdown sequence as main.cpp::runFile() — join future and
-    // actor worker threads before the ProtoSpace destructor runs.
+    // Same shutdown sequence as main.cpp::runFile() — stop HTTP servers,
+    // then join future and actor worker threads before the ProtoSpace
+    // destructor runs.
+    shutdownIO(session.ctx);
     shutdownFutures(session.ctx);
     ActorScheduler::instance().shutdown(session.ctx);
     return 0;

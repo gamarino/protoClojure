@@ -62,6 +62,7 @@ tell at a glance which parts of the surface are runnable today. The
 | `if`, `do`, `quote`, `apply` | Implemented (`quote` of atoms only; `apply` over a list) |
 | `when`, `when-not`, `cond`, `and`, `or` | Implemented |
 | `throw`, `try`, `catch`, `finally`, `ex-info`, `ex-data`, `ex-message`, `ex-cause` | Implemented (§14) |
+| Input and output: `slurp`, `spit`, `read-line`, `reader` / `writer` / `with-open`, `line-seq`, `file-seq`, `sh`, `getenv`, `exit`, HTTP client and Ring server, TCP / UDP / TLS sockets | Implemented, in the global namespace (§18) |
 | Closures with N-level lexical capture | Implemented |
 | Named arguments `& {:keys [...] :or {...} :as m}` | Implemented |
 | Namespaces (`ns`, `:require`, `:as`, `:refer`) | Planned |
@@ -992,8 +993,8 @@ Throwable
 
 `(catch Exception e ...)` catches every exception but a
 `StackOverflowError`, which is an `Error`; `(catch Throwable e ...)`
-catches everything. The I/O classes are raised by nothing yet; they exist
-for the planned I/O layer.
+catches everything. The I/O classes are raised by the I/O functions (§18),
+with an ex-data map such as `{:type :file-not-found, :errno 2}`.
 
 **Errors raised by the runtime.** An error raised by a built-in function or
 by the VM is an exception of the class its message names, with the rest of
@@ -1132,3 +1133,214 @@ are four different kinds of constant).
 | Nesting depth of non-tail calls | the 32 MiB native stack of every thread: about 24,700 calls of a simple self-recursive fn; a recursion through a primitive such as `map` uses more stack per level | runtime error `StackOverflowError` |
 | Nesting depth of a collection that is printed, compared or hashed | the 32 MiB native stack of every thread | runtime error `StackOverflowError` |
 | Nesting depth of source forms (lists, vectors, maps, `fn` bodies) | the 32 MiB native stack of the thread that reads and compiles them: 80,000 nested lists read, compile and run and 100,000 do not; 20,000 nested `fn` forms compile and 40,000 do not | read or compile error `StackOverflowError` |
+
+---
+
+## 18. Input and output
+
+Files, standard input, other programs, the environment, HTTP and sockets.
+There are no namespaces yet (§7), so every function below is a global,
+named as in Clojure where Clojure has a name for it: `clojure.core`
+(`slurp`, `spit`, `read-line`, `line-seq`, `file-seq`, `with-open`),
+`clojure.java.io` (`reader`, `writer`, `file`, `copy`, `delete-file`,
+`make-parents`), `clojure.java.shell` (`sh`), babashka's `http-client`
+(`http-get`, `http-post`, ..., `http-request`) and Ring (`run-server`, the
+request and response maps). Java interop has no syntax here (D1), so a few
+small functions stand in for it (`close`, `write`, `exists?`,
+`directory?`, `getenv`, `exit`), and sockets are protoClojure's own
+(D30). The implementation is the protoIO library; `DESIGN.md` §4.2 has
+the architecture.
+
+Text is UTF-8 everywhere; `:encoding` is accepted with `"UTF-8"` only.
+Options are given as trailing keyword/value pairs or as one map:
+`(spit f s :append true)` and `(spit f s {:append true})` are the same
+call. An option a function does not know is an `IllegalArgumentException`
+(`spit: unsupported option :apend`), not silently ignored.
+
+### 18.1 Files
+
+| Call | Result |
+|---|---|
+| `(slurp f)` | The whole contents of a file (a path string or a `file`), of a reader or socket, or of an `http://` / `https://` URL, as a string. A URL answering 404 or 410 throws `FileNotFoundException`, another status of 400 or more an `IOException`, as `java.net.URL` does. |
+| `(spit f content)` | Writes `(str content)` to a file (replacing it) or to a writer; `:append true` appends. nil. |
+| `(reader f)` | A reader on a file. |
+| `(writer f)` / `(writer f :append true)` | A writer on a file, truncated or appended to. |
+| `(read-line)` | The next line of standard input without its line end (LF or CRLF), or nil at its end. |
+| `(read-line r)` | The same from a reader or a socket (Java: `.readLine`). |
+| `(write w x)` | Writes `(str x)` to a writer or a socket (Java: `.write`). nil. |
+| `(close h)` | Closes a reader, writer or socket, or stops an HTTP server; closing twice is harmless (Java: `.close`). |
+| `(line-seq r)` | The remaining lines of a reader or socket, as a list; nil when there are none. |
+| `(with-open [name init ...] body...)` | Binds each name, evaluates the body and closes the names in reverse order, whether the body returns or throws. |
+| `(file path & children)` | A file naming `path`, each further argument a child of the one before. `str` of a file is its path. |
+| `(file-seq dir)` | The file itself and, for a directory, every file below it, depth first, each directory's entries in name order; a list of files. |
+| `(exists? f)`, `(directory? f)` | Whether anything, or a directory, is at the path (Java: `.exists`, `.isDirectory`). |
+| `(delete-file f)` / `(delete-file f silently)` | Deletes a file or an empty directory and answers true; a failure throws `IOException` "Couldn't delete f", or, when `silently` is truthy, answers `silently`. |
+| `(make-parents f & more)` | Creates the missing parent directories of a file; true when it created any. |
+| `(copy in out)` | Copies a string's characters, a file's or a reader's contents to a file or a writer; a file to a file copies whole directory trees too. |
+
+```clojure
+(spit "notes.txt" "first\n")
+(spit "notes.txt" "second\n" :append true)
+(with-open [r (reader "notes.txt")]
+  (println (line-seq r)))            ; (first second)
+```
+
+A handle holds an operating-system descriptor until it is closed: there is
+no finaliser, so a reader or socket a program drops without closing keeps
+its descriptor until the process ends. `with-open` is the way to scope one.
+Using a closed handle throws `IOException: Stream closed`. Handles print
+as `#<reader notes.txt>`, `#<socket 127.0.0.1:8080>`, `#<file a/b>`, and
+error messages name their type (`inc expects a number, got a file`).
+
+### 18.2 Other programs and the running program
+
+`(sh cmd & args)` runs a program (searched in `PATH`) and answers
+`{:exit n :out "..." :err "..."}`; a non-zero exit is answered, not thrown.
+Options after the arguments: `:in` (a string fed to the program's standard
+input; a program that exits without reading it does no harm), `:dir` (its
+working directory) and `:env` (a map that replaces its environment).
+A program that cannot be run throws `IOException` with `:type :process`.
+
+```clojure
+(sh "tr" "a-z" "A-Z" :in "hello")    ; {:exit 0, :out "HELLO", :err ""}
+```
+
+`(getenv "NAME")` answers a variable's value or nil, and `(getenv)` every
+variable as a map of strings (Java: `System/getenv`). `(exit)` and
+`(exit n)` end the process at once with that status, after flushing what
+was printed (Java: `System/exit`). The arguments given after the script's
+path, `protoclj script.clj a b`, are bound to `*command-line-args*` as a
+list of strings, or nil when there are none.
+
+### 18.3 HTTP client
+
+babashka's `http-client` shape:
+
+```clojure
+(http-get url)                         ; also http-post, http-put, http-delete, http-head
+(http-get url {:headers {"accept" "text/plain"} :timeout 5000})
+(http-post url {:headers {"content-type" "application/json"} :body "{\"a\": 1}"})
+(http-request {:method :put :uri url :body "x"})
+;; => {:status 200, :headers {"content-type" "text/plain", ...}, :body "..."}
+```
+
+Options: `:headers` (a map; names are sent in lower case), `:body` (a
+string), `:query-params` (a map, percent-encoded into the URL), `:timeout`
+(milliseconds for the connection and for each wait on the server; default
+30,000), `:follow-redirects` (`false` answers a redirect instead of
+following it; default: up to 5), and `:throw`. Response header names are
+lower case. `https` verifies the server's certificate.
+
+A status outside babashka's "unexceptional" set (200-207, 300-304, 307)
+throws an `ExceptionInfo` "Exceptional status code: 404" whose `ex-data`
+is the response map; `:throw false` answers the response instead. A
+network failure throws the matching `IOException`: `ConnectException`,
+`SocketTimeoutException`, `UnknownHostException` or `SocketException`. A
+header value with a line break is an `IllegalArgumentException`, raised
+before anything is sent. Redirects follow the safe policy of protoIO: a
+redirect to another origin drops the caller's headers (an
+`authorization` header is never sent to a third party), and a redirect
+from `https` to `http` is refused.
+
+### 18.4 HTTP server
+
+Ring's contract. `(run-server handler {:port 8080})` serves HTTP/1.1 and
+calls `(handler request)` for each request; it answers a server, whose
+port `(server-port s)` gives (`:port 0` picks a free one), and
+`(stop-server s)` stops it.
+
+```clojure
+(defn handler [req]
+  {:status 200
+   :headers {"content-type" "text/plain"}
+   :body (str "you asked for " (:uri req))})
+(def server (run-server handler {:port 0}))
+(println (:body (http-get (str "http://127.0.0.1:" (server-port server) "/hello"))))
+(stop-server server)
+```
+
+The request map has `:request-method` (`:get`, `:post`, ...), `:uri`,
+`:query-string` (nil without one), `:headers` (lower-case names; repeated
+headers joined with `,`), `:body` (a string, or nil when empty),
+`:remote-addr`, `:server-port`, `:server-name`, `:scheme` (`:http`) and
+`:protocol`. The handler answers `{:status :headers :body}`: `:status`
+defaults to 200, a header value may be a vector to repeat the header, and
+`:body` is a string, nil, a list or vector of strings, or a `file`.
+
+Options: `:port` (default 8080), `:host` / `:ip` (default: every
+interface), `:max-body` (bytes; default 64 MiB), `:read-timeout`
+(milliseconds to wait for a request; default 30,000) and `:max-line`
+(bytes of a request or header line; default 8,192).
+
+Malformed or oversized requests are refused before the handler runs: 400
+for a malformed request line, `Content-Length` or chunked body, 414 for a
+request line over the limit, 431 for a header line over the limit or more
+than 100 headers, 413 for a body over `:max-body`. A handler that throws,
+or answers something that is not a map, gets a plain `500 Internal Server
+Error` and a report on standard error; so does a response the server
+refuses to write, such as a header value containing a line break.
+
+Each connection is served on a thread of its own, so handlers run in
+parallel and may block (on `http-get`, `sh`, a future) without holding up
+other requests or the actors of the program. Each connection carries one
+request (`connection: close`). A handler may stop its own server. A server
+still running when the script ends is stopped then; a script that should
+keep serving blocks, for example on `@(promise)`.
+
+### 18.5 Sockets
+
+Clojure has no socket functions of its own (only Java interop), so these
+are protoClojure's (D30).
+
+| Call | Result |
+|---|---|
+| `(tcp-connect host port)` / `(tcp-connect host port {:tls true :timeout ms :verify false})` | A connected socket. `:timeout` bounds the connect and every later wait on the socket (`SocketTimeoutException`); `:tls true` upgrades it to TLS, verifying the certificate unless `:verify false`. |
+| `(tcp-listen port)` / `(tcp-listen host port)` | A listening socket; port 0 picks a free port. |
+| `(tcp-accept server)` / `(tcp-accept server timeout-ms)` | The next connection, or nil when the timeout elapsed first or the socket was closed. |
+| `(socket-read-line s)`, `(socket-write s x)`, `(socket-close s)` | A line (nil at the end), a write of `(str x)`, a close; the same as `read-line`, `write` and `close`, which also accept sockets. `line-seq` and `slurp` read a socket to its end. |
+| `(udp-socket)` / `(udp-socket port)` / `(udp-socket host port)` | A bound UDP socket. |
+| `(udp-send sock host port data)` | Sends one datagram of `(str data)`. |
+| `(udp-receive sock)` / `(udp-receive sock timeout-ms)` | `{:data "..." :host "..." :port n}`, or nil when the timeout elapsed first. |
+| `(server-port s)` | The local port of a listening, UDP or connected socket, or of an HTTP server. |
+
+### 18.6 Errors
+
+Every I/O failure is an exception of the class that matches it, carrying
+an ex-data map: `:type` names the failure and `:errno` the system's error
+number when there is one.
+
+| Class | `:type` |
+|---|---|
+| `FileNotFoundException` | `:file-not-found` |
+| `IOException` | `:file-exists`, `:file-system`, `:process`, `:line-too-long`, `:body-too-large` |
+| `ConnectException` (a `SocketException`) | `:connection-refused` |
+| `SocketTimeoutException` | `:timeout` |
+| `UnknownHostException` | `:unknown-host` |
+| `SocketException` | `:network` (other socket, TLS and HTTP protocol failures) |
+| `IllegalArgumentException` | `:invalid-argument` (a header with a line break, a bad URL) |
+
+```clojure
+(try (slurp "missing.txt")
+     (catch FileNotFoundException e (ex-data e)))   ; {:type :file-not-found, :errno 2}
+```
+
+Every class above is an `IOException` except `IllegalArgumentException`,
+so `(catch IOException e ...)` catches any I/O failure. Because the data
+map is present, the exception's `str` and the uncaught-error report show
+it: `FileNotFoundException: cannot read missing.txt: No such file or
+directory {:type :file-not-found, :errno 2}` (D33).
+
+### 18.7 Threads and the collector
+
+Every call that can block (a read, a write, a connect, an accept, a child
+process) waits outside the collector's stop-the-world quorum, so a thread
+blocked on I/O never delays a collection. Handles may be shared between
+threads: reads on one handle are serialised, and so are writes,
+independently of each other, and closing a socket wakes a thread blocked
+on it. An actor whose handler blocks in I/O keeps its worker busy until
+the call returns; long blocking work belongs in a `future`.
+
+Not implemented: `*in*`, `*out*` and `binding` (§8), `input-stream` /
+`output-stream` and byte arrays, `as-file` / `as-url`, `resource`, `sh`'s
+`:in-enc` / `:out-enc`, HTTP keep-alive, an HTTPS server, and streaming
+request or response bodies.

@@ -1,5 +1,6 @@
 #include "Primitives.h"
 #include "Exceptions.h"
+#include "IO.h"
 #include "ExecutionEngine.h"
 #include "ActorScheduler.h"
 #include "ListBuilder.h"
@@ -268,6 +269,8 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
         appendExceptionForm(ctx, out, v);
         return;
     }
+    // An I/O handle: `#<file a/b>`, `#<reader in.txt>`, ... (IO.h).
+    if (appendIOHandle(ctx, out, v)) return;
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) { out += "#<unprintable>"; return; }
     if (isNamed(ctx, cc->named, v)) {
@@ -353,6 +356,8 @@ void appendStr(proto::ProtoContext* ctx, std::string& out,
         out += exceptionToString(ctx, v);
         return;
     }
+    // A file renders as its path, as JVM Clojure's `str` renders a File.
+    if (appendIOFilePath(ctx, out, v)) return;
     printTo(ctx, out, v, /*readable=*/true);
 }
 
@@ -2625,7 +2630,7 @@ const char* primitiveName(proto::ProtoMethod fn) {
     for (const PrimitiveEntry& p : kPrimitives) {
         if (p.fn == fn) return p.name;
     }
-    return nullptr;
+    return ioPrimitiveName(reinterpret_cast<const void*>(fn));
 }
 
 } // namespace
@@ -2707,6 +2712,7 @@ const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v)
     if (isMap(v))                           return "a map";
     if (v->isMethod(ctx))                   return "a fn";
     if (isException(ctx, v))                return "an exception";
+    if (const char* io = ioHandleTypeName(ctx, v)) return io;
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) return "an object";
     if (isNamed(ctx, cc->named, v)) {
@@ -2877,6 +2883,8 @@ void installPrimitives(proto::ProtoContext* ctx,
             ctx->fromMethod(nullptr /* self */, p.fn);
         globals->setAttribute(ctx, key, callable);
     }
+    // Input and output (IO.h).
+    installIO(ctx, globals);
 }
 
 } // namespace protoClojure
