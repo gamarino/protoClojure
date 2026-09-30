@@ -195,18 +195,19 @@ protoClojure runs scripts and an interactive REPL. Version 0.0.1; no tagged rele
 | Actors with priority bands | Implemented |
 | Local REPL on libreadline | Implemented |
 | CPack packaging | Configured; TGZ and DEB verified on Linux |
-| Quote reader macro, macros, sets, lazy sequences, exceptions | Planned |
+| Exceptions: `try` / `catch` / `finally`, `throw`, `ex-info` | Implemented |
+| Quote reader macro, macros, sets, lazy sequences | Planned |
 | Namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **392 test cases: 291 conformance fixtures, 93 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics, value lifetime, the vector representation, value equality and hashing, native stack guard, double printer) **and 8 CLI checks** (`--help`, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, the garbage a `loop` makes under a heap limit, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, and deeply nested source). All of them pass, against protoCore 2.2.0. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **447 test cases: 338 conformance fixtures, 98 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics, value lifetime, the vector representation, value equality and hashing, native stack guard, double printer, exception values) **and 11 CLI checks** (`--help`, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, the garbage a `loop` makes under a heap limit, joins that park for the collector, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, deeply nested source, an uncaught exception, and exceptions under a heap limit). All of them pass, against protoCore 2.2.0. The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 
 - Reader: integers of any size (`12345678901234567890`, `42N`), floats (`3.14`, `1e6`), strings, symbols, keywords (`:foo`), `true` / `false` / `nil`, lists `(...)`, vectors `[...]`, maps `{...}`, `@form` as `(deref form)`, line comments (`;`), commas as whitespace.
-- Special forms: `def`, `defn` and `fn` (single- and multi-arity, variadic, named-argument destructuring), `let`, `loop`, `recur` (in `loop` and as the implicit function-body target), `if`, `do`, `quote` (of symbols, keywords and other atoms), `apply`, `when`, `when-not`, `cond`, `and`, `or`, `future`.
+- Special forms: `def`, `defn` and `fn` (single- and multi-arity, variadic, named-argument destructuring), `let`, `loop`, `recur` (in `loop` and as the implicit function-body target), `if`, `do`, `quote` (of symbols, keywords and other atoms), `apply`, `when`, `when-not`, `cond`, `and`, `or`, `future`, `try` / `catch` / `finally`, `throw`.
 - Closures: full N-level capture, including chained closures across `(fn ... (fn ... (fn ...)))`.
-- Primitives (76 registered at startup):
+- Primitives (80 registered at startup):
   - arithmetic and comparison: `+ - * / inc dec < <= > >= = not=` (`=` compares maps, vectors and lists by value; a vector and a list with equal elements are `=`)
   - output: `println str`
   - lists and vectors: `list vector vec nth first rest cons count empty? reverse`. A vector is a protoCore `ProtoList` of its elements in a one-entry `ProtoSparseList` box, which is what carries its type; `nth` is O(log n), `vector` / `vec` are O(1), and a vector is collected like any other value (it used to be an interned `ProtoTuple`, which protoCore never frees — decision R2)
@@ -217,14 +218,16 @@ What is implemented:
   - atoms and watches: `atom atom? deref reset! swap! compare-and-set! add-watch remove-watch`
   - futures and promises: `make-future future? realized? promise promise? deliver`
   - actors: `actor actor? send send-h send-m send-l actor-stats`
-- VM: 29 opcodes, including SmallInteger fast-path binary opcodes (`ADD SUB MUL LT LE GT GE EQ`), arity dispatch (`MAKE_FN` / `MAKE_FN_MULTI`), `CALL_APPLY` for spread arguments, `CALL_KW` for trailing keyword arguments, and `DUP` / `JUMP_IF_TRUE` for short-circuit forms.
+  - exceptions: `ex-info ex-data ex-message ex-cause`
+- Exceptions: `catch` by class over a built-in hierarchy mirroring the Java classes (`Exception`, `ExceptionInfo`, `ArithmeticException`, `IOException`, `StackOverflowError`, …, simple or qualified names); errors raised by built-in functions are catchable exceptions of the class their message names; `deref` of a failed future raises `ExecutionException` with the original as its cause ([LANGUAGE.md §14](docs/LANGUAGE.md#14-exceptions)).
+- VM: 33 opcodes, including SmallInteger fast-path binary opcodes (`ADD SUB MUL LT LE GT GE EQ`), arity dispatch (`MAKE_FN` / `MAKE_FN_MULTI`), `CALL_APPLY` for spread arguments, `CALL_KW` for trailing keyword arguments, `DUP` / `JUMP_IF_TRUE` for short-circuit forms, and `TRY_BEGIN` / `TRY_END` / `THROW` / `EXC_MATCH` for exceptions.
 - Numeric semantics: SmallInteger for values that fit a tagged pointer, automatic promotion to LargeInteger on overflow (no integer operation wraps around, whether compiled to an opcode or called through `apply` / `reduce`), automatic promotion to double when any operand is a float.
 
 What is **not yet** implemented:
 
 - **Clojure-style `agent`** with its send/await semantics (the in-tree `actor` is the protoCore-native variant — different surface, see [docs/tutorial/13-actors.md](docs/tutorial/13-actors.md)).
 - **`delay` / `force`** and `volatile!` / `vreset!` / `vswap!`.
-- **The quote reader macro `'`, macros, sets, lazy sequences, exceptions** and most of `clojure.core` beyond the primitives above.
+- **The quote reader macro `'`, macros, sets, lazy sequences** and most of `clojure.core` beyond the primitives above.
 - **The UMD module system**: `ns`, `(:require [py/numpy :as np])` and the foreign-dispatch protocol layer.
 - **An nREPL server** for CIDER / Calva / Conjure. It is planned for v0.1; the local interactive REPL on libreadline ships today (see [docs/tutorial/10-repl.md](docs/tutorial/10-repl.md)).
 - **A `core.clj`** evaluated at startup, so that library functions are composed in Clojure instead of installed as C++ primitives.
@@ -245,7 +248,7 @@ cmake --build build_release
 ./build_release/protoclj script.clj          # run a .clj file
 ./build_release/protoclj --version           # version
 
-ctest --test-dir build_release -j1           # 392 cases: 291 fixtures + 93 unit tests + 8 CLI checks
+ctest --test-dir build_release -j1           # 447 cases: 338 fixtures + 98 unit tests + 11 CLI checks
 ./benchmarks/bench.sh                        # benchmark against Babashka
 ./benchmarks/actor-bench.sh                  # actor throughput, varied worker counts
 ```

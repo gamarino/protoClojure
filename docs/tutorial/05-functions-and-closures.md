@@ -2,8 +2,9 @@
 
 > **Implementation status.** protoClojure 0.0.1 implements `defn` and
 > `fn` (single- and multi-arity, variadic), closures, `let`, `loop` /
-> `recur`, `apply` over a list, `map` / `filter` / `reduce`, atoms, and
-> named-argument destructuring with `& {:keys [...]}`. Not available yet:
+> `recur`, `apply` over a list, `map` / `filter` / `reduce`, atoms,
+> named-argument destructuring with `& {:keys [...]}`, and exceptions
+> (`try` / `catch` / `finally`, `throw`, `ex-info`). Not available yet:
 > docstrings and `doc`, the `#(...)` shorthand, vector and map
 > destructuring in `let` and parameter vectors, `zero?`, `even?`, `conj`,
 > `comp`, `partial`, `juxt`, `complement`, lazy sequences (`range`,
@@ -376,7 +377,61 @@ A function can declare runtime assertions on its inputs and outputs:
 Use these for documentation as much as enforcement. They are checked
 at runtime and can be turned off globally (a v0.2 toggle).
 
-## 5.12 What we have not covered
+## 5.12 When things go wrong — exceptions
+
+A function that cannot do its job throws. `throw` raises an exception;
+`try` runs code and handles what it raises. The idiomatic exception to
+throw from your own code is an `ex-info`: a message plus a map of whatever
+data the handler needs.
+
+```clojure
+(defn withdraw [balance amount]
+  (if (> amount balance)
+    (throw (ex-info "insufficient funds" {:balance balance :amount amount}))
+    (- balance amount)))
+
+(try
+  (withdraw 100 250)
+  (catch clojure.lang.ExceptionInfo e
+    (println (ex-message e) (:amount (ex-data e)))   ;; insufficient funds 250
+    0))                                               ;; => 0
+```
+
+Each `catch` names a class; the first clause whose class matches — the
+exception's own class or a superclass — handles it, and its value becomes
+the `try`'s value. `finally` runs on every way out, for cleanup, without
+changing the value:
+
+```clojure
+(defn parse-ratio [a b]
+  (try
+    (/ a b)
+    (catch ArithmeticException e :infinite)   ;; (/ 1 0) raises this
+    (catch Exception e :unexpected)           ;; anything else
+    (finally (println "parse-ratio done"))))
+
+(parse-ratio 6 3)   ;; prints "parse-ratio done", => 2
+(parse-ratio 1 0)   ;; prints "parse-ratio done", => :infinite
+```
+
+Errors raised by built-in functions are exceptions too: dividing by zero
+is an `ArithmeticException`, `(+ 1 "a")` a `ClassCastException`, a
+runaway recursion a `StackOverflowError` (an `Error`, which
+`(catch Exception ...)` deliberately does not catch; `Throwable` does).
+The classes you can name, and the details, are in
+[`LANGUAGE.md` §14](../LANGUAGE.md#14-exceptions).
+
+*Bridge.* `try` / `catch` / `finally` is Python's `try` / `except` /
+`finally` and JavaScript's `try` / `catch` / `finally`, with two
+differences: `try` is an expression with a value, and each `catch` selects
+by class, like Python's `except ValueError as e:`. `ex-info` plays the
+role of raising a custom exception, with the payload in a map instead of a
+subclass.
+
+One rule is specific to Clojure: `recur` cannot jump out of a `try`. Put
+the `try` inside the loop body, or the loop inside the `try`.
+
+## 5.13 What we have not covered
 
 - **Metadata on functions** — `^:dynamic`, `^:private`, custom
   attributes. Covered briefly in [`LANGUAGE.md`](../LANGUAGE.md).

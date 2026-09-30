@@ -91,7 +91,8 @@ user=> *2
 
 `(doc fn)`, `(source fn)` and `(find-doc "regex")` are not implemented
 yet; they are planned together with docstring storage on `defn`. `*e`
-(last exception) is planned together with `try` / `catch`.
+(last exception) is not bound yet: exceptions exist and an uncaught one
+is reported as `error: <class>: <message>`, but the REPL does not keep it.
 
 ### 10.1.2 REPL meta-commands
 

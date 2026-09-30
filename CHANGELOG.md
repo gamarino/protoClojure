@@ -15,10 +15,10 @@ The project has no tagged releases yet; the version declared in
   `{...}`, `;` line comments, commas as whitespace, and `@form` as
   `(deref form)`. The remaining reader macros (`'`, `` ` ``, `~`, `^`, `#...`)
   are rejected with a "reserved-for-later token" error.
-- **Compiler and bytecode VM.** A single-pass compiler to a 29-opcode stack VM.
+- **Compiler and bytecode VM.** A single-pass compiler to a 33-opcode stack VM.
   Special forms: `def`, `if`, `do`, `quote` (of symbols, keywords and other
   atoms), `fn`, `defn`, `let`, `loop`, `recur`, `when`, `when-not`, `cond`,
-  `and`, `or`, `apply` and `future`.
+  `and`, `or`, `apply`, `future`, `try` and `throw`.
 - **Functions.** Closures with lexical capture across nested `fn` bodies;
   variadic parameters (`& rest`); `apply`; multi-arity `fn` / `defn`; the
   `(fn name [args] ...)` form (the name is not bound inside the body).
@@ -43,20 +43,48 @@ The project has no tagged releases yet; the version declared in
 - **Actors.** `actor`, `actor?`, `send`, `send-h`, `send-m`, `send-l` and
   `actor-stats` on a worker pool sized by `PROTOCLJ_ACTOR_WORKERS`, with three
   priority bands, a single-method invariant and a lock-free per-actor mailbox.
+- **Exceptions.** `try` / `catch` / `finally` and `throw` as special forms,
+  and `ex-info`, `ex-data`, `ex-message` and `ex-cause`. Catch clauses are
+  tried in order and match subclasses; `finally` runs on the normal path,
+  after a handled exception and when a catch clause throws; `recur` across a
+  `try` is the compile error `Cannot recur across try`. A `catch` names one
+  of 23 built-in classes mirroring the Java hierarchy (`Exception`,
+  `RuntimeException`, `clojure.lang.ExceptionInfo`, `ArithmeticException`,
+  `IOException` with `FileNotFoundException` and the `java.net` classes,
+  `ExecutionException`, `Error`, `StackOverflowError`, …), by simple or
+  qualified name. Errors raised by the runtime are exceptions of the class
+  their message names (`(/ 1 0)` is an `ArithmeticException` with message
+  `"Divide by zero"`), and any other runtime error a `RuntimeException`
+  (D26); a stack overflow is a catchable `StackOverflowError`. `deref` of a
+  failed future (and `pmap`) raises an `ExecutionException` whose `ex-cause`
+  is the original exception. Exceptions print as a one-line `#error` map
+  (D27). An uncaught exception keeps the `runtime error: <class>: <message>`
+  report and exit status 1. Four opcodes (`TRY_BEGIN`, `TRY_END`, `THROW`,
+  `EXC_MATCH`) over a per-frame handler stack; only a body that contains a
+  `try` runs in a frame with a C++ catch region, which keeps `fib`, `tak`
+  and `sum-loop` at cycle parity with the VM before exceptions (the region
+  in every frame cost `fib` +3.5 % cycles). An exception in flight is pinned
+  in a protoCore `ProtoRootSet` while the frames it unwinds hand their young
+  generations to the collector; the unit test
+  `InFlightExceptionSurvivesCollections` fails without the pin. C++ code
+  raises classed exceptions with
+  `throwClassed(ctx, className, message, data, cause)` (`DESIGN.md` §4.1).
 - **REPL.** Running `protoclj` without arguments starts an interactive REPL on
   libreadline: `user=>` prompt, multi-line input, history in
   `~/.protoclj_history`, `*1` / `*2` / `*3`, and the `:help`, `:quit`,
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (291 fixtures under
+- **Tests.** A glob-discovered conformance suite (338 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
   the bytecode module, the runtime map, value equality and hashing, the
-  native stack guard and the double printer (86 tests), and six CLI checks (`--help`, a
-  generated program with 70,000 distinct literals of each kind, the native
-  bulk builders under a heap ceiling, a
-  stack overflow in the REPL, globals bound to nil in the REPL, and
-  deeply nested source).
+  native stack guard, the double printer and exception values (98 tests),
+  and eleven CLI checks (`--help`, a generated program with 70,000 distinct
+  literals of each kind, the native bulk builders under a heap ceiling, the
+  garbage a `loop` makes under a heap ceiling, joins that park for the
+  collector, actor payloads under a heap ceiling, a stack overflow in the
+  REPL, globals bound to nil in the REPL, deeply nested source, an uncaught
+  exception, and exceptions under a heap ceiling).
 - **Benchmarks and examples.** `benchmarks/bench.sh` (comparison with
   Babashka), `benchmarks/actor-bench.sh` (actor throughput) and twelve
   example scripts under `examples/`.

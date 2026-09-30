@@ -22,8 +22,10 @@ under a `Dnn` id.
 >   atoms with watches; promises; `println`. Reader macros other than
 >   `@`, sets, most collection functions, lazy sequences, the
 >   higher-order combinators, the threading macros, namespaces, vars and
->   `binding`, volatiles, delays, exceptions and the `pr`-family printers
->   are not implemented yet.
+>   `binding`, volatiles, delays and the `pr`-family printers are not
+>   implemented yet. Exceptions are implemented: `try` / `catch` /
+>   `finally`, `throw`, `ex-info`, `ex-data`, `ex-message`, `ex-cause`
+>   (§3.3.6 lists the differences).
 > - §3.2 to §3.4: `defprotocol`, `extend-type`, `extend-protocol` and
 >   `reify`; the `#"..."` regex literal and regex support; `slurp`,
 >   `spit` and `with-open`; character literals such as `\a`, `char` and
@@ -200,6 +202,22 @@ divergence, file a `STATUS.md` deviation.
 Reader literals that are not registered (`#myorg/foo`) raise on read.
 JVM Clojure is more permissive here. We are strict to surface typos
 in the data layer. Register your literals.
+
+### 3.3.6 Exceptions — D26, D27
+
+`try` / `catch` / `finally`, `throw` and the `ex-*` functions work as you
+know them, including catch order, superclass matching, `finally` on every
+path and "Cannot recur across try". What differs comes from there being no
+JVM (D27): `catch` accepts a fixed set of 23 classes mirroring the Java
+ones you catch in practice (`Exception`, `RuntimeException`,
+`clojure.lang.ExceptionInfo`, `ArithmeticException`, `IOException`, …,
+simple or qualified names); there are no stack traces, no user-defined
+exception classes and no `instance?` on them; and an exception prints as a
+one-line `#error {:type ..., :message ..., :data ...}`. A deref of a
+failed future raises an `ExecutionException` whose `ex-cause` is the
+original exception, as on the JVM. Most arity and argument-type errors of
+the built-in functions are plain `RuntimeException`s rather than
+`ArityException` or `ClassCastException` (D26).
 
 ## 3.4 What is new
 
