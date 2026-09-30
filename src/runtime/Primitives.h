@@ -84,7 +84,7 @@ inline bool isNumber([[maybe_unused]] proto::ProtoContext* ctx,
 
 // The type of `v` as error messages name it, with its article: "nil",
 // "a boolean", "an integer", "a float", "a string", "a list", "a vector",
-// "a fn", and, when an ActiveCallContext is installed, "a keyword",
+// "a fn", "an exception", and, when an ActiveCallContext is installed, "a keyword",
 // "a symbol", "a map", "an atom", "a future", "a promise", "an actor";
 // "an object" otherwise. Allocates nothing.
 const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v);
@@ -182,6 +182,12 @@ void shutdownFutures(proto::ProtoContext* ctx);
 // prints them bare. A null pointer prints "nil".
 void replPrintValue(proto::ProtoContext* ctx, std::FILE* out,
                     const proto::ProtoObject* v);
+
+// The same printer, appending to `out`: readable (Clojure's `pr`) when
+// `readable` is true, else as `print` renders it. Used by the exception
+// printer (Exceptions.h). `v` must be rooted by the caller.
+void printValueTo(proto::ProtoContext* ctx, std::string& out,
+                  const proto::ProtoObject* v, bool readable);
 
 // Delivers `value` to `promise` unless it was delivered before. A pending
 // promise has no own `valueKey` attribute; delivery installs a one-element

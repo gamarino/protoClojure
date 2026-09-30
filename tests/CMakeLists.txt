@@ -54,6 +54,10 @@ add_test(NAME cli/repl-nil-global
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/repl-nil-global.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/deeply-nested-source
     COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/deeply-nested-source.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/uncaught-exception
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/uncaught-exception.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/exceptions-survive-gc
+    COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/cli/exceptions-survive-gc.sh" "$<TARGET_FILE:protoclj>")
 
 foreach(conf_file ${PROTOCLJ_CONFORMANCE_FILES})
     # Module-helper files prefixed with `_` are loaded by other fixtures, not

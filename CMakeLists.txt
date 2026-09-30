@@ -130,6 +130,7 @@ target_compile_options(protoclj_reader PRIVATE -Wall -Wextra -Wpedantic)
 add_library(protoclj_runtime STATIC
     src/runtime/ActorScheduler.cpp
     src/runtime/BytecodeModule.cpp
+    src/runtime/Exceptions.cpp
     src/runtime/ExecutionEngine.cpp
     src/runtime/GCCensus.cpp
     src/runtime/MapOps.cpp

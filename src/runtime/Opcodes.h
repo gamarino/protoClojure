@@ -90,6 +90,24 @@ enum class Op : uint8_t {
     // map in order (last duplicate wins) and passes like the session-13
     // trailing-map path.
     CALL_KW         = 28,
+
+    // Exceptions (try / catch / finally / throw; docs/DESIGN.md §
+    // "Exceptions"). A frame keeps a stack of active handlers; each records
+    // where its handler code starts and the operand-stack depth at entry.
+    TRY_BEGIN       = 29,  // operand = FORWARD offset to the handler code.
+                           //           Pushes a handler. When an exception
+                           //           escapes any instruction (or call)
+                           //           while the handler is active, the VM
+                           //           pops it, truncates the operand stack
+                           //           to the recorded depth, pushes the
+                           //           exception value and jumps there.
+    TRY_END         = 30,  // pops the innermost handler (normal exit).
+    THROW           = 31,  // pop; raise the value as an exception. A value
+                           //       that is not an exception raises a
+                           //       ClassCastException instead.
+    EXC_MATCH       = 32,  // operand = exception class id (Exceptions.h).
+                           //           pop; push true when the value is an
+                           //           exception of that class or a subclass.
 };
 
 // One instruction word: opcode in the low byte, operand in the high 24 bits.

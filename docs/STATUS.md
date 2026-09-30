@@ -5,18 +5,20 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 392 test cases: 291
-conformance fixtures under `tests/conformance/`, 93 GoogleTest unit
+scripts and an interactive REPL. `ctest` registers 447 test cases: 338
+conformance fixtures under `tests/conformance/`, 98 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 its key semantics, the lifetime of values that used to be interned, the
 vector representation, value equality and hashing, the
-native stack guard and the double printer (`tests/unit/`), and
-eight CLI checks (`tests/cli/`: `--help`, a generated program with 70,000
-distinct literals of each kind, the native bulk builders under a heap
-ceiling, the garbage a `loop` makes under a heap ceiling, actor message
-payloads under a heap ceiling, a stack overflow in
-the REPL, globals bound to nil in the REPL, and source nested too deeply
-to read or compile);
+native stack guard, the double printer and exception values
+(`tests/unit/`), and eleven CLI checks (`tests/cli/`: `--help`, a
+generated program with 70,000 distinct literals of each kind, the native
+bulk builders under a heap ceiling, the garbage a `loop` makes under a heap
+ceiling, joins that must park for the collector, actor message payloads
+under a heap ceiling, a stack overflow in the REPL, globals bound to nil in
+the REPL, source nested too deeply to read or compile, an uncaught
+exception in a script and in the REPL, and exceptions thrown under a heap
+ceiling);
 all pass. Benchmark numbers against Babashka 1.4.192
 are in [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md). Shipped changes
 are listed in [`CHANGELOG.md`](../CHANGELOG.md).
@@ -45,6 +47,7 @@ directories that cover them.
 | Futures and `pmap` on OS threads | `22-futures` | 18 |
 | Watches, promises | `23-watches`, `24-promises` | 12 |
 | Actors | `25-actors` | 9 |
+| Exceptions: `try` / `catch` / `finally`, `throw`, `ex-info`, catchable primitive errors | `26-exceptions` | 47 |
 | Interactive REPL | — (no conformance fixtures) | — |
 
 The design specifications written during development are archived under
@@ -105,6 +108,19 @@ The design specifications written during development are archived under
 - [x] `cond` (with `:else` / `else`)
 - [x] `and`, `or` (short-circuit via DUP + JUMP_IF_TRUE/FALSE)
 - [x] `future` — `(future body...)` compiles to `(make-future (fn [] body...))`
+- [x] `try` / `catch` / `finally` and `throw` — catch clauses tried in
+      order, a clause matching subclasses of its class, the same object
+      rethrown when none matches; `finally` runs on the normal path, after a
+      handled exception and when a catch clause throws; a throw in `finally`
+      replaces the exception in flight; `recur` across a `try` is the compile
+      error `Cannot recur across try`; `try` works at the top level, in
+      `fn`, `let`, `loop` bodies, futures and actor handlers. Classes are a
+      fixed built-in hierarchy (`LANGUAGE.md` §14, `DESIGN.md` §4.1), named
+      simply or qualified (`java.io.IOException`, `clojure.lang.ExceptionInfo`)
+- [x] Errors raised by the runtime are exceptions of the class their message
+      names: `(try (/ 1 0) (catch ArithmeticException e (ex-message e)))` is
+      `"Divide by zero"`; `StackOverflowError` is an `Error` a `try` can
+      catch; an error naming no class is a `RuntimeException` (D26)
 - [x] Variadic `& rest` in fn params
 - [x] Named-argument destructuring `& {:keys [...] :or {...} :as name}`
 
@@ -196,7 +212,7 @@ The design specifications written during development are archived under
 - [x] Captures cascade — intermediate scopes create capture slots automatically
 - [x] First-class fns — `((make-mul k) x)` callable head, passed around freely
 
-### Primitives installed at startup (75)
+### Primitives installed at startup (80)
 
 - [x] Arithmetic and comparison: `+ - * / inc dec < <= > >= = not=`
 - [x] Output: `println str` — one printer (`printTo` in
@@ -236,10 +252,17 @@ The design specifications written during development are archived under
 - [x] Futures and promises: `make-future future? realized? promise
       promise? deliver`
 - [x] Actors: `actor actor? send send-h send-m send-l actor-stats`
+- [x] Exceptions: `ex-info ex-data ex-message ex-cause`. An exception
+      prints as `#error {:type ExceptionInfo, :message "boom", :data {:a 1}}`
+      and `str` renders its toString, `ExceptionInfo: boom {:a 1}` (D27)
 
 ### Bytecode VM
 
-- [x] 29 opcodes — see `src/runtime/Opcodes.h`
+- [x] 33 opcodes — see `src/runtime/Opcodes.h`
+- [x] Exception opcodes `TRY_BEGIN` / `TRY_END` / `THROW` / `EXC_MATCH`
+      over a per-frame handler stack; only a body containing a `try` runs in
+      a frame with the C++ catch region, so code without one runs at the
+      speed it had before exceptions (`DESIGN.md` §4.1)
 - [x] 32-bit instruction words with a 24-bit operand: constant-pool
       indices, local slots, function bodies, argument counts and jump
       offsets range up to 16,777,215 per function body or script top level
@@ -280,11 +303,12 @@ The design specifications written during development are archived under
       measured a 3.25× wall-clock speedup over `map` on 2026-06-14
       ([`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md))
 - [x] Errors on future and `pmap` threads propagate: every `deref` of a
-      future whose body raised an error raises it as
-      `ExecutionException: <error>` (`@(future (/ 1 0))` raises
-      `ExecutionException: ArithmeticException: Divide by zero`), and `pmap`
-      raises the error of the first failing element in input order the same
-      way, after waiting for every element
+      future whose body raised an exception raises an `ExecutionException`
+      whose cause (`ex-cause`) is that exception and whose message is its
+      toString (`@(future (/ 1 0))` raises
+      `ExecutionException: ArithmeticException: Divide by zero`), as JVM
+      Clojure does, and `pmap` raises the exception of the first failing
+      element in input order the same way, after waiting for every element
 - [x] **Actors** (`actor`, `send`, `send-h` / `send-m` / `send-l`, `actor?`,
       `actor-stats`) on a configurable worker pool (`PROTOCLJ_ACTOR_WORKERS`,
       default `max(2, cores-2)`, cap 16). Three priority bands, single-method
@@ -344,8 +368,6 @@ raises a read, compile or runtime error.
 - [ ] Docstrings in `defn`
 - [ ] `(apply f x y coll)` with leading arguments; `apply` over a vector
 - [ ] List quoting `(quote (1 2 3))`
-- [ ] `throw`
-- [ ] `try` / `catch` / `finally`
 - [ ] `let*` / `fn*` raw forms
 - [ ] `var` form
 - [ ] `case`, `if-let`, `when-let`
@@ -436,7 +458,7 @@ for the rationale.
 
 ### REPL and command line (not yet)
 
-- [ ] `*e` (last exception) — needs exception objects, planned with `try` / `catch`
+- [ ] `*e` (last exception) — exception values exist; the REPL does not bind them yet
 - [ ] `(doc symbol)`, `(source symbol)` — needs docstring storage on `defn`
 - [ ] `protoclj -e <expr>`
 - [ ] nREPL server (CIDER / Calva / Conjure compatible) — planned for v0.1
@@ -483,6 +505,8 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | ~~D23~~ | **Withdrawn.** Map keys used to be interned and never freed. Since maps moved onto protoCore's `ProtoMap` and its hashed-collection helper, a key is stored as the object the caller passed and dies with the last map that holds it, as in JVM Clojure | — |
 | D24 | Map iteration and print order is unspecified for maps of every size and can change between runs of the same program (JVM Clojure keeps insertion order for array maps of up to 8 entries) | (perm) |
 | D25 | `count` of a map is O(n), not O(1) (JVM Clojure: O(1)). Two keys whose hashes collide in their low 54 bits share one slot of the underlying `ProtoMap`, so the slot count is a lower bound on the number of entries, not the number itself; `count` therefore walks the entries. `empty?` stays O(1), because a slot always holds at least one entry | (perm) |
+| D26 | A runtime error whose message names no class is a `RuntimeException` carrying the whole message: most arity and argument-type errors raised by primitives (`(inc 1 2)`: `inc: expects 1 arg`, where JVM Clojure raises `ArityException`; `(upper-case 1)`: `upper-case: arg must be a string`, where it raises `ClassCastException`), and an unresolved global, which is caught at run time as a `RuntimeException` where JVM Clojure reports it at compile time. The class-naming errors (`ArithmeticException`, `ClassCastException` for arithmetic on non-numbers, `IndexOutOfBoundsException`, `StringIndexOutOfBoundsException`, `UnsupportedOperationException`, `StackOverflowError`) have JVM Clojure's classes | v0.x |
+| D27 | Exceptions are not Java objects: there are no stack traces, no user-defined exception classes, no `class` / `instance?` and no `.getMessage`-style interop; `catch` names one of 23 built-in classes (`DESIGN.md` §4.1). An exception prints on one line as `#error {:type C, :message "m", :data {...}, :cause #error {...}}` (JVM Clojure: a multi-line `#error` map with `:via`, `:trace` and a root-cause `:cause` string), and its toString and the uncaught-error report use the simple class name, `ArithmeticException: Divide by zero` (JVM Clojure: `java.lang.ArithmeticException: Divide by zero`). `throw` of a value that is not an exception raises `ClassCastException: throw expects an exception, got an integer` | (perm) |
 
 ## Known issues
 
@@ -529,8 +553,12 @@ See `LANGUAGE.md` for the full discussion. Summary:
 
 - **Errors on actor threads are silent.** An actor message whose handler
   throws (a `StackOverflowError` included) sets the actor's value to `nil`
-  and delivers `nil` to the promise `send` returned; the error is not
-  reported. How a failed message should surface is an open design decision.
+  and delivers `nil` to the promise `send` returned; the exception is not
+  reported. Exceptions did not change this: a handler can `try` / `catch`
+  its own exceptions and keep its state (`26-exceptions/try-inside-actor`),
+  but an escaping one is still swallowed. How a failed message should
+  surface (JVM Clojure's agents keep the failed state and rethrow on the
+  next `send`) is an open design decision.
 
 - **Promise `deref` polls.** A pending promise is checked every millisecond
   (with the thread marked unmanaged so garbage collection can proceed);

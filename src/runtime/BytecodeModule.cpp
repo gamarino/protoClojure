@@ -37,6 +37,10 @@ const char* opName(Op op) {
         case Op::GE:            return "GE";
         case Op::EQ:            return "EQ";
         case Op::CALL_KW:       return "CALL_KW";
+        case Op::TRY_BEGIN:     return "TRY_BEGIN";
+        case Op::TRY_END:       return "TRY_END";
+        case Op::THROW:         return "THROW";
+        case Op::EXC_MATCH:     return "EXC_MATCH";
     }
     return "?";
 }
@@ -108,6 +112,7 @@ std::size_t BytecodeModule::addNamed(const std::string& spelling,
 std::size_t BytecodeModule::emit(Op op, std::size_t operand) {
     const std::uint32_t checked = checkedOperand(op, operand);
     code_.push_back((checked << kOperandShift) | static_cast<Instr>(op));
+    if (op == Op::TRY_BEGIN) hasHandlers_ = true;
     return code_.size() - 1;
 }
 

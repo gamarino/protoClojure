@@ -4,6 +4,7 @@
 
 add_executable(protoclj_unit_tests
     test_bytecode.cpp
+    test_exceptions.cpp
     test_format_double.cpp
     test_lexer.cpp
     test_mapops.cpp

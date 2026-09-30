@@ -227,16 +227,160 @@ Clojure-specific opcodes for:
 - **Anonymous function creation** as a closure-over-locals — same
   mechanism as protoST blocks and protoPython lambdas.
 
-In 0.0.1 the VM has 29 opcodes (`src/runtime/Opcodes.h`). `recur`
+In 0.0.1 the VM has 33 opcodes (`src/runtime/Opcodes.h`). `recur`
 compiles to a backward jump (`JUMP_BACK`); `def` stores directly into a
 single globals object (`STORE_GLOBAL` / `PUSH_VAR`); closures use
 `MAKE_FN` / `MAKE_FN_MULTI`; SmallInteger arithmetic and comparison have
-fast-path opcodes. Vars as objects and exception-handling opcodes are
-planned.
+fast-path opcodes; `try` / `throw` use the four exception opcodes of §4.1.
+Vars as objects are planned.
 
 The compiler does NOT do whole-program analysis. Each top-level form
 compiles independently — the REPL relies on this, and the JVM Clojure
 does it the same way.
+
+### 4.1 Exceptions
+
+The user-facing rules are in `LANGUAGE.md` §14; the code is
+`src/runtime/Exceptions.{h,cpp}`, the `try` / `throw` branches of
+`src/compiler/Compiler.cpp` and the handler loop of
+`ExecutionEngine::executeFrame`.
+
+**Representation.** An exception is an immutable protoCore object whose
+prototype is one process-wide exception marker (created at start-up and
+kept alive as a hidden attribute of the globals namespace). It has four
+attributes: `__ex_class__`, the class as a SmallInteger id into a built-in
+table; `__ex_message__`, a string or nil; `__ex_data__`, the data map of an
+`ex-info`, or nil; `__ex_cause__`, an exception or nil. Keeping the class
+as an integer makes a `catch` test an integer compare and a walk of at most
+five parent links, with no string work.
+
+**Classes.** protoClojure has no Java classes (D2), so a `catch` names one
+of a fixed set of classes that mirror the Java ones a Clojure programmer
+catches. The simple name and the qualified Java name are both accepted
+(`ArithmeticException`, `java.lang.ArithmeticException`,
+`clojure.lang.ExceptionInfo`); an unknown name is the compile error
+`Unable to resolve classname: Foo`.
+
+```
+Throwable
+├── Exception
+│   ├── RuntimeException
+│   │   ├── ExceptionInfo                      (clojure.lang)
+│   │   ├── ArithmeticException
+│   │   ├── ClassCastException
+│   │   ├── IllegalArgumentException
+│   │   │   ├── ArityException                 (clojure.lang)
+│   │   │   └── NumberFormatException
+│   │   ├── IllegalStateException
+│   │   ├── IndexOutOfBoundsException
+│   │   │   └── StringIndexOutOfBoundsException
+│   │   ├── NullPointerException
+│   │   └── UnsupportedOperationException
+│   ├── IOException                            (java.io)
+│   │   ├── FileNotFoundException              (java.io)
+│   │   ├── SocketException                    (java.net)
+│   │   │   └── ConnectException               (java.net)
+│   │   ├── SocketTimeoutException             (java.net)
+│   │   └── UnknownHostException               (java.net)
+│   └── ExecutionException                     (java.util.concurrent)
+└── Error
+    └── StackOverflowError
+```
+
+Unmarked classes are in `java.lang`. Two links are shortened against
+Java: `SocketTimeoutException` hangs directly under `IOException` (Java:
+via `InterruptedIOException`) and `StackOverflowError` directly under
+`Error` (Java: via `VirtualMachineError`). The I/O classes exist before
+any I/O primitive does, so that the I/O layer can raise them.
+
+**Bytecode.** A frame keeps a stack of active handlers, each a code
+position and an operand-stack depth. `TRY_BEGIN` pushes one, `TRY_END`
+pops it on the normal path, `THROW` raises the value on top of the stack,
+and `EXC_MATCH <class>` tests the class of an exception, superclasses
+included. `(try body (catch C1 e h1) (catch C2 e h2) (finally f))`
+compiles to
+
+```
+    TRY_BEGIN Lfinally          ; only with a finally clause
+    TRY_BEGIN Lcatch            ; only with catch clauses
+    <body>
+    TRY_END
+    JUMP Ldone
+Lcatch:                         ; stack: the exception
+    STORE_LOCAL ex
+    PUSH_LOCAL ex; EXC_MATCH C1; JUMP_IF_FALSE L2; <h1>; JUMP Ldone
+L2: PUSH_LOCAL ex; EXC_MATCH C2; JUMP_IF_FALSE L3; <h2>; JUMP Ldone
+L3: PUSH_LOCAL ex; THROW        ; no clause matched: rethrow the same object
+Ldone:
+    TRY_END                     ; the finally handler
+    <f>; POP                    ; normal path
+    JUMP Lend
+Lfinally:                       ; stack: the exception
+    STORE_LOCAL fx
+    <f>; POP
+    PUSH_LOCAL fx; THROW
+Lend:
+```
+
+The finally handler encloses the catch clauses too, so `finally` runs
+after a handled exception and when a catch clause throws; its forms are
+compiled once per path, as javac does. The catch binding names the
+exception's slot for the clause body only. A top-level `try` compiles as
+`((fn [] (try ...)))`, because the top level has no local slots. Clojure
+has no early return, so normal completion and an exception are the only
+two ways out of a `try`; `recur` across a `try` is the compile error
+`Cannot recur across try` (the handler it would leave behind is frame
+state a backward jump does not undo), tracked by a per-scope try depth
+recorded on every recur target.
+
+**Unwinding.** Calls nest natively (every call is a nested
+`executeFrame`), so an exception travels up the native stack as a C++
+exception. Every body that contains a `try` runs in `executeFrame<true>`,
+whose dispatch loop sits inside a C++ `try`: an exception escaping any
+instruction — raised by the VM, by a primitive or by a nested call —
+lands there. With no active handler it leaves the frame; otherwise the
+innermost handler is popped, the operand stack is cut back to its depth,
+the exception value is pushed and the loop resumes at the handler code.
+A body without a `try` runs in `executeFrame<false>`, which has no catch
+region at all: with the region in every frame `fib.clj` ran +3.5 % cycles,
+and with the split the benchmarks are at parity with the VM before
+exceptions (`perf stat -r 5`, fib / tak / sum-loop).
+
+**GC safety.** A `throw` raises a `ClojureThrow`, a `std::runtime_error`
+whose `what()` is the exception's toString, so every existing
+`catch (const std::exception&)` (the script driver, the REPL) reports it
+unchanged. While it unwinds, the frames it leaves are destroyed and hand
+their young generations to the collector, and those may be the only thing
+keeping the exception, its message and its data alive. So a
+`ClojureThrow` pins its object in a protoCore `ProtoRootSet` from its
+construction until its last copy is destroyed; the frame that catches it
+pushes it into a slot first. The pin is proven by the unit test
+`ExceptionsFixture.InFlightExceptionSurvivesCollections`, which fails
+when it is disabled.
+
+**Errors raised by C++.** Primitives, the VM and the stack guard raise
+`std::runtime_error`s whose message starts with a class name
+(`ArithmeticException: Divide by zero`, `StackOverflowError: ...`). When
+one reaches a handler, `exceptionFromError` makes it an exception of that
+class, with the text after `": "` as its message; a message that names no
+known class becomes a `RuntimeException` carrying the whole text (D26). New
+C++ code raises classed exceptions directly, with an optional data map and
+cause:
+
+```cpp
+[[noreturn]] void throwClassed(proto::ProtoContext* ctx, const char* className,
+                               const std::string& message,
+                               const proto::ProtoObject* data = nullptr,
+                               const proto::ProtoObject* cause = nullptr);
+```
+
+**Threads.** A future's or a `pmap` element's worker records the
+exception object on the future (still inside its `catch`, while the pin
+holds); `deref` then raises an `ExecutionException` whose cause is that
+object and whose message is the cause's toString, as JVM Clojure does. An
+exception escaping an actor's message handler is caught by the worker,
+and the actor's state becomes `nil` (STATUS.md, Known issues); a handler
+that catches its own exceptions keeps its state.
 
 ## 5. Namespaces and vars (planned)
 

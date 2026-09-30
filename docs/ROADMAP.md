@@ -66,6 +66,23 @@ follow-ups below.
 - Actors on a worker pool, with three priority bands, a single-method
   invariant and three protoCore `ProtoMPSCQueue` mailboxes per actor.
 
+### Exceptions
+
+- `try` / `catch` / `finally` and `throw` as special forms, over four VM
+  opcodes and a per-frame handler stack; `recur` across a `try` is a
+  compile error, as in JVM Clojure.
+- `ex-info`, `ex-data`, `ex-message`, `ex-cause`.
+- A built-in class hierarchy of 23 classes mirroring the Java ones
+  (`Exception`, `RuntimeException`, `ExceptionInfo`, `ArithmeticException`,
+  `IOException` and its `java.io` / `java.net` subclasses,
+  `ExecutionException`, `StackOverflowError`, …).
+- Errors raised by the runtime are exceptions of the class their message
+  names; deref of a failed future raises `ExecutionException` with the
+  original as its cause.
+- Follow-ups: bind `*e` in the REPL; give the arity and argument-type
+  errors of the built-in functions JVM Clojure's classes (D26); decide how
+  an exception escaping an actor handler should surface.
+
 ### Local REPL and packaging
 
 - Interactive `protoclj` REPL on libreadline: multi-line input, history,
@@ -92,12 +109,6 @@ Clojure. Macros become user-writable.
 - `defmacro`, the quote reader macro `'`, and quasiquote (`` ` ``, `~`, `~@`).
 - Move every `clojure.core` macro definable in protoClojure into
   `core.clj`. Keep only special-form-coupled macros in C++.
-
-### Exceptions
-
-- `try`, `catch`, `finally`, `throw`.
-- `ex-info`, `ex-data`, `ex-message`.
-- Stack unwinding via protoCore exceptions.
 
 ### Collections and sequences
 

@@ -1,5 +1,6 @@
 #include "ExecutionEngine.h"
 #include "BytecodeModule.h"
+#include "Exceptions.h"
 #include "ListBuilder.h"
 #include "MapOps.h"
 #include "Named.h"
@@ -13,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
+#include <vector>
 
 namespace protoClojure {
 
@@ -188,6 +190,33 @@ void packArguments(proto::ProtoContext& scope, unsigned int slot,
     scope.setAutomaticLocal(slot, packed.finish());
 }
 
+// An active exception handler of a frame (TRY_BEGIN / TRY_END).
+struct TryHandler {
+    const Instr* target;   // first instruction of the handler code
+    unsigned int sp;       // operand-stack depth at TRY_BEGIN
+};
+
+// TRY_BEGIN's push, out of line: the vector's growth path inlined into the
+// dispatch loop changed the register allocation of the whole loop and cost
+// +5.5 % instructions on benchmarks/sum-loop.clj, which runs no `try` at all.
+[[gnu::noinline]]
+void pushTryHandler(std::vector<TryHandler>& handlers, const Instr* target,
+                    unsigned int sp) {
+    handlers.push_back(TryHandler{target, sp});
+}
+
+// THROW: raises `v` (rooted by the caller) as an exception; a value that is
+// not an exception raises a ClassCastException, as JVM Clojure's `throw` of a
+// non-Throwable does. Cold and out of line, to keep the dispatch loop small.
+[[noreturn, gnu::cold, gnu::noinline]]
+void throwValue(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    if (!isException(ctx, v)) {
+        throwClassed(ctx, "ClassCastException",
+            std::string("throw expects an exception, got ") + valueTypeName(ctx, v));
+    }
+    throwException(ctx, v);
+}
+
 } // namespace
 
 // Session 13 — for a kw-based callee, extract the declared kwKey values
@@ -253,6 +282,26 @@ void ExecutionEngine::gcSafepointSlow(proto::ProtoContext* ctx) const {
     // the enabled build's as the escape hatch can.
     gcSafepointCountdown_ = kGcSafepointStride;
     if (gcSafepointEnabled_ && ctx) ctx->safepoint();
+}
+
+// Declared in ExecutionEngine.h. Defined before its callers, so it inlines
+// into them: the choice costs one flag test and no native frame.
+[[gnu::always_inline]] inline const proto::ProtoObject*
+ExecutionEngine::execute(proto::ProtoContext* parent,
+                         const BytecodeModule& mod,
+                         const ActiveCallContext& env,
+                         const proto::ProtoObject* const* args,
+                         unsigned int argCount,
+                         const proto::ProtoObject* captures,
+                         const proto::ProtoObject* const* kwVals,
+                         unsigned int kwCount,
+                         const proto::ProtoObject* kwMap) {
+    if (mod.hasHandlers()) [[unlikely]] {
+        return executeFrame<true>(parent, mod, env, args, argCount, captures,
+                                  kwVals, kwCount, kwMap);
+    }
+    return executeFrame<false>(parent, mod, env, args, argCount, captures,
+                               kwVals, kwCount, kwMap);
 }
 
 const proto::ProtoObject*
@@ -439,16 +488,17 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                    kwVals, kwCount, kwMap);
 }
 
+template <bool kHandlers>
 const proto::ProtoObject*
-ExecutionEngine::execute(proto::ProtoContext* parent,
-                         const BytecodeModule& mod,
-                         const ActiveCallContext& env,
-                         const proto::ProtoObject* const* args,
-                         unsigned int argCount,
-                         const proto::ProtoObject* captures,
-                         const proto::ProtoObject* const* kwVals,
-                         unsigned int kwCount,
-                         const proto::ProtoObject* kwMap) {
+ExecutionEngine::executeFrame(proto::ProtoContext* parent,
+                              const BytecodeModule& mod,
+                              const ActiveCallContext& env,
+                              const proto::ProtoObject* const* args,
+                              unsigned int argCount,
+                              const proto::ProtoObject* captures,
+                              const proto::ProtoObject* const* kwVals,
+                              unsigned int kwCount,
+                              const proto::ProtoObject* kwMap) {
     // Every call nests here on the native stack: raise StackOverflowError
     // instead of recursing past the end of the thread's stack.
     checkNativeStack();
@@ -713,6 +763,14 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
     const Instr* const codeEnd = mod.code().data() + mod.code().size();
     const Instr* ip = mod.code().data();
 
+    // The frame's active exception handlers, innermost last (TRY_BEGIN /
+    // TRY_END). Plain C++ data: a code position and a stack depth. Empty,
+    // and never allocated, in a frame that runs no `try`.
+    std::vector<TryHandler> handlers;
+
+    // The dispatch loop. Returns the frame's value at RETURN or at the end
+    // of the code.
+    auto dispatchLoop = [&]() __attribute__((always_inline)) -> const proto::ProtoObject* {
     while (ip < codeEnd) {
         const Instr word = *ip++;
         const Op op = static_cast<Op>(word & 0xFF);
@@ -1142,11 +1200,76 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
                 break;
             }
 
+            case Op::TRY_BEGIN:
+                // Emitting TRY_BEGIN marks the module (hasHandlers), so only
+                // a handler frame ever sees one.
+                if constexpr (kHandlers) {
+                    pushTryHandler(handlers, ip + operand, sp);
+                } else {
+                    throw std::runtime_error("VM: TRY_BEGIN in a frame without handlers");
+                }
+                break;
+
+            case Op::TRY_END:
+                if (handlers.empty())
+                    throw std::runtime_error("VM: TRY_END without a handler");
+                handlers.pop_back();
+                break;
+
+            case Op::THROW:
+                // The value stays in its slot, rooted, until the ClojureThrow
+                // has pinned it.
+                if (sp == 0) throw std::runtime_error("VM: THROW on empty stack");
+                throwValue(&frame, peekAt(0));
+
+            case Op::EXC_MATCH: {
+                const proto::ProtoObject* v = popVal();
+                const bool match = isException(&frame, v) &&
+                    exceptionClassIsA(exceptionClassOf(&frame, v),
+                                      static_cast<int>(operand));
+                pushVal(match ? PROTO_TRUE : PROTO_FALSE);
+                break;
+            }
+
             default:
                 throw std::runtime_error("VM: unknown opcode");
         }
     }
     return (sp == 0) ? PROTO_NONE : frame.getAutomaticLocal(stackBase + sp - 1);
+    };
+
+    if constexpr (!kHandlers) {
+        return dispatchLoop();
+    } else {
+        // An exception escaping an instruction — raised here, by a primitive
+        // or by a nested call, whose frames it has already unwound — lands in
+        // the catch below. With no active handler it leaves the frame.
+        // Otherwise the innermost handler takes it: the operand stack is cut
+        // back to the handler's depth, the exception value is pushed (which
+        // roots it in this frame; a ClojureThrow pins it until then,
+        // Exceptions.h) and the loop resumes at the handler code.
+        for (;;) {
+            try {
+                return dispatchLoop();
+            } catch (const std::exception& error) {
+                if (handlers.empty()) throw;
+                const TryHandler h = handlers.back();
+                handlers.pop_back();
+                sp = h.sp;
+                pushVal(exceptionFromError(&frame, error));
+                ip = h.target;
+            }
+        }
+    }
 }
+
+template const proto::ProtoObject* ExecutionEngine::executeFrame<false>(
+    proto::ProtoContext*, const BytecodeModule&, const ActiveCallContext&,
+    const proto::ProtoObject* const*, unsigned int, const proto::ProtoObject*,
+    const proto::ProtoObject* const*, unsigned int, const proto::ProtoObject*);
+template const proto::ProtoObject* ExecutionEngine::executeFrame<true>(
+    proto::ProtoContext*, const BytecodeModule&, const ActiveCallContext&,
+    const proto::ProtoObject* const*, unsigned int, const proto::ProtoObject*,
+    const proto::ProtoObject* const*, unsigned int, const proto::ProtoObject*);
 
 } // namespace protoClojure

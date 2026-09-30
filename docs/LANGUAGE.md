@@ -61,7 +61,7 @@ tell at a glance which parts of the surface are runnable today. The
 | Variadic `& rest` | Implemented |
 | `if`, `do`, `quote`, `apply` | Implemented (`quote` of atoms only; `apply` over a list) |
 | `when`, `when-not`, `cond`, `and`, `or` | Implemented |
-| `throw`, `try`, `catch`, `finally`, `ex-info` | Planned |
+| `throw`, `try`, `catch`, `finally`, `ex-info`, `ex-data`, `ex-message`, `ex-cause` | Implemented (§14) |
 | Closures with N-level lexical capture | Implemented |
 | Named arguments `& {:keys [...] :or {...} :as m}` | Implemented |
 | Namespaces (`ns`, `:require`, `:as`, `:refer`) | Planned |
@@ -336,7 +336,7 @@ etc., are macros built on these specials.
 
 In 0.0.1 the C++ compiler handles `def`, `if`, `do`, `quote`, `fn`,
 `defn`, `let`, `loop`, `recur`, `when`, `when-not`, `cond`, `and`, `or`,
-`apply` and `future` directly; the `*` forms, `var`, `throw`, `try` and
+`apply`, `future`, `try` and `throw` directly; the `*` forms, `var` and
 `if-let` are not implemented.
 
 ### 3.4 Truthiness
@@ -661,9 +661,9 @@ writes the `*` forms directly. (See §3.3 for what 0.0.1 implements.)
 (try body (catch ExceptionType e handler) (finally cleanup))
 ```
 
-`ExceptionType` is one of the protoCore exception class objects:
-`Error`, `ArithmeticError`, `IndexError`, etc. Catching `Exception`
-matches all of them.
+`ExceptionType` is one of the built-in exception classes — `Exception`,
+`ExceptionInfo`, `ArithmeticException`, `IOException`, … — and matches its
+subclasses too (§14).
 
 ---
 
@@ -874,15 +874,18 @@ of them (§17).
 @result                        ;; blocks until done
 ```
 
-An error raised by a future's body is kept with the future, and every
-`deref` of that future raises it wrapped as the analogue of JVM Clojure's
-`java.util.concurrent.ExecutionException`: `@(future (/ 1 0))` raises
-`ExecutionException: ArithmeticException: Divide by zero`. A future whose
-error is never dereferenced fails silently, as in JVM Clojure. `pmap` raises
-the error of the first element, in input order, whose call failed, wrapped
-the same way, after waiting for every element. An error in an actor's
-message handler is not reported yet: the actor's state becomes `nil`
-(`STATUS.md`, Known issues).
+An exception raised by a future's body is kept with the future, and every
+`deref` of that future raises an `ExecutionException` (JVM Clojure's
+`java.util.concurrent.ExecutionException`) whose cause is that exception:
+`@(future (/ 1 0))` raises
+`ExecutionException: ArithmeticException: Divide by zero`, and
+`(ex-cause e)` of the caught `ExecutionException` is the
+`ArithmeticException`. A future whose exception is never dereferenced fails
+silently, as in JVM Clojure. `pmap` raises the exception of the first
+element, in input order, whose call failed, wrapped the same way, after
+waiting for every element. An exception escaping an actor's message handler
+is not reported yet: the actor's state becomes `nil` (`STATUS.md`, Known
+issues); a handler that catches its own exceptions keeps its state.
 
 The Clojure-JVM thread-local Var binding semantics will be preserved
 (planned, with `binding`): a `binding` form establishes a thread-local
@@ -915,27 +918,121 @@ Deviations introduced after these (D14 onward) are listed in
 
 ---
 
-## 14. Errors (planned)
+## 14. Exceptions
 
-Errors are protoCore exception objects. The `clojure.core` exception
-constructors (`ex-info`, `ex-data`, `ex-message`, `ex-cause`) work as
-JVM Clojure. `try` / `catch` / `finally` operate on exception class
-prototypes.
+`try` / `catch` / `finally` and `throw` are special forms; `ex-info`,
+`ex-data`, `ex-message` and `ex-cause` are functions. They behave as in
+JVM Clojure, with the departures listed at the end of this section.
 
 ```clojure
+(defn safe-div [a b]
+  (try
+    (/ a b)
+    (catch ArithmeticException e
+      (println "math error:" (ex-message e))   ;; math error: Divide by zero
+      :undefined)
+    (finally
+      (println "done"))))
+
 (try
-  (something-risky)
-  (catch ArithmeticError e
-    (println "math error:" (ex-message e)))
-  (finally
-    (cleanup)))
+  (throw (ex-info "order rejected" {:order 42 :reason :no-stock}))
+  (catch clojure.lang.ExceptionInfo e
+    (ex-data e)))                               ;; {:order 42, :reason :no-stock}
 ```
 
-Class hierarchy: `Exception` ← `Error` ← `ArithmeticError`, `IndexError`,
-`KeyError`, `TypeError`, `ArityError`. A catch on `Exception` matches any
-of them.
+**`try`.** `(try body* (catch Class name body*)* (finally body*)?)`. The
+body forms run as a `do`. When one of them raises an exception, the catch
+clauses are tried in order and the first whose class is the exception's
+class or a superclass of it runs, with `name` bound to the exception; its
+value is the `try`'s value. When no clause matches, the exception
+propagates, the same object. The `finally` forms run last on every path —
+after the body, after a catch clause, and when the exception propagates
+(also when a catch clause throws) — for effect only: the `try`'s value is
+the body's or the clause's. An exception thrown by `finally` replaces the
+one in flight. Body forms come first, then catch clauses, then at most one
+`finally`, as in JVM Clojure (`Only catch or finally clause can follow
+catch in try expression`, `finally clause must be last in try
+expression`). `recur` may not jump out of a `try`: `Cannot recur across
+try` is a compile error, while a `loop` wholly inside a `try`, or a `try`
+inside the arguments of a `recur`, is fine. `try` works at the top level
+of a file and in the REPL as well as in function bodies.
 
-In 0.0.1, a read, compile or runtime error stops a script with a
+**`throw`.** `(throw e)` raises the exception `e`. Throwing a value that
+is not an exception raises `ClassCastException`.
+
+**Functions.**
+
+- `(ex-info msg map)` / `(ex-info msg map cause)` — a new `ExceptionInfo`
+  with a message (a string or nil), a data map (not nil: `Additional data
+  must be non-nil.` is an `IllegalArgumentException`) and an optional cause.
+- `(ex-data e)` — the data map of an `ExceptionInfo`; nil for any other
+  value, other exceptions included.
+- `(ex-message e)` — the message of any exception; nil for a non-exception.
+- `(ex-cause e)` — the cause of an exception, or nil.
+
+**Classes.** A `catch` names one of a fixed hierarchy of classes that
+mirrors the Java classes a Clojure programmer catches, by its simple name
+or its qualified Java name (`ExceptionInfo` or `clojure.lang.ExceptionInfo`,
+`IOException` or `java.io.IOException`). An unknown name is the compile
+error `Unable to resolve classname: Foo`.
+
+```
+Throwable
+├── Exception
+│   ├── RuntimeException
+│   │   ├── ExceptionInfo            ArithmeticException   ClassCastException
+│   │   ├── IllegalArgumentException ─ ArityException, NumberFormatException
+│   │   ├── IllegalStateException    NullPointerException  UnsupportedOperationException
+│   │   └── IndexOutOfBoundsException ─ StringIndexOutOfBoundsException
+│   ├── IOException ─ FileNotFoundException, SocketException ─ ConnectException,
+│   │                 SocketTimeoutException, UnknownHostException
+│   └── ExecutionException
+└── Error ─ StackOverflowError
+```
+
+`(catch Exception e ...)` catches every exception but a
+`StackOverflowError`, which is an `Error`; `(catch Throwable e ...)`
+catches everything. The I/O classes are raised by nothing yet; they exist
+for the planned I/O layer.
+
+**Errors raised by the runtime.** An error raised by a built-in function or
+by the VM is an exception of the class its message names, with the rest of
+the message as `ex-message`: `(/ 1 0)` is an `ArithmeticException` with
+message `"Divide by zero"`, `(+ 1 "a")` a `ClassCastException`, `(nth [1 2]
+5)` an `IndexOutOfBoundsException`, a runaway recursion a
+`StackOverflowError`. An error whose message names no class — most
+arity and argument-type errors of built-in functions, such as
+`inc: expects 1 arg` — is a `RuntimeException` whose message is the whole
+text (D26).
+
+**Printing.** `str` of an exception is its toString: the class, the
+message and, for an `ExceptionInfo`, the data —
+`(str (ex-info "boom" {:a 1}))` is `"ExceptionInfo: boom {:a 1}"`.
+`println` and the REPL print it as a one-line `#error` map:
+`#error {:type ExceptionInfo, :message "boom", :data {:a 1}}`, with
+`:cause #error {...}` when it has a cause (D27).
+
+**Uncaught exceptions.** An exception no `catch` handles stops a script
+with exit status 1 after every `finally` on the way has run, and reports
+`<file>: runtime error: <toString>` on standard error
+(`script.clj: runtime error: ExceptionInfo: boom {:a 1}`); the REPL prints
+`error: <toString>` and reads the next form.
+
+**Threads.** A `deref` of a future whose body raised an exception raises an
+`ExecutionException` whose `ex-cause` is that exception (§12); `pmap` does
+the same for the first failing element. An exception escaping an actor's
+message handler is swallowed and the actor's state becomes `nil` (§12).
+
+**Departures from JVM Clojure.** Exceptions are not Java objects: no stack
+traces, no user-defined exception classes, no `class` / `instance?` on
+them, and the class names above are the only ones `catch` accepts (D27).
+Most errors of the built-in functions are `RuntimeException`s rather than
+the `ArityException` or `ClassCastException` JVM Clojure raises, and an
+unresolved global is a `RuntimeException` raised at run time rather than a
+compile error (D26).
+
+In 0.0.1, a read or compile error, or a runtime error no `try` catches,
+stops a script with a
 message on standard error and exit status 1; the REPL prints the error
 and continues. A recursion, or a collection printed, compared or hashed,
 nested deeper than the thread's stack allows raises the runtime error

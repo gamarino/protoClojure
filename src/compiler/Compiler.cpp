@@ -1,5 +1,6 @@
 #include "Compiler.h"
 
+#include "runtime/Exceptions.h"
 #include "runtime/StackGuard.h"
 
 #include "protoCore.h"
@@ -403,6 +404,192 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     }
     scopes_.pop_back();
     return body;
+}
+
+void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
+                          BytecodeModule& out, const CompilerMarkers& markers) {
+    // A try needs local slots (the caught exception), and a top-level form
+    // has none: compile a top-level try as the body of a zero-argument fn
+    // called on the spot, `((fn [] (try ...)))`, as `future` does for its
+    // body.
+    if (scopes_.empty()) {
+        const proto::ProtoList* wrapper = ctx->newList()
+            ->appendLast(ctx, proto::ProtoString::createSymbol(ctx, "fn")->asObject(ctx))
+            ->appendLast(ctx, lst->asObject(ctx));
+        std::unique_ptr<BytecodeModule> body =
+            compileArity(ctx, ctx->newList(), wrapper, /*bodyStartIdx=*/1, markers);
+        std::size_t blockIdx = out.addBlock(std::move(body));
+        out.emit(Op::MAKE_FN, blockIdx);   // no captures at the top level
+        out.emit(Op::CALL, 0);
+        return;
+    }
+
+    // Split the form into body forms, catch clauses and the finally clause,
+    // with JVM Clojure's rules and messages: body forms first, then catch
+    // clauses, then at most one finally, last.
+    struct CatchClause {
+        int classId;
+        std::string binding;
+        const proto::ProtoList* form;   // (catch Class name body...)
+    };
+    const unsigned long n = lst->getSize(ctx);
+    std::vector<unsigned long> bodyIdx;
+    std::vector<CatchClause> catches;
+    const proto::ProtoList* finallyForm = nullptr;
+    for (unsigned long i = 1; i < n; ++i) {
+        const proto::ProtoObject* f = lst->getAt(ctx, static_cast<int>(i));
+        std::string clause;
+        if (isList(f)) {
+            const proto::ProtoList* fl = f->asList(ctx);
+            if (fl->getSize(ctx) > 0 && isStringy(fl->getAt(ctx, 0))) {
+                clause = asUtf8(ctx, fl->getAt(ctx, 0));
+            }
+        }
+        if (finallyForm) {
+            throw CompileError("finally clause must be last in try expression");
+        }
+        if (clause == "catch") {
+            const proto::ProtoList* cl = f->asList(ctx);
+            if (cl->getSize(ctx) < 3 || !isStringy(cl->getAt(ctx, 1)) ||
+                !isStringy(cl->getAt(ctx, 2))) {
+                throw CompileError(
+                    "catch: expects (catch ClassName binding body...)");
+            }
+            const std::string className = asUtf8(ctx, cl->getAt(ctx, 1));
+            const int classId = exceptionClassId(className);
+            if (classId < 0) {
+                throw CompileError("Unable to resolve classname: " + className);
+            }
+            catches.push_back({classId, asUtf8(ctx, cl->getAt(ctx, 2)), cl});
+        } else if (clause == "finally") {
+            finallyForm = f->asList(ctx);
+        } else {
+            if (!catches.empty()) {
+                throw CompileError(
+                    "Only catch or finally clause can follow catch in try expression");
+            }
+            bodyIdx.push_back(i);
+        }
+    }
+
+    // Everything the try compiles — body, catch clauses and finally — is
+    // inside it for `recur` (Scope::tryDepth). The scope is re-acquired by
+    // index: compiling nested fns grows scopes_.
+    const std::size_t scopeIdx = scopes_.size() - 1;
+    struct DepthGuard {
+        std::vector<Scope>& scopes; std::size_t idx;
+        DepthGuard(std::vector<Scope>& s, std::size_t i) : scopes(s), idx(i) {
+            ++scopes[idx].tryDepth;
+        }
+        ~DepthGuard() { if (idx < scopes.size()) --scopes[idx].tryDepth; }
+    } depthGuard(scopes_, scopeIdx);
+
+    auto patchTo = [&](std::size_t at, std::size_t target) {
+        out.patchOperand(at, target - (at + 1));
+    };
+    // Forms [from, size) of `form` as an implicit do: nil when there are none.
+    auto compileDo = [&](const proto::ProtoList* form, unsigned long from) {
+        const unsigned long size = form->getSize(ctx);
+        if (from >= size) { out.emit(Op::PUSH_NIL, 0); return; }
+        for (unsigned long i = from; i < size; ++i) {
+            compileForm(ctx, form->getAt(ctx, static_cast<int>(i)), out, markers);
+            if (i + 1 < size) out.emit(Op::POP, 0);
+        }
+    };
+    // The finally forms, for effect only: the try's value is left alone.
+    auto compileFinally = [&]() {
+        const unsigned long size = finallyForm->getSize(ctx);
+        for (unsigned long i = 1; i < size; ++i) {
+            compileForm(ctx, finallyForm->getAt(ctx, static_cast<int>(i)), out, markers);
+            out.emit(Op::POP, 0);
+        }
+    };
+
+    // A finally handler encloses the body AND the catch clauses, so it also
+    // runs when a catch clause throws:
+    //
+    //       TRY_BEGIN Lfinally          ; only with a finally clause
+    //       TRY_BEGIN Lcatch            ; only with catch clauses
+    //       <body>
+    //       TRY_END
+    //       JUMP Ldone
+    //   Lcatch:                         ; stack: exception
+    //       STORE_LOCAL ex
+    //       PUSH_LOCAL ex, EXC_MATCH C1, JUMP_IF_FALSE L2, <catch body 1>, JUMP Ldone
+    //   L2: ...
+    //       PUSH_LOCAL ex, THROW        ; no clause matched: rethrow
+    //   Ldone:
+    //       TRY_END                     ; the finally handler
+    //       <finally>, POP              ; normal path
+    //       JUMP Lend
+    //   Lfinally:                       ; stack: exception
+    //       STORE_LOCAL fx
+    //       <finally>, POP
+    //       PUSH_LOCAL fx, THROW
+    //   Lend:
+    //
+    // The finally forms are compiled twice, once per path, as javac does.
+    std::size_t finallyBeginAt = 0;
+    if (finallyForm) finallyBeginAt = out.emit(Op::TRY_BEGIN, 0);
+
+    if (catches.empty()) {
+        if (bodyIdx.empty()) out.emit(Op::PUSH_NIL, 0);
+        for (std::size_t k = 0; k < bodyIdx.size(); ++k) {
+            compileForm(ctx, lst->getAt(ctx, static_cast<int>(bodyIdx[k])), out, markers);
+            if (k + 1 < bodyIdx.size()) out.emit(Op::POP, 0);
+        }
+    } else {
+        const std::size_t catchBeginAt = out.emit(Op::TRY_BEGIN, 0);
+        if (bodyIdx.empty()) out.emit(Op::PUSH_NIL, 0);
+        for (std::size_t k = 0; k < bodyIdx.size(); ++k) {
+            compileForm(ctx, lst->getAt(ctx, static_cast<int>(bodyIdx[k])), out, markers);
+            if (k + 1 < bodyIdx.size()) out.emit(Op::POP, 0);
+        }
+        out.emit(Op::TRY_END, 0);
+        std::vector<std::size_t> doneJumps{out.emit(Op::JUMP, 0)};
+
+        patchTo(catchBeginAt, out.pos());
+        const int exSlot = scopes_[scopeIdx].nextSlot++;
+        out.emit(Op::STORE_LOCAL, exSlot);
+        for (const CatchClause& c : catches) {
+            out.emit(Op::PUSH_LOCAL, exSlot);
+            out.emit(Op::EXC_MATCH, static_cast<std::size_t>(c.classId));
+            const std::size_t nextAt = out.emit(Op::JUMP_IF_FALSE, 0);
+            // The binding names the exception's slot for the clause body
+            // only; an outer binding of the same name is restored after.
+            int shadowed = -1;
+            {
+                auto& names = scopes_[scopeIdx].nameToSlot;
+                auto it = names.find(c.binding);
+                if (it != names.end()) shadowed = it->second;
+                names[c.binding] = exSlot;
+            }
+            compileDo(c.form, 3);
+            {
+                auto& names = scopes_[scopeIdx].nameToSlot;
+                if (shadowed >= 0) names[c.binding] = shadowed;
+                else               names.erase(c.binding);
+            }
+            doneJumps.push_back(out.emit(Op::JUMP, 0));
+            patchTo(nextAt, out.pos());
+        }
+        out.emit(Op::PUSH_LOCAL, exSlot);
+        out.emit(Op::THROW, 0);
+        for (std::size_t at : doneJumps) patchTo(at, out.pos());
+    }
+
+    if (finallyForm) {
+        out.emit(Op::TRY_END, 0);
+        compileFinally();
+        const std::size_t endAt = out.emit(Op::JUMP, 0);
+        patchTo(finallyBeginAt, out.pos());
+        const int fxSlot = scopes_[scopeIdx].nextSlot++;
+        out.emit(Op::STORE_LOCAL, fxSlot);
+        compileFinally();
+        out.emit(Op::PUSH_LOCAL, fxSlot);
+        out.emit(Op::THROW, 0);
+        patchTo(endAt, out.pos());
+    }
 }
 
 int Compiler::resolveLocal(const std::string& name) {
@@ -890,6 +1077,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             Scope::RecurTarget tgt;
             tgt.bodyStart = out.pos();
             tgt.slots = recurSlots;
+            tgt.tryDepth = scopes_.back().tryDepth;
             scopes_.back().recurStack.push_back(tgt);
 
             if (n == 2) {
@@ -940,6 +1128,23 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             return;
         }
 
+        // (try body* (catch Class name body*)* (finally body*)?)
+        if (headName == "try") {
+            compileTry(ctx, lst, out, markers);
+            return;
+        }
+
+        // (throw expr) — raise the value of expr, which must be an exception.
+        if (headName == "throw") {
+            if (n != 2) {
+                throw CompileError(
+                    "Too many arguments to throw, throw expects a single exception");
+            }
+            compileForm(ctx, lst->getAt(ctx, 1), out, markers);
+            out.emit(Op::THROW, 0);
+            return;
+        }
+
         // (apply f args-list) — special form. Compile f, compile the
         // args-list (any expression that yields a list), emit CALL_APPLY.
         // v0.7.x supports only the two-arg shape; the JVM-Clojure variadic
@@ -962,6 +1167,9 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 throw CompileError("recur: no enclosing loop in current scope");
             }
             const auto& tgt = scopes_.back().recurStack.back();
+            if (tgt.tryDepth != scopes_.back().tryDepth) {
+                throw CompileError("Cannot recur across try");
+            }
             unsigned long argc = n - 1;
             if (argc != tgt.slots.size()) {
                 throw CompileError("recur: arity mismatch with enclosing loop");
