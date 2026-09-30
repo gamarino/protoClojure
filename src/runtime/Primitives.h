@@ -84,7 +84,7 @@ inline bool isNumber([[maybe_unused]] proto::ProtoContext* ctx,
 
 // The type of `v` as error messages name it, with its article: "nil",
 // "a boolean", "an integer", "a float", "a string", "a list", "a vector",
-// "a fn", and, when an ActiveCallContext is installed, "a keyword",
+// "a fn", "an exception", and, when an ActiveCallContext is installed, "a keyword",
 // "a symbol", "a map", "an atom", "a future", "a promise", "an actor";
 // "an object" otherwise. Allocates nothing.
 const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v);
