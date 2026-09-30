@@ -1114,7 +1114,7 @@ IOPRIM(prim_sh) {
     if (argv.empty())
         throwClassed(ctx, "IllegalArgumentException", "sh: needs a command");
     const PO* opts = optionsArg(ctx, args, i, "sh");
-    checkOptions(ctx, opts, "sh", {":in", ":dir", ":env", ":in-enc", ":out-enc"});
+    checkOptions(ctx, opts, "sh", {":in", ":dir", ":env"});
     std::optional<std::string> input;
     if (const PO* in = option(ctx, opts, ":in"); in && in != PROTO_NONE) input = strOf(ctx, in);
     std::optional<std::string> dir;

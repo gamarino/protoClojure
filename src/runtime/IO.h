@@ -8,7 +8,7 @@
  * (`http-get`, `http-post`, ..., `http-request`), Ring's contract for the
  * HTTP server (`run-server`, `stop-server`, `server-port`) and protoClojure's
  * own socket functions (`tcp-connect`, `tcp-listen`, `udp-socket`, ...).
- * docs/LANGUAGE.md §15 is the user-facing reference and docs/DESIGN.md §4.2
+ * docs/LANGUAGE.md §18 is the user-facing reference and docs/DESIGN.md §4.2
  * the architecture.
  *
  * The POSIX layer (buffered descriptors, SIGPIPE, TLS, child processes,
