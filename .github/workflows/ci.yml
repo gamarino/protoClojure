@@ -53,8 +53,10 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 2.5.0, SOVERSION 3 (master, 2026-09-25).  Bump this deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'df8406a3f44f2a7c8505251bf6887e0ad6e60809' }}
+  # protoCore 2.6.2 (tag v2.6.2), SOVERSION 3.  Bump this deliberately.
+  # 2.6.1 is needed to create threads from threads (one per HTTP connection),
+  # 2.6.2 to keep the heap ceiling under dead mutables.
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '752bdb2064d3a2a6f8aa6bc756f107ed395bebd0' }}
   PROTOIO_REPO: gamarino/protoIO
   # protoIO 0.1.0 (main, 2026-09-30).  Bump this deliberately.
   PROTOIO_REF: ${{ github.event_name == 'schedule' && 'main' || '503c7e79292b52b427d1c829092bfd389c9aeec2' }}
