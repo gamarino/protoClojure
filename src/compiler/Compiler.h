@@ -128,9 +128,20 @@ private:
         struct RecurTarget {
             std::size_t  bodyStart;     // instruction position to JUMP_BACK to
             std::vector<int> slots;     // local slot indices for the bindings
+            int          tryDepth = 0;  // Scope::tryDepth where the target is
         };
         std::vector<RecurTarget> recurStack;
+
+        // How many `try` forms of this scope enclose the form being compiled.
+        // A `recur` whose target sits at a smaller depth would jump out of a
+        // try, which Clojure forbids ("Cannot recur across try"): the handler
+        // it would leave behind is frame state the jump does not undo.
+        int tryDepth = 0;
     };
+
+    // Compiles `(try body* (catch Class name body*)* (finally body*)?)`.
+    void compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
+                    BytecodeModule& out, const CompilerMarkers& markers);
 
     std::vector<Scope> scopes_;
 

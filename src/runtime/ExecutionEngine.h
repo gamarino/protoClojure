@@ -107,6 +107,9 @@ private:
     // and nested calls find it installed). Every nested call runs here, so
     // its native frame is what bounds the recursion depth: the context
     // travels as one reference instead of 23 arguments.
+    //
+    // Dispatches to executeFrame<true> when `mod` contains a `try`, else to
+    // executeFrame<false>; inlined into its callers.
     const proto::ProtoObject* execute(proto::ProtoContext* parent,
                                       const BytecodeModule& mod,
                                       const ActiveCallContext& env,
@@ -116,6 +119,21 @@ private:
                                       const proto::ProtoObject* const* kwVals,
                                       unsigned int kwCount,
                                       const proto::ProtoObject* kwMap);
+
+    // The frame itself. Only the <true> instantiation carries the C++
+    // try/catch that routes an exception to the body's handlers
+    // (TRY_BEGIN): a handler-free frame pays nothing for exceptions. The
+    // catch region alone cost fib.clj +3.5 % cycles when every frame had it.
+    template <bool kHandlers>
+    const proto::ProtoObject* executeFrame(proto::ProtoContext* parent,
+                                           const BytecodeModule& mod,
+                                           const ActiveCallContext& env,
+                                           const proto::ProtoObject* const* args,
+                                           unsigned int argCount,
+                                           const proto::ProtoObject* captures,
+                                           const proto::ProtoObject* const* kwVals,
+                                           unsigned int kwCount,
+                                           const proto::ProtoObject* kwMap);
 
     // protoClojure's garbage-collection safepoint.
     //

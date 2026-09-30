@@ -100,6 +100,11 @@ public:
     const Const& constAt(std::size_t i) const { return consts_[i]; }
     std::size_t constCount() const { return consts_.size(); }
 
+    // True once a TRY_BEGIN has been emitted into this body. The VM runs a
+    // body without one in a frame that has no exception-handler machinery
+    // at all (ExecutionEngine::executeFrame).
+    bool hasHandlers()  const { return hasHandlers_; }
+
     // Function metadata used by user-fn dispatch in the VM.
     int  arity()        const { return arity_; }
     int  localCount()   const { return localCount_; }
@@ -189,6 +194,7 @@ private:
     int                                          arity_      = 0;
     int                                          localCount_ = 0;
     bool                                         isVariadic_ = false;
+    bool                                         hasHandlers_ = false;
     bool                                         isKwBased_  = false;
     int                                          asSlot_     = -1;
     std::vector<KwKey>                           kwKeys_;
