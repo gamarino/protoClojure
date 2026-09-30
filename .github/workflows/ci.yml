@@ -14,6 +14,12 @@ name: CI
 # against cannot arise here, and the configuration CI runs is the one every
 # contributor runs locally.
 #
+# HOW protoIO IS OBTAINED: the same way, as a sibling checkout built into
+# ../protoIO/build_release before protoClojure is configured, which then finds
+# it with -DprotoIO_DIR (the build tree exports protoIO's CMake package).
+# protoIO is linked statically; it needs OpenSSL's development files.  Its ref
+# is pinned to a full commit hash, like protoCore's, and bumped deliberately.
+#
 # WHICH protoCore REF: pinned for push and pull_request, `master` for the
 # nightly schedule.  A pinned ref makes a red pull request unambiguous -- the
 # pull request is the only thing that changed.  Tracking master catches
@@ -49,6 +55,9 @@ env:
   PROTOCORE_REPO: numaes/protoCore
   # protoCore 2.5.0, SOVERSION 3 (master, 2026-09-25).  Bump this deliberately.
   PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'df8406a3f44f2a7c8505251bf6887e0ad6e60809' }}
+  PROTOIO_REPO: gamarino/protoIO
+  # protoIO 0.1.0 (main, 2026-09-30).  Bump this deliberately.
+  PROTOIO_REF: ${{ github.event_name == 'schedule' && 'main' || '503c7e79292b52b427d1c829092bfd389c9aeec2' }}
 
 jobs:
   test:
@@ -68,23 +77,35 @@ jobs:
           ref: ${{ env.PROTOCORE_REF }}
           path: protoCore
 
+      - name: Check out protoIO as a sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PROTOIO_REPO }}
+          ref: ${{ env.PROTOIO_REF }}
+          path: protoIO
+
       - name: Record what is being built
         run: |
           cmake --version | head -1
           g++ --version | head -1
           CORE_SHA=$(git -C protoCore rev-parse HEAD)
+          IO_SHA=$(git -C protoIO rev-parse HEAD)
           echo "protoCore ref: $PROTOCORE_REF ($CORE_SHA)"
+          echo "protoIO ref: $PROTOIO_REF ($IO_SHA)"
           {
             echo "protoCore ref \`$PROTOCORE_REF\` at \`$CORE_SHA\`"
+            echo "protoIO ref \`$PROTOIO_REF\` at \`$IO_SHA\`"
             echo "protoClojure at \`$(git -C protoClojure rev-parse HEAD)\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Install libreadline
+      - name: Install libreadline and OpenSSL
         # protoClojure's REPL links readline; CMakeLists.txt fails the configure
-        # without it.
+        # without it.  protoIO needs OpenSSL for TLS sockets and https.  python3
+        # (preinstalled on the runner) serves the raw chunked response of
+        # tests/conformance/27-io/http-chunked-utf8-split.clj.
         run: |
           sudo apt-get update
-          sudo apt-get install -y libreadline-dev
+          sudo apt-get install -y libreadline-dev libssl-dev
 
       - name: Build protoCore
         # Only the library: protoCore's own test binary is protoCore's CI's job,
@@ -93,9 +114,15 @@ jobs:
           cmake -S protoCore -B protoCore/build_release -DCMAKE_BUILD_TYPE=Release
           cmake --build protoCore/build_release --target protoCore --parallel "$(nproc)"
 
+      - name: Build protoIO
+        # Only the library: protoIO's own suite is protoIO's CI's job.
+        run: |
+          cmake -S protoIO -B protoIO/build_release -DCMAKE_BUILD_TYPE=Release -DPROTOIO_BUILD_TESTS=OFF
+          cmake --build protoIO/build_release --parallel "$(nproc)"
+
       - name: Configure protoClojure
         working-directory: protoClojure
-        run: cmake -B build_release -S .
+        run: cmake -B build_release -S . -DprotoIO_DIR="$GITHUB_WORKSPACE/protoIO/build_release"
 
       - name: Build protoClojure
         working-directory: protoClojure
