@@ -1,4 +1,5 @@
 #include "Primitives.h"
+#include "Exceptions.h"
 #include "ExecutionEngine.h"
 #include "ActorScheduler.h"
 #include "ListBuilder.h"
@@ -262,6 +263,11 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
         out += '>';
         return;
     }
+    // An exception: `#error {:type C, :message "m", ...}` (Exceptions.h).
+    if (isException(ctx, v)) {
+        appendExceptionForm(ctx, out, v);
+        return;
+    }
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) { out += "#<unprintable>"; return; }
     if (isNamed(ctx, cc->named, v)) {
@@ -340,6 +346,12 @@ void appendStr(proto::ProtoContext* ctx, std::string& out,
         const double d = v->asDouble(ctx);
         if (std::isnan(d)) { out += "NaN"; return; }
         if (std::isinf(d)) { out += d > 0 ? "Infinity" : "-Infinity"; return; }
+    }
+    // A bare exception renders as its toString, as JVM Clojure's `str`
+    // renders a Throwable ("ExceptionInfo: boom {:a 1}").
+    if (isException(ctx, v)) {
+        out += exceptionToString(ctx, v);
+        return;
     }
     printTo(ctx, out, v, /*readable=*/true);
 }
@@ -1533,41 +1545,50 @@ const proto::ProtoObject* prim_atom_p(proto::ProtoContext* ctx,
 }
 
 // The attribute under which a future, or a pmap element, records the error
-// its body raised: the error's message as a string. Absent when the body
+// its body raised: the exception value (Exceptions.h). Absent when the body
 // returned normally.
 const proto::ProtoString* threadErrorKey(proto::ProtoContext* ctx) {
     return proto::ProtoString::createSymbol(ctx, "__error__");
 }
 
-// The message of an error escaping a future's or a pmap element's body.
-std::string currentErrorMessage() {
+// Records the error being handled on `holder` (a future or a pmap element)
+// under threadErrorKey, as an exception value: the object of a Clojure
+// `throw`, or the classed exception of a C++ error (exceptionFromError).
+// Call only from inside a catch block, where the in-flight exception is still
+// pinned. `holder` is mutable and rooted by the caller.
+void recordThreadError(proto::ProtoContext* ctx, const proto::ProtoObject* holder) {
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
     try {
         throw;
     } catch (const std::exception& e) {
-        return e.what();
+        scope.setAutomaticLocal(0, exceptionFromError(&scope, e));
     } catch (...) {
-        return "unknown error";
+        scope.setAutomaticLocal(0, exceptionFromError(
+            &scope, std::runtime_error("unknown error")));
     }
+    const_cast<proto::ProtoObject*>(holder)->setAttribute(
+        &scope, threadErrorKey(&scope), scope.getAutomaticLocal(0));
 }
 
-// True, with the recorded message in `*message`, when the body of `holder`
-// (a future or a pmap element) raised an error.
-bool threadFailed(proto::ProtoContext* ctx, const proto::ProtoObject* holder,
-                  std::string* message) {
+// The exception the body of `holder` (a future or a pmap element) raised, or
+// nullptr when it returned normally. Reachable from `holder`.
+const proto::ProtoObject* threadFailure(proto::ProtoContext* ctx,
+                                        const proto::ProtoObject* holder) {
     const proto::ProtoObject* error = holder->getAttribute(ctx, threadErrorKey(ctx));
-    if (!error || !proto::ProtoObject::isStringTagFast(error)) return false;
-    *message = reinterpret_cast<const proto::ProtoString*>(error)->toStdString(ctx);
-    return true;
+    return isException(ctx, error) ? error : nullptr;
 }
 
-// The analogue of the java.util.concurrent.ExecutionException JVM Clojure's
-// deref of a failed future raises. Its message is the cause's toString(),
-// "<class>: <message>", which is how the runtime already spells its errors
-// ("ArithmeticException: Divide by zero"), so the message is
-// "ExecutionException: " followed by the cause's message.
+// JVM Clojure's deref of a failed future raises a
+// java.util.concurrent.ExecutionException whose cause is the exception the
+// body raised and whose message is the cause's toString, "<class>:
+// <message>" ("ArithmeticException: Divide by zero"). `cause` must be rooted
+// by the caller.
 [[noreturn]]
-void throwExecutionException(const std::string& cause) {
-    throw std::runtime_error("ExecutionException: " + cause);
+void throwExecutionException(proto::ProtoContext* ctx,
+                             const proto::ProtoObject* cause) {
+    throwClassed(ctx, "ExecutionException", exceptionToString(ctx, cause),
+                 nullptr, cause);
 }
 
 const proto::ProtoObject* prim_deref(proto::ProtoContext* ctx,
@@ -1617,8 +1638,8 @@ const proto::ProtoObject* prim_deref(proto::ProtoContext* ctx,
         }
         // A body that raised an error makes every deref raise it, wrapped as
         // JVM Clojure's ExecutionException.
-        std::string error;
-        if (threadFailed(ctx, a, &error)) throwExecutionException(error);
+        if (const proto::ProtoObject* cause = threadFailure(ctx, a))
+            throwExecutionException(ctx, cause);
         const proto::ProtoObject* r =
             a->getAttribute(ctx, cc->resultKey);
         return r ? r : PROTO_NONE;
@@ -1855,25 +1876,17 @@ const proto::ProtoObject* futureThreadMain(
     setActiveCallContext(*parentCc);
 
     const proto::ProtoObject* value = PROTO_NONE;
-    std::string error;
-    bool failed = false;
     try {
         value = parentCc->engine->invoke(ctx, thunk, nullptr, 0);
     } catch (...) {
-        // Recorded on the future; deref raises it (prim_deref).
-        failed = true;
-        error = currentErrorMessage();
+        // Recorded on the future, before `__done__`, so a deref that sees
+        // the future realised finds it; deref raises it (prim_deref).
+        recordThreadError(ctx, fut);
     }
 
     proto::ProtoObject* futMut =
         const_cast<proto::ProtoObject*>(fut);
     futMut->setAttribute(ctx, resultKey, value);
-    // The error before `__done__`, so a deref that sees the future realised
-    // finds it.
-    if (failed) {
-        futMut->setAttribute(ctx, threadErrorKey(ctx),
-                             ctx->fromUTF8String(error.c_str()));
-    }
     futMut->setAttribute(ctx, doneKey, PROTO_TRUE);
 
     clearActiveCallContext();
@@ -2053,22 +2066,15 @@ const proto::ProtoObject* pmapWorkerMain(
     setActiveCallContext(*parentCc);
 
     const proto::ProtoObject* value = PROTO_NONE;
-    std::string error;
-    bool failed = false;
     try {
         const proto::ProtoObject* one[1] = { x };
         value = parentCc->engine->invoke(ctx, f, one, 1);
     } catch (...) {
         // Recorded on the element; prim_pmap raises it.
-        failed = true;
-        error = currentErrorMessage();
+        recordThreadError(ctx, fut);
     }
     proto::ProtoObject* futMut = const_cast<proto::ProtoObject*>(fut);
     futMut->setAttribute(ctx, resultKey, value);
-    if (failed) {
-        futMut->setAttribute(ctx, threadErrorKey(ctx),
-                             ctx->fromUTF8String(error.c_str()));
-    }
     futMut->setAttribute(ctx, doneKey, PROTO_TRUE);
     clearActiveCallContext();
     return value;
@@ -2139,8 +2145,7 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
     // for every element.
     const proto::ProtoList* fs =
         scope.getAutomaticLocal(kSlotFs)->asList(&scope);
-    std::string firstError;
-    bool anyFailed = false;
+    long firstFailed = -1;   // index of the first failing element
     {
         ListBuilder results(&scope);
         proto::ProtoContext* rctx = results.context();
@@ -2174,12 +2179,18 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
                     }
                 }
             }
-            if (!anyFailed) anyFailed = threadFailed(rctx, fut, &firstError);
+            if (firstFailed < 0 && threadFailure(rctx, fut))
+                firstFailed = static_cast<long>(i);
             results.push(fut->getAttribute(rctx, cc->resultKey));
         }
         scope.setAutomaticLocal(kSlotOut, results.finish());
     }
-    if (anyFailed) throwExecutionException(firstError);
+    if (firstFailed >= 0) {
+        // The element stays rooted in the kSlotFs list, and its exception
+        // with it.
+        throwExecutionException(&scope, threadFailure(&scope,
+            fs->getAt(&scope, static_cast<int>(firstFailed))));
+    }
     return scope.getAutomaticLocal(kSlotOut);
 }
 
@@ -2601,9 +2612,15 @@ constexpr PrimitiveEntry kPrimitives[] = {
     {"map",     &prim_map},
     {"filter",  &prim_filter},
     {"reduce",  &prim_reduce},
+
+    // Exceptions (Exceptions.h).
+    {"ex-info",    &prim_ex_info},
+    {"ex-data",    &prim_ex_data},
+    {"ex-message", &prim_ex_message},
+    {"ex-cause",   &prim_ex_cause},
 };
 
-// A linear scan of the 76 entries; printing a function is not a hot path.
+// A linear scan of the 80 entries; printing a function is not a hot path.
 const char* primitiveName(proto::ProtoMethod fn) {
     for (const PrimitiveEntry& p : kPrimitives) {
         if (p.fn == fn) return p.name;
@@ -2629,6 +2646,12 @@ void shutdownFutures(proto::ProtoContext* ctx) {
 void replPrintValue(proto::ProtoContext* ctx, std::FILE* out,
                     const proto::ProtoObject* v) {
     printValue(ctx, out, v, /*readable=*/true);
+}
+
+// Declared in Primitives.h; the exception printer's way back into printTo.
+void printValueTo(proto::ProtoContext* ctx, std::string& out,
+                  const proto::ProtoObject* v, bool readable) {
+    printTo(ctx, out, v, readable);
 }
 
 // Declared in Primitives.h; used by `deliver` and the actor scheduler.
@@ -2683,6 +2706,7 @@ const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v)
     if (isVector(v))                        return "a vector";
     if (isMap(v))                           return "a map";
     if (v->isMethod(ctx))                   return "a fn";
+    if (isException(ctx, v))                return "an exception";
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) return "an object";
     if (isNamed(ctx, cc->named, v)) {
@@ -2841,6 +2865,8 @@ bool valuesEqual(proto::ProtoContext* ctx,
 
 void installPrimitives(proto::ProtoContext* ctx,
                        proto::ProtoObject* globals) {
+    // The exception marker and the in-flight root set (Exceptions.h).
+    initExceptions(ctx, globals);
     // Install each primitive: wrap the C function pointer in a callable
     // ProtoObject via fromMethod, store on the globals under the symbol key.
     // setAttribute on a mutable receiver mutates in place.

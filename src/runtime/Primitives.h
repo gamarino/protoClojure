@@ -183,6 +183,12 @@ void shutdownFutures(proto::ProtoContext* ctx);
 void replPrintValue(proto::ProtoContext* ctx, std::FILE* out,
                     const proto::ProtoObject* v);
 
+// The same printer, appending to `out`: readable (Clojure's `pr`) when
+// `readable` is true, else as `print` renders it. Used by the exception
+// printer (Exceptions.h). `v` must be rooted by the caller.
+void printValueTo(proto::ProtoContext* ctx, std::string& out,
+                  const proto::ProtoObject* v, bool readable);
+
 // Delivers `value` to `promise` unless it was delivered before. A pending
 // promise has no own `valueKey` attribute; delivery installs a one-element
 // list holding the value with a single compare-and-set, so a reader never
