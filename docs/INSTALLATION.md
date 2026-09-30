@@ -15,7 +15,7 @@ dependency on protoCore's own package instead of shipping a copy.
   Fedora/RHEL, `brew install readline` on macOS). It is a hard requirement: the
   REPL needs history, arrow-key editing and the multi-line continuation prompt,
   and configuration fails with a `FATAL_ERROR` when it is missing.
-- **protoCore 2.1.0 or newer**, installed, with its CMake package
+- **protoCore 2.6.1 or newer**, installed, with its CMake package
   configuration. See protoCore's `docs/INSTALLATION.md`.
 - **protoIO 0.1** (the input and output library shared by the protoCore
   runtimes), either installed (the `protoio-dev` package, or any prefix
@@ -52,10 +52,12 @@ The discovery is `find_package(protoCore 2.0 CONFIG)`, so the prefix must hold
 configuration there is no way to tell protoCore 1.x from 2.x, and linking the
 wrong major version is silent.
 
-The version floor is `2.1` and the ceiling is the next major version.
-protoClojure's maps are protoCore `ProtoMap`s and its actor mailboxes are
-protoCore `ProtoMPSCQueue`s, both added in 2.1.0, and protoCore's major
-version and its soname move together.
+The version floor is `2.6.1` and the ceiling is the next major version.
+The HTTP server creates a thread per connection from its accept thread, and
+protoCore before 2.6.1 could detach a live context's roots when a thread was
+created from another thread. (protoClojure's maps are protoCore `ProtoMap`s and
+its actor mailboxes protoCore `ProtoMPSCQueue`s, both added in 2.1.0.)
+protoCore's major version and its soname move together.
 protoClojure additionally asserts that the package's `SOVERSION` is `2`.
 
 ## Building against a sibling developer tree
@@ -129,8 +131,8 @@ dependency on protoCore's own package:
 
 | Format | Relation |
 |--------|----------|
-| DEB | `Depends: protocore (>= 2.1.0), protocore (<< 3.0.0)` |
-| RPM | `Requires: protoCore >= 2.1.0, protoCore < 3.0.0` |
+| DEB | `Depends: protocore (>= 2.6.1), protocore (<< 3.0.0)` |
+| RPM | `Requires: protoCore >= 2.6.1, protoCore < 3.0.0` |
 
 `CPACK_DEBIAN_PACKAGE_SHLIBDEPS` is enabled, so `dpkg-shlibdeps` adds the
 shared libraries `protoclj` links to the DEB's `Depends`: `libc6`,
@@ -138,7 +140,7 @@ shared libraries `protoclj` links to the DEB's `Depends`: `libc6`,
 landed, `libssl3t64` (OpenSSL, pulled in by the statically linked protoIO).
 protoIO itself is not a dependency: `protoio-dev` is needed to build, never
 to run. Verified 2026-09-30 with `cpack -G DEB`: `Depends: protocore (>=
-2.1.0), protocore (<< 3.0.0), libc6 (>= 2.38), libgcc-s1 (>= 3.0),
+2.6.1), protocore (<< 3.0.0), libc6 (>= 2.38), libgcc-s1 (>= 3.0),
 libreadline8t64 (>= 6.0), libssl3t64 (>= 3.0.0), libstdc++6 (>= 13),
 protocore (>= 2.6.2)`.
 

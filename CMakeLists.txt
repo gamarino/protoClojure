@@ -18,7 +18,7 @@ include(GNUInstallDirs)
 
 # --- protoCore -----------------------------------------------------------------
 # Resolution order (Phase I, decision D-I1):
-#   1. An installed protoCore CMake package: find_package(protoCore 2.1 CONFIG).
+#   1. An installed protoCore CMake package: find_package(protoCore 2.6.1 CONFIG).
 #      The only mode that checks protoCore's version and ABI, and therefore the
 #      only mode a distributable package may be built in. Name a prefix with
 #      -DPROTO_CORE_PREFIX=<prefix> or -DCMAKE_PREFIX_PATH=<prefix>.
@@ -27,12 +27,14 @@ include(GNUInstallDirs)
 #      package was found and no prefix was named; refused by
 #      -DPROTOCORE_REQUIRE_PACKAGE=ON.
 #
-# The version floor is 2.1: protoClojure's maps are protoCore `ProtoMap`s
-# driven through its hashed-collection helper, both added in 2.1.0. The
+# The version floor is 2.6.1: the HTTP server creates a thread per connection
+# from its accept thread, and before 2.6.1 ProtoSpace::newThread called from a
+# thread other than the creator detached a live context's roots (a later cycle
+# freed objects still in use). (Maps as `ProtoMap`s needed 2.1.0.) The
 # ceiling is the next major, because protoCore's major version and its soname
 # move together.
-set(PROTOCORE_MIN_VERSION      "2.1")
-set(PROTOCORE_MIN_VERSION_FULL "2.1.0")
+set(PROTOCORE_MIN_VERSION      "2.6.1")
+set(PROTOCORE_MIN_VERSION_FULL "2.6.1")
 set(PROTOCORE_NEXT_MAJOR       "3.0.0")
 set(PROTOCORE_ABI_SOVERSION    "3")
 option(PROTOCORE_REQUIRE_PACKAGE
@@ -317,7 +319,7 @@ elseif(UNIX)
     # with an older SOVERSION is accepted by dpkg and then fails at load
     # time (installers-sep2026 report, F4). Verified it does NOT add that
     # dependency: rebuilding this package's DEB with the flag on produced
-    # Depends: protocore (>= 2.1.0), protocore (<< 3.0.0), libc6 (>= 2.38),
+    # Depends: protocore (>= 2.6.1), protocore (<< 3.0.0), libc6 (>= 2.38),
     # libgcc-s1 (>= 3.0), libreadline8t64 (>= 6.0), libstdc++6 (>= 13) -- no
     # protocore SONAME entry. Cause, confirmed by hand-running dpkg-shlibdeps
     # --ignore-missing-info against the staged binary: `dpkg -S` resolves

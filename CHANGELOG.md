@@ -8,6 +8,8 @@ The project has no tagged releases yet; the version declared in
 
 ## [Unreleased]
 
+- **protoCore floor raised to 2.6.1.** The HTTP server creates a thread per connection from its accept thread; before 2.6.1, protoCore's `newThread` could detach a live context's roots when called from another thread. The DEB now depends on `protocore (>= 2.6.1)`.
+
 ### Added
 
 - **Reader.** Integers, floats (`3.14`, `1e6`), strings with escapes,
