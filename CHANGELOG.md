@@ -69,27 +69,55 @@ The project has no tagged releases yet; the version declared in
   `InFlightExceptionSurvivesCollections` fails without the pin. C++ code
   raises classed exceptions with
   `throwClassed(ctx, className, message, data, cause)` (`DESIGN.md` §4.1).
+- **Input and output**, on the shared protoIO library (linked statically;
+  the DEB gains only `libssl3t64`), as globals named as in Clojure
+  (`LANGUAGE.md` §18, `DESIGN.md` §4.2): `slurp` (files, readers, sockets and
+  `http(s)` URLs), `spit` with `:append`, `reader`, `writer`, `with-open`
+  (compiled as Clojure's macro expands it, closing in reverse order on
+  return and on exception), `read-line` (standard input, readers, sockets),
+  `write`, `close`, `line-seq` (eager, D29), `file`, `file-seq`, `exists?`,
+  `directory?`, `delete-file`, `make-parents` and `copy`; `sh` with `:in`,
+  `:dir` and `:env`, answering `{:exit :out :err}`; `getenv`, `exit`, and
+  `*command-line-args*` bound to the arguments after the script's path; an
+  HTTP client in babashka http-client's shape (`http-get`, `http-post`,
+  `http-put`, `http-delete`, `http-head`, `http-request`; an exceptional
+  status throws ex-info carrying the response unless `:throw false`); a
+  Ring server (`run-server`, `stop-server`, `server-port`) that refuses
+  malformed and oversized requests with 400 / 414 / 431 / 413 and answers
+  a plain 500 for a failing handler or a response header with a line
+  break, each connection on a ProtoThread of its own rather than on the
+  actor pool; and sockets (`tcp-connect` with `:tls` and `:timeout`,
+  `tcp-listen`, `tcp-accept`, `socket-read-line`, `socket-write`,
+  `socket-close`, `udp-socket`, `udp-send`, `udp-receive`, D30). Every
+  blocking call runs outside the collector's quorum. Failures are
+  `FileNotFoundException`, `IOException`, `ConnectException`,
+  `SocketTimeoutException`, `UnknownHostException`, `SocketException` or
+  `IllegalArgumentException` with ex-data `{:type :file-not-found :errno 2}`
+  and the like. Deviations D28-D33 (`STATUS.md`). 69 conformance fixtures in
+  `tests/conformance/27-io` and four CLI checks.
 - **REPL.** Running `protoclj` without arguments starts an interactive REPL on
   libreadline: `user=>` prompt, multi-line input, history in
   `~/.protoclj_history`, `*1` / `*2` / `*3`, and the `:help`, `:quit`,
   `:load` and `:time` commands.
 - **Packaging.** CPack configuration: DEB, RPM and TGZ on Linux, DragNDrop on
   macOS, NSIS and ZIP on Windows.
-- **Tests.** A glob-discovered conformance suite (338 fixtures under
+- **Tests.** A glob-discovered conformance suite (407 fixtures under
   `tests/conformance/`), GoogleTest unit tests for the lexer, the reader,
   the bytecode module, the runtime map, value equality and hashing, the
   native stack guard, the double printer and exception values (98 tests),
-  and eleven CLI checks (`--help`, a generated program with 70,000 distinct
+  and fifteen CLI checks (`--help`, a generated program with 70,000 distinct
   literals of each kind, the native bulk builders under a heap ceiling, the
   garbage a `loop` makes under a heap ceiling, joins that park for the
   collector, actor payloads under a heap ceiling, a stack overflow in the
   REPL, globals bound to nil in the REPL, deeply nested source, an uncaught
-  exception, and exceptions under a heap ceiling).
+  exception, exceptions under a heap ceiling, `read-line` in pipelines,
+  `*command-line-args*`, exit statuses, and an HTTP server under a heap
+  ceiling).
 - **Benchmarks and examples.** `benchmarks/bench.sh` (comparison with
   Babashka), `benchmarks/actor-bench.sh` (actor throughput) and twelve
   example scripts under `examples/`.
 - **Documentation.** Language reference, architectural design, interop design,
-  status tracker, roadmap and a thirteen-chapter tutorial.
+  status tracker, roadmap and a fourteen-chapter tutorial.
 - **Garbage-collection census (`PROTOCLJ_GC_STATS=1`).** Prints one line to
   standard error when a script ends: cycles completed, cells reclaimed
   (total, per-cycle maximum and mean), the live set of the last cycle, and

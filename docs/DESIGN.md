@@ -382,6 +382,120 @@ exception escaping an actor's message handler is caught by the worker,
 and the actor's state becomes `nil` (STATUS.md, Known issues); a handler
 that catches its own exceptions keeps its state.
 
+### 4.2 Input and output
+
+The user-facing reference is `LANGUAGE.md` §18; the code is
+`src/runtime/IO.{h,cpp}`, the `with-open` branch of
+`src/compiler/Compiler.cpp` and the argument handling of `src/main.cpp`.
+
+**protoIO does the I/O.** The POSIX layer — buffered descriptors that may
+be shared between threads, SIGPIPE handling, TLS, child processes, sockets
+and the HTTP/1.1 message layer and client — is the protoIO library, shared
+with protoST and protoScala and linked statically (`CMakeLists.txt` finds
+an installed package or builds the sibling `../protoIO`). `IO.cpp` only
+binds it, in three steps per primitive:
+
+1. arguments are read and copied into C++ values (`std::string`, `int`,
+   `protoio::http::Request`, ...);
+2. the protoIO call runs inside `ProtoContext::UnmanagedScope`, touching no
+   protoCore object, so a thread blocked on a file, a pipe, a child or a
+   peer never holds up a collection (`blocking()` in `IO.cpp`);
+3. the result is built into protoClojure values after the scope has been
+   left; a `protoio::Error` caught there becomes a classed exception
+   (`throwClassed`, §4.1) with the ex-data map `{:type <kind> :errno n}`.
+
+| protoio::Error kind | Class | `:type` |
+|---|---|---|
+| FileNotFound | `FileNotFoundException` | `:file-not-found` |
+| FileExists, FileSystem, Process, LineTooLong, BodyTooLarge | `IOException` | `:file-exists`, `:file-system`, `:process`, `:line-too-long`, `:body-too-large` |
+| ConnectionRefused | `ConnectException` | `:connection-refused` |
+| ConnectionTimedOut | `SocketTimeoutException` | `:timeout` |
+| NameLookup | `UnknownHostException` | `:unknown-host` |
+| Network | `SocketException` | `:network` |
+| InvalidArgument | `IllegalArgumentException` | `:invalid-argument` |
+
+**Handles.** Files named with `file`, readers, writers, sockets,
+listening sockets, UDP sockets and HTTP servers are protoCore objects whose
+prototype is one IO marker (kept alive as a hidden attribute of the
+globals, like the exception marker). Their attributes are the kind, the
+path or address, and the descriptor. A file handle is immutable; the
+others are mutable, and `close` swaps the descriptor for -1 with
+`setAttributeIfEqual`, so exactly one caller closes a descriptor however
+many threads race to close the handle. There is no finaliser: a handle the
+program drops without closing keeps its descriptor until the process ends,
+which is why `with-open` exists.
+
+**`with-open`** is a macro in Clojure; protoClojure has no macros yet, so
+the compiler performs the same rewrite,
+`(with-open [a ia b ib] body)` → `(let [a ia] (try (with-open [b ib] body)
+(finally (__with_open_close__ a))))`, closing in reverse order.
+`__with_open_close__` is the `close` primitive under a name a program
+cannot shadow by defining its own `close`. A top-level `with-open` is
+compiled as `((fn [] ...))`, like a top-level `try`.
+
+**The HTTP server and the blocking decision.** The spec proposed serving
+requests "on actors". The actor pool is a fixed set of workers
+(`PROTOCLJ_ACTOR_WORKERS`, default `max(2, cores - 2)`), and a request
+spends most of its life blocked: waiting for the request head, for the
+body, for a slow client to take the response. On actors, a handful of slow
+or idle connections would occupy every worker and stop every actor in the
+program — the starvation protoST avoids by growing its pool while a worker
+is blocked (`BlockingIO`). protoClojure's scheduler has no such accounting,
+and adding it would change the actor model for a problem actors do not
+have. Decision (2026-09-30): the server does not use the actor pool.
+
+- `run-server` binds the listening socket and starts one **accept thread**,
+  a ProtoThread (`ProtoSpace::newThread`), which blocks in
+  `protoio::net::tcpAccept` inside an `UnmanagedScope`.
+- Each accepted connection gets a **connection thread** of its own, also a
+  ProtoThread, which reads the request with protoIO's limits (400, 414,
+  431 and 413 are answered before the handler runs), builds the Ring
+  request map in a per-request child context, calls the handler through the
+  ExecutionEngine with the ActiveCallContext of the thread that started the
+  server, converts and validates the response (a header value with a line
+  break, or an answer that is not a map, becomes a plain 500; a handler
+  exception becomes a plain 500 and a report on standard error), writes
+  it and closes. `connection: close` — one request per connection.
+- No native thread API is used: both kinds of thread are ProtoThreads,
+  joined with `ProtoThread::join`. The accept thread joins the connection
+  threads that have finished each time it wakes, and all of them when it
+  stops; `stop-server` joins the accept thread.
+- **Stopping.** Only the thread that owns a descriptor ever closes it, so a
+  descriptor number is never released under a thread still using it and
+  then reused by an unrelated `open`. `stop-server` therefore does not close
+  anything: it shuts the listening socket down (which wakes the blocked
+  accept) and shuts down the connections still waiting for their request,
+  under the per-connection mutex that the owner holds when it closes;
+  requests already in their handler finish and are answered. A handler may
+  stop its own server: the call returns at once (the join would wait for
+  the calling thread itself), and `shutdownIO` joins the threads at exit.
+- **GC.** The handler is pinned in a `ProtoRootSet` for as long as the
+  server runs. A connection thread's request map, the handler's garbage
+  and the response live in a child context destroyed when the request
+  ends, so a long-running server's garbage is collected
+  (`tests/cli/http-server-under-heap-limit.sh`: 400 requests under a
+  200,000-cell ceiling, about 20 collection cycles).
+- **Exit.** `shutdownIO` stops every server still running before
+  `shutdownFutures` and the actor scheduler's shutdown, in the script
+  driver and the REPL, since a handler may be using futures and actors. A
+  script that wants to keep serving blocks its main thread, for example on
+  `@(promise)`.
+
+Blocking I/O called from user code (an `http-get` inside an actor's
+handler, a `slurp` inside a future) runs on the calling thread and is
+bracketed like every other call: it never holds up a collection, but an
+actor worker blocked in I/O is unavailable to other actors until it
+returns, as a JVM agent's `send` pool thread is. Long blocking work
+belongs in a `future`, which gets its own thread.
+
+**Processes.** `sh` is `protoio::process::run`, which feeds `:in` and
+drains standard output and error together without SIGPIPE. protoIO's
+`run` has no working-directory or environment parameter, so `:dir` and
+`:env` go through `/bin/sh -c 'cd -- "$0" && exec "$@"'` and `env -i`,
+after checking up front, as the JVM would, that the directory exists and
+the program is on `PATH` (otherwise the shell's exit 127 would replace the
+`IOException`).
+
 ## 5. Namespaces and vars (planned)
 
 A namespace is a protoCore object. Its attributes are vars (or aliases to

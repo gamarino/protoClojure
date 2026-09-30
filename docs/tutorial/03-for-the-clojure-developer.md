@@ -27,13 +27,14 @@ under a `Dnn` id.
 >   `finally`, `throw`, `ex-info`, `ex-data`, `ex-message`, `ex-cause`
 >   (§3.3.6 lists the differences).
 > - §3.2 to §3.4: `defprotocol`, `extend-type`, `extend-protocol` and
->   `reify`; the `#"..."` regex literal and regex support; `slurp`,
->   `spit` and `with-open`; character literals such as `\a`, `char` and
+>   `reify`; the `#"..."` regex literal and regex support; character
+>   literals such as `\a`, `char` and
 >   `char?`; reader-literal registration; and the UMD interop with the
 >   `clj->py` family of conversion functions are not implemented yet.
 >   The STM and agent names (`ref`, `dosync`, `agent`, ...) are not
 >   reserved: they fail as unresolved symbols. Futures, `pmap`, atoms
->   and actors work as described.
+>   and actors work as described, and so does input and output
+>   (`slurp`, `spit`, `with-open`, `sh`, HTTP, sockets: chapter 14).
 >
 > See [STATUS.md](../STATUS.md) for the exact list.
 
@@ -149,10 +150,15 @@ the v0.1 idiom. We will revisit in v0.2.
 
 ### 3.2.6 `clojure.java.*` namespaces — D12
 
-None of `clojure.java.io`, `clojure.java.jdbc`,
-`clojure.java.javadoc`, etc. exist. For file I/O, use `slurp`,
-`spit`, `with-open` against host-provided file handles; for JDBC,
-use a Python-or-JS UMD substitute (`py/sqlite3`, `js/better-sqlite3`).
+None of `clojure.java.io`, `clojure.java.shell`, `clojure.java.jdbc`,
+`clojure.java.javadoc`, etc. exist as namespaces. The input and output
+functions are globals under their Clojure names instead — `slurp`,
+`spit`, `with-open`, `reader`, `writer`, `line-seq`, `file`, `copy`,
+`delete-file`, `make-parents`, `sh` — with small stand-ins for Java
+interop (`close`, `write`, `exists?`, `getenv`, `exit`), a babashka-style
+HTTP client, a Ring server and protoClojure's own sockets (chapter 14,
+D28-D33). For JDBC, use a Python-or-JS UMD substitute (`py/sqlite3`,
+`js/better-sqlite3`).
 
 ### 3.2.7 `clojure.spec`, BigDecimal `M`, transducers, chunked seqs
 

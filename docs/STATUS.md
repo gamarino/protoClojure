@@ -5,19 +5,21 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 447 test cases: 338
+scripts and an interactive REPL. `ctest` registers 520 test cases: 407
 conformance fixtures under `tests/conformance/`, 98 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 its key semantics, the lifetime of values that used to be interned, the
 vector representation, value equality and hashing, the
 native stack guard, the double printer and exception values
-(`tests/unit/`), and eleven CLI checks (`tests/cli/`: `--help`, a
+(`tests/unit/`), and fifteen CLI checks (`tests/cli/`: `--help`, a
 generated program with 70,000 distinct literals of each kind, the native
 bulk builders under a heap ceiling, the garbage a `loop` makes under a heap
 ceiling, joins that must park for the collector, actor message payloads
 under a heap ceiling, a stack overflow in the REPL, globals bound to nil in
 the REPL, source nested too deeply to read or compile, an uncaught
-exception in a script and in the REPL, and exceptions thrown under a heap
+exception in a script and in the REPL, exceptions thrown under a heap
+ceiling, `read-line` over standard input in pipelines,
+`*command-line-args*`, exit statuses, and an HTTP server under a heap
 ceiling);
 all pass. Benchmark numbers against Babashka 1.4.192
 are in [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md). Shipped changes
@@ -48,6 +50,7 @@ directories that cover them.
 | Watches, promises | `23-watches`, `24-promises` | 12 |
 | Actors | `25-actors` | 9 |
 | Exceptions: `try` / `catch` / `finally`, `throw`, `ex-info`, catchable primitive errors | `26-exceptions` | 47 |
+| Input and output: files, `with-open`, `sh`, the environment, HTTP client and Ring server, TCP / UDP / TLS sockets | `27-io` | 69 |
 | Interactive REPL | — (no conformance fixtures) | — |
 
 The design specifications written during development are archived under
@@ -212,7 +215,47 @@ The design specifications written during development are archived under
 - [x] Captures cascade — intermediate scopes create capture slots automatically
 - [x] First-class fns — `((make-mul k) x)` callable head, passed around freely
 
-### Primitives installed at startup (80)
+### Input and output (`LANGUAGE.md` §18, `DESIGN.md` §4.2)
+
+On the protoIO library (linked statically; the package depends on OpenSSL
+only). Every blocking call runs outside the collector's quorum
+(`ProtoContext::UnmanagedScope`), with its arguments copied to C++ values
+first and its result built after.
+
+- [x] Files: `slurp` (files, readers, sockets, `http(s)` URLs), `spit`
+      with `:append`, `reader`, `writer` (`:append`), `with-open` (closes
+      in reverse order on return and on exception), `read-line` (standard
+      input, readers, sockets; nil at the end), `write`, `close`,
+      `line-seq`, `file`, `file-seq`, `exists?`, `directory?`,
+      `delete-file`, `make-parents`, `copy`; UTF-8 only
+- [x] Programs: `sh` with `:in`, `:dir`, `:env`, answering
+      `{:exit :out :err}`; 2 MiB fed to a program that never reads it
+      neither kills nor hangs the runtime
+- [x] The running program: `getenv` (one variable or all), `exit`,
+      `*command-line-args*` bound to the arguments after the script's path
+- [x] HTTP client in babashka http-client's shape: `http-get`,
+      `http-post`, `http-put`, `http-delete`, `http-head`, `http-request`,
+      answering `{:status :headers :body}`; an exceptional status throws
+      ex-info carrying the response unless `:throw false`; `:headers`,
+      `:body`, `:query-params`, `:timeout`, `:follow-redirects`; a
+      cross-origin redirect drops the caller's headers, https to http is
+      refused
+- [x] HTTP server on Ring's contract: `run-server`, `stop-server`,
+      `server-port`; request map with `:request-method`, `:uri`,
+      `:query-string`, `:headers`, `:body`, `:remote-addr`, ...; 400 / 414
+      / 431 / 413 before the handler runs; a handler exception, a non-map
+      answer or a response header with a line break is a plain 500; each
+      connection on its own ProtoThread, never on the actor pool
+- [x] Sockets: `tcp-connect` (`:tls`, `:timeout`, `:verify`),
+      `tcp-listen`, `tcp-accept` (timeout -> nil), `socket-read-line`,
+      `socket-write`, `socket-close`, `udp-socket`, `udp-send`,
+      `udp-receive` (timeout -> nil)
+- [x] Errors: `FileNotFoundException`, `IOException`, `ConnectException`,
+      `SocketTimeoutException`, `UnknownHostException`, `SocketException`
+      and `IllegalArgumentException`, with ex-data
+      `{:type :file-not-found :errno 2}` and the like
+
+### Primitives installed at startup (80, plus 36 I/O)
 
 - [x] Arithmetic and comparison: `+ - * / inc dec < <= > >= = not=`
 - [x] Output: `println str` — one printer (`printTo` in
@@ -331,7 +374,8 @@ The design specifications written during development are archived under
 
 ### Tooling
 
-- [x] `protoclj <script.clj>` — single-file evaluation
+- [x] `protoclj <script.clj> [args...]` — single-file evaluation; the
+      arguments after the script are `*command-line-args*`
 - [x] `protoclj` with no arguments — interactive REPL
 - [x] `protoclj --version` / `--help` / `-h`
 - [x] Conformance suite under `tests/conformance/` — discovered by glob
@@ -507,6 +551,12 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D25 | `count` of a map is O(n), not O(1) (JVM Clojure: O(1)). Two keys whose hashes collide in their low 54 bits share one slot of the underlying `ProtoMap`, so the slot count is a lower bound on the number of entries, not the number itself; `count` therefore walks the entries. `empty?` stays O(1), because a slot always holds at least one entry | (perm) |
 | D26 | A runtime error whose message names no class is a `RuntimeException` carrying the whole message: most arity and argument-type errors raised by primitives (`(inc 1 2)`: `inc: expects 1 arg`, where JVM Clojure raises `ArityException`; `(upper-case 1)`: `upper-case: arg must be a string`, where it raises `ClassCastException`), and an unresolved global, which is caught at run time as a `RuntimeException` where JVM Clojure reports it at compile time. The class-naming errors (`ArithmeticException`, `ClassCastException` for arithmetic on non-numbers, `IndexOutOfBoundsException`, `StringIndexOutOfBoundsException`, `UnsupportedOperationException`, `StackOverflowError`) have JVM Clojure's classes | v0.x |
 | D27 | Exceptions are not Java objects: there are no stack traces, no user-defined exception classes, no `class` / `instance?` and no `.getMessage`-style interop; `catch` names one of 23 built-in classes (`DESIGN.md` §4.1). An exception prints on one line as `#error {:type C, :message "m", :data {...}, :cause #error {...}}` (JVM Clojure: a multi-line `#error` map with `:via`, `:trace` and a root-cause `:cause` string), and its toString and the uncaught-error report use the simple class name, `ArithmeticException: Divide by zero` (JVM Clojure: `java.lang.ArithmeticException: Divide by zero`). `throw` of a value that is not an exception raises `ClassCastException: throw expects an exception, got an integer` | (perm) |
+| D28 | The I/O functions are globals, not in `clojure.java.io`, `clojure.java.shell` or babashka's `babashka.http-client` (there are no namespaces yet), and small functions stand in for Java interop: `close` / `write` / `(read-line r)` for `.close` / `.write` / `.readLine`, `exists?` / `directory?` for `.exists` / `.isDirectory`, `getenv` / `exit` for `System/getenv` / `System/exit`. `file` answers a protoClojure file handle, not a `java.io.File` (`str` gives its path; `file-seq` answers such handles); readers and writers are UTF-8 only, with no InputStream / Reader stack | (perm while there are no namespaces) |
+| D29 | `line-seq` is eager: it reads the reader to its end and answers a list (nil when empty), because there are no lazy sequences yet (JVM Clojure: a lazy seq read as it is consumed). On an endless stream, such as a socket that never closes, use `read-line` in a loop | v0.2 (lazy seqs) |
+| D30 | Sockets are protoClojure's own functions (`tcp-connect`, `tcp-listen`, `tcp-accept`, `socket-read-line`, `socket-write`, `socket-close`, `udp-socket`, `udp-send`, `udp-receive`, `server-port`): Clojure has only Java interop (`java.net.Socket`) | (perm) |
+| D31 | The Ring request `:body` is a string (nil when empty), not an InputStream, and a response `:body` may be a string, nil, a list or vector of strings or a file, not an InputStream; `run-server` answers a server handle (http-kit answers a stop fn), serves one request per connection (`connection: close`, no keep-alive), each on its own thread, and a server still running when the script ends is stopped (the JVM keeps running while a server thread lives) | v0.x |
+| D32 | `sh` runs `:dir` and `:env` through `/bin/sh -c 'cd ...'` and `env -i`, since protoIO's process runner has no working-directory or environment parameter; `:in-enc` / `:out-enc` are not supported (output is always decoded as UTF-8) | v0.x |
+| D33 | I/O exceptions carry an ex-data map (`{:type :file-not-found :errno 2}`), so their toString and the uncaught-error report end with it, and their messages are protoIO's (`cannot read x: No such file or directory`, JVM: `x (No such file or directory)`) | (perm) |
 
 ## Known issues
 
@@ -581,6 +631,14 @@ See `LANGUAGE.md` for the full discussion. Summary:
 - **`pmap` spawns one OS thread per element**, which is wasteful for large
   collections.
 - **Actor `MPMC` throughput** is limited by the global ready-queue mutex.
+- **The HTTP server starts one thread per connection, without a cap.** A
+  flood of concurrent connections starts as many ProtoThreads; each waits
+  at most `:read-timeout` (30 s by default) for its request. Adequate for
+  the tools and services protoClojure targets today, not for exposure to
+  hostile traffic; a connection limit (answering 503) is the follow-up.
+- **I/O handles are not closed by the collector.** A reader, writer or
+  socket the program drops without closing keeps its descriptor until the
+  process ends (`with-open` scopes one); protoCore has no finalisers.
 
 ## History
 
