@@ -406,6 +406,96 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     return body;
 }
 
+void Compiler::compileWithOpen(proto::ProtoContext* ctx, const proto::ProtoList* lst,
+                               BytecodeModule& out, const CompilerMarkers& markers) {
+    // Clojure's with-open is a macro:
+    //
+    //   (with-open [a ia, b ib] body)
+    //   => (let [a ia] (try (with-open [b ib] body) (finally (.close a))))
+    //
+    // protoClojure has no macros yet, so the compiler performs the same
+    // rewrite, closing through `__with_open_close__` (IO.cpp), the `close`
+    // primitive under a name a program cannot shadow. The binding vector is
+    // rebuilt as a plain list, which `let` accepts as well.
+    auto sym = [&](const char* name) {
+        return proto::ProtoString::createSymbol(ctx, name)->asObject(ctx);
+    };
+    const unsigned long n = lst->getSize(ctx);
+    const proto::ProtoObject* bindings = n >= 2 ? lst->getAt(ctx, 1) : nullptr;
+    const proto::ProtoList* bvec = nullptr;
+    if (bindings && isWrappedVector(ctx, bindings, markers)) {
+        bvec = vectorItems(ctx, bindings, markers);
+    } else if (bindings && isList(bindings)) {
+        bvec = bindings->asList(ctx);
+    } else {
+        throw CompileError("with-open requires a vector for its binding");
+    }
+    const unsigned long bn = bvec->getSize(ctx);
+    if (bn % 2 != 0) {
+        throw CompileError("with-open requires an even number of forms in binding vector");
+    }
+    for (unsigned long i = 0; i < bn; i += 2) {
+        if (!isStringy(bvec->getAt(ctx, static_cast<int>(i)))) {
+            throw CompileError("with-open only allows Symbols in bindings");
+        }
+    }
+
+    // `let` needs local slots, and a top-level form has none: compile a
+    // top-level with-open as the body of a zero-argument fn called on the
+    // spot, as a top-level try is.
+    if (scopes_.empty()) {
+        const proto::ProtoList* wrapper = ctx->newList()
+            ->appendLast(ctx, sym("fn"))
+            ->appendLast(ctx, lst->asObject(ctx));
+        std::unique_ptr<BytecodeModule> body =
+            compileArity(ctx, ctx->newList(), wrapper, /*bodyStartIdx=*/1, markers);
+        std::size_t blockIdx = out.addBlock(std::move(body));
+        out.emit(Op::MAKE_FN, blockIdx);
+        out.emit(Op::CALL, 0);
+        return;
+    }
+
+    if (bn == 0) {
+        // (with-open [] body...) is (do body...).
+        const proto::ProtoList* doForm = ctx->newList()->appendLast(ctx, sym("do"));
+        for (unsigned long i = 2; i < n; ++i) {
+            doForm = doForm->appendLast(ctx, lst->getAt(ctx, static_cast<int>(i)));
+        }
+        compileForm(ctx, doForm->asObject(ctx), out, markers);
+        return;
+    }
+
+    const proto::ProtoObject* name = bvec->getAt(ctx, 0);
+    const proto::ProtoList* restBindings = ctx->newList();
+    for (unsigned long i = 2; i < bn; ++i) {
+        restBindings = restBindings->appendLast(ctx, bvec->getAt(ctx, static_cast<int>(i)));
+    }
+    const proto::ProtoList* inner = ctx->newList()
+        ->appendLast(ctx, sym("with-open"))
+        ->appendLast(ctx, restBindings->asObject(ctx));
+    for (unsigned long i = 2; i < n; ++i) {
+        inner = inner->appendLast(ctx, lst->getAt(ctx, static_cast<int>(i)));
+    }
+    const proto::ProtoList* closeCall = ctx->newList()
+        ->appendLast(ctx, sym("__with_open_close__"))
+        ->appendLast(ctx, name);
+    const proto::ProtoList* finallyForm = ctx->newList()
+        ->appendLast(ctx, sym("finally"))
+        ->appendLast(ctx, closeCall->asObject(ctx));
+    const proto::ProtoList* tryForm = ctx->newList()
+        ->appendLast(ctx, sym("try"))
+        ->appendLast(ctx, inner->asObject(ctx))
+        ->appendLast(ctx, finallyForm->asObject(ctx));
+    const proto::ProtoList* letBindings = ctx->newList()
+        ->appendLast(ctx, name)
+        ->appendLast(ctx, bvec->getAt(ctx, 1));
+    const proto::ProtoList* letForm = ctx->newList()
+        ->appendLast(ctx, sym("let"))
+        ->appendLast(ctx, letBindings->asObject(ctx))
+        ->appendLast(ctx, tryForm->asObject(ctx));
+    compileForm(ctx, letForm->asObject(ctx), out, markers);
+}
+
 void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
                           BytecodeModule& out, const CompilerMarkers& markers) {
     // A try needs local slots (the caught exception), and a top-level form
@@ -1125,6 +1215,12 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             }
             out.emit(Op::MAKE_FN, blockIdx);
             out.emit(Op::CALL, 1);
+            return;
+        }
+
+        // (with-open [name init ...] body*)
+        if (headName == "with-open") {
+            compileWithOpen(ctx, lst, out, markers);
             return;
         }
 

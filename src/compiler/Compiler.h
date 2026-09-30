@@ -143,6 +143,11 @@ private:
     void compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
                     BytecodeModule& out, const CompilerMarkers& markers);
 
+    // Compiles `(with-open [name init ...] body*)` by rewriting it into
+    // `let` + `try` / `finally` forms.
+    void compileWithOpen(proto::ProtoContext* ctx, const proto::ProtoList* lst,
+                         BytecodeModule& out, const CompilerMarkers& markers);
+
     std::vector<Scope> scopes_;
 
     // Resolve `name` against the scope chain. If found in the innermost
