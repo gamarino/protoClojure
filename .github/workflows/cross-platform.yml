@@ -1,0 +1,115 @@
+name: Cross-platform
+
+# macOS and Windows. Linux is ci.yml's; this workflow adds the two platforms
+# nobody here can run locally, against an INSTALLED protoCore package (the
+# supported mode on Windows) and the sibling protoIO source tree. Refs pinned:
+# the first protoCore and protoIO commits that pass on macOS and Windows.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PROTOCORE_REPO: numaes/protoCore
+  PROTOCORE_REF: effba28b86aa9cf0e2227c1d4ff9ce8b2473717c
+  PROTOIO_REPO: gamarino/protoIO
+  PROTOIO_REF: 8e823a6f1e7a424737d845206c77d3c5e03b1748
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple clang, arm64)
+            os: macos-14
+          - name: Windows (MSVC, x64)
+            os: windows-2022
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out protoClojure
+        uses: actions/checkout@v4
+        with:
+          path: protoClojure
+
+      - name: Check out protoCore as a sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PROTOCORE_REPO }}
+          ref: ${{ env.PROTOCORE_REF }}
+          path: protoCore
+
+      - name: Check out protoIO as a sibling
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.PROTOIO_REPO }}
+          ref: ${{ env.PROTOIO_REF }}
+          path: protoIO
+
+      - name: Dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          for f in readline openssl@3 ninja; do brew list "$f" >/dev/null 2>&1 || brew install "$f"; done
+          echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
+          echo "EXTRA_PREFIX=;$(brew --prefix readline)" >> "$GITHUB_ENV"
+
+      - name: Dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          for d in "C:/Program Files/OpenSSL" "C:/Program Files/OpenSSL-Win64"; do
+            if [ -f "$d/include/openssl/ssl.h" ]; then echo "OPENSSL_ROOT_DIR=$d" >> "$GITHUB_ENV"; break; fi
+          done
+          # A fixture runs `python3`; Windows ships python.exe only.
+          mkdir -p "$RUNNER_TEMP/py3"
+          cp "$(command -v python)" "$RUNNER_TEMP/py3/python3.exe"
+          echo "$RUNNER_TEMP/py3" >> "$GITHUB_PATH"
+
+      - name: MSVC environment
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Build and install protoCore
+        run: |
+          cmake -S protoCore -B protoCore/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build protoCore/build --parallel 4
+          cmake --install protoCore/build --prefix "$GITHUB_WORKSPACE/prefix"
+
+      - name: Configure protoClojure
+        working-directory: protoClojure
+        run: >
+          cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DPROTOCORE_REQUIRE_PACKAGE=ON
+          "-DCMAKE_PREFIX_PATH=$GITHUB_WORKSPACE/prefix$EXTRA_PREFIX"
+          ${OPENSSL_ROOT_DIR:+"-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR"}
+
+      - name: Build protoClojure
+        working-directory: protoClojure
+        run: cmake --build build --parallel 4
+
+      - name: Report the registered test count
+        working-directory: protoClojure
+        run: |
+          COUNT=$(ctest --test-dir build -N | tail -1)
+          echo "$COUNT"
+          echo "protoClojure ctest (${{ runner.os }}): $COUNT" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Test suite
+        # stdin at EOF, as in ci.yml: a test that reads it must not hang the job.
+        working-directory: protoClojure
+        run: ctest --test-dir build -j2 --output-on-failure --timeout 600 < /dev/null
