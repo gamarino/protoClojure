@@ -540,9 +540,11 @@ void closeConnection(Connection* c) {
 // protoIO resolves the empty host to the wildcard addresses and binds the
 // first. Linux lists 0.0.0.0 first; Windows lists :: first, and a Windows
 // IPv6 socket is IPv6-only by default, so a server there would not answer
-// 127.0.0.1. Naming 0.0.0.0 on Windows binds what Linux binds.
+// 127.0.0.1. macOS lists :: first too, and its IPv6 socket takes IPv4
+// clients as IPv4-mapped addresses, so :remote-addr read ::ffff:127.0.0.1.
+// Naming 0.0.0.0 on both binds what Linux binds.
 std::string listenHost(const std::string& host) {
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__APPLE__)
     if (host.empty()) return "0.0.0.0";
 #endif
     return host;
