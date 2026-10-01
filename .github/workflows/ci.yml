@@ -56,10 +56,10 @@ env:
   # protoCore 2.6.2 (tag v2.6.2), SOVERSION 3.  Bump this deliberately.
   # 2.6.1 is needed to create threads from threads (one per HTTP connection),
   # 2.6.2 to keep the heap ceiling under dead mutables.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '752bdb2064d3a2a6f8aa6bc756f107ed395bebd0' }}
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'fc5d79db4f89f8a6eb473a52766b1908140a19d1' }}
   PROTOIO_REPO: gamarino/protoIO
   # protoIO 0.1.0 (main, 2026-09-30).  Bump this deliberately.
-  PROTOIO_REF: ${{ github.event_name == 'schedule' && 'main' || '503c7e79292b52b427d1c829092bfd389c9aeec2' }}
+  PROTOIO_REF: ${{ github.event_name == 'schedule' && 'main' || '8e823a6f1e7a424737d845206c77d3c5e03b1748' }}
 
 jobs:
   test:

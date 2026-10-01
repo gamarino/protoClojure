@@ -20,7 +20,7 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  PROTOCORE_REF: effba28b86aa9cf0e2227c1d4ff9ce8b2473717c
+  PROTOCORE_REF: fc5d79db4f89f8a6eb473a52766b1908140a19d1
   PROTOIO_REPO: gamarino/protoIO
   PROTOIO_REF: 8e823a6f1e7a424737d845206c77d3c5e03b1748
 
@@ -63,9 +63,11 @@ jobs:
       - name: Dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          for f in readline openssl@3 ninja; do brew list "$f" >/dev/null 2>&1 || brew install "$f"; done
+          for f in readline openssl@3 ninja coreutils; do brew list "$f" >/dev/null 2>&1 || brew install "$f"; done
           echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
           echo "EXTRA_PREFIX=;$(brew --prefix readline)" >> "$GITHUB_ENV"
+          # The test scripts use GNU timeout, which macOS does not ship.
+          echo "$(brew --prefix coreutils)/libexec/gnubin" >> "$GITHUB_PATH"
 
       - name: Dependencies (Windows)
         if: runner.os == 'Windows'

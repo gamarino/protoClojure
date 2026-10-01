@@ -17,7 +17,7 @@ dependency on protoCore's own package instead of shipping a copy.
   REPL needs history, arrow-key editing and the multi-line continuation prompt,
   and configuration fails with a `FATAL_ERROR` when it is missing (except on
   Windows, where the REPL uses the console's own line editing).
-- **protoCore 2.6.1 or newer**, installed, with its CMake package
+- **protoCore 2.7.0 or newer** (where `proto::proto_long` first exists), installed, with its CMake package
   configuration. See protoCore's `docs/INSTALLATION.md`.
 - **protoIO 0.1** (the input and output library shared by the protoCore
   runtimes), either installed (the `protoio-dev` package, or any prefix
@@ -30,6 +30,9 @@ dependency on protoCore's own package instead of shipping a copy.
   `openssl-devel` on Fedora/RHEL, `brew install openssl@3` on macOS), for
   TLS sockets and `https`. `libssl` becomes a runtime dependency of
   `protoclj`.
+- **Running the test suite on macOS** needs GNU `timeout`, which macOS does
+  not ship: `brew install coreutils` and put `$(brew --prefix coreutils)/libexec/gnubin`
+  on `PATH` (the cross-platform CI job does exactly that).
 
 ---
 
