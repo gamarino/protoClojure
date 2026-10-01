@@ -1262,7 +1262,10 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (scopes_.empty() || scopes_.back().recurStack.empty()) {
                 throw CompileError("recur: no enclosing loop in current scope");
             }
-            const auto& tgt = scopes_.back().recurStack.back();
+            // A copy, not a reference: compiling an argument that holds a fn
+            // (`future`, `fn`) pushes a nested Scope and may reallocate
+            // `scopes_`, which would leave a reference dangling.
+            const auto tgt = scopes_.back().recurStack.back();
             if (tgt.tryDepth != scopes_.back().tryDepth) {
                 throw CompileError("Cannot recur across try");
             }
