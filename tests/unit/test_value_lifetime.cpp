@@ -55,7 +55,7 @@ bool waitForIdleCollector(proto::ProtoSpace& space, proto::ProtoContext* ctx) {
 }
 
 // The live set after at least `minCycles` collections, in cells.
-unsigned long liveCellsAfterCollections(proto::ProtoSpace& space, proto::ProtoContext* live,
+proto::proto_ulong liveCellsAfterCollections(proto::ProtoSpace& space, proto::ProtoContext* live,
                                         std::uint64_t minCycles) {
     const std::uint64_t start = space.getGCCycleCount();
     space.setHeapLimits(/*soft=*/0, /*hard=*/space.heapSize + kHeadroomCells);
@@ -100,10 +100,10 @@ TEST(MapKeyLifetime, DistinctCollectionKeysDoNotAccumulate) {
     proto::ProtoContext live(&space, space.rootContext, nullptr, nullptr, nullptr, nullptr);
 
     churnCollectionKeys(space, &live, 0, kWarmupKeys);
-    const unsigned long before = liveCellsAfterCollections(space, &live, 3);
+    const proto::proto_ulong before = liveCellsAfterCollections(space, &live, 3);
 
     churnCollectionKeys(space, &live, 1000000, kChurnKeys);
-    const unsigned long after = liveCellsAfterCollections(space, &live, 3);
+    const proto::proto_ulong after = liveCellsAfterCollections(space, &live, 3);
 
     const double growth = static_cast<double>(after) - static_cast<double>(before);
     EXPECT_LT(growth, perKeyBudget() * kChurnKeys)
@@ -145,10 +145,10 @@ TEST(VectorLifetime, DistinctVectorsDoNotAccumulate) {
     proto::ProtoContext live(&space, space.rootContext, nullptr, nullptr, nullptr, nullptr);
 
     churnVectors(space, &live, 0, kWarmupKeys);
-    const unsigned long before = liveCellsAfterCollections(space, &live, 3);
+    const proto::proto_ulong before = liveCellsAfterCollections(space, &live, 3);
 
     churnVectors(space, &live, 1000000, kChurnKeys);
-    const unsigned long after = liveCellsAfterCollections(space, &live, 3);
+    const proto::proto_ulong after = liveCellsAfterCollections(space, &live, 3);
 
     const double growth = static_cast<double>(after) - static_cast<double>(before);
     EXPECT_LT(growth, perKeyBudget() * kChurnKeys)

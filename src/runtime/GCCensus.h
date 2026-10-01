@@ -32,6 +32,8 @@
  */
 #pragma once
 
+#include "protoCore.h"
+
 #include <atomic>
 #include <cstdint>
 #include <thread>
@@ -68,8 +70,8 @@ private:
 
     // Written by the sampler thread, read after the join.
     std::uint64_t  observedCycles_  = 0;
-    unsigned long  reclaimedTotal_  = 0;
-    unsigned long  reclaimedMax_    = 0;
+    proto::proto_ulong  reclaimedTotal_  = 0;
+    proto::proto_ulong  reclaimedMax_    = 0;
 };
 
 }  // namespace protoClojure

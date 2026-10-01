@@ -13,31 +13,31 @@ namespace protoClojure {
 namespace {
 
 // Pointer tags of protoCore's headers/proto_internal.h.
-constexpr unsigned long kTagMask         = 0x3F;
-constexpr unsigned long kTagObject       = 0;
-constexpr unsigned long kTagEmbedded     = 1;
-constexpr unsigned long kTagList         = 2;
-constexpr unsigned long kTagLargeInteger = 14;
-constexpr unsigned long kTagDouble       = 15;
-constexpr unsigned long kTagListSmall    = 25;
+constexpr proto::proto_ulong kTagMask         = 0x3F;
+constexpr proto::proto_ulong kTagObject       = 0;
+constexpr proto::proto_ulong kTagEmbedded     = 1;
+constexpr proto::proto_ulong kTagList         = 2;
+constexpr proto::proto_ulong kTagLargeInteger = 14;
+constexpr proto::proto_ulong kTagDouble       = 15;
+constexpr proto::proto_ulong kTagListSmall    = 25;
 
 // One salt per key class, so keys of different classes never share a hash by
 // construction: a string, a one-element vector and a big integer that happen
 // to reduce to the same number still land in different slots.
-constexpr unsigned long kSaltIdentity = 0x9E3779B97F4A7C15UL;
-constexpr unsigned long kSaltInteger  = 0xC2B2AE3D27D4EB4FUL;
-constexpr unsigned long kSaltDouble   = 0x165667B19E3779F9UL;
-constexpr unsigned long kSaltBigInt   = 0x27D4EB2F165667C5UL;
-constexpr unsigned long kSaltString   = 0xD6E8FEB86659FD93UL;
-constexpr unsigned long kSaltSequence = 0xA24BAED4963EE407UL;
-constexpr unsigned long kSaltMap      = 0x9FB21C651E98DF25UL;
+constexpr proto::proto_ulong kSaltIdentity = PROTO_UL(0x9E3779B97F4A7C15);
+constexpr proto::proto_ulong kSaltInteger  = PROTO_UL(0xC2B2AE3D27D4EB4F);
+constexpr proto::proto_ulong kSaltDouble   = PROTO_UL(0x165667B19E3779F9);
+constexpr proto::proto_ulong kSaltBigInt   = PROTO_UL(0x27D4EB2F165667C5);
+constexpr proto::proto_ulong kSaltString   = PROTO_UL(0xD6E8FEB86659FD93);
+constexpr proto::proto_ulong kSaltSequence = PROTO_UL(0xA24BAED4963EE407);
+constexpr proto::proto_ulong kSaltMap      = PROTO_UL(0x9FB21C651E98DF25);
 
 // Automatic-local slots of a MapBuilder scope.
 constexpr unsigned int kSlotMap   = 0;
 constexpr unsigned int kSlotCount = 1;
 
-inline unsigned long tagOf(const proto::ProtoObject* v) {
-    return reinterpret_cast<unsigned long>(v) & kTagMask;
+inline proto::proto_ulong tagOf(const proto::ProtoObject* v) {
+    return reinterpret_cast<proto::proto_ulong>(v) & kTagMask;
 }
 
 // The tag has already been checked by isMap / isSequential, so the cast is
@@ -48,7 +48,7 @@ inline const proto::ProtoMap* asMapFast(const proto::ProtoObject* m) {
 }
 
 inline bool isListTag(const proto::ProtoObject* v) {
-    const unsigned long tag = tagOf(v);
+    const proto::proto_ulong tag = tagOf(v);
     return tag == kTagList || tag == kTagListSmall;
 }
 
@@ -66,24 +66,24 @@ struct SequenceView {
         s.list = isVector(v) ? vectorItems(ctx, v) : v->asList(ctx);
         return s;
     }
-    unsigned long size(proto::ProtoContext* ctx) const { return list->getSize(ctx); }
-    const proto::ProtoObject* at(proto::ProtoContext* ctx, unsigned long i) const {
+    proto::proto_ulong size(proto::ProtoContext* ctx) const { return list->getSize(ctx); }
+    const proto::ProtoObject* at(proto::ProtoContext* ctx, proto::proto_ulong i) const {
         return list->getAt(ctx, static_cast<int>(i));
     }
 };
 
 // One round of the SplitMix64 finaliser: cheap, and it spreads the low bits,
 // which is what the helper's 54-bit slot key keeps.
-inline unsigned long mix(unsigned long h) {
+inline proto::proto_ulong mix(proto::proto_ulong h) {
     std::uint64_t x = static_cast<std::uint64_t>(h);
     x ^= x >> 30; x *= 0xBF58476D1CE4E5B9ULL;
     x ^= x >> 27; x *= 0x94D049BB133111EBULL;
     x ^= x >> 31;
-    return static_cast<unsigned long>(x);
+    return static_cast<proto::proto_ulong>(x);
 }
 
-inline unsigned long combine(unsigned long acc, unsigned long value) {
-    return mix(acc ^ (value + 0x9E3779B97F4A7C15UL + (acc << 6) + (acc >> 2)));
+inline proto::proto_ulong combine(proto::proto_ulong acc, proto::proto_ulong value) {
+    return mix(acc ^ (value + PROTO_UL(0x9E3779B97F4A7C15) + (acc << 6) + (acc >> 2)));
 }
 
 std::uint64_t doubleBits(proto::ProtoContext* ctx, const proto::ProtoObject* key) {
@@ -93,17 +93,17 @@ std::uint64_t doubleBits(proto::ProtoContext* ctx, const proto::ProtoObject* key
     return bits;
 }
 
-unsigned long sequenceHash(proto::ProtoContext* ctx, const proto::ProtoObject* seq) {
+proto::proto_ulong sequenceHash(proto::ProtoContext* ctx, const proto::ProtoObject* seq) {
     const SequenceView view = SequenceView::of(ctx, seq);
-    const unsigned long n = view.size(ctx);
-    unsigned long h = combine(kSaltSequence, n);
-    for (unsigned long i = 0; i < n; ++i) h = combine(h, keyHash(ctx, view.at(ctx, i)));
+    const proto::proto_ulong n = view.size(ctx);
+    proto::proto_ulong h = combine(kSaltSequence, n);
+    for (proto::proto_ulong i = 0; i < n; ++i) h = combine(h, keyHash(ctx, view.at(ctx, i)));
     return h;
 }
 
 struct MapHashAccumulator {
-    unsigned long sum   = 0;
-    unsigned long count = 0;
+    proto::proto_ulong sum   = 0;
+    proto::proto_ulong count = 0;
 };
 
 void accumulateEntryHash(proto::ProtoContext* ctx, void* self,
@@ -116,7 +116,7 @@ void accumulateEntryHash(proto::ProtoContext* ctx, void* self,
     ++acc->count;
 }
 
-unsigned long mapHash(proto::ProtoContext* ctx, const proto::ProtoObject* m) {
+proto::proto_ulong mapHash(proto::ProtoContext* ctx, const proto::ProtoObject* m) {
     MapHashAccumulator acc;
     proto::hashedForEach(ctx, asMapFast(m), &acc, &accumulateEntryHash);
     return combine(combine(kSaltMap, acc.count), acc.sum);
@@ -126,9 +126,9 @@ bool sequenceEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
                     const proto::ProtoObject* b) {
     const SequenceView va = SequenceView::of(ctx, a);
     const SequenceView vb = SequenceView::of(ctx, b);
-    const unsigned long n = va.size(ctx);
+    const proto::proto_ulong n = va.size(ctx);
     if (n != vb.size(ctx)) return false;
-    for (unsigned long i = 0; i < n; ++i)
+    for (proto::proto_ulong i = 0; i < n; ++i)
         if (!keyEquals(ctx, va.at(ctx, i), vb.at(ctx, i))) return false;
     return true;
 }
@@ -160,7 +160,7 @@ bool mapKeyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
 }
 
 struct CountAccumulator {
-    unsigned long n = 0;
+    proto::proto_ulong n = 0;
 };
 
 void countEntry(proto::ProtoContext*, void* self, const proto::ProtoObject*,
@@ -218,7 +218,7 @@ private:
     proto::ProtoContext scope_;
 };
 
-void requireEven(unsigned long n) {
+void requireEven(proto::proto_ulong n) {
     if (n % 2 != 0)
         throw std::runtime_error("map: a key has no value");
 }
@@ -253,7 +253,7 @@ bool keyIsIdentity(proto::ProtoContext* /*ctx*/, const proto::ProtoObject* key) 
     }
 }
 
-unsigned long keyHash(proto::ProtoContext* ctx, const proto::ProtoObject* key) {
+proto::proto_ulong keyHash(proto::ProtoContext* ctx, const proto::ProtoObject* key) {
     if (!key) key = PROTO_NONE;
     if (proto::ProtoObject::isStringTagFast(key)) {
         // The content hash, equal for the inline, rope and symbol forms of
@@ -264,12 +264,12 @@ unsigned long keyHash(proto::ProtoContext* ctx, const proto::ProtoObject* key) {
     switch (tagOf(key)) {
         case kTagEmbedded:
             return combine(proto::isSmallInt(key) ? kSaltInteger : kSaltIdentity,
-                           reinterpret_cast<unsigned long>(key));
+                           reinterpret_cast<proto::proto_ulong>(key));
         case kTagDouble:
             // The exact bit pattern, because that is what keyEquals compares:
             // 0.0 and -0.0, and two NaNs with different payloads, are
             // different keys and hash differently.
-            return combine(kSaltDouble, static_cast<unsigned long>(doubleBits(ctx, key)));
+            return combine(kSaltDouble, static_cast<proto::proto_ulong>(doubleBits(ctx, key)));
         case kTagLargeInteger:
             // protoCore hashes every digit of the canonical representation,
             // so equal values computed differently hash equally.
@@ -287,7 +287,7 @@ unsigned long keyHash(proto::ProtoContext* ctx, const proto::ProtoObject* key) {
                 checkNativeStack();
                 return mapHash(ctx, key);
             }
-            return combine(kSaltIdentity, reinterpret_cast<unsigned long>(key));
+            return combine(kSaltIdentity, reinterpret_cast<proto::proto_ulong>(key));
     }
 }
 
@@ -333,21 +333,21 @@ const proto::KeySemantics& clojureKeySemantics() {
 const proto::ProtoObject* mapAssocPairs(proto::ProtoContext* ctx,
                                         const proto::ProtoObject* base,
                                         const proto::ProtoObject* const* kv,
-                                        unsigned long n) {
+                                        proto::proto_ulong n) {
     requireEven(n);
     MapBuilder b(ctx, base);
-    for (unsigned long i = 0; i < n; i += 2) b.assoc(kv[i], kv[i + 1]);
+    for (proto::proto_ulong i = 0; i < n; i += 2) b.assoc(kv[i], kv[i + 1]);
     return b.result();
 }
 
 const proto::ProtoObject* mapAssocPairs(proto::ProtoContext* ctx,
                                         const proto::ProtoObject* base,
                                         const proto::ProtoList* items,
-                                        unsigned long from,
-                                        unsigned long n) {
+                                        proto::proto_ulong from,
+                                        proto::proto_ulong n) {
     requireEven(n);
     MapBuilder b(ctx, base);
-    for (unsigned long i = from; i < from + n; i += 2) {
+    for (proto::proto_ulong i = from; i < from + n; i += 2) {
         b.assoc(items->getAt(b.ctx(), static_cast<int>(i)),
                 items->getAt(b.ctx(), static_cast<int>(i + 1)));
     }
@@ -376,7 +376,7 @@ const proto::ProtoObject* mapGet(proto::ProtoContext* ctx,
     return value;
 }
 
-unsigned long mapCount(proto::ProtoContext* ctx, const proto::ProtoObject* m) {
+proto::proto_ulong mapCount(proto::ProtoContext* ctx, const proto::ProtoObject* m) {
     if (!m || m == PROTO_NONE) return 0;
     // The number of ENTRIES, not of slots: a 54-bit hash collision puts
     // several entries in one slot, so ProtoMap::getSize would undercount.
@@ -414,7 +414,7 @@ bool mapEquals(proto::ProtoContext* ctx,
                const proto::ProtoObject* a, const proto::ProtoObject* b,
                void* self, MapValueEqFn valueEq) {
     if (a == b) return true;
-    const unsigned long n = mapCount(ctx, a);
+    const proto::proto_ulong n = mapCount(ctx, a);
     if (n != mapCount(ctx, b)) return false;
     if (n == 0) return true;
 

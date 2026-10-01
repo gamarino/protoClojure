@@ -138,10 +138,10 @@ Compiler::compileFnBody(proto::ProtoContext* ctx,
     // Detect whether the form is (fn [params] body...) or
     // (defn name [params] body...). The compileForm dispatcher routes
     // both here and we discover the shape from the head's name.
-    unsigned long n = fnForm->getSize(ctx);
+    proto::proto_ulong n = fnForm->getSize(ctx);
     const proto::ProtoObject* head = fnForm->getAt(ctx, 0);
     std::string headName = asUtf8(ctx, head);
-    unsigned long paramsAt = 0;
+    proto::proto_ulong paramsAt = 0;
     if (headName == "fn")        paramsAt = 1;
     else if (headName == "defn") paramsAt = 2;
     else throw CompileError("compileFnBody: head must be `fn` or `defn`");
@@ -173,10 +173,10 @@ std::unique_ptr<BytecodeModule>
 Compiler::compileArity(proto::ProtoContext* ctx,
                        const proto::ProtoList* params,
                        const proto::ProtoList* arityForm,
-                       unsigned long bodyStartIdx,
+                       proto::proto_ulong bodyStartIdx,
                        const CompilerMarkers& markers) {
-    unsigned long n = arityForm->getSize(ctx);
-    unsigned long rawCount = params->getSize(ctx);
+    proto::proto_ulong n = arityForm->getSize(ctx);
+    proto::proto_ulong rawCount = params->getSize(ctx);
 
     // Session 7/8/13 — scan for `& <rest>`. The rest can be:
     //   - a symbol (`& rest`): variadic, collects leftover positionals as
@@ -190,7 +190,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     // surface (`& {:keys}` is the kw form of variadic), but the
     // dispatch path diverges entirely. We pick the path by inspecting
     // the form after `&`.
-    unsigned long fixedArity = rawCount;
+    proto::proto_ulong fixedArity = rawCount;
     bool isVariadic = false;
     bool isKwBased  = false;
     std::string restName;
@@ -202,7 +202,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
         const proto::ProtoObject* defaultForm;
     };
     std::vector<KwKeyDecl> kwKeyDecls;
-    for (unsigned long i = 0; i < rawCount; ++i) {
+    for (proto::proto_ulong i = 0; i < rawCount; ++i) {
         const proto::ProtoObject* p = params->getAt(ctx, (int)i);
         if (isStringy(p) && asUtf8(ctx, p) == "&") {
             if (i + 1 != rawCount - 1) {
@@ -217,13 +217,13 @@ Compiler::compileArity(proto::ProtoContext* ctx,
                 // destructuring.
                 isKwBased = true;
                 const proto::ProtoList* entries = mapEntries(ctx, rp, markers);
-                unsigned long ne = entries->getSize(ctx);
+                proto::proto_ulong ne = entries->getSize(ctx);
                 bool sawKeys = false;
                 // Defer reading :or until after :keys — so we can attach
                 // defaults to the right KwKeyDecl regardless of source
                 // order. Cache the :or entries list pointer.
                 const proto::ProtoList* orEntries = nullptr;
-                for (unsigned long j = 0; j < ne; j += 2) {
+                for (proto::proto_ulong j = 0; j < ne; j += 2) {
                     const proto::ProtoObject* mk = entries->getAt(ctx, (int)j);
                     if (!isStringy(mk))
                         throw CompileError("fn/defn: `& {...}` key must be a keyword");
@@ -236,8 +236,8 @@ Compiler::compileArity(proto::ProtoContext* ctx,
                                 "fn/defn: `:keys` must be a vector of symbols");
                         }
                         const proto::ProtoList* ks = vectorItems(ctx, mv, markers);
-                        unsigned long nk = ks->getSize(ctx);
-                        for (unsigned long t = 0; t < nk; ++t) {
+                        proto::proto_ulong nk = ks->getSize(ctx);
+                        for (proto::proto_ulong t = 0; t < nk; ++t) {
                             const proto::ProtoObject* sym = ks->getAt(ctx, (int)t);
                             if (!isStringy(sym))
                                 throw CompileError("fn/defn: `:keys` entry must be a symbol");
@@ -264,8 +264,8 @@ Compiler::compileArity(proto::ProtoContext* ctx,
                 }
                 // Attach :or defaults to the matching KwKeyDecl.
                 if (orEntries) {
-                    unsigned long nor = orEntries->getSize(ctx);
-                    for (unsigned long j = 0; j < nor; j += 2) {
+                    proto::proto_ulong nor = orEntries->getSize(ctx);
+                    for (proto::proto_ulong j = 0; j < nor; j += 2) {
                         const proto::ProtoObject* ok = orEntries->getAt(ctx, (int)j);
                         if (!isStringy(ok))
                             throw CompileError("fn/defn: `:or` key must be a symbol");
@@ -312,7 +312,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     {
         Scope& scope = scopes_.back();
         scope.arity = static_cast<int>(fixedArity);
-        for (unsigned long i = 0; i < fixedArity; ++i) {
+        for (proto::proto_ulong i = 0; i < fixedArity; ++i) {
             const proto::ProtoObject* p = params->getAt(ctx, (int)i);
             if (!isStringy(p)) {
                 scopes_.pop_back();
@@ -385,7 +385,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
         // Empty body → return nil.
         body->emit(Op::PUSH_NIL, 0);
     } else {
-        for (unsigned long i = bodyStartIdx; i < n; ++i) {
+        for (proto::proto_ulong i = bodyStartIdx; i < n; ++i) {
             compileForm(ctx, arityForm->getAt(ctx, (int)i), *body, markers);
             if (i + 1 < n) body->emit(Op::POP, 0);
         }
@@ -420,7 +420,7 @@ void Compiler::compileWithOpen(proto::ProtoContext* ctx, const proto::ProtoList*
     auto sym = [&](const char* name) {
         return proto::ProtoString::createSymbol(ctx, name)->asObject(ctx);
     };
-    const unsigned long n = lst->getSize(ctx);
+    const proto::proto_ulong n = lst->getSize(ctx);
     const proto::ProtoObject* bindings = n >= 2 ? lst->getAt(ctx, 1) : nullptr;
     const proto::ProtoList* bvec = nullptr;
     if (bindings && isWrappedVector(ctx, bindings, markers)) {
@@ -430,11 +430,11 @@ void Compiler::compileWithOpen(proto::ProtoContext* ctx, const proto::ProtoList*
     } else {
         throw CompileError("with-open requires a vector for its binding");
     }
-    const unsigned long bn = bvec->getSize(ctx);
+    const proto::proto_ulong bn = bvec->getSize(ctx);
     if (bn % 2 != 0) {
         throw CompileError("with-open requires an even number of forms in binding vector");
     }
-    for (unsigned long i = 0; i < bn; i += 2) {
+    for (proto::proto_ulong i = 0; i < bn; i += 2) {
         if (!isStringy(bvec->getAt(ctx, static_cast<int>(i)))) {
             throw CompileError("with-open only allows Symbols in bindings");
         }
@@ -458,7 +458,7 @@ void Compiler::compileWithOpen(proto::ProtoContext* ctx, const proto::ProtoList*
     if (bn == 0) {
         // (with-open [] body...) is (do body...).
         const proto::ProtoList* doForm = ctx->newList()->appendLast(ctx, sym("do"));
-        for (unsigned long i = 2; i < n; ++i) {
+        for (proto::proto_ulong i = 2; i < n; ++i) {
             doForm = doForm->appendLast(ctx, lst->getAt(ctx, static_cast<int>(i)));
         }
         compileForm(ctx, doForm->asObject(ctx), out, markers);
@@ -467,13 +467,13 @@ void Compiler::compileWithOpen(proto::ProtoContext* ctx, const proto::ProtoList*
 
     const proto::ProtoObject* name = bvec->getAt(ctx, 0);
     const proto::ProtoList* restBindings = ctx->newList();
-    for (unsigned long i = 2; i < bn; ++i) {
+    for (proto::proto_ulong i = 2; i < bn; ++i) {
         restBindings = restBindings->appendLast(ctx, bvec->getAt(ctx, static_cast<int>(i)));
     }
     const proto::ProtoList* inner = ctx->newList()
         ->appendLast(ctx, sym("with-open"))
         ->appendLast(ctx, restBindings->asObject(ctx));
-    for (unsigned long i = 2; i < n; ++i) {
+    for (proto::proto_ulong i = 2; i < n; ++i) {
         inner = inner->appendLast(ctx, lst->getAt(ctx, static_cast<int>(i)));
     }
     const proto::ProtoList* closeCall = ctx->newList()
@@ -522,11 +522,11 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
         std::string binding;
         const proto::ProtoList* form;   // (catch Class name body...)
     };
-    const unsigned long n = lst->getSize(ctx);
-    std::vector<unsigned long> bodyIdx;
+    const proto::proto_ulong n = lst->getSize(ctx);
+    std::vector<proto::proto_ulong> bodyIdx;
     std::vector<CatchClause> catches;
     const proto::ProtoList* finallyForm = nullptr;
-    for (unsigned long i = 1; i < n; ++i) {
+    for (proto::proto_ulong i = 1; i < n; ++i) {
         const proto::ProtoObject* f = lst->getAt(ctx, static_cast<int>(i));
         std::string clause;
         if (isList(f)) {
@@ -578,18 +578,18 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
         out.patchOperand(at, target - (at + 1));
     };
     // Forms [from, size) of `form` as an implicit do: nil when there are none.
-    auto compileDo = [&](const proto::ProtoList* form, unsigned long from) {
-        const unsigned long size = form->getSize(ctx);
+    auto compileDo = [&](const proto::ProtoList* form, proto::proto_ulong from) {
+        const proto::proto_ulong size = form->getSize(ctx);
         if (from >= size) { out.emit(Op::PUSH_NIL, 0); return; }
-        for (unsigned long i = from; i < size; ++i) {
+        for (proto::proto_ulong i = from; i < size; ++i) {
             compileForm(ctx, form->getAt(ctx, static_cast<int>(i)), out, markers);
             if (i + 1 < size) out.emit(Op::POP, 0);
         }
     };
     // The finally forms, for effect only: the try's value is left alone.
     auto compileFinally = [&]() {
-        const unsigned long size = finallyForm->getSize(ctx);
-        for (unsigned long i = 1; i < size; ++i) {
+        const proto::proto_ulong size = finallyForm->getSize(ctx);
+        for (proto::proto_ulong i = 1; i < size; ++i) {
             compileForm(ctx, finallyForm->getAt(ctx, static_cast<int>(i)), out, markers);
             out.emit(Op::POP, 0);
         }
@@ -755,7 +755,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
     // anything else is a plain call.
     if (isList(form)) {
         const proto::ProtoList* lst = form->asList(ctx);
-        unsigned long n = lst->getSize(ctx);
+        proto::proto_ulong n = lst->getSize(ctx);
         if (n == 0) {
             throw CompileError("empty list () is not supported yet");
         }
@@ -829,7 +829,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (n == 2) {
                 out.emit(Op::PUSH_NIL, 0);
             } else {
-                for (unsigned long i = 2; i < n; ++i) {
+                for (proto::proto_ulong i = 2; i < n; ++i) {
                     compileForm(ctx, lst->getAt(ctx, (int)i), out, markers);
                     if (i + 1 < n) out.emit(Op::POP, 0);
                 }
@@ -852,12 +852,12 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         //   value works). If no clause matches and no :else is given,
         //   yields nil.
         if (headName == "cond") {
-            unsigned long pn = n - 1;
+            proto::proto_ulong pn = n - 1;
             if (pn % 2 != 0) {
                 throw CompileError("cond: clauses must come in pairs");
             }
             std::vector<std::size_t> endPatches;
-            for (unsigned long i = 1; i < n; i += 2) {
+            for (proto::proto_ulong i = 1; i < n; i += 2) {
                 const proto::ProtoObject* test = lst->getAt(ctx, (int)i);
                 const proto::ProtoObject* expr = lst->getAt(ctx, (int)(i + 1));
                 bool isElse = isStringy(test) &&
@@ -893,7 +893,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         if (headName == "and") {
             if (n == 1) { out.emit(Op::PUSH_TRUE, 0); return; }
             std::vector<std::size_t> shortAts;
-            for (unsigned long i = 1; i < n; ++i) {
+            for (proto::proto_ulong i = 1; i < n; ++i) {
                 compileForm(ctx, lst->getAt(ctx, (int)i), out, markers);
                 if (i + 1 < n) {
                     out.emit(Op::DUP, 0);
@@ -914,7 +914,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         if (headName == "or") {
             if (n == 1) { out.emit(Op::PUSH_NIL, 0); return; }
             std::vector<std::size_t> shortAts;
-            for (unsigned long i = 1; i < n; ++i) {
+            for (proto::proto_ulong i = 1; i < n; ++i) {
                 compileForm(ctx, lst->getAt(ctx, (int)i), out, markers);
                 if (i + 1 < n) {
                     out.emit(Op::DUP, 0);
@@ -937,7 +937,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 out.emit(Op::PUSH_NIL, 0);     // (do) => nil
                 return;
             }
-            for (unsigned long i = 1; i < n; ++i) {
+            for (proto::proto_ulong i = 1; i < n; ++i) {
                 compileForm(ctx, lst->getAt(ctx, static_cast<int>(i)), out, markers);
                 if (i + 1 < n) out.emit(Op::POP, 0);
             }
@@ -988,7 +988,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // is itself a list, the form is multi-arity. Each subsequent form
         // is then a `(params body...)` arity body.
         if (headName == "fn" || headName == "defn") {
-            unsigned long aritiesStart = (headName == "fn") ? 1 : 2;
+            proto::proto_ulong aritiesStart = (headName == "fn") ? 1 : 2;
             if (n <= aritiesStart) {
                 throw CompileError("fn/defn: missing parameter vector");
             }
@@ -1034,7 +1034,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 // Multi-arity — compile each `(params body...)` separately,
                 // push their captures (arity 0 first), emit MAKE_FN_MULTI.
                 std::vector<std::size_t> blockIdxs;
-                for (unsigned long i = aritiesStart; i < n; ++i) {
+                for (proto::proto_ulong i = aritiesStart; i < n; ++i) {
                     const proto::ProtoObject* aobj = lst->getAt(ctx, (int)i);
                     if (!isList(aobj)) {
                         throw CompileError("multi-arity: each arity must be a list");
@@ -1096,11 +1096,11 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             } else {
                 throw CompileError("let: bindings must be a vector");
             }
-            unsigned long bn = bvec->getSize(ctx);
+            proto::proto_ulong bn = bvec->getSize(ctx);
             if (bn % 2 != 0) {
                 throw CompileError("let: bindings must come in name/value pairs");
             }
-            for (unsigned long i = 0; i < bn; i += 2) {
+            for (proto::proto_ulong i = 0; i < bn; i += 2) {
                 const proto::ProtoObject* nameForm = bvec->getAt(ctx, (int)i);
                 const proto::ProtoObject* valForm  = bvec->getAt(ctx, (int)(i + 1));
                 if (!isStringy(nameForm)) {
@@ -1119,7 +1119,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (n == 2) {
                 out.emit(Op::PUSH_NIL, 0);                  // (let [...]) => nil
             } else {
-                for (unsigned long i = 2; i < n; ++i) {
+                for (proto::proto_ulong i = 2; i < n; ++i) {
                     compileForm(ctx, lst->getAt(ctx, (int)i), out, markers);
                     if (i + 1 < n) out.emit(Op::POP, 0);
                 }
@@ -1144,12 +1144,12 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             } else {
                 throw CompileError("loop: bindings must be a vector");
             }
-            unsigned long bn = bvec->getSize(ctx);
+            proto::proto_ulong bn = bvec->getSize(ctx);
             if (bn % 2 != 0) {
                 throw CompileError("loop: bindings must come in name/value pairs");
             }
             std::vector<int> recurSlots;
-            for (unsigned long i = 0; i < bn; i += 2) {
+            for (proto::proto_ulong i = 0; i < bn; i += 2) {
                 const proto::ProtoObject* nameForm = bvec->getAt(ctx, (int)i);
                 const proto::ProtoObject* valForm  = bvec->getAt(ctx, (int)(i + 1));
                 if (!isStringy(nameForm)) {
@@ -1173,7 +1173,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (n == 2) {
                 out.emit(Op::PUSH_NIL, 0);
             } else {
-                for (unsigned long i = 2; i < n; ++i) {
+                for (proto::proto_ulong i = 2; i < n; ++i) {
                     compileForm(ctx, lst->getAt(ctx, (int)i), out, markers);
                     if (i + 1 < n) out.emit(Op::POP, 0);
                 }
@@ -1266,7 +1266,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (tgt.tryDepth != scopes_.back().tryDepth) {
                 throw CompileError("Cannot recur across try");
             }
-            unsigned long argc = n - 1;
+            proto::proto_ulong argc = n - 1;
             if (argc != tgt.slots.size()) {
                 throw CompileError("recur: arity mismatch with enclosing loop");
             }
@@ -1274,7 +1274,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             // the stack. Then store each into its slot in REVERSE order so
             // the rightmost (top-of-stack) value goes into the rightmost
             // slot.
-            for (unsigned long i = 0; i < argc; ++i) {
+            for (proto::proto_ulong i = 0; i < argc; ++i) {
                 compileForm(ctx, lst->getAt(ctx, (int)(i + 1)), out, markers);
             }
             for (int i = static_cast<int>(argc) - 1; i >= 0; --i) {
@@ -1315,7 +1315,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             // are calling the local binding, not the global primitive;
             // fall back to the general PUSH_VAR + CALL path.
             int shadowSlot = (binOp != Op::NOP) ? resolveLocal(headName) : -1;
-            unsigned long argc = n - 1;
+            proto::proto_ulong argc = n - 1;
 
             if (binOp != Op::NOP && shadowSlot < 0 && argc >= 2) {
                 // Arithmetic: left-fold pairs. (op a b c d) emits
@@ -1331,7 +1331,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                     // Defer to general path for chained comparisons.
                 } else {
                     compileForm(ctx, lst->getAt(ctx, 1), out, markers);
-                    for (unsigned long i = 2; i < n; ++i) {
+                    for (proto::proto_ulong i = 2; i < n; ++i) {
                         compileForm(ctx, lst->getAt(ctx, (int)i), out, markers);
                         out.emit(binOp, 0);
                     }
@@ -1372,11 +1372,11 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             hasKvSuffix = true;
         }
 
-        for (unsigned long i = 1; i < n; ++i) {
+        for (proto::proto_ulong i = 1; i < n; ++i) {
             compileForm(ctx, lst->getAt(ctx, static_cast<int>(i)), out, markers);
         }
 
-        unsigned long callArgc = n - 1;
+        proto::proto_ulong callArgc = n - 1;
         out.emit(hasKvSuffix ? Op::CALL_KW : Op::CALL,
                  callArgc);
         return;
@@ -1388,10 +1388,10 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
     // out of the bytecode — purely a compile-time hint.
     if (isWrappedMap(ctx, form, markers)) {
         const proto::ProtoList* entries = mapEntries(ctx, form, markers);
-        unsigned long ne = entries->getSize(ctx);  // already validated even
+        proto::proto_ulong ne = entries->getSize(ctx);  // already validated even
         std::size_t headIdx = out.addSymbol("hash-map");
         out.emit(Op::PUSH_VAR, headIdx);
-        for (unsigned long i = 0; i < ne; ++i) {
+        for (proto::proto_ulong i = 0; i < ne; ++i) {
             compileForm(ctx, entries->getAt(ctx, (int)i), out, markers);
         }
         out.emit(Op::CALL, ne);
@@ -1404,10 +1404,10 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
     // it is purely a compile-time hint to distinguish `[..]` from `(..)`.
     if (isWrappedVector(ctx, form, markers)) {
         const proto::ProtoList* items = vectorItems(ctx, form, markers);
-        unsigned long ni = items->getSize(ctx);
+        proto::proto_ulong ni = items->getSize(ctx);
         std::size_t headIdx = out.addSymbol("vector");
         out.emit(Op::PUSH_VAR, headIdx);
-        for (unsigned long i = 0; i < ni; ++i) {
+        for (proto::proto_ulong i = 0; i < ni; ++i) {
             compileForm(ctx, items->getAt(ctx, (int)i), out, markers);
         }
         out.emit(Op::CALL, ni);

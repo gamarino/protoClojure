@@ -69,6 +69,8 @@
  */
 #pragma once
 
+#include "protoCore.h"  // proto::proto_long / proto_ulong
+
 namespace proto {
 class ProtoContext;
 class ProtoObject;
@@ -97,7 +99,7 @@ public:
     void push(const proto::ProtoObject* value);
 
     /** Number of elements pushed so far. */
-    unsigned long size() const { return size_; }
+    proto::proto_ulong size() const { return size_; }
 
     /**
      * The builder's own context — the innermost one on this thread while the
@@ -140,7 +142,7 @@ private:
     proto::ProtoContext* holder_;
     unsigned int  capacity_ = kInitialPending;
     unsigned int  pending_  = 0;
-    unsigned long size_     = 0;
+    proto::proto_ulong size_     = 0;
 };
 
 } // namespace protoClojure

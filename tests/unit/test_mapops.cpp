@@ -30,7 +30,7 @@ namespace {
 // collision bucket protoCore's helper builds is exercised on purpose. A
 // genuine 54-bit collision is not reachable from a test.
 bool collidingIsIdentityKey(proto::ProtoContext*, const proto::ProtoObject*) { return false; }
-unsigned long collidingHash(proto::ProtoContext*, const proto::ProtoObject*) { return 42; }
+proto::proto_ulong collidingHash(proto::ProtoContext*, const proto::ProtoObject*) { return 42; }
 bool collidingEquals(proto::ProtoContext*, const proto::ProtoObject* a,
                      const proto::ProtoObject* b) { return a == b; }
 const proto::KeySemantics kCollidingSemantics{
@@ -107,7 +107,7 @@ struct MapOpsFixture : ::testing::Test {
             });
         return out;
     }
-    unsigned long slotCount(const proto::ProtoObject* m) const {
+    proto::proto_ulong slotCount(const proto::ProtoObject* m) const {
         return reinterpret_cast<const proto::ProtoMap*>(m)->getSize(ctx);
     }
     bool has(const proto::ProtoObject* m, const proto::ProtoObject* k) const {

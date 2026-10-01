@@ -46,6 +46,8 @@
  */
 #pragma once
 
+#include "protoCore.h"  // proto::proto_long / proto_ulong
+
 namespace proto {
 class ProtoContext;
 class ProtoObject;
@@ -58,10 +60,10 @@ namespace protoClojure {
 // of protoCore's forms (pointer tags 8 and 26 of headers/proto_internal.h;
 // one entry always fits the Small form, but both are accepted).
 inline bool isVector(const proto::ProtoObject* v) {
-    constexpr unsigned long kTagMask            = 0x3F;
-    constexpr unsigned long kTagSparseList      = 8;
-    constexpr unsigned long kTagSparseListSmall = 26;
-    const unsigned long tag = reinterpret_cast<unsigned long>(v) & kTagMask;
+    constexpr proto::proto_ulong kTagMask            = 0x3F;
+    constexpr proto::proto_ulong kTagSparseList      = 8;
+    constexpr proto::proto_ulong kTagSparseListSmall = 26;
+    const proto::proto_ulong tag = reinterpret_cast<proto::proto_ulong>(v) & kTagMask;
     return v != nullptr && (tag == kTagSparseList || tag == kTagSparseListSmall);
 }
 

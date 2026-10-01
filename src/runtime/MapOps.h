@@ -63,6 +63,8 @@
  */
 #pragma once
 
+#include "protoCore.h"  // proto::proto_long / proto_ulong
+
 namespace proto {
 class ProtoContext;
 class ProtoObject;
@@ -77,9 +79,9 @@ namespace protoClojure {
 // (pointer tag 27 of protoCore's headers/proto_internal.h, shared by both).
 // The runtime never hands a ProtoMap to user code for anything else.
 inline bool isMap(const proto::ProtoObject* v) {
-    constexpr unsigned long kTagMask = 0x3F;
-    constexpr unsigned long kTagMap  = 27;
-    const unsigned long tag = reinterpret_cast<unsigned long>(v) & kTagMask;
+    constexpr proto::proto_ulong kTagMask = 0x3F;
+    constexpr proto::proto_ulong kTagMap  = 27;
+    const proto::proto_ulong tag = reinterpret_cast<proto::proto_ulong>(v) & kTagMask;
     return v != nullptr && tag == kTagMap;
 }
 
@@ -97,7 +99,7 @@ bool keyIsIdentity(proto::ProtoContext* ctx, const proto::ProtoObject* key);
 // The hash of `key` under the semantics above: equal keys hash equally.
 // Total, so it is defined for identity keys too (a collection key hashes its
 // elements whatever they are).
-unsigned long keyHash(proto::ProtoContext* ctx, const proto::ProtoObject* key);
+proto::proto_ulong keyHash(proto::ProtoContext* ctx, const proto::ProtoObject* key);
 
 // True when `a` and `b` name one map entry (the semantics above).
 bool keyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
@@ -109,14 +111,14 @@ bool keyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
 const proto::ProtoObject* mapAssocPairs(proto::ProtoContext* ctx,
                                         const proto::ProtoObject* base,
                                         const proto::ProtoObject* const* kv,
-                                        unsigned long n);
+                                        proto::proto_ulong n);
 
 // Same, taking the `n` keys and values from `items[from .. from+n)`.
 const proto::ProtoObject* mapAssocPairs(proto::ProtoContext* ctx,
                                         const proto::ProtoObject* base,
                                         const proto::ProtoList* items,
-                                        unsigned long from,
-                                        unsigned long n);
+                                        proto::proto_ulong from,
+                                        proto::proto_ulong n);
 
 // Return `m` without `key`. Returns `m` itself when the key is absent.
 const proto::ProtoObject* mapDissoc(proto::ProtoContext* ctx,
@@ -133,7 +135,7 @@ const proto::ProtoObject* mapGet(proto::ProtoContext* ctx,
 // Number of entries in map `m` (nullptr is the empty map). O(n): see the
 // note on count in the header comment. Use mapIsEmpty when only emptiness
 // matters.
-unsigned long mapCount(proto::ProtoContext* ctx, const proto::ProtoObject* m);
+proto::proto_ulong mapCount(proto::ProtoContext* ctx, const proto::ProtoObject* m);
 
 // True when `m` holds no entry. O(1).
 bool mapIsEmpty(proto::ProtoContext* ctx, const proto::ProtoObject* m);

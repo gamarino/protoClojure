@@ -7,7 +7,7 @@ namespace protoClojure {
 namespace {
 
 // The single index the box stores its elements under.
-constexpr unsigned long kItemsSlot = 0;
+constexpr proto::proto_ulong kItemsSlot = 0;
 
 inline const proto::ProtoSparseList* asBox(const proto::ProtoObject* v) {
     // isVector has already checked the tag, so the cast is the whole

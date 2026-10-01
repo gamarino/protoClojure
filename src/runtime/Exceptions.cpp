@@ -288,7 +288,7 @@ const proto::ProtoObject* prim_ex_info(proto::ProtoContext* ctx,
                                        const proto::ParentLink*,
                                        const proto::ProtoList* args,
                                        const proto::ProtoSparseList*) {
-    const unsigned long n = args ? args->getSize(ctx) : 0;
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n != 2 && n != 3)
         throwClassed(ctx, "ArityException",
             "Wrong number of args (" + std::to_string(n) + ") passed to: ex-info");
@@ -316,7 +316,7 @@ namespace {
 
 const proto::ProtoObject* oneArg(proto::ProtoContext* ctx,
                                  const proto::ProtoList* args, const char* name) {
-    const unsigned long n = args ? args->getSize(ctx) : 0;
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n != 1)
         throwClassed(ctx, "ArityException",
             "Wrong number of args (" + std::to_string(n) + ") passed to: " + name);

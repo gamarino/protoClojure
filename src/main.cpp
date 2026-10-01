@@ -251,8 +251,8 @@ int runFile(const char* path, const std::vector<std::string>& scriptArgs) {
 
     const proto::ProtoList* forms =
         ctx->getAutomaticLocal(kSlotForms)->asList(ctx);
-    unsigned long n = forms->getSize(ctx);
-    for (unsigned long i = 0; i < n; ++i) {
+    proto::proto_ulong n = forms->getSize(ctx);
+    for (proto::proto_ulong i = 0; i < n; ++i) {
         const proto::ProtoObject* form =
             forms->getAt(ctx, static_cast<int>(i));
         try {

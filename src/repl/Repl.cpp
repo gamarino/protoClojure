@@ -397,8 +397,8 @@ void cmdLoad(Session& s, const std::string& path) {
     proto::ProtoContext formsScope(s.ctx->space, s.ctx);
     formsScope.resizeAutomaticLocals(1);
     formsScope.setAutomaticLocal(0, forms->asObject(&formsScope));
-    unsigned long n = forms->getSize(&formsScope);
-    for (unsigned long i = 0; i < n; ++i) {
+    proto::proto_ulong n = forms->getSize(&formsScope);
+    for (proto::proto_ulong i = 0; i < n; ++i) {
         const proto::ProtoObject* form =
             forms->getAt(&formsScope, static_cast<int>(i));
         auto modPtr = std::make_unique<BytecodeModule>();
@@ -428,7 +428,7 @@ void cmdLoad(Session& s, const std::string& path) {
             return;
         }
     }
-    std::printf("loaded %s (%lu forms)\n", path.c_str(), n);
+    std::printf("loaded %s (%" PROTO_FMT_U " forms)\n", path.c_str(), n);
 }
 
 void cmdTime(Session& s, const std::string& expr) {

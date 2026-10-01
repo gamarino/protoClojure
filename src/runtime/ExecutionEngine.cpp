@@ -34,11 +34,11 @@ constexpr unsigned int kMaxBoundParameters = 17;
 // PROTO_SMALL_INT_TAG_MASK/VALUE for the hot-path checks. Re-declared here
 // to dodge the per-call function-call cost of going through the inline
 // helper; both definitions must match headers/protoCore.h.
-constexpr unsigned long kSmallIntTagMask  = 0x3FFUL;
-constexpr unsigned long kSmallIntTagValue = 0x001UL;
+constexpr proto::proto_ulong kSmallIntTagMask  = PROTO_UL(0x3FF);
+constexpr proto::proto_ulong kSmallIntTagValue = PROTO_UL(0x001);
 
 inline bool isSmallIntFast(const proto::ProtoObject* v) {
-    return (reinterpret_cast<unsigned long>(v) & kSmallIntTagMask) ==
+    return (reinterpret_cast<proto::proto_ulong>(v) & kSmallIntTagMask) ==
            kSmallIntTagValue;
 }
 
@@ -250,15 +250,15 @@ static bool extractKwVals(proto::ProtoContext* ctx,
 static int pickArity(proto::ProtoContext* ctx,
                      const proto::ProtoList* aritiesList,
                      unsigned int argc) {
-    unsigned long N = aritiesList->getSize(ctx);
-    for (unsigned long k = 0; k < N; ++k) {
+    proto::proto_ulong N = aritiesList->getSize(ctx);
+    for (proto::proto_ulong k = 0; k < N; ++k) {
         const proto::ProtoList* spec =
             aritiesList->getAt(ctx, (int)k)->asList(ctx);
         long long a = spec->getAt(ctx, 0)->asLong(ctx);
         bool variadic = spec->getAt(ctx, 2) == PROTO_TRUE;
         if (!variadic && a == static_cast<long long>(argc)) return (int)k;
     }
-    for (unsigned long k = 0; k < N; ++k) {
+    for (proto::proto_ulong k = 0; k < N; ++k) {
         const proto::ProtoList* spec =
             aritiesList->getAt(ctx, (int)k)->asList(ctx);
         long long a = spec->getAt(ctx, 0)->asLong(ctx);
@@ -888,8 +888,8 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 const proto::ProtoList* argsList = listObj->asList(&frame);
                 if (!argsList)
                     throw std::runtime_error("VM: CALL_APPLY: not a list");
-                unsigned long ln = argsList->getSize(&frame);
-                for (unsigned long i = 0; i < ln; ++i) {
+                proto::proto_ulong ln = argsList->getSize(&frame);
+                for (proto::proto_ulong i = 0; i < ln; ++i) {
                     pushVal(argsList->getAt(&frame, static_cast<int>(i)));
                 }
                 dispatchCall(static_cast<unsigned int>(ln));

@@ -32,6 +32,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "protoCore.h"  // proto::proto_long / proto_ulong
+
 namespace proto {
 class ProtoContext;
 class ProtoObject;
@@ -95,7 +97,7 @@ public:
     compileArity(proto::ProtoContext* ctx,
                  const proto::ProtoList* paramsForm,
                  const proto::ProtoList* arityForm,
-                 unsigned long bodyStartIdx,
+                 proto::proto_ulong bodyStartIdx,
                  const CompilerMarkers& markers);
 
 private:

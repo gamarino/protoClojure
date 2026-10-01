@@ -64,9 +64,9 @@ long long indexArg(proto::ProtoContext* ctx, const proto::ProtoList* args,
                                  " expects an integer, got " +
                                  valueTypeName(ctx, a));
     }
-    constexpr unsigned long kSmallIntMask  = 0x3FFUL;
-    constexpr unsigned long kSmallIntValue = 0x001UL;
-    if ((reinterpret_cast<unsigned long>(a) & kSmallIntMask) == kSmallIntValue)
+    constexpr proto::proto_ulong kSmallIntMask  = PROTO_UL(0x3FF);
+    constexpr proto::proto_ulong kSmallIntValue = PROTO_UL(0x001);
+    if ((reinterpret_cast<proto::proto_ulong>(a) & kSmallIntMask) == kSmallIntValue)
         return reinterpret_cast<long long>(a) >> 10;
     if (a->compare(ctx, ctx->fromLong(LLONG_MAX)) > 0) return LLONG_MAX;
     if (a->compare(ctx, ctx->fromLong(LLONG_MIN)) < 0) return LLONG_MIN;
@@ -90,10 +90,10 @@ const proto::ProtoObject* numberArg(proto::ProtoContext* ctx,
 // anything larger goes through protoCore compare.
 int compareIntegers(proto::ProtoContext* ctx, const proto::ProtoObject* a,
                     const proto::ProtoObject* b) {
-    constexpr unsigned long kSmallIntMask  = 0x3FFUL;
-    constexpr unsigned long kSmallIntValue = 0x001UL;
-    if ((reinterpret_cast<unsigned long>(a) & kSmallIntMask) == kSmallIntValue &&
-        (reinterpret_cast<unsigned long>(b) & kSmallIntMask) == kSmallIntValue) {
+    constexpr proto::proto_ulong kSmallIntMask  = PROTO_UL(0x3FF);
+    constexpr proto::proto_ulong kSmallIntValue = PROTO_UL(0x001);
+    if ((reinterpret_cast<proto::proto_ulong>(a) & kSmallIntMask) == kSmallIntValue &&
+        (reinterpret_cast<proto::proto_ulong>(b) & kSmallIntMask) == kSmallIntValue) {
         const long long x = reinterpret_cast<long long>(a) >> 10;
         const long long y = reinterpret_cast<long long>(b) >> 10;
         return (x > y) - (x < y);
@@ -194,9 +194,9 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
     if (v->isInteger(ctx)) {
         // SmallInt: the tagged-pointer fast extract, mirror of the check in
         // ExecutionEngine.cpp. LargeInt: protoCore's asIntegerString.
-        constexpr unsigned long kSmallIntMask  = 0x3FFUL;
-        constexpr unsigned long kSmallIntValue = 0x001UL;
-        unsigned long bits = reinterpret_cast<unsigned long>(v);
+        constexpr proto::proto_ulong kSmallIntMask  = PROTO_UL(0x3FF);
+        constexpr proto::proto_ulong kSmallIntValue = PROTO_UL(0x001);
+        proto::proto_ulong bits = reinterpret_cast<proto::proto_ulong>(v);
         if ((bits & kSmallIntMask) == kSmallIntValue) {
             out += std::to_string(reinterpret_cast<long long>(v) >> 10);
         } else {
@@ -211,8 +211,8 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
     if (isListTag(v)) {
         const proto::ProtoList* lst = v->asList(ctx);
         out += '(';
-        unsigned long n = lst->getSize(ctx);
-        for (unsigned long i = 0; i < n; ++i) {
+        proto::proto_ulong n = lst->getSize(ctx);
+        for (proto::proto_ulong i = 0; i < n; ++i) {
             if (i > 0) out += ' ';
             printTo(ctx, out, lst->getAt(ctx, static_cast<int>(i)), readable);
         }
@@ -222,8 +222,8 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
     if (isVector(v)) {
         const proto::ProtoList* items = vectorItems(ctx, v);
         out += '[';
-        unsigned long n = items->getSize(ctx);
-        for (unsigned long i = 0; i < n; ++i) {
+        proto::proto_ulong n = items->getSize(ctx);
+        for (proto::proto_ulong i = 0; i < n; ++i) {
             if (i > 0) out += ' ';
             printTo(ctx, out, items->getAt(ctx, static_cast<int>(i)), readable);
         }
@@ -376,9 +376,9 @@ const proto::ProtoObject* prim_println(proto::ProtoContext* ctx,
                                        const proto::ParentLink* /*parents*/,
                                        const proto::ProtoList* args,
                                        const proto::ProtoSparseList* /*kwargs*/) {
-    unsigned long n = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     std::string line;
-    for (unsigned long i = 0; i < n; ++i) {
+    for (proto::proto_ulong i = 0; i < n; ++i) {
         if (i > 0) line += ' ';
         printTo(ctx, line, args->getAt(ctx, static_cast<int>(i)),
                 /*readable=*/false);
@@ -404,18 +404,18 @@ const proto::ProtoObject* prim_println(proto::ProtoContext* ctx,
 template <typename Op>
 const proto::ProtoObject* numericFold(proto::ProtoContext* ctx,
                                       const proto::ProtoList* args,
-                                      unsigned long n, Op op) {
+                                      proto::proto_ulong n, Op op) {
     if (n == 2) return op(args->getAt(ctx, 0), args->getAt(ctx, 1));
     proto::ProtoContext::CriticalSection guard(ctx);
     const proto::ProtoObject* acc = args->getAt(ctx, 0);
-    for (unsigned long i = 1; i < n; ++i)
+    for (proto::proto_ulong i = 1; i < n; ++i)
         acc = op(acc, args->getAt(ctx, static_cast<int>(i)));
     return acc;
 }
 
 void checkNumbers(proto::ProtoContext* ctx, const proto::ProtoList* args,
-                  unsigned long n, const char* primName) {
-    for (unsigned long i = 0; i < n; ++i)
+                  proto::proto_ulong n, const char* primName) {
+    for (proto::proto_ulong i = 0; i < n; ++i)
         numberArg(ctx, args, static_cast<int>(i), primName);
 }
 
@@ -424,7 +424,7 @@ const proto::ProtoObject* prim_plus(proto::ProtoContext* ctx,
                                     const proto::ParentLink*,
                                     const proto::ProtoList* args,
                                     const proto::ProtoSparseList*) {
-    unsigned long n = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     checkNumbers(ctx, args, n, "+");
     if (n == 0) return ctx->fromLong(0);
     if (n == 1) return args->getAt(ctx, 0);
@@ -439,7 +439,7 @@ const proto::ProtoObject* prim_minus(proto::ProtoContext* ctx,
                                      const proto::ParentLink*,
                                      const proto::ProtoList* args,
                                      const proto::ProtoSparseList*) {
-    unsigned long n = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n == 0) throw std::runtime_error("- : needs at least one arg");
     checkNumbers(ctx, args, n, "-");
     if (n == 1) {
@@ -459,7 +459,7 @@ const proto::ProtoObject* prim_mul(proto::ProtoContext* ctx,
                                    const proto::ParentLink*,
                                    const proto::ProtoList* args,
                                    const proto::ProtoSparseList*) {
-    unsigned long n = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     checkNumbers(ctx, args, n, "*");
     if (n == 0) return ctx->fromLong(1);
     if (n == 1) return args->getAt(ctx, 0);
@@ -480,20 +480,20 @@ const proto::ProtoObject* prim_div(proto::ProtoContext* ctx,
                                    const proto::ParentLink*,
                                    const proto::ProtoList* args,
                                    const proto::ProtoSparseList*) {
-    unsigned long n = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n == 0) throw std::runtime_error("/: needs at least one arg");
     checkNumbers(ctx, args, n, "/");
     bool anyFloat = false;
-    for (unsigned long i = 0; i < n && !anyFloat; ++i)
+    for (proto::proto_ulong i = 0; i < n && !anyFloat; ++i)
         anyFloat = args->getAt(ctx, static_cast<int>(i))->isFloat(ctx);
     if (anyFloat) {
         if (n == 1) return ctx->fromDouble(1.0 / args->getAt(ctx, 0)->asDouble(ctx));
         double acc = args->getAt(ctx, 0)->asDouble(ctx);
-        for (unsigned long i = 1; i < n; ++i)
+        for (proto::proto_ulong i = 1; i < n; ++i)
             acc /= args->getAt(ctx, static_cast<int>(i))->asDouble(ctx);
         return ctx->fromDouble(acc);
     }
-    for (unsigned long i = (n == 1 ? 0 : 1); i < n; ++i) {
+    for (proto::proto_ulong i = (n == 1 ? 0 : 1); i < n; ++i) {
         if (args->getAt(ctx, static_cast<int>(i))->integerSign(ctx) == 0)
             throw std::runtime_error("ArithmeticException: Divide by zero");
     }
@@ -541,10 +541,10 @@ const proto::ProtoObject* monotonicChain(proto::ProtoContext* ctx,
                                          const char* name,
                                          DoublePred holdsForDoubles,
                                          SignPred holdsForSign) {
-    unsigned long n = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n < 2) return PROTO_TRUE;            // 0- or 1-arg form is true
     const proto::ProtoObject* prev = numberArg(ctx, args, 0, name);
-    for (unsigned long i = 1; i < n; ++i) {
+    for (proto::proto_ulong i = 1; i < n; ++i) {
         const proto::ProtoObject* cur = numberArg(ctx, args, (int)i, name);
         const bool holds = (prev->isInteger(ctx) && cur->isInteger(ctx))
             ? holdsForSign(compareIntegers(ctx, prev, cur))
@@ -598,9 +598,9 @@ const proto::ProtoObject* prim_eq(proto::ProtoContext* ctx,
                                   const proto::ProtoSparseList*) {
     // Value equality (valuesEqual) over every adjacent pair, like Clojure's
     // variadic =. The 0- and 1-argument forms are true.
-    unsigned long n = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n < 2) return PROTO_TRUE;
-    for (unsigned long i = 1; i < n; ++i) {
+    for (proto::proto_ulong i = 1; i < n; ++i) {
         if (!valuesEqual(ctx, args->getAt(ctx, static_cast<int>(i - 1)),
                          args->getAt(ctx, static_cast<int>(i))))
             return PROTO_FALSE;
@@ -627,9 +627,9 @@ const proto::ProtoObject* prim_str(proto::ProtoContext* ctx,
                                    const proto::ParentLink*,
                                    const proto::ProtoList* args,
                                    const proto::ProtoSparseList*) {
-    unsigned long n = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     std::string text;
-    for (unsigned long i = 0; i < n; ++i) {
+    for (proto::proto_ulong i = 0; i < n; ++i) {
         appendStr(ctx, text, args->getAt(ctx, (int)i));
     }
     return ctx->fromUTF8String(text.c_str());
@@ -720,7 +720,7 @@ const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
                                    const proto::ParentLink*,
                                    const proto::ProtoList* args,
                                    const proto::ProtoSparseList*) {
-    unsigned long ac = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong ac = args ? args->getSize(ctx) : 0;
     if (ac != 2 && ac != 3)
         throw std::runtime_error("nth: expects (nth coll i) or (nth coll i nf)");
     const proto::ProtoObject* coll = args->getAt(ctx, 0);
@@ -807,7 +807,7 @@ const proto::ProtoObject* prim_hash_map(proto::ProtoContext* ctx,
                                         const proto::ParentLink*,
                                         const proto::ProtoList* args,
                                         const proto::ProtoSparseList*) {
-    unsigned long n = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n % 2 != 0)
         throw std::runtime_error("hash-map: needs an even number of args");
     const ActiveCallContext* cc = activeCallContext();
@@ -820,7 +820,7 @@ const proto::ProtoObject* prim_assoc(proto::ProtoContext* ctx,
                                      const proto::ParentLink*,
                                      const proto::ProtoList* args,
                                      const proto::ProtoSparseList*) {
-    unsigned long n = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n < 3 || (n - 1) % 2 != 0)
         throw std::runtime_error("assoc: expects (assoc m k v ...)");
     const ActiveCallContext* cc = activeCallContext();
@@ -840,7 +840,7 @@ const proto::ProtoObject* prim_dissoc(proto::ProtoContext* ctx,
                                       const proto::ParentLink*,
                                       const proto::ProtoList* args,
                                       const proto::ProtoSparseList*) {
-    unsigned long n = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n < 1)
         throw std::runtime_error("dissoc: expects (dissoc m k ...)");
     const ActiveCallContext* cc = activeCallContext();
@@ -856,7 +856,7 @@ const proto::ProtoObject* prim_dissoc(proto::ProtoContext* ctx,
     proto::ProtoContext scope(ctx->space, ctx);
     scope.resizeAutomaticLocals(1);
     scope.setAutomaticLocal(0, m);
-    for (unsigned long i = 1; i < n; ++i) {
+    for (proto::proto_ulong i = 1; i < n; ++i) {
         scope.setAutomaticLocal(0,
             mapDissoc(&scope, scope.getAutomaticLocal(0),
                       args->getAt(&scope, static_cast<int>(i))));
@@ -869,7 +869,7 @@ const proto::ProtoObject* prim_get(proto::ProtoContext* ctx,
                                    const proto::ParentLink*,
                                    const proto::ProtoList* args,
                                    const proto::ProtoSparseList*) {
-    unsigned long n = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n != 2 && n != 3)
         throw std::runtime_error("get: expects (get m k) or (get m k not-found)");
     const ActiveCallContext* cc = activeCallContext();
@@ -1077,7 +1077,7 @@ const proto::ProtoObject* prim_reverse(proto::ProtoContext* ctx,
     // run through ListBuilder; appending at the front produces the same list
     // but has no chunked form.
     ListBuilder out(ctx);
-    for (unsigned long i = lst->getSize(out.context()); i-- > 0;) {
+    for (proto::proto_ulong i = lst->getSize(out.context()); i-- > 0;) {
         out.push(lst->getAt(out.context(), static_cast<int>(i)));
     }
     return out.finish();
@@ -1099,12 +1099,12 @@ const proto::ProtoObject* prim_map(proto::ProtoContext* ctx,
     if (!lst) return ctx->newList()->asObject(ctx);
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("map: no active VM context");
-    unsigned long n = lst->getSize(ctx);
+    proto::proto_ulong n = lst->getSize(ctx);
     // The result grows with the input, so it is built in chunks: `invoke` runs
     // in the builder's context (it pushes frames, and the context stack is
     // LIFO — see ListBuilder.h).
     ListBuilder out(ctx);
-    for (unsigned long i = 0; i < n; ++i) {
+    for (proto::proto_ulong i = 0; i < n; ++i) {
         const proto::ProtoObject* one[1] = {
             lst->getAt(out.context(), static_cast<int>(i)) };
         out.push(cc->engine->invoke(out.context(), f, one, 1));
@@ -1125,9 +1125,9 @@ const proto::ProtoObject* prim_filter(proto::ProtoContext* ctx,
     if (!lst) return ctx->newList()->asObject(ctx);
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("filter: no active VM context");
-    unsigned long n = lst->getSize(ctx);
+    proto::proto_ulong n = lst->getSize(ctx);
     ListBuilder out(ctx);
-    for (unsigned long i = 0; i < n; ++i) {
+    for (proto::proto_ulong i = 0; i < n; ++i) {
         const proto::ProtoObject* x = lst->getAt(out.context(), static_cast<int>(i));
         const proto::ProtoObject* one[1] = { x };
         const proto::ProtoObject* keep =
@@ -1146,18 +1146,18 @@ const proto::ProtoObject* prim_reduce(proto::ProtoContext* ctx,
                                       const proto::ProtoSparseList*) {
     // Two shapes: (reduce f coll) — init is first elem;
     //             (reduce f init coll) — explicit init.
-    unsigned long ac = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong ac = args ? args->getSize(ctx) : 0;
     if (ac != 2 && ac != 3)
         throw std::runtime_error("reduce: expects (reduce f coll) or (reduce f init coll)");
     const proto::ProtoObject* f = args->getAt(ctx, 0);
     const proto::ProtoObject* coll = args->getAt(ctx, ac == 2 ? 1 : 2);
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
-    unsigned long n = lst ? lst->getSize(ctx) : 0;
+    proto::proto_ulong n = lst ? lst->getSize(ctx) : 0;
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("reduce: no active VM context");
 
     const proto::ProtoObject* acc;
-    unsigned long start;
+    proto::proto_ulong start;
     if (ac == 3) {
         acc = args->getAt(ctx, 1);
         start = 0;
@@ -1169,7 +1169,7 @@ const proto::ProtoObject* prim_reduce(proto::ProtoContext* ctx,
         acc = lst->getFirst(ctx);
         start = 1;
     }
-    for (unsigned long i = start; i < n; ++i) {
+    for (proto::proto_ulong i = start; i < n; ++i) {
         const proto::ProtoObject* x = lst->getAt(ctx, static_cast<int>(i));
         const proto::ProtoObject* two[2] = { acc, x };
         acc = cc->engine->invoke(ctx, f, two, 2);
@@ -1189,7 +1189,7 @@ const proto::ProtoObject* prim_subs(proto::ProtoContext* ctx,
                                     const proto::ParentLink*,
                                     const proto::ProtoList* args,
                                     const proto::ProtoSparseList*) {
-    unsigned long ac = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong ac = args ? args->getSize(ctx) : 0;
     if (ac != 2 && ac != 3)
         throw std::runtime_error("subs: expects (subs s start) or (subs s start end)");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
@@ -1298,7 +1298,7 @@ const proto::ProtoObject* prim_index_of(proto::ProtoContext* ctx,
                                         const proto::ParentLink*,
                                         const proto::ProtoList* args,
                                         const proto::ProtoSparseList*) {
-    unsigned long ac = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong ac = args ? args->getSize(ctx) : 0;
     if (ac != 2 && ac != 3)
         throw std::runtime_error("index-of: expects (index-of s sub) or (index-of s sub from)");
     const proto::ProtoObject* sv = args->getAt(ctx, 0);
@@ -1359,7 +1359,7 @@ const proto::ProtoObject* prim_join(proto::ProtoContext* ctx,
                                     const proto::ParentLink*,
                                     const proto::ProtoList* args,
                                     const proto::ProtoSparseList*) {
-    unsigned long ac = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong ac = args ? args->getSize(ctx) : 0;
     if (ac != 1 && ac != 2)
         throw std::runtime_error("join: expects (join coll) or (join sep coll)");
     std::string sep;
@@ -1376,8 +1376,8 @@ const proto::ProtoObject* prim_join(proto::ProtoContext* ctx,
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
     std::string text;
     if (lst) {
-        unsigned long n = lst->getSize(ctx);
-        for (unsigned long i = 0; i < n; ++i) {
+        proto::proto_ulong n = lst->getSize(ctx);
+        for (proto::proto_ulong i = 0; i < n; ++i) {
             if (i > 0) text += sep;
             appendStr(ctx, text, lst->getAt(ctx, static_cast<int>(i)));
         }
@@ -1524,7 +1524,7 @@ const proto::ProtoObject* prim_atom(proto::ProtoContext* ctx,
                                     const proto::ParentLink*,
                                     const proto::ProtoList* args,
                                     const proto::ProtoSparseList*) {
-    unsigned long n = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n != 1)
         throw std::runtime_error("atom: expects (atom initial-value)");
     const ActiveCallContext* cc = activeCallContext();
@@ -1716,8 +1716,8 @@ static void fireWatches(proto::ProtoContext* ctx,
     // The list stays rooted in its slot while the watches run.
     const proto::ProtoList* watches =
         scope.getAutomaticLocal(kSlotWatchList)->asList(&scope);
-    const unsigned long n = watches->getSize(&scope);
-    for (unsigned long i = 0; i + 1 < n; i += 2) {
+    const proto::proto_ulong n = watches->getSize(&scope);
+    for (proto::proto_ulong i = 0; i + 1 < n; i += 2) {
         const proto::ProtoObject* four[4] = {
             watches->getAt(&scope, static_cast<int>(i)), atomObj,
             oldV ? oldV : PROTO_NONE,
@@ -1771,7 +1771,7 @@ const proto::ProtoObject* prim_swap_bang(proto::ProtoContext* ctx,
                                          const proto::ParentLink*,
                                          const proto::ProtoList* args,
                                          const proto::ProtoSparseList*) {
-    unsigned long n = args ? args->getSize(ctx) : 0;
+    proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n < 2)
         throw std::runtime_error("swap!: expects (swap! atom f & args)");
     const ActiveCallContext* cc = activeCallContext();
@@ -1782,11 +1782,11 @@ const proto::ProtoObject* prim_swap_bang(proto::ProtoContext* ctx,
     const proto::ProtoObject* f = args->getAt(ctx, 1);
 
     // Build (old + extras) buffer once; old gets overwritten per attempt.
-    unsigned long extras = n - 2;
+    proto::proto_ulong extras = n - 2;
     const proto::ProtoObject* buf[17];
     if (extras > 15)
         throw std::runtime_error("swap!: >15 extra args not supported");
-    for (unsigned long i = 0; i < extras; ++i) {
+    for (proto::proto_ulong i = 0; i < extras; ++i) {
         buf[i + 1] = args->getAt(ctx, static_cast<int>(2 + i));
     }
 
@@ -2098,7 +2098,7 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
     if (!lst) return ctx->newList()->asObject(ctx);
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("pmap: no active VM context");
-    unsigned long n = lst->getSize(ctx);
+    proto::proto_ulong n = lst->getSize(ctx);
 
     const proto::ProtoString* fKey =
         proto::ProtoString::createSymbol(ctx, "__pmap_f__");
@@ -2120,7 +2120,7 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
     {
         ListBuilder futures(&scope);
         proto::ProtoContext* fctx = futures.context();
-        for (unsigned long i = 0; i < n; ++i) {
+        for (proto::proto_ulong i = 0; i < n; ++i) {
             const proto::ProtoObject* x = lst->getAt(fctx, (int)i);
             proto::ProtoObject* fut = const_cast<proto::ProtoObject*>(
                 cc->futureMarkerProto->newChild(fctx, /*isMutable=*/true));
@@ -2150,11 +2150,11 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
     // for every element.
     const proto::ProtoList* fs =
         scope.getAutomaticLocal(kSlotFs)->asList(&scope);
-    long firstFailed = -1;   // index of the first failing element
+    proto::proto_long firstFailed = -1;   // index of the first failing element
     {
         ListBuilder results(&scope);
         proto::ProtoContext* rctx = results.context();
-        for (unsigned long i = 0; i < n; ++i) {
+        for (proto::proto_ulong i = 0; i < n; ++i) {
             const proto::ProtoObject* fut = fs->getAt(rctx, (int)i);
             const proto::ProtoObject* done =
                 fut->getAttribute(rctx, cc->doneKey);
@@ -2185,7 +2185,7 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
                 }
             }
             if (firstFailed < 0 && threadFailure(rctx, fut))
-                firstFailed = static_cast<long>(i);
+                firstFailed = static_cast<proto::proto_long>(i);
             results.push(fut->getAttribute(rctx, cc->resultKey));
         }
         scope.setAutomaticLocal(kSlotOut, results.finish());
@@ -2349,10 +2349,10 @@ static const proto::ProtoObject* sendCore(proto::ProtoContext* ctx,
         // (see ListBuilder.h). A send with no extra arguments — the common
         // case, and the one the actor benchmarks measure — skips it.
         const proto::ProtoObject* extras = PROTO_NONE;
-        const unsigned long n = args->getSize(&scope);
+        const proto::proto_ulong n = args->getSize(&scope);
         if (n > 2) {
             ListBuilder b(&scope);
-            for (unsigned long i = 2; i < n; ++i) {
+            for (proto::proto_ulong i = 2; i < n; ++i) {
                 b.push(args->getAt(b.context(), static_cast<int>(i)));
             }
             extras = b.finish();
@@ -2683,10 +2683,10 @@ struct SequentialView {
     const proto::ProtoList* list = nullptr;
 
     explicit operator bool() const { return list != nullptr; }
-    unsigned long size(proto::ProtoContext* ctx) const { return list->getSize(ctx); }
+    proto::proto_ulong size(proto::ProtoContext* ctx) const { return list->getSize(ctx); }
     // O(log n): protoCore exposes no allocation-free sequential walk of a
     // ProtoList, so elements are read by index.
-    const proto::ProtoObject* at(proto::ProtoContext* ctx, unsigned long i) const {
+    const proto::ProtoObject* at(proto::ProtoContext* ctx, proto::proto_ulong i) const {
         return list->getAt(ctx, static_cast<int>(i));
     }
 };
@@ -2853,9 +2853,9 @@ bool valuesEqual(proto::ProtoContext* ctx,
     const SequentialView sb = sequentialView(ctx, b);
     if (sa || sb) {
         if (!sa || !sb) return false;
-        const unsigned long n = sa.size(ctx);
+        const proto::proto_ulong n = sa.size(ctx);
         if (n != sb.size(ctx)) return false;
-        for (unsigned long i = 0; i < n; ++i) {
+        for (proto::proto_ulong i = 0; i < n; ++i) {
             if (!valuesEqual(ctx, sa.at(ctx, i), sb.at(ctx, i)))
                 return false;
         }

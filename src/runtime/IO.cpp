@@ -186,7 +186,7 @@ const PO* stringList(proto::ProtoContext* ctx, const std::vector<std::string>& i
 
 // ============================================================== errors
 
-[[noreturn]] void arity(proto::ProtoContext* ctx, unsigned long n, const char* name) {
+[[noreturn]] void arity(proto::ProtoContext* ctx, proto::proto_ulong n, const char* name) {
     throwClassed(ctx, "ArityException",
                  "Wrong number of args (" + std::to_string(n) + ") passed to: " + name);
 }
@@ -248,11 +248,11 @@ auto blocking(proto::ProtoContext* ctx, F&& f) -> decltype(f()) {
 
 // ============================================================== arguments
 
-unsigned long argCount(proto::ProtoContext* ctx, const proto::ProtoList* args) {
+proto::proto_ulong argCount(proto::ProtoContext* ctx, const proto::ProtoList* args) {
     return args ? args->getSize(ctx) : 0;
 }
 
-const PO* arg(proto::ProtoContext* ctx, const proto::ProtoList* args, unsigned long i) {
+const PO* arg(proto::ProtoContext* ctx, const proto::ProtoList* args, proto::proto_ulong i) {
     const PO* v = args->getAt(ctx, static_cast<int>(i));
     return v ? v : PROTO_NONE;
 }
@@ -298,8 +298,8 @@ int openFd(proto::ProtoContext* ctx, const PO* v, const char* who,
 // Options after the positional arguments, starting at `from`: one map, or
 // keyword/value pairs (`:append true`). Answers a map, or nullptr for none.
 const PO* optionsArg(proto::ProtoContext* ctx, const proto::ProtoList* args,
-                     unsigned long from, const char* who) {
-    const unsigned long n = argCount(ctx, args);
+                     proto::proto_ulong from, const char* who) {
+    const proto::proto_ulong n = argCount(ctx, args);
     if (from >= n) return nullptr;
     if (n - from == 1) {
         const PO* only = arg(ctx, args, from);
@@ -363,8 +363,8 @@ protoio::http::Headers headersArg(proto::ProtoContext* ctx, const PO* v, const c
         if (name.empty()) name = strOf(c, k);
         if (isListTagged(val) || isVector(val)) {
             const proto::ProtoList* items = isVector(val) ? vectorItems(c, val) : val->asList(c);
-            const unsigned long n = items->getSize(c);
-            for (unsigned long i = 0; i < n; ++i)
+            const proto::proto_ulong n = items->getSize(c);
+            for (proto::proto_ulong i = 0; i < n; ++i)
                 hs->push_back({name, strOf(c, items->getAt(c, static_cast<int>(i)))});
         } else {
             hs->push_back({name, strOf(c, val)});
@@ -529,8 +529,8 @@ Answer answerOf(proto::ProtoContext* ctx, const PO* r) {
             a.bodyFile = handlePath(ctx, b);
         } else if (isListTagged(b) || isVector(b)) {
             const proto::ProtoList* items = isVector(b) ? vectorItems(ctx, b) : b->asList(ctx);
-            const unsigned long n = items->getSize(ctx);
-            for (unsigned long i = 0; i < n; ++i)
+            const proto::proto_ulong n = items->getSize(ctx);
+            for (proto::proto_ulong i = 0; i < n; ++i)
                 a.body += strOf(ctx, items->getAt(ctx, static_cast<int>(i)));
         } else {
             a.body = strOf(ctx, b);
@@ -791,7 +791,7 @@ void checkEncoding(proto::ProtoContext* ctx, const PO* opts, const char* who) {
 
 // (slurp f & opts): the whole contents of a file, a reader or an http(s) URL.
 IOPRIM(prim_slurp) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n < 1) arity(ctx, n, "slurp");
     const PO* src = arg(ctx, args, 0);
     checkEncoding(ctx, optionsArg(ctx, args, 1, "slurp"), "slurp");
@@ -821,7 +821,7 @@ IOPRIM(prim_slurp) {
 // (spit f content & {:keys [append]}): writes (str content) to a file or a
 // writer; nil.
 IOPRIM(prim_spit) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n < 2) arity(ctx, n, "spit");
     const PO* dst = arg(ctx, args, 0);
     const PO* opts = optionsArg(ctx, args, 2, "spit");
@@ -844,7 +844,7 @@ IOPRIM(prim_spit) {
 // (read-line) from standard input, or (read-line rdr) from a reader or a
 // socket: the next line without its end, nil at the end of the stream.
 IOPRIM(prim_read_line) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n > 1) arity(ctx, n, "read-line");
     const int fd = n == 0 ? 0
         : openFd(ctx, arg(ctx, args, 0), "read-line", {HandleKind::Reader, HandleKind::Socket});
@@ -854,7 +854,7 @@ IOPRIM(prim_read_line) {
 
 // (write w x): writes (str x) to a writer or a socket; nil.
 IOPRIM(prim_write) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n != 2) arity(ctx, n, "write");
     const int fd = openFd(ctx, arg(ctx, args, 0), "write", {HandleKind::Writer, HandleKind::Socket});
     const std::string data = strOf(ctx, arg(ctx, args, 1));
@@ -865,7 +865,7 @@ IOPRIM(prim_write) {
 // (close h): closes a reader, writer, socket or listening socket, or stops an
 // HTTP server; closing twice is harmless. nil.
 IOPRIM(prim_close) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n != 1) arity(ctx, n, "close");
     const PO* h = arg(ctx, args, 0);
     if (h == PROTO_NONE) return PROTO_NONE;  // (with-open [x nil] ...) as in Clojure
@@ -883,7 +883,7 @@ IOPRIM(prim_close) {
 
 // (reader f): a reader on a file.
 IOPRIM(prim_reader) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n < 1) arity(ctx, n, "reader");
     const PO* src = arg(ctx, args, 0);
     if (isHandle(ctx, src) && handleKind(ctx, src) == HandleKind::Reader) return src;
@@ -896,7 +896,7 @@ IOPRIM(prim_reader) {
 // (writer f & {:keys [append]}): a writer on a file, truncated unless
 // :append is true.
 IOPRIM(prim_writer) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n < 1) arity(ctx, n, "writer");
     const PO* dst = arg(ctx, args, 0);
     if (isHandle(ctx, dst) && handleKind(ctx, dst) == HandleKind::Writer) return dst;
@@ -914,7 +914,7 @@ IOPRIM(prim_writer) {
 // (line-seq rdr): the remaining lines of a reader or a socket, read to the
 // end (eager: deviation D29); nil when there are none.
 IOPRIM(prim_line_seq) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n != 1) arity(ctx, n, "line-seq");
     const int fd = openFd(ctx, arg(ctx, args, 0), "line-seq", {HandleKind::Reader, HandleKind::Socket});
     const std::vector<std::string> lines = blocking(ctx, [&] {
@@ -928,10 +928,10 @@ IOPRIM(prim_line_seq) {
 // (file path & more): a file handle naming `path`, each further argument a
 // child of the one before.
 IOPRIM(prim_file) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n < 1) arity(ctx, n, "file");
     std::string path = pathArg(ctx, arg(ctx, args, 0), "file");
-    for (unsigned long i = 1; i < n; ++i) {
+    for (proto::proto_ulong i = 1; i < n; ++i) {
         const std::string child = pathArg(ctx, arg(ctx, args, i), "file");
         if (!path.empty() && path.back() != '/') path += '/';
         path += child;
@@ -942,7 +942,7 @@ IOPRIM(prim_file) {
 // (file-seq dir): the file itself and, for a directory, every file below it,
 // depth first, each directory's entries in name order; file handles.
 IOPRIM(prim_file_seq) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n != 1) arity(ctx, n, "file-seq");
     const std::string root = pathArg(ctx, arg(ctx, args, 0), "file-seq");
     const std::vector<std::string> paths = blocking(ctx, [&] {
@@ -967,7 +967,7 @@ IOPRIM(prim_file_seq) {
 
 // (exists? f), (directory? f): whether something, or a directory, is there.
 IOPRIM(prim_exists_p) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n != 1) arity(ctx, n, "exists?");
     const std::string path = pathArg(ctx, arg(ctx, args, 0), "exists?");
     const bool there = blocking(ctx, [&] { return protoio::file::stat(path).has_value(); });
@@ -975,7 +975,7 @@ IOPRIM(prim_exists_p) {
 }
 
 IOPRIM(prim_directory_p) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n != 1) arity(ctx, n, "directory?");
     const std::string path = pathArg(ctx, arg(ctx, args, 0), "directory?");
     const bool dir = blocking(ctx, [&] {
@@ -989,7 +989,7 @@ IOPRIM(prim_directory_p) {
 // A failure throws IOException "Couldn't delete f", unless `silently` is
 // truthy, in which case it answers `silently` (clojure.java.io/delete-file).
 IOPRIM(prim_delete_file) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n < 1 || n > 2) arity(ctx, n, "delete-file");
     const std::string path = pathArg(ctx, arg(ctx, args, 0), "delete-file");
     const PO* silently = n == 2 ? arg(ctx, args, 1) : PROTO_FALSE;
@@ -1006,10 +1006,10 @@ IOPRIM(prim_delete_file) {
 // (make-parents f & more): creates the missing parent directories of the
 // file (clojure.java.io/make-parents); true when it created any.
 IOPRIM(prim_make_parents) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n < 1) arity(ctx, n, "make-parents");
     std::string path = pathArg(ctx, arg(ctx, args, 0), "make-parents");
-    for (unsigned long i = 1; i < n; ++i) {
+    for (proto::proto_ulong i = 1; i < n; ++i) {
         if (!path.empty() && path.back() != '/') path += '/';
         path += pathArg(ctx, arg(ctx, args, i), "make-parents");
     }
@@ -1029,7 +1029,7 @@ IOPRIM(prim_make_parents) {
 // contents into a file or a writer (clojure.java.io/copy); a file into a
 // file copies whole trees too. nil.
 IOPRIM(prim_copy) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n < 2) arity(ctx, n, "copy");
     const PO* in = arg(ctx, args, 0);
     const PO* outv = arg(ctx, args, 1);
@@ -1103,9 +1103,9 @@ bool commandExists(const std::string& cmd) {
 // string fed to its standard input), :dir (its working directory), :env (a
 // map replacing its environment).
 IOPRIM(prim_sh) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     std::vector<std::string> argv;
-    unsigned long i = 0;
+    proto::proto_ulong i = 0;
     for (; i < n; ++i) {
         const PO* a = arg(ctx, args, i);
         if (!isString(a)) break;
@@ -1167,7 +1167,7 @@ IOPRIM(prim_sh) {
 // (getenv name): the variable's value or nil; (getenv): every variable, as a
 // map of strings.
 IOPRIM(prim_getenv) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n > 1) arity(ctx, n, "getenv");
     if (n == 1) {
         const std::string name = stringArg(ctx, arg(ctx, args, 0), "getenv");
@@ -1184,7 +1184,7 @@ IOPRIM(prim_getenv) {
 
 // (exit) / (exit n): ends the process at once with status n (System/exit).
 IOPRIM(prim_exit) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n > 1) arity(ctx, n, "exit");
     const int code = n == 1 ? static_cast<int>(longArg(ctx, arg(ctx, args, 0), "exit")) : 0;
     protoio::process::exit(code);
@@ -1284,7 +1284,7 @@ const PO* httpCall(proto::ProtoContext* ctx, const char* who, const PO* opts,
 
 // (http-request {:method :get :uri url ...}).
 IOPRIM(prim_http_request) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n != 1) arity(ctx, n, "http-request");
     const PO* opts = arg(ctx, args, 0);
     if (!isMap(opts)) wrongType(ctx, "http-request", "a request map", opts);
@@ -1293,7 +1293,7 @@ IOPRIM(prim_http_request) {
 
 const PO* httpVerb(proto::ProtoContext* ctx, const proto::ProtoList* args, const char* who,
                    const char* method) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n < 1) arity(ctx, n, who);
     const std::string url = stringArg(ctx, arg(ctx, args, 0), who);
     return httpCall(ctx, who, optionsArg(ctx, args, 1, who), std::string(method), url);
@@ -1311,7 +1311,7 @@ IOPRIM(prim_http_head) { return httpVerb(ctx, args, "http-head", "HEAD"); }
 // one, see server-port), calling (handler request) for each request on a
 // thread of its own; answers the server.
 IOPRIM(prim_run_server) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n < 1) arity(ctx, n, "run-server");
     const PO* handler = arg(ctx, args, 0);
     if (handler == PROTO_NONE) wrongType(ctx, "run-server", "a handler fn", handler);
@@ -1359,7 +1359,7 @@ IOPRIM(prim_run_server) {
 // (stop-server s): stops accepting, lets requests in progress finish and
 // waits for them; nil.
 IOPRIM(prim_stop_server) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n != 1) arity(ctx, n, "stop-server");
     stopServer(ctx, serverOf(ctx, arg(ctx, args, 0), "stop-server"));
     return PROTO_NONE;
@@ -1368,7 +1368,7 @@ IOPRIM(prim_stop_server) {
 // (server-port s): the local port of an HTTP server, a listening socket, a
 // UDP socket or a connected socket.
 IOPRIM(prim_server_port) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n != 1) arity(ctx, n, "server-port");
     const PO* h = arg(ctx, args, 0);
     if (isHandle(ctx, h) && handleKind(ctx, h) == HandleKind::HttpServer)
@@ -1385,7 +1385,7 @@ IOPRIM(prim_server_port) {
 // :timeout (ms) bounds the connect and every later wait on the socket; :tls
 // true upgrades it to TLS (the certificate is verified unless :verify false).
 IOPRIM(prim_tcp_connect) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n < 2) arity(ctx, n, "tcp-connect");
     const std::string host = stringArg(ctx, arg(ctx, args, 0), "tcp-connect");
     const int port = portArg(ctx, arg(ctx, args, 1), "tcp-connect");
@@ -1412,7 +1412,7 @@ IOPRIM(prim_tcp_connect) {
 // (tcp-listen port) / (tcp-listen host port): a listening socket (an empty
 // host, the default, listens on every interface; port 0 picks a free port).
 IOPRIM(prim_tcp_listen) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n < 1 || n > 2) arity(ctx, n, "tcp-listen");
     const std::string host = n == 2 ? stringArg(ctx, arg(ctx, args, 0), "tcp-listen") : "";
     const int port = portArg(ctx, arg(ctx, args, n - 1), "tcp-listen");
@@ -1427,7 +1427,7 @@ IOPRIM(prim_tcp_listen) {
 // (tcp-accept server) / (tcp-accept server timeout-ms): the next connection,
 // or nil when the timeout elapsed first or the socket was closed.
 IOPRIM(prim_tcp_accept) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n < 1 || n > 2) arity(ctx, n, "tcp-accept");
     const int fd = openFd(ctx, arg(ctx, args, 0), "tcp-accept", {HandleKind::ServerSocket});
     const int timeout = n == 2 ? static_cast<int>(longArg(ctx, arg(ctx, args, 1), "tcp-accept")) : -1;
@@ -1450,7 +1450,7 @@ IOPRIM(prim_tcp_accept) {
 // (udp-socket) / (udp-socket port) / (udp-socket host port): a bound UDP
 // socket.
 IOPRIM(prim_udp_socket) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n > 2) arity(ctx, n, "udp-socket");
     const std::string host = n == 2 ? stringArg(ctx, arg(ctx, args, 0), "udp-socket") : "";
     const int port = n >= 1 ? portArg(ctx, arg(ctx, args, n - 1), "udp-socket") : 0;
@@ -1464,7 +1464,7 @@ IOPRIM(prim_udp_socket) {
 
 // (udp-send sock host port data): sends one datagram with (str data); nil.
 IOPRIM(prim_udp_send) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n != 4) arity(ctx, n, "udp-send");
     const int fd = openFd(ctx, arg(ctx, args, 0), "udp-send", {HandleKind::UdpSocket});
     const std::string host = stringArg(ctx, arg(ctx, args, 1), "udp-send");
@@ -1477,7 +1477,7 @@ IOPRIM(prim_udp_send) {
 // (udp-receive sock) / (udp-receive sock timeout-ms): the next datagram as
 // {:data "..." :host "..." :port n}, or nil when the timeout elapsed first.
 IOPRIM(prim_udp_receive) {
-    const unsigned long n = argCount(ctx, args);
+    const proto::proto_ulong n = argCount(ctx, args);
     if (n < 1 || n > 2) arity(ctx, n, "udp-receive");
     const int fd = openFd(ctx, arg(ctx, args, 0), "udp-receive", {HandleKind::UdpSocket});
     const int timeout = n == 2 ? static_cast<int>(longArg(ctx, arg(ctx, args, 1), "udp-receive")) : -1;

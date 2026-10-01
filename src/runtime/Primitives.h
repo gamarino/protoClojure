@@ -21,6 +21,8 @@
 #include <cstdio>
 #include <string>
 
+#include "protoCore.h"  // proto::proto_long / proto_ulong
+
 namespace proto {
 class ProtoContext;
 class ProtoObject;
@@ -71,13 +73,13 @@ void installPrimitives(proto::ProtoContext* ctx,
 // call.
 inline bool isNumber([[maybe_unused]] proto::ProtoContext* ctx,
                      const proto::ProtoObject* v) {
-    constexpr unsigned long kSmallIntMask     = 0x3FFUL;
-    constexpr unsigned long kSmallIntValue    = 0x001UL;
-    constexpr unsigned long kPointerTagMask   = 0x3FUL;
-    constexpr unsigned long kTagLargeInteger  = 14;
-    constexpr unsigned long kTagDouble        = 15;
-    const auto bits = reinterpret_cast<unsigned long>(v);
-    const unsigned long tag = bits & kPointerTagMask;
+    constexpr proto::proto_ulong kSmallIntMask     = PROTO_UL(0x3FF);
+    constexpr proto::proto_ulong kSmallIntValue    = PROTO_UL(0x001);
+    constexpr proto::proto_ulong kPointerTagMask   = PROTO_UL(0x3F);
+    constexpr proto::proto_ulong kTagLargeInteger  = 14;
+    constexpr proto::proto_ulong kTagDouble        = 15;
+    const auto bits = reinterpret_cast<proto::proto_ulong>(v);
+    const proto::proto_ulong tag = bits & kPointerTagMask;
     return (bits & kSmallIntMask) == kSmallIntValue ||
            (v != nullptr && (tag == kTagDouble || tag == kTagLargeInteger));
 }

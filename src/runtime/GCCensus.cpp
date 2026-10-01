@@ -38,14 +38,14 @@ void GCCensus::sample() {
         std::this_thread::sleep_for(std::chrono::microseconds(200));
         const std::uint64_t now = space_.getGCCycleCount();
         if (now == last) continue;
-        const unsigned long r = space_.reclaimedLastCycle.load();
+        const proto::proto_ulong r = space_.reclaimedLastCycle.load();
         reclaimedTotal_ += r;
         reclaimedMax_ = std::max(reclaimedMax_, r);
         ++observedCycles_;
         last = now;
     }
     // The cycle in flight when sampling stopped, if it has since published.
-    const unsigned long tail = space_.reclaimedLastCycle.load();
+    const proto::proto_ulong tail = space_.reclaimedLastCycle.load();
     if (space_.getGCCycleCount() != last) {
         reclaimedTotal_ += tail;
         ++observedCycles_;
@@ -58,11 +58,12 @@ GCCensus::~GCCensus() {
     stop_.store(true, std::memory_order_relaxed);
     if (sampler_.joinable()) sampler_.join();
 
-    const unsigned long mean =
-        observedCycles_ ? reclaimedTotal_ / observedCycles_ : 0UL;
+    const proto::proto_ulong mean =
+        observedCycles_ ? reclaimedTotal_ / observedCycles_ : PROTO_UL(0);
     std::fprintf(stderr,
-                 "protoclj gc: cycles=%llu reclaimed-total=%lu "
-                 "reclaimed-max=%lu reclaimed-mean=%lu live-last=%lu "
+                 "protoclj gc: cycles=%llu reclaimed-total=%" PROTO_FMT_U " "
+                 "reclaimed-max=%" PROTO_FMT_U " reclaimed-mean=%" PROTO_FMT_U
+                 " live-last=%" PROTO_FMT_U " "
                  "heap=%d heap-start=%d\n",
                  static_cast<unsigned long long>(space_.getGCCycleCount()),
                  reclaimedTotal_, reclaimedMax_, mean,

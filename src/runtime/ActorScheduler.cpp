@@ -258,8 +258,8 @@ void ActorScheduler::workerLoop(proto::ProtoContext* ctx) {
             for (int band = 0; band < 3; ++band) {
                 const proto::ProtoList* batch =
                     turn.getAutomaticLocal(band)->asList(&turn);
-                const unsigned long count = batch->getSize(&turn);
-                for (unsigned long at = 0; at < count; ++at) {
+                const proto::proto_ulong count = batch->getSize(&turn);
+                for (proto::proto_ulong at = 0; at < count; ++at) {
                     const proto::ProtoList* msg =
                         batch->getAt(&turn, (int)at)->asList(&turn);
                     const proto::ProtoObject* fn = msg->getAt(&turn, message::kFn);
@@ -274,9 +274,9 @@ void ActorScheduler::workerLoop(proto::ProtoContext* ctx) {
                         buf[0] = actor->value ? actor->value : PROTO_NONE;
                         if (margs && margs != PROTO_NONE) {
                             const proto::ProtoList* alist = margs->asList(&turn);
-                            unsigned long an = alist->getSize(&turn);
+                            proto::proto_ulong an = alist->getSize(&turn);
                             if (an > 15) an = 15;
-                            for (unsigned long i = 0; i < an; ++i) {
+                            for (proto::proto_ulong i = 0; i < an; ++i) {
                                 buf[total++] = alist->getAt(&turn, (int)i);
                             }
                         }
