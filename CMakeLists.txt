@@ -16,6 +16,28 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 include(GNUInstallDirs)
 
+# Compiler and platform differences, gathered here so the targets below read the
+# same on every platform. Outside Windows these are the flags the build always
+# used.
+if(MSVC)
+    # Sources are UTF-8; the VM and primitives are large translation units.
+    add_compile_options(/utf-8 /bigobj)
+    # The sources mark inlining for GCC and Clang with gnu:: attributes, which
+    # MSVC ignores (C5030), and use the standard C library (getenv, C4996).
+    add_compile_options(/wd5030)
+    add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+    set(PROTOCLJ_WARNINGS /W3)
+else()
+    set(PROTOCLJ_WARNINGS -Wall -Wextra -Wpedantic)
+endif()
+if(WIN32)
+    # Windows has no rpath: a program finds its DLLs next to itself, so every
+    # executable and DLL of the build goes to one directory.
+    if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+        set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    endif()
+endif()
+
 # --- protoCore -----------------------------------------------------------------
 # Resolution order (Phase I, decision D-I1):
 #   1. An installed protoCore CMake package: find_package(protoCore 2.6.1 CONFIG).
@@ -62,7 +84,7 @@ else()
     if(DEFINED PROTO_CORE_PREFIX)
         set(_protoCore_where " under ${PROTO_CORE_PREFIX}")
     endif()
-    if(DEFINED PROTO_CORE_PREFIX OR PROTOCORE_REQUIRE_PACKAGE)
+    if(DEFINED PROTO_CORE_PREFIX OR PROTOCORE_REQUIRE_PACKAGE OR WIN32)
         message(FATAL_ERROR
             "No protoCore >= ${PROTOCORE_MIN_VERSION_FULL} CMake package was "
             "found${_protoCore_where}.\n"
@@ -73,7 +95,9 @@ else()
             "    cmake -S ../protoCore -B ../protoCore/build_release "
             "-DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=<prefix>\n"
             "    cmake --build ../protoCore/build_release --target protoCore\n"
-            "    cmake --install ../protoCore/build_release --component protoCore")
+            "    cmake --install ../protoCore/build_release --component protoCore\n"
+            "  (On Windows only an installed package is supported: name its prefix "
+            "with -DCMAKE_PREFIX_PATH=<prefix>.)")
     endif()
     unset(_protoCore_where)
     message(WARNING
@@ -140,7 +164,7 @@ add_library(protoclj_support STATIC
     src/runtime/StackGuard.cpp
 )
 target_link_libraries(protoclj_support PUBLIC ${PROTOCORE_LIBRARY})
-target_compile_options(protoclj_support PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(protoclj_support PRIVATE ${PROTOCLJ_WARNINGS})
 
 # --- protoClojure reader library ---
 add_library(protoclj_reader STATIC
@@ -148,7 +172,7 @@ add_library(protoclj_reader STATIC
     src/reader/Reader.cpp
 )
 target_link_libraries(protoclj_reader PUBLIC ${PROTOCORE_LIBRARY} protoclj_support)
-target_compile_options(protoclj_reader PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(protoclj_reader PRIVATE ${PROTOCLJ_WARNINGS})
 
 # --- protoClojure runtime library (bytecode, VM, primitives) ---
 add_library(protoclj_runtime STATIC
@@ -165,14 +189,14 @@ add_library(protoclj_runtime STATIC
 )
 target_link_libraries(protoclj_runtime PUBLIC ${PROTOCORE_LIBRARY} protoclj_support
                                         PRIVATE protoIO::protoio)
-target_compile_options(protoclj_runtime PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(protoclj_runtime PRIVATE ${PROTOCLJ_WARNINGS})
 
 # --- protoClojure compiler library ---
 add_library(protoclj_compiler STATIC
     src/compiler/Compiler.cpp
 )
 target_link_libraries(protoclj_compiler PUBLIC protoclj_runtime)
-target_compile_options(protoclj_compiler PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(protoclj_compiler PRIVATE ${PROTOCLJ_WARNINGS})
 
 # --- protoClojure REPL library ---
 # libreadline is a hard requirement of the REPL (history, arrow-key
@@ -180,7 +204,12 @@ target_compile_options(protoclj_compiler PRIVATE -Wall -Wextra -Wpedantic)
 # present on every modern Linux + macOS Homebrew distribution.
 find_library(READLINE_LIBRARY NAMES readline)
 find_path(READLINE_INCLUDE_DIR NAMES readline/readline.h)
-if(NOT READLINE_LIBRARY OR NOT READLINE_INCLUDE_DIR)
+if(WIN32 AND (NOT READLINE_LIBRARY OR NOT READLINE_INCLUDE_DIR))
+    # The Windows console edits the line and keeps a history itself, so the
+    # REPL reads plain lines there (src/repl/Repl.cpp, PROTOCLJ_NO_READLINE).
+    message(STATUS "protoClojure: no readline; the REPL uses the console's own line editing")
+    set(PROTOCLJ_NO_READLINE ON)
+elseif(NOT READLINE_LIBRARY OR NOT READLINE_INCLUDE_DIR)
     message(FATAL_ERROR
         "libreadline not found. Install it (Debian/Ubuntu: libreadline-dev; "
         "Fedora/RHEL: readline-devel; macOS: brew install readline).")
@@ -188,22 +217,65 @@ endif()
 add_library(protoclj_repl STATIC
     src/repl/Repl.cpp
 )
-target_include_directories(protoclj_repl PRIVATE "${READLINE_INCLUDE_DIR}")
-target_link_libraries(protoclj_repl
-    PUBLIC  protoclj_compiler protoclj_reader protoclj_runtime
-    PRIVATE "${READLINE_LIBRARY}")
-target_compile_options(protoclj_repl PRIVATE -Wall -Wextra -Wpedantic)
+if(PROTOCLJ_NO_READLINE)
+    target_compile_definitions(protoclj_repl PRIVATE PROTOCLJ_NO_READLINE)
+    target_link_libraries(protoclj_repl
+        PUBLIC  protoclj_compiler protoclj_reader protoclj_runtime)
+else()
+    target_include_directories(protoclj_repl PRIVATE "${READLINE_INCLUDE_DIR}")
+    target_link_libraries(protoclj_repl
+        PUBLIC  protoclj_compiler protoclj_reader protoclj_runtime
+        PRIVATE "${READLINE_LIBRARY}")
+endif()
+target_compile_options(protoclj_repl PRIVATE ${PROTOCLJ_WARNINGS})
 
 # --- protoClojure binary ---
 add_executable(protoclj
     src/main.cpp
 )
+if(WIN32)
+    # UTF-8 process code page: argv, getenv and paths are UTF-8 as elsewhere.
+    target_sources(protoclj PRIVATE src/windows/utf8.manifest)
+endif()
+if(MSVC)
+    # The Windows counterpart of configureThreadStacks (StackGuard.h): every
+    # thread created without an explicit size (std::thread, so protoCore's
+    # future, pmap and actor threads) reserves the stack size in the
+    # executable's header. 32 MiB = protoClojure::kThreadStackBytes; pages are
+    # committed only as a recursion touches them.
+    target_link_options(protoclj PRIVATE /STACK:33554432)
+endif()
 target_link_libraries(protoclj PRIVATE
     protoclj_repl
     protoclj_reader
     protoclj_compiler
     protoclj_runtime)
-target_compile_options(protoclj PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(protoclj PRIVATE ${PROTOCLJ_WARNINGS})
+
+# Windows finds a DLL next to the program that loads it. Copy the DLLs
+# protoClojure needs -- protoCore, and OpenSSL through protoIO -- into the
+# build's bin/, so protoclj and the unit tests run in place.
+if(WIN32)
+    set(PROTOCLJ_RUNTIME_DLLS "")
+    if(TARGET ${PROTOCORE_LIBRARY})
+        list(APPEND PROTOCLJ_RUNTIME_DLLS "$<TARGET_FILE:${PROTOCORE_LIBRARY}>")
+    endif()
+    set(PROTOCLJ_OPENSSL_DLLS "")
+    if(OPENSSL_INCLUDE_DIR)
+        get_filename_component(PROTOCLJ_OPENSSL_BIN "${OPENSSL_INCLUDE_DIR}/../bin" ABSOLUTE)
+        file(GLOB PROTOCLJ_OPENSSL_DLLS
+            "${PROTOCLJ_OPENSSL_BIN}/libcrypto*.dll" "${PROTOCLJ_OPENSSL_BIN}/libssl*.dll")
+    endif()
+    list(APPEND PROTOCLJ_RUNTIME_DLLS ${PROTOCLJ_OPENSSL_DLLS})
+    # A target every library depends on, not a post-build step of protoclj:
+    # the unit tests are run to list their tests as soon as they are linked.
+    add_custom_target(protoclj_runtime_dlls
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PROTOCLJ_RUNTIME_DLLS}
+                "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+        VERBATIM)
+    add_dependencies(protoclj_support protoclj_runtime_dlls)
+endif()
 
 # --- Tests ---
 enable_testing()
@@ -234,6 +306,14 @@ endif()
 install(TARGETS protoclj
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT protoClojure)
+# protoIO is linked in statically, but OpenSSL is a DLL on Windows: install it
+# next to protoclj.exe, where Windows looks for it. (protoCore is a package of
+# its own and installs its DLL into its own prefix's bin/.)
+if(WIN32 AND PROTOCLJ_OPENSSL_DLLS)
+    install(FILES ${PROTOCLJ_OPENSSL_DLLS}
+        DESTINATION ${CMAKE_INSTALL_BINDIR}
+        COMPONENT protoClojure)
+endif()
 
 # License and documentation (Markdown only — sources, specs, internal notes
 # stay in the repo).
@@ -337,7 +417,9 @@ elseif(UNIX)
         "protoCore >= ${PROTOCORE_MIN_VERSION_FULL}, protoCore < ${PROTOCORE_NEXT_MAJOR}")
 elseif(WIN32)
     # Windows NSIS installer + plain ZIP.
-    # UNVERIFIED: configured and reviewed, never built - no Windows host (D-I6).
+    # The ZIP was built and run on Windows 11 / MSVC 19.44 (`cpack -G ZIP`:
+    # protoclj.exe and the OpenSSL DLLs; protoCore's DLL comes with protoCore's
+    # own package). The NSIS installer is configured but has not been built.
     set(CPACK_GENERATOR "NSIS;ZIP")
     set(CPACK_NSIS_HELP_LINK     "https://github.com/gamarino/protoClojure")
     set(CPACK_NSIS_URL_INFO_ABOUT "https://github.com/gamarino/protoClojure")

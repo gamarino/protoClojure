@@ -1,0 +1,6 @@
+# Sources whose line endings are part of their meaning stay LF on every
+# platform: a multi-line string literal in a .clj file keeps its line endings,
+# and bash refuses a script with CRLF ones. Without this a Windows checkout
+# with core.autocrlf=true would change what programs and fixtures mean.
+*.clj text eol=lf
+*.sh  text eol=lf

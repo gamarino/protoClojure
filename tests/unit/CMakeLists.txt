@@ -17,7 +17,7 @@ add_executable(protoclj_unit_tests
 target_link_libraries(protoclj_unit_tests
     PRIVATE protoclj_reader protoclj_runtime gtest gtest_main)
 
-target_compile_options(protoclj_unit_tests PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_options(protoclj_unit_tests PRIVATE ${PROTOCLJ_WARNINGS})
 
 include(GoogleTest)
 gtest_discover_tests(protoclj_unit_tests)
