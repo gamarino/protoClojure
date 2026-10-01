@@ -427,13 +427,19 @@ struct HttpServer {
     const proto::ProtoThread* acceptThread = nullptr;
     std::atomic<bool> stopping{false};
     std::atomic<bool> joined{false};
-#if defined(_WIN32)
+#if defined(_WIN32) || defined(__APPLE__)
     std::atomic<bool> inAccept{false};           // the accept thread is in tcpAccept
 #endif
     std::mutex mutex;                            // guards the fields below
     bool listenClosed = false;
     std::vector<std::shared_ptr<Connection>> connections;
 };
+
+#if defined(__APPLE__)
+// How long the accept thread waits in one tcpAccept call before it looks at
+// `stopping` again (see requestStop).
+constexpr int kAcceptSliceMs = 50;
+#endif
 
 std::mutex g_serversMutex;
 std::vector<std::unique_ptr<HttpServer>> g_servers;  // never shrinks: states live for the process
@@ -472,6 +478,28 @@ void requestStop(HttpServer* s) {
     // within one slice. Until then Windows still queues new connections on
     // it, and resets them when it goes; on Linux they are refused at once.
     // Wait for it, so that a client is refused once stop-server returned.
+    while (s->inAccept.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+#elif defined(__APPLE__)
+    // macOS: a shutdown does not wake a poll on a listening socket, nor make
+    // it refuse connections (it answers ENOTCONN), so the listener must be
+    // closed. Not while the accept thread may be entering or inside
+    // tcpAccept: protoio::close releases the descriptor number as soon as no
+    // protoIO call holds it, and a call about to start could then use a
+    // number reused by someone else. So the listener is closed here only when
+    // the accept thread is outside tcpAccept (s->mutex orders this against
+    // its entry); otherwise the accept thread, which waits in short slices
+    // (kAcceptSliceMs), closes it as it leaves the call, and this waits for
+    // that, so that a client is refused once stop-server returned. A shutdown
+    // does wake a read on a connected socket, as on Linux.
+    if (!s->listenClosed && !s->inAccept.load()) {
+        s->listenClosed = true;
+        protoio::close(s->listenFd);
+    }
+    for (const auto& c : s->connections) {
+        std::lock_guard<std::mutex> cl(c->mutex);
+        if (!c->closed && c->reading) ::shutdown(c->fd, SHUT_RDWR);
+    }
+    lock.unlock();
     while (s->inAccept.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
 #else
     if (!s->listenClosed) ::shutdown(s->listenFd, SHUT_RDWR);
@@ -761,8 +789,32 @@ const PO* acceptMain(proto::ProtoContext* ctx, const PO*, const proto::ParentLin
                 ~InAccept() { flag.store(false); }
             } inAccept(s->inAccept);
             if (s->stopping.load()) break;
-#endif
             accepted = protoio::net::tcpAccept(s->listenFd, -1);
+#elif defined(__APPLE__)
+            // See requestStop. Entering and leaving tcpAccept are ordered
+            // against it by s->mutex; whoever sees the other side last
+            // closes the listener. Cleared before the scope ends, as on
+            // Windows.
+            {
+                std::lock_guard<std::mutex> lock(s->mutex);
+                if (s->stopping.load()) break;
+                s->inAccept.store(true);
+            }
+            struct InAccept {
+                HttpServer* s;
+                ~InAccept() {
+                    std::lock_guard<std::mutex> lock(s->mutex);
+                    if (s->stopping.load() && !s->listenClosed) {
+                        s->listenClosed = true;
+                        protoio::close(s->listenFd);
+                    }
+                    s->inAccept.store(false);
+                }
+            } inAccept{s};
+            accepted = protoio::net::tcpAccept(s->listenFd, kAcceptSliceMs);
+#else
+            accepted = protoio::net::tcpAccept(s->listenFd, -1);
+#endif
         } catch (const protoio::Error& e) {
             if (s->stopping.load()) break;
             report(std::string("run-server: accept failed: ") + e.what());
