@@ -17,10 +17,13 @@
 #include <protoio/process.h>
 #include <protoio/stream.h>
 
+#if !defined(_WIN32)
 #include <sys/socket.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
@@ -30,6 +33,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -423,6 +427,9 @@ struct HttpServer {
     const proto::ProtoThread* acceptThread = nullptr;
     std::atomic<bool> stopping{false};
     std::atomic<bool> joined{false};
+#if defined(_WIN32)
+    std::atomic<bool> inAccept{false};           // the accept thread is in tcpAccept
+#endif
     std::mutex mutex;                            // guards the fields below
     bool listenClosed = false;
     std::vector<std::shared_ptr<Connection>> connections;
@@ -439,12 +446,40 @@ thread_local HttpServer* t_servingFor = nullptr;    // the server whose handler 
 // only shuts the sockets down, which wakes a blocked accept or read.
 void requestStop(HttpServer* s) {
     if (s->stopping.exchange(true)) return;
-    std::lock_guard<std::mutex> lock(s->mutex);
+    std::unique_lock<std::mutex> lock(s->mutex);
+#if defined(_WIN32)
+    // Windows: a shutdown wakes neither a blocked accept nor a blocked read.
+    // protoIO waits there in short WSAPoll slices and watches the
+    // descriptor's closed flag, which only protoio::close sets, so the
+    // sockets are closed here instead, and marked so that their own threads
+    // leave them alone. This keeps the rule above: the state a waiting
+    // protoIO call holds keeps its socket open until the call returns, and
+    // protoIO numbers Windows sockets itself and does not reuse a number
+    // until it wraps around, so a later use of the old number fails cleanly.
+    if (!s->listenClosed) {
+        s->listenClosed = true;
+        protoio::close(s->listenFd);
+    }
+    for (const auto& c : s->connections) {
+        std::lock_guard<std::mutex> cl(c->mutex);
+        if (!c->closed && c->reading) {
+            c->closed = true;
+            protoio::close(c->fd);
+        }
+    }
+    lock.unlock();
+    // The listening socket is released when the waiting tcpAccept returns,
+    // within one slice. Until then Windows still queues new connections on
+    // it, and resets them when it goes; on Linux they are refused at once.
+    // Wait for it, so that a client is refused once stop-server returned.
+    while (s->inAccept.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+#else
     if (!s->listenClosed) ::shutdown(s->listenFd, SHUT_RDWR);
     for (const auto& c : s->connections) {
         std::lock_guard<std::mutex> cl(c->mutex);
         if (!c->closed && c->reading) ::shutdown(c->fd, SHUT_RDWR);
     }
+#endif
 }
 
 // Joins the connection threads that finished (all of them with `all`).
@@ -471,6 +506,18 @@ void closeConnection(Connection* c) {
     if (c->closed) return;
     c->closed = true;
     protoio::close(c->fd);
+}
+
+// The host a listening socket binds when none was named: every interface.
+// protoIO resolves the empty host to the wildcard addresses and binds the
+// first. Linux lists 0.0.0.0 first; Windows lists :: first, and a Windows
+// IPv6 socket is IPv6-only by default, so a server there would not answer
+// 127.0.0.1. Naming 0.0.0.0 on Windows binds what Linux binds.
+std::string listenHost(const std::string& host) {
+#if defined(_WIN32)
+    if (host.empty()) return "0.0.0.0";
+#endif
+    return host;
 }
 
 void report(const std::string& text) {
@@ -705,6 +752,16 @@ const PO* acceptMain(proto::ProtoContext* ctx, const PO*, const proto::ParentLin
         std::optional<int> accepted;
         try {
             proto::ProtoContext::UnmanagedScope out(ctx);
+#if defined(_WIN32)
+            // Cleared before the scope ends: requestStop waits for it without
+            // reaching a safepoint.
+            struct InAccept {
+                std::atomic<bool>& flag;
+                explicit InAccept(std::atomic<bool>& f) : flag(f) { flag.store(true); }
+                ~InAccept() { flag.store(false); }
+            } inAccept(s->inAccept);
+            if (s->stopping.load()) break;
+#endif
             accepted = protoio::net::tcpAccept(s->listenFd, -1);
         } catch (const protoio::Error& e) {
             if (s->stopping.load()) break;
@@ -736,8 +793,10 @@ const PO* acceptMain(proto::ProtoContext* ctx, const PO*, const proto::ParentLin
     joinConnections(ctx, s, /*all=*/true);
     {
         std::lock_guard<std::mutex> lock(s->mutex);
-        s->listenClosed = true;
-        protoio::close(s->listenFd);
+        if (!s->listenClosed) {
+            s->listenClosed = true;
+            protoio::close(s->listenFd);
+        }
     }
     clearActiveCallContext();
     return PROTO_NONE;
@@ -1078,21 +1137,42 @@ IOPRIM(prim_copy) {
 
 // Searches `cmd` in PATH as posix_spawnp would; true when it names an
 // executable file.
-bool commandExists(const std::string& cmd) {
+bool commandExists(const std::string& cmd, std::string* found = nullptr) {
     auto executable = [](const std::string& p) {
         const auto st = protoio::file::stat(p);
         return st && st->isFile;
     };
+#if defined(_WIN32)
+    // Windows: PATH is ';'-separated, either slash separates directories, and
+    // a program may be named without its ".exe", which CreateProcess (and so
+    // protoIO's run) appends.
+    auto program = [&](const std::string& p) {
+        for (const std::string& name : {p, p + ".exe"}) {
+            if (!executable(name)) continue;
+            if (found) *found = name;
+            return true;
+        }
+        return false;
+    };
+    if (cmd.find_first_of("/\\") != std::string::npos) return program(cmd);
+    const auto path = protoio::process::getenv("PATH");
+    const std::string dirs = path ? *path : "";
+    constexpr char kPathListSeparator = ';';
+#else
+    (void)found;  // the found path is only needed on Windows
+    auto program = executable;
     if (cmd.find('/') != std::string::npos) return executable(cmd);
     const auto path = protoio::process::getenv("PATH");
     const std::string dirs = path ? *path : "/usr/local/bin:/usr/bin:/bin";
+    constexpr char kPathListSeparator = ':';
+#endif
     std::size_t start = 0;
     for (;;) {
-        const std::size_t colon = dirs.find(':', start);
+        const std::size_t colon = dirs.find(kPathListSeparator, start);
         std::string dir = dirs.substr(start, colon == std::string::npos ? std::string::npos
                                                                         : colon - start);
         if (dir.empty()) dir = ".";
-        if (executable(dir + "/" + cmd)) return true;
+        if (program(dir + "/" + cmd)) return true;
         if (colon == std::string::npos) return false;
         start = colon + 1;
     }
@@ -1139,12 +1219,29 @@ IOPRIM(prim_sh) {
                 throw protoio::Error(Kind::Process, "Cannot run program \"" + argv[0] +
                                      "\" (in directory \"" + *dir + "\"): No such file or directory", 2);
         }
+#if defined(_WIN32)
+        // `env -i` (Git for Windows') cannot search a PATH it has just
+        // cleared: give it the program's full path.
+        std::string found;
+        if (!commandExists(argv[0], &found))
+            throw protoio::Error(Kind::Process, "Cannot run program \"" + argv[0] +
+                                 "\": No such file or directory", 2);
+        if (env) argv[0] = found;
+#else
         if (!commandExists(argv[0]))
             throw protoio::Error(Kind::Process, "Cannot run program \"" + argv[0] +
                                  "\": No such file or directory", 2);
+#endif
         std::vector<std::string> full;
         if (dir) {
+#if defined(_WIN32)
+            // Windows has no /bin/sh: the `sh` and `env` on PATH (Git for
+            // Windows ships both) do the same, until protoIO's run can set a
+            // child's directory and environment itself.
+            full = {"sh", "-c", "cd -- \"$0\" && exec \"$@\"", *dir};
+#else
             full = {"/bin/sh", "-c", "cd -- \"$0\" && exec \"$@\"", *dir};
+#endif
         }
         if (env) {
             full.push_back("env");
@@ -1334,7 +1431,7 @@ IOPRIM(prim_run_server) {
     server->cc = callContext();
     server->host = host;
     const std::pair<int, int> bound = blocking(ctx, [&] {
-        const int fd = protoio::net::tcpListen(host, port);
+        const int fd = protoio::net::tcpListen(listenHost(host), port);
         return std::make_pair(fd, protoio::net::sockName(fd).port);
     });
     server->listenFd = bound.first;
@@ -1417,7 +1514,7 @@ IOPRIM(prim_tcp_listen) {
     const std::string host = n == 2 ? stringArg(ctx, arg(ctx, args, 0), "tcp-listen") : "";
     const int port = portArg(ctx, arg(ctx, args, n - 1), "tcp-listen");
     const std::pair<int, int> bound = blocking(ctx, [&] {
-        const int fd = protoio::net::tcpListen(host, port);
+        const int fd = protoio::net::tcpListen(listenHost(host), port);
         return std::make_pair(fd, protoio::net::sockName(fd).port);
     });
     return newHandle(ctx, HandleKind::ServerSocket, bound.first,

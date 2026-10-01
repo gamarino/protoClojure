@@ -1,7 +1,13 @@
 #include "StackGuard.h"
 
+#if defined(_WIN32)
+#define NOMINMAX
+#include <windows.h>
+#include <process.h>
+#else
 #include <pthread.h>
 #include <signal.h>
+#endif
 
 #include <algorithm>
 #include <exception>
@@ -42,6 +48,12 @@ bool currentThreadStack(std::uintptr_t* lowest, std::size_t* size) {
     *lowest = reinterpret_cast<std::uintptr_t>(address);
     *size = bytes;
     return true;
+#elif defined(_WIN32)
+    ULONG_PTR low = 0, high = 0;
+    GetCurrentThreadStackLimits(&low, &high);
+    *lowest = static_cast<std::uintptr_t>(low);
+    *size = static_cast<std::size_t>(high - low);
+    return *size > 0;
 #else
     (void)lowest;
     (void)size;
@@ -111,6 +123,39 @@ void configureThreadStacks() {
 #endif
 }
 
+#if defined(_WIN32)
+// Windows: the thread's stack is reserved with kThreadStackBytes and committed
+// as it grows. There are no asynchronous signals to redirect: the console's
+// Ctrl+C handler runs on a thread of its own.
+int runOnEvaluatorThread(int (*body)(void*), void* arg) {
+    struct Job {
+        int (*body)(void*);
+        void* arg;
+        int result;
+        std::exception_ptr error;
+    } job{body, arg, 1, nullptr};
+
+    const auto entry = [](void* p) -> unsigned {
+        auto* j = static_cast<Job*>(p);
+        try {
+            j->result = j->body(j->arg);
+        } catch (...) {
+            j->error = std::current_exception();
+        }
+        return 0;
+    };
+    const auto handle = reinterpret_cast<HANDLE>(_beginthreadex(
+        nullptr, static_cast<unsigned>(kThreadStackBytes),
+        static_cast<unsigned (__stdcall*)(void*)>(entry), &job,
+        STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr));
+    if (!handle) return body(arg);
+    WaitForSingleObject(handle, INFINITE);
+    CloseHandle(handle);
+
+    if (job.error) std::rethrow_exception(job.error);
+    return job.result;
+}
+#else
 int runOnEvaluatorThread(int (*body)(void*), void* arg) {
     struct Job {
         int (*body)(void*);
@@ -149,5 +194,6 @@ int runOnEvaluatorThread(int (*body)(void*), void* arg) {
     if (job.error) std::rethrow_exception(job.error);
     return job.result;
 }
+#endif
 
 } // namespace protoClojure

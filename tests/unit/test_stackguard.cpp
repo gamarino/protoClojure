@@ -7,7 +7,15 @@
 
 #include <gtest/gtest.h>
 
+#if defined(_WIN32)
+#define NOMINMAX
+#include <windows.h>
+#include <process.h>
+// rpcndr.h, included by windows.h, defines `small` as `char`.
+#undef small
+#else
 #include <pthread.h>
+#endif
 
 #include <cstddef>
 #include <string>
@@ -43,6 +51,28 @@ struct Probe {
 Probe probeThread(std::size_t stackBytes, StackUse use = StackUse::Evaluation) {
     Probe probe;
     probe.use = use;
+#if defined(_WIN32)
+    // The stack is reserved with exactly `stackBytes`, as pthread_attr_setstacksize does.
+    const auto handle = reinterpret_cast<HANDLE>(_beginthreadex(
+        nullptr, static_cast<unsigned>(stackBytes),
+        [](void* p) -> unsigned {
+            auto* pr = static_cast<Probe*>(p);
+            try {
+                recurse(pr->depth, pr->use);
+            } catch (const StackOverflowError& e) {
+                pr->overflowed = true;
+                pr->message = e.what();
+            }
+            return 0;
+        },
+        &probe, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr));
+    EXPECT_NE(handle, nullptr);
+    if (handle) {
+        WaitForSingleObject(handle, INFINITE);
+        CloseHandle(handle);
+    }
+    return probe;
+#else
     pthread_attr_t attr;
     EXPECT_EQ(pthread_attr_init(&attr), 0);
     EXPECT_EQ(pthread_attr_setstacksize(&attr, stackBytes), 0);
@@ -63,6 +93,7 @@ Probe probeThread(std::size_t stackBytes, StackUse use = StackUse::Evaluation) {
     EXPECT_EQ(rc, 0);
     if (rc == 0) pthread_join(thread, nullptr);
     return probe;
+#endif
 }
 
 TEST(StackGuard, ExhaustedStackRaisesStackOverflowError) {
@@ -110,11 +141,17 @@ TEST(StackGuard, EvaluatorThreadHasTheConfiguredStack) {
     std::size_t reported = 0;
     const int result = protoClojure::runOnEvaluatorThread(
         [](void* p) -> int {
+#if defined(_WIN32)
+            ULONG_PTR low = 0, high = 0;
+            GetCurrentThreadStackLimits(&low, &high);
+            const std::size_t bytes = static_cast<std::size_t>(high - low);
+#else
             pthread_attr_t attr;
             if (pthread_getattr_np(pthread_self(), &attr) != 0) return -1;
             std::size_t bytes = 0;
             pthread_attr_getstacksize(&attr, &bytes);
             pthread_attr_destroy(&attr);
+#endif
             *static_cast<std::size_t*>(p) = bytes;
             return 42;
         },
@@ -135,6 +172,11 @@ TEST(StackGuard, EvaluatorThreadRethrowsOnTheCaller) {
 }
 
 TEST(StackGuard, ConfiguredDefaultAppliesToNewThreads) {
+#if defined(_WIN32)
+    // Windows has no process-wide default for new threads' stacks; the guard
+    // still checks every thread against its own stack.
+    GTEST_SKIP() << "no default thread stack size on Windows";
+#else
     protoClojure::configureThreadStacks();
     pthread_attr_t attr;
     ASSERT_EQ(pthread_getattr_default_np(&attr), 0);
@@ -142,6 +184,7 @@ TEST(StackGuard, ConfiguredDefaultAppliesToNewThreads) {
     pthread_attr_getstacksize(&attr, &bytes);
     pthread_attr_destroy(&attr);
     EXPECT_GE(bytes, protoClojure::kThreadStackBytes);
+#endif
 }
 
 } // namespace

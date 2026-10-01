@@ -13,8 +13,23 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <stdexcept>
 #include <vector>
+
+// Inlining directives. GCC and Clang read the gnu:: attributes below; MSVC
+// ignores them, so these macros give it the same instruction (and expand to
+// nothing elsewhere; PROTOCLJ_INLINE is plain `inline` and the lambda one is
+// GCC's own spelling).
+#if defined(_MSC_VER) && !defined(__clang__)
+#define PROTOCLJ_MSVC_NOINLINE     __declspec(noinline)
+#define PROTOCLJ_INLINE            __forceinline
+#define PROTOCLJ_LAMBDA_ALWAYS_INLINE [[msvc::forceinline]]
+#else
+#define PROTOCLJ_MSVC_NOINLINE
+#define PROTOCLJ_INLINE            inline
+#define PROTOCLJ_LAMBDA_ALWAYS_INLINE __attribute__((always_inline))
+#endif
 
 namespace protoClojure {
 
@@ -79,7 +94,7 @@ inline bool smallIntFitsLong(long long v) {
 // A BigInteger constant rebuilt from its digits. Out of line: it is rare, and
 // keeping it out of materialise leaves the PUSH_CONST path of the common
 // kinds as compact as before.
-[[gnu::noinline, gnu::cold]]
+[[gnu::noinline, gnu::cold]] PROTOCLJ_MSVC_NOINLINE
 const proto::ProtoObject* materialiseBigInteger(proto::ProtoContext* ctx,
                                                 const BytecodeModule::Const& c) {
     return ctx->fromString(c.sval.c_str(), 10);
@@ -143,7 +158,7 @@ const proto::ProtoObject* callLookup(proto::ProtoContext* ctx,
 // built so far is rooted in the first pair's slot, which no later chunk
 // reads, before the next chunk allocates. Out of line so the chunk buffer
 // does not enlarge the native frame of every call (StackGuard.h).
-[[gnu::noinline]]
+[[gnu::noinline]] PROTOCLJ_MSVC_NOINLINE
 const proto::ProtoObject* foldKeywordPairs(proto::ProtoContext* frame,
                                            unsigned int firstPairSlot,
                                            unsigned int kvItems) {
@@ -176,7 +191,7 @@ const proto::ProtoObject* foldKeywordPairs(proto::ProtoContext* frame,
 // spreads a list of any length), and appending N times inside this one
 // context used to pin ~N*log2(N) cells until the primitive returned: under a
 // heap ceiling the call ran out of memory with a tiny live set.
-[[gnu::noinline]]
+[[gnu::noinline]] PROTOCLJ_MSVC_NOINLINE
 void packArguments(proto::ProtoContext& scope, unsigned int slot,
                    const proto::ProtoObject* const* args, unsigned int argc) {
     constexpr unsigned int kBulkArgs = 256;
@@ -199,7 +214,7 @@ struct TryHandler {
 // TRY_BEGIN's push, out of line: the vector's growth path inlined into the
 // dispatch loop changed the register allocation of the whole loop and cost
 // +5.5 % instructions on benchmarks/sum-loop.clj, which runs no `try` at all.
-[[gnu::noinline]]
+[[gnu::noinline]] PROTOCLJ_MSVC_NOINLINE
 void pushTryHandler(std::vector<TryHandler>& handlers, const Instr* target,
                     unsigned int sp) {
     handlers.push_back(TryHandler{target, sp});
@@ -286,7 +301,7 @@ void ExecutionEngine::gcSafepointSlow(proto::ProtoContext* ctx) const {
 
 // Declared in ExecutionEngine.h. Defined before its callers, so it inlines
 // into them: the choice costs one flag test and no native frame.
-[[gnu::always_inline]] inline const proto::ProtoObject*
+[[gnu::always_inline]] PROTOCLJ_INLINE const proto::ProtoObject*
 ExecutionEngine::execute(proto::ProtoContext* parent,
                          const BytecodeModule& mod,
                          const ActiveCallContext& env,
@@ -770,7 +785,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
 
     // The dispatch loop. Returns the frame's value at RETURN or at the end
     // of the code.
-    auto dispatchLoop = [&]() __attribute__((always_inline)) -> const proto::ProtoObject* {
+    auto dispatchLoop = [&]() PROTOCLJ_LAMBDA_ALWAYS_INLINE -> const proto::ProtoObject* {
     while (ip < codeEnd) {
         const Instr word = *ip++;
         const Op op = static_cast<Op>(word & 0xFF);
@@ -1248,17 +1263,30 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
         // back to the handler's depth, the exception value is pushed (which
         // roots it in this frame; a ClojureThrow pins it until then,
         // Exceptions.h) and the loop resumes at the handler code.
+        //
+        // With no handler the exception is re-thrown AFTER the catch clause
+        // has completed (std::rethrow_exception), never with `throw;` inside
+        // it. Under the Itanium ABI (Linux, macOS) the two are the same. Under
+        // MSVC a catch clause runs before the stack below it is released, so a
+        // `throw;` inside it would start the next search below the frames
+        // already left behind, and a StackOverflowError raised at depth would
+        // overflow the native stack while propagating.
         for (;;) {
+            std::exception_ptr passOn;
             try {
                 return dispatchLoop();
             } catch (const std::exception& error) {
-                if (handlers.empty()) throw;
-                const TryHandler h = handlers.back();
-                handlers.pop_back();
-                sp = h.sp;
-                pushVal(exceptionFromError(&frame, error));
-                ip = h.target;
+                if (handlers.empty()) {
+                    passOn = std::current_exception();
+                } else {
+                    const TryHandler h = handlers.back();
+                    handlers.pop_back();
+                    sp = h.sp;
+                    pushVal(exceptionFromError(&frame, error));
+                    ip = h.target;
+                }
             }
+            if (passOn) std::rethrow_exception(passOn);
         }
     }
 }

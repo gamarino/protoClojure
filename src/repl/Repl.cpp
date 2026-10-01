@@ -13,6 +13,33 @@
 #include "runtime/Opcodes.h"
 #include "runtime/Primitives.h"
 
+#if defined(PROTOCLJ_NO_READLINE)
+// No libreadline (Windows). The console edits the line and keeps a history of
+// its own, so these stand-ins read a plain line and keep no history file.
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <io.h>
+#include <string>
+#define isatty _isatty
+#define STDIN_FILENO 0
+static char* readline(const char* prompt) {
+    std::fputs(prompt, stdout);
+    std::fflush(stdout);
+    std::string line;
+    int ch;
+    bool any = false;
+    while ((ch = std::getc(stdin)) != EOF && ch != '\n') { any = true; line.push_back(static_cast<char>(ch)); }
+    if (ch == EOF && !any) return nullptr;
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    char* out = static_cast<char*>(std::malloc(line.size() + 1));
+    std::memcpy(out, line.c_str(), line.size() + 1);
+    return out;
+}
+static void add_history(const char*) {}
+static int read_history(const char*) { return 0; }
+static int write_history(const char*) { return 0; }
+#else
 #include <readline/history.h>
 #include <readline/readline.h>
 // readline/chardefs.h defines a `RETURN` macro (= CTRL('M')) which would
@@ -20,6 +47,8 @@
 // care about the enum value.
 #ifdef RETURN
 #  undef RETURN
+#endif
+#include <unistd.h>
 #endif
 
 #include <chrono>
@@ -31,7 +60,6 @@
 #include <memory>
 #include <sstream>
 #include <string>
-#include <unistd.h>
 #include <vector>
 
 namespace protoClojure {

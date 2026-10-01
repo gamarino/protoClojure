@@ -27,6 +27,13 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
+#define NOMINMAX
+#include <windows.h>
+#endif
+
 namespace protoClojure {
 
 const char* versionString() {
@@ -65,7 +72,19 @@ void printHelp() {
 }
 
 std::string slurp(const char* path) {
-    std::ifstream f(path);
+#if defined(_WIN32)
+    // Windows has no /dev/stdin; the name reads standard input there too, so
+    // `... | protoclj /dev/stdin` works as it does on Linux and macOS.
+    if (std::strcmp(path, "/dev/stdin") == 0) {
+        std::string all;
+        char buf[1 << 16];
+        std::size_t got;
+        while ((got = std::fread(buf, 1, sizeof buf, stdin)) > 0) all.append(buf, got);
+        return all;
+    }
+#endif
+    // Binary: the program's bytes exactly, on Windows too (no CRLF folding).
+    std::ifstream f(path, std::ios::binary);
     if (!f) throw std::runtime_error(std::string("cannot open: ") + path);
     std::stringstream ss;
     ss << f.rdbuf();
@@ -306,7 +325,26 @@ int runFile(const char* path, const std::vector<std::string>& scriptArgs) {
 
 } // namespace
 
+namespace {
+
+// Windows: the standard streams carry exactly the bytes the program writes, as
+// on Linux and macOS (no "\n" -> "\r\n" translation), and a console shows and
+// reads them as UTF-8. The process code page is UTF-8 through the manifest
+// (src/windows/utf8.manifest).
+void prepareStandardStreams() {
+#if defined(_WIN32)
+    _setmode(_fileno(stdin), _O_BINARY);
+    _setmode(_fileno(stdout), _O_BINARY);
+    _setmode(_fileno(stderr), _O_BINARY);
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
+}
+
+} // namespace
+
 int main(int argc, char** argv) {
+    prepareStandardStreams();
     // Every non-tail call nests the VM on the native stack, so the stack
     // size bounds the recursion depth. The evaluator runs on a thread with
     // a stack of protoClojure::kThreadStackBytes, and every thread created

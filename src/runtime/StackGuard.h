@@ -80,15 +80,21 @@ void checkNativeStackSlow(std::uintptr_t frameAddress, StackUse use);
 inline void checkNativeStack(StackUse use = StackUse::Evaluation) {
     const char probe = 0;
     const auto frameAddress = reinterpret_cast<std::uintptr_t>(&probe);
+#if defined(_MSC_VER) && !defined(__clang__)
+    if (frameAddress < detail::tl_stackLimit) [[unlikely]]
+        detail::checkNativeStackSlow(frameAddress, use);
+#else
     if (__builtin_expect(frameAddress < detail::tl_stackLimit, 0))
         detail::checkNativeStackSlow(frameAddress, use);
+#endif
 }
 
 // Raises the default stack size of threads created from now on without an
 // explicit size (std::thread, protoCore's newThread) to kThreadStackBytes,
 // unless it is already larger. Call once at start-up, before any thread is
-// created. Only effective with glibc; elsewhere threads keep the platform
-// default and checkNativeStack still guards them.
+// created. Only effective with glibc; on Windows the executable's header
+// sets that default (link option /STACK, CMakeLists.txt); elsewhere threads
+// keep the platform default and checkNativeStack still guards them.
 void configureThreadStacks();
 
 // Runs `body(arg)` on a new thread whose stack holds kThreadStackBytes (or
