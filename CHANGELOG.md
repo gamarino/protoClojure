@@ -8,6 +8,34 @@ The project has no tagged releases yet; the version declared in
 
 ## [Unreleased]
 
+### Added — Windows (MSVC), 2026-10-01
+
+- **Native Windows build.** protoClojure builds with Visual Studio 2022 against
+  an installed protoCore and the sibling protoIO; `protoclj` runs scripts and
+  the REPL natively and installs with `cmake --install` (or `cpack -G ZIP`).
+  503 of 520 tests pass on Windows 11 and one is skipped; the 16 left fail in
+  the Git Bash harness (Git's `mktemp` answers `/tmp` paths, `python3` is the
+  Store stub), not the runtime. Every Windows difference is behind `_WIN32` /
+  `_MSC_VER` / `WIN32`; on Linux the suite passes 520/520 as before, with the
+  same compile and link lines. See docs/INSTALLATION.md, "Windows (MSVC)".
+- The runtime spells protoCore's 64-bit integers `proto::proto_long` /
+  `proto::proto_ulong` (`long` / `unsigned long` outside Windows, where `long`
+  is 32 bits).
+- `.gitattributes` keeps `*.clj` and `*.sh` LF on every platform.
+
+### Fixed
+
+- **`recur` read its target from freed memory when an argument held a fn.**
+  The compiler kept a reference into its scope stack while compiling the
+  arguments; `(recur (+ i 1) (cons (future ...) acc))` pushes a nested scope,
+  which can reallocate that stack. glibc left the old block intact, so Linux
+  never showed it; on Windows it crashed the compiler. The target is copied.
+- **A StackOverflowError could crash the process under MSVC.** A frame with
+  `try` handlers re-threw an exception it does not handle with `throw;` inside
+  its catch clause; it now re-throws with `std::rethrow_exception` after it.
+  The two are equivalent under the Itanium ABI (Linux, macOS); under MSVC a
+  catch clause runs before the stack below it is released.
+
 - **protoCore floor raised to 2.6.1.** The HTTP server creates a thread per connection from its accept thread; before 2.6.1, protoCore's `newThread` could detach a live context's roots when called from another thread. The DEB now depends on `protocore (>= 2.6.1)`.
 
 ### Added

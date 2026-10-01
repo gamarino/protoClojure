@@ -260,6 +260,8 @@ ctest --test-dir build_release -j1           # 520 cases: 407 fixtures + 98 unit
 ./benchmarks/actor-bench.sh                  # actor throughput, varied worker counts
 ```
 
+On **Windows**, protoClojure builds natively with Visual Studio 2022 (MSVC) and runs scripts and the REPL from `cmd.exe` or PowerShell; the steps, and what differs there (no readline, `;`-separated `PATH` for `sh`, the test harness running through Git Bash), are in [docs/INSTALLATION.md — Windows (MSVC)](docs/INSTALLATION.md#windows-msvc).
+
 The benchmark harness expects a Babashka binary at `/tmp/proto-bench/bb` by default; pass the path as the second argument to override:
 
 ```bash
@@ -296,7 +298,7 @@ protoclj --version
 protoclj /usr/share/protoClojure/examples/02-factorial.clj
 ```
 
-Only the TGZ and DEB artifacts have been verified, on Linux. The RPM, macOS and Windows generators are configured but unverified, and no packages are published.
+Only the TGZ and DEB artifacts have been verified on Linux, and the ZIP on Windows 11. The RPM, macOS and NSIS generators are configured but unverified, and no packages are published.
 
 ## Documentation
 

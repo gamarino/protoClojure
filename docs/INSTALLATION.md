@@ -9,12 +9,14 @@ dependency on protoCore's own package instead of shipping a copy.
 
 ## Prerequisites
 
-- A **C++20** compiler (GCC or Clang).
+- A **C++20** compiler (GCC or Clang; MSVC from Visual Studio 2022 on
+  Windows, see [Windows (MSVC)](#windows-msvc)).
 - **CMake** 3.20 or newer.
 - **libreadline** (`libreadline-dev` on Debian/Ubuntu, `readline-devel` on
   Fedora/RHEL, `brew install readline` on macOS). It is a hard requirement: the
   REPL needs history, arrow-key editing and the multi-line continuation prompt,
-  and configuration fails with a `FATAL_ERROR` when it is missing.
+  and configuration fails with a `FATAL_ERROR` when it is missing (except on
+  Windows, where the REPL uses the console's own line editing).
 - **protoCore 2.6.1 or newer**, installed, with its CMake package
   configuration. See protoCore's `docs/INSTALLATION.md`.
 - **protoIO 0.1** (the input and output library shared by the protoCore
@@ -111,6 +113,75 @@ so a protoCore installed into the same prefix is found with no
 
 ---
 
+## Windows (MSVC)
+
+protoClojure builds and runs natively on Windows with Visual Studio 2022 (MSVC
+19.44 verified, Windows 11), using the CMake and Ninja that ship with it. Build
+protoCore first (its `docs/INSTALLATION.md`, "Windows (MSVC)") and install it
+into a prefix: on Windows only an installed protoCore package is accepted, never
+a sibling build tree. protoIO is compiled from the sibling `../protoIO` as on
+Linux. From an "x64 Native Tools Command Prompt":
+
+```bat
+set PREFIX=%LOCALAPPDATA%\Programs\proto
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release ^
+      -DCMAKE_PREFIX_PATH=%PREFIX% -DCMAKE_INSTALL_PREFIX=%PREFIX% ^
+      "-DOPENSSL_ROOT_DIR=C:/Program Files/OpenSSL-Win64"
+cmake --build build
+ctest --test-dir build -j8
+cmake --install build --component protoClojure
+%PREFIX%\bin\protoclj --version
+```
+
+Any OpenSSL 3 for Windows with headers and import libraries works as
+`OPENSSL_ROOT_DIR`; the one PostgreSQL ships (`C:/Program Files/PostgreSQL/17`)
+was used for the verification. The build copies the DLLs protoClojure needs
+(`protoCore.dll`, `libssl-3-x64.dll`, `libcrypto-3-x64.dll`) into `build/bin/`,
+so `protoclj.exe` and the tests run in place; `cmake --install` puts
+`protoclj.exe` and the OpenSSL DLLs in `<prefix>/bin`, and protoCore's own
+install adds `protoCore.dll` there. With that one directory on `PATH`,
+`protoclj` runs scripts and the REPL from `cmd.exe` or PowerShell.
+`cpack -G ZIP` produces `protoclojure-<version>-win64.zip` (without
+`protoCore.dll`, which comes with protoCore's own package).
+
+How Windows differs, by design:
+
+- **Same output bytes everywhere.** The standard streams are binary, so
+  `println` writes `\n` as on Linux, and the console is switched to UTF-8.
+  Scripts are read as bytes: a CRLF script reads as it would on Linux.
+- **UTF-8 throughout.** `protoclj.exe` carries a manifest that makes UTF-8 the
+  process code page (Windows 10 1903 or later), so arguments, environment
+  variables and file names with non-ASCII characters work as on Linux.
+- **`/dev/stdin`.** `protoclj /dev/stdin` reads the program from standard input,
+  as on Linux, although Windows has no such file.
+- **No readline.** The console edits the line and keeps a history itself, so
+  the REPL reads plain lines and keeps no history file.
+- **Deep recursion** still raises `StackOverflowError`, at the same depth as on
+  Linux: the evaluator thread reserves 32 MiB, `protoclj.exe` sets 32 MiB as the
+  default stack of every thread it creates (futures, `pmap`, actor workers;
+  linker option `/STACK`, the counterpart of glibc's default thread attribute),
+  and the limit comes from `GetCurrentThreadStackLimits`.
+- **Servers without a host** (`run-server`, `tcp-listen`) bind `0.0.0.0`, as on
+  Linux, so they answer `127.0.0.1`. (Windows lists `::` first among the
+  wildcard addresses and makes IPv6 sockets IPv6-only.)
+- **`sh`** finds programs in `PATH` with `;` separators and an implied `.exe`.
+  Its `:dir` and `:env` options go through the `sh` and `env` on `PATH` (Git
+  for Windows ships both), as they go through `/bin/sh` and `env` on Linux;
+  without them those two options fail with "Cannot run program".
+
+Test harness. The script tests run through Git for Windows' `bash`, and the
+conformance fixtures call Unix tools (`mktemp`, `rm`, `basename`, `sleep`,
+`python3`) through `sh`, so Git's `usr/bin` must be on `PATH` (it is inside Git
+Bash). 503 of 520 tests pass and one is skipped (the default thread stack size
+test, which reads a glibc attribute). The 16 that do not pass fail in the
+harness, not in protoClojure: 15 fixtures under `27-io` make their scratch
+directory with Git's `mktemp -d`, which answers a `/tmp/...` path that a native
+program cannot open (each passes when given a Windows directory instead), and
+`27-io/http-chunked-utf8-split.clj` runs `python3`, which on a stock Windows is
+the Microsoft Store stub (it passes with a real Python).
+
+---
+
 ## Packages (CPack)
 
 ```bash
@@ -155,7 +226,7 @@ sibling developer fallback was a hard error.
 | Linux / Debian-Ubuntu | TGZ, DEB | **VERIFIED.** Installed with `dpkg -i` as root in a throwaway `ubuntu:24.04` container and run there from `/usr/bin/protoclj`, outside any repository, with no `LD_LIBRARY_PATH` set. |
 | Linux / Fedora-RHEL | TGZ, RPM | **VERIFIED.** `cpack -G RPM` executed in a throwaway `fedora:41` container (glibc 2.40, `rpm` 4.20.1); the RPM installed with `rpm -i` and `protoclj` ran correctly there. This closes the gap left by decision D-I2. |
 | macOS | DragNDrop | **UNVERIFIED.** Configured and reviewed only; there is no macOS host here. Review is not verification. |
-| Windows | NSIS, ZIP | **UNVERIFIED.** Configured and reviewed only; there is no Windows host here. |
+| Windows | NSIS, ZIP | **PARTLY VERIFIED** (2026-10-01, Windows 11, MSVC 19.44, protoCore 2.6.2). Built and tested (503/520, 1 skipped, the rest harness failures, see [Windows (MSVC)](#windows-msvc)); `cmake --install` into a user prefix, then `protoclj --version`, a script, an example and the REPL run from `cmd.exe` with only that prefix's `bin` and protoCore's `bin` on `PATH`; `cpack -G ZIP` builds the ZIP. The NSIS installer has not been built (no NSIS on that host). |
 
 ### Known defect: the DEB dependency floor does not encode the ABI
 
