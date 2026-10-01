@@ -115,8 +115,15 @@ TEST(StackGuard, SourceNestingNamesForms) {
     EXPECT_NE(evaluation.message.find("calls or data nested too deeply"),
               std::string::npos) << evaluation.message;
     // Same limit: the two probes stop within a level or two of each other.
-    EXPECT_LE(source.depth, evaluation.depth + 2);
-    EXPECT_LE(evaluation.depth, source.depth + 2);
+    // On Windows each new thread starts a varying distance into its stack
+    // reservation, so two probe threads differ by a few levels more.
+#if defined(_WIN32)
+    constexpr std::size_t kSlack = 8;
+#else
+    constexpr std::size_t kSlack = 2;
+#endif
+    EXPECT_LE(source.depth, evaluation.depth + kSlack);
+    EXPECT_LE(evaluation.depth, source.depth + kSlack);
 }
 
 TEST(StackGuard, LimitFollowsTheThreadStackSize) {
