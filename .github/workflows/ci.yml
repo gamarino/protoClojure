@@ -59,7 +59,7 @@ env:
   PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'fc5d79db4f89f8a6eb473a52766b1908140a19d1' }}
   PROTOIO_REPO: gamarino/protoIO
   # protoIO 0.1.0 (main, 2026-09-30).  Bump this deliberately.
-  PROTOIO_REF: ${{ github.event_name == 'schedule' && 'main' || '8e823a6f1e7a424737d845206c77d3c5e03b1748' }}
+  PROTOIO_REF: ${{ github.event_name == 'schedule' && 'main' || '120c8c373db2ffd840f6c807a487afae251ff6d3' }}
 
 jobs:
   test:
