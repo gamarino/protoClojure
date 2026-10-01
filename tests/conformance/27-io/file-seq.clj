@@ -1,6 +1,6 @@
 ;; EXPECT: (d d/a.txt d/sub d/sub/b.txt d/z.txt)
 ;; file-seq walks a tree depth first, each directory's entries in name order.
-(def dir (trim (:out (sh "mktemp" "-d"))))
+(def dir (trim (:out (sh "sh" "-c" "d=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then cygpath -m \"$d\"; else echo \"$d\"; fi"))))
 (sh "mkdir" "-p" "d/sub" :dir dir)
 (spit (str dir "/d/z.txt") "z")
 (spit (str dir "/d/a.txt") "a")

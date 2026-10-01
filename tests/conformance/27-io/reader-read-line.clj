@@ -1,6 +1,6 @@
 ;; EXPECT: first/second/nil
 ;; read-line on a reader answers each line without its end, then nil.
-(def dir (trim (:out (sh "mktemp" "-d"))))
+(def dir (trim (:out (sh "sh" "-c" "d=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then cygpath -m \"$d\"; else echo \"$d\"; fi"))))
 (def f (str dir "/l.txt"))
 (spit f "first\r\nsecond\n")
 (def r (reader f))

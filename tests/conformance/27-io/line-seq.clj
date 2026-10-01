@@ -1,6 +1,6 @@
 ;; EXPECT: 3 (alpha beta gamma) true
 ;; line-seq answers the lines of a reader; nil for an empty one.
-(def dir (trim (:out (sh "mktemp" "-d"))))
+(def dir (trim (:out (sh "sh" "-c" "d=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then cygpath -m \"$d\"; else echo \"$d\"; fi"))))
 (def f (str dir "/l.txt"))
 (def e (str dir "/empty.txt"))
 (spit f "alpha\nbeta\ngamma")

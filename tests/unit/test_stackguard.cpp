@@ -145,6 +145,8 @@ TEST(StackGuard, EvaluatorThreadHasTheConfiguredStack) {
             ULONG_PTR low = 0, high = 0;
             GetCurrentThreadStackLimits(&low, &high);
             const std::size_t bytes = static_cast<std::size_t>(high - low);
+#elif defined(__APPLE__)
+            const std::size_t bytes = pthread_get_stacksize_np(pthread_self());
 #else
             pthread_attr_t attr;
             if (pthread_getattr_np(pthread_self(), &attr) != 0) return -1;
@@ -176,6 +178,10 @@ TEST(StackGuard, ConfiguredDefaultAppliesToNewThreads) {
     // Windows has no process-wide default for new threads' stacks; the guard
     // still checks every thread against its own stack.
     GTEST_SKIP() << "no default thread stack size on Windows";
+#elif !defined(__GLIBC__)
+    // Only glibc lets a process set the default stack of new threads
+    // (configureThreadStacks is a no-op elsewhere, macOS included).
+    GTEST_SKIP() << "no settable default thread stack size outside glibc";
 #else
     protoClojure::configureThreadStacks();
     pthread_attr_t attr;

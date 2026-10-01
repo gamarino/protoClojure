@@ -1,6 +1,6 @@
 ;; EXPECT: a/b/c.txt true false true true false true :gone
 ;; file joins paths; exists?, directory?, make-parents and delete-file act on them.
-(def dir (trim (:out (sh "mktemp" "-d"))))
+(def dir (trim (:out (sh "sh" "-c" "d=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then cygpath -m \"$d\"; else echo \"$d\"; fi"))))
 (def f (file dir "a" "b" "c.txt"))
 (def made (make-parents f))
 (spit f "x")

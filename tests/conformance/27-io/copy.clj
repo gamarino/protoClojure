@@ -1,6 +1,6 @@
 ;; EXPECT: text|text|line
 ;; copy takes a string, a file or a reader and writes a file or a writer.
-(def dir (trim (:out (sh "mktemp" "-d"))))
+(def dir (trim (:out (sh "sh" "-c" "d=$(mktemp -d); if command -v cygpath >/dev/null 2>&1; then cygpath -m \"$d\"; else echo \"$d\"; fi"))))
 (copy "text" (file dir "a"))
 (copy (file dir "a") (file dir "b"))
 (spit (str dir "/c") "line\n")
