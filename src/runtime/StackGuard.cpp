@@ -9,6 +9,8 @@
 #include <signal.h>
 #endif
 
+#include "protoCore.h"
+
 #include <algorithm>
 #include <exception>
 
@@ -120,6 +122,10 @@ void configureThreadStacks() {
         pthread_setattr_default_np(&attr);
     }
     pthread_attr_destroy(&attr);
+#elif defined(__APPLE__) && defined(PROTOCORE_HAS_THREAD_STACK_BYTES)
+    // macOS has no process-wide default for new threads (a secondary thread
+    // gets 512 KiB); protoCore 2.8.0 gives the threads it creates this size.
+    proto::ProtoSpace::setThreadStackBytes(kThreadStackBytes);
 #endif
 }
 

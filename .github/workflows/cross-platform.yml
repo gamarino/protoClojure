@@ -20,7 +20,7 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  PROTOCORE_REF: fc5d79db4f89f8a6eb473a52766b1908140a19d1
+  PROTOCORE_REF: 43b6dc0717e417aa6af1436a45bec187753a8130
   PROTOIO_REPO: gamarino/protoIO
   PROTOIO_REF: 120c8c373db2ffd840f6c807a487afae251ff6d3
 
