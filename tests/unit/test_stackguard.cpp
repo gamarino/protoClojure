@@ -100,7 +100,12 @@ TEST(StackGuard, ExhaustedStackRaisesStackOverflowError) {
     const Probe p = probeThread(1u << 20);
     EXPECT_TRUE(p.overflowed);
     EXPECT_EQ(p.message.rfind("StackOverflowError:", 0), 0u) << p.message;
+#if defined(__APPLE__)
+    // macOS reports the size with its guard pages (1036 KiB for 1 MiB).
+    EXPECT_NE(p.message.find(" KiB thread stack"), std::string::npos) << p.message;
+#else
     EXPECT_NE(p.message.find("1 MiB"), std::string::npos) << p.message;
+#endif
     EXPECT_GT(p.depth, 100u);
 }
 
@@ -110,8 +115,14 @@ TEST(StackGuard, SourceNestingNamesForms) {
     const Probe evaluation = probeThread(1u << 20);
     const Probe source = probeThread(1u << 20, StackUse::Source);
     ASSERT_TRUE(source.overflowed);
+#if defined(__APPLE__)
+    // macOS reports the size with its guard pages (1036 KiB for 1 MiB).
+    EXPECT_EQ(source.message.rfind("StackOverflowError: forms nested too deeply for the ", 0), 0u)
+        << source.message;
+#else
     EXPECT_EQ(source.message,
               "StackOverflowError: forms nested too deeply for the 1 MiB thread stack");
+#endif
     EXPECT_NE(evaluation.message.find("calls or data nested too deeply"),
               std::string::npos) << evaluation.message;
     // Same limit: the two probes stop within a level or two of each other.

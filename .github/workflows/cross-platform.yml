@@ -7,7 +7,8 @@ name: Cross-platform
 
 on:
   push:
-    branches: [main]
+    # ci/** lets a platform fix be tried on the runners before it reaches main.
+    branches: [main, 'ci/**']
   pull_request:
   workflow_dispatch:
 
