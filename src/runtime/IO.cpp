@@ -33,7 +33,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <thread>
+#include <condition_variable>
 #include <utility>
 #include <vector>
 
@@ -428,7 +428,10 @@ struct HttpServer {
     std::atomic<bool> stopping{false};
     std::atomic<bool> joined{false};
 #if defined(_WIN32) || defined(__APPLE__)
-    std::atomic<bool> inAccept{false};           // the accept thread is in tcpAccept
+    // The accept thread is in tcpAccept. Cleared under `mutex`, with
+    // acceptLeft notified, so requestStop can wait for it to leave.
+    std::atomic<bool> inAccept{false};
+    std::condition_variable acceptLeft;
 #endif
     std::mutex mutex;                            // guards the fields below
     bool listenClosed = false;
@@ -455,10 +458,9 @@ void requestStop(HttpServer* s) {
     std::unique_lock<std::mutex> lock(s->mutex);
 #if defined(_WIN32)
     // Windows: a shutdown wakes neither a blocked accept nor a blocked read.
-    // protoIO waits there in short WSAPoll slices and watches the
-    // descriptor's closed flag, which only protoio::close sets, so the
-    // sockets are closed here instead, and marked so that their own threads
-    // leave them alone. This keeps the rule above: the state a waiting
+    // protoio::close does (since protoIO 0.2.0 it signals the waiting
+    // thread's wake-up socket), so the sockets are closed here instead, and
+    // marked so that their own threads leave them alone. This keeps the rule above: the state a waiting
     // protoIO call holds keeps its socket open until the call returns, and
     // protoIO numbers Windows sockets itself and does not reuse a number
     // until it wraps around, so a later use of the old number fails cleanly.
@@ -473,12 +475,13 @@ void requestStop(HttpServer* s) {
             protoio::close(c->fd);
         }
     }
-    lock.unlock();
     // The listening socket is released when the waiting tcpAccept returns,
-    // within one slice. Until then Windows still queues new connections on
-    // it, and resets them when it goes; on Linux they are refused at once.
-    // Wait for it, so that a client is refused once stop-server returned.
-    while (s->inAccept.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    // which closing it wakes at once. Until then Windows still queues new
+    // connections on it, and resets them when it goes; on Linux they are
+    // refused at once. Wait for it (the accept thread clears inAccept under
+    // the mutex and notifies acceptLeft), so that a client is refused once
+    // stop-server returned.
+    s->acceptLeft.wait(lock, [s] { return !s->inAccept.load(); });
 #elif defined(__APPLE__)
     // macOS: a shutdown does not wake a poll on a listening socket, nor make
     // it refuse connections (it answers ENOTCONN), so the listener must be
@@ -499,8 +502,7 @@ void requestStop(HttpServer* s) {
         std::lock_guard<std::mutex> cl(c->mutex);
         if (!c->closed && c->reading) ::shutdown(c->fd, SHUT_RDWR);
     }
-    lock.unlock();
-    while (s->inAccept.load()) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    s->acceptLeft.wait(lock, [s] { return !s->inAccept.load(); });
 #else
     if (!s->listenClosed) ::shutdown(s->listenFd, SHUT_RDWR);
     for (const auto& c : s->connections) {
@@ -772,10 +774,16 @@ const PO* acceptMain(proto::ProtoContext* ctx, const PO*, const proto::ParentLin
             // Cleared before the scope ends: requestStop waits for it without
             // reaching a safepoint.
             struct InAccept {
-                std::atomic<bool>& flag;
-                explicit InAccept(std::atomic<bool>& f) : flag(f) { flag.store(true); }
-                ~InAccept() { flag.store(false); }
-            } inAccept(s->inAccept);
+                HttpServer* s;
+                explicit InAccept(HttpServer* server) : s(server) { s->inAccept.store(true); }
+                ~InAccept() {
+                    {
+                        std::lock_guard<std::mutex> lock(s->mutex);
+                        s->inAccept.store(false);
+                    }
+                    s->acceptLeft.notify_all();
+                }
+            } inAccept(s);
             if (s->stopping.load()) break;
             accepted = protoio::net::tcpAccept(s->listenFd, -1);
 #elif defined(__APPLE__)
@@ -791,12 +799,15 @@ const PO* acceptMain(proto::ProtoContext* ctx, const PO*, const proto::ParentLin
             struct InAccept {
                 HttpServer* s;
                 ~InAccept() {
-                    std::lock_guard<std::mutex> lock(s->mutex);
-                    if (s->stopping.load() && !s->listenClosed) {
-                        s->listenClosed = true;
-                        protoio::close(s->listenFd);
+                    {
+                        std::lock_guard<std::mutex> lock(s->mutex);
+                        if (s->stopping.load() && !s->listenClosed) {
+                            s->listenClosed = true;
+                            protoio::close(s->listenFd);
+                        }
+                        s->inAccept.store(false);
                     }
-                    s->inAccept.store(false);
+                    s->acceptLeft.notify_all();
                 }
             } inAccept{s};
             accepted = protoio::net::tcpAccept(s->listenFd, kAcceptSliceMs);
