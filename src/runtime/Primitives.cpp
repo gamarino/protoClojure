@@ -1782,11 +1782,11 @@ const proto::ProtoObject* prim_swap_bang(proto::ProtoContext* ctx,
     const proto::ProtoObject* f = args->getAt(ctx, 1);
 
     // Build (old + extras) buffer once; old gets overwritten per attempt.
-    proto::proto_ulong extras = n - 2;
-    const proto::ProtoObject* buf[17];
-    if (extras > 15)
+    if (n - 2 > 15)
         throw std::runtime_error("swap!: >15 extra args not supported");
-    for (proto::proto_ulong i = 0; i < extras; ++i) {
+    const unsigned int extras = static_cast<unsigned int>(n - 2);
+    const proto::ProtoObject* buf[17];
+    for (unsigned int i = 0; i < extras; ++i) {
         buf[i + 1] = args->getAt(ctx, static_cast<int>(2 + i));
     }
 

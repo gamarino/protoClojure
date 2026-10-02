@@ -14,18 +14,18 @@
  *
  * The check compares the address of a local variable with a per-thread
  * limit: the lowest address of the thread's stack, as the thread library
- * reports it (pthread_getattr_np), plus kStackReserveBytes. The limit is
+ * reports it (pthread_getattr_np, pthread_get_stackaddr_np,
+ * GetCurrentThreadStackLimits), plus kStackReserveBytes. The limit is
  * computed on the first check a thread makes, so the check needs no
  * per-thread set-up and adapts to any stack size: the evaluator thread,
  * threads created by protoCore, the main thread under any `ulimit -s`. No
  * guard page and no signal handler are involved.
  *
- * Depth. The evaluator (the script driver and the REPL) runs on a thread
- * whose stack holds kThreadStackBytes, and configureThreadStacks raises the
- * default stack size of every thread the process creates later (future and
- * pmap threads, actor workers) to the same size, so a recursion reaches the
- * same depth on every kind of thread. Stack pages are committed only when a
- * recursion touches them.
+ * Depth. The evaluator (the script driver and the REPL) runs on a protoCore
+ * thread (runOnEvaluatorThread), like future and pmap threads and actor
+ * workers, and configureThreadStacks gives every one of them a stack of
+ * kThreadStackBytes, so a recursion reaches the same depth on every kind of
+ * thread. Stack pages are committed only when a recursion touches them.
  */
 #pragma once
 
@@ -33,6 +33,11 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+
+namespace proto {
+class ProtoContext;
+class ProtoSpace;
+}
 
 namespace protoClojure {
 
@@ -89,21 +94,26 @@ inline void checkNativeStack(StackUse use = StackUse::Evaluation) {
 #endif
 }
 
-// Raises the default stack size of threads created from now on without an
-// explicit size (std::thread, protoCore's newThread) to kThreadStackBytes,
-// unless it is already larger. Call once at start-up, before any thread is
-// created. Only effective with glibc; on Windows the executable's header
-// sets that default (link option /STACK, CMakeLists.txt); elsewhere threads
-// keep the platform default and checkNativeStack still guards them.
+// Gives the threads created from now on kThreadStackBytes of stack: protoCore's
+// threads through ProtoSpace::setThreadStackBytes (honoured on macOS since
+// protoCore 2.8.0, on Linux and Windows since 2.9.0), and with glibc every
+// thread created without an explicit size, through the default thread
+// attribute (unless it is already larger). On Windows the executable's /STACK
+// reservation (CMakeLists.txt) sets the same default for an older protoCore.
+// Call once at start-up, before any thread is created; where none of these
+// applies, threads keep the platform default and checkNativeStack still
+// guards them.
 void configureThreadStacks();
 
-// Runs `body(arg)` on a new thread whose stack holds kThreadStackBytes (or
-// the default stack size, if larger), waits for it and returns its result;
-// an exception escaping `body` is rethrown on the calling thread. While
-// waiting, the calling thread blocks asynchronous signals, so they are
-// delivered to the thread running `body` as they would be to a
-// single-threaded program. If the thread cannot be created, `body` runs on
-// the calling thread.
-int runOnEvaluatorThread(int (*body)(void*), void* arg);
+// Runs `body(ctx, arg)` on a protoCore thread of `space` (ProtoSpace::
+// newThread), `ctx` being that thread's context, waits for it and returns its
+// result; an exception escaping `body` is rethrown on the calling thread. The
+// thread's stack holds kThreadStackBytes once configureThreadStacks ran. While
+// waiting, the calling thread blocks asynchronous signals (POSIX), so they are
+// delivered to the evaluator as they would be to a single-threaded program.
+// If the thread cannot be created, `body` runs on the calling thread, with the
+// space's root context.
+int runOnEvaluatorThread(proto::ProtoSpace& space, int (*body)(proto::ProtoContext*, void*),
+                         void* arg);
 
 } // namespace protoClojure

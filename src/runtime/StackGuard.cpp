@@ -3,7 +3,6 @@
 #if defined(_WIN32)
 #define NOMINMAX
 #include <windows.h>
-#include <process.h>
 #else
 #include <pthread.h>
 #include <signal.h>
@@ -69,20 +68,6 @@ std::string describeBytes(std::size_t bytes) {
     return std::to_string(bytes >> 10) + " KiB";
 }
 
-// The default stack size of new threads, or 0 when it cannot be read.
-std::size_t defaultThreadStackBytes() {
-#if defined(__GLIBC__)
-    pthread_attr_t attr;
-    if (pthread_getattr_default_np(&attr) != 0) return 0;
-    std::size_t bytes = 0;
-    pthread_attr_getstacksize(&attr, &bytes);
-    pthread_attr_destroy(&attr);
-    return bytes;
-#else
-    return 0;
-#endif
-}
-
 } // namespace
 
 namespace detail {
@@ -122,84 +107,79 @@ void configureThreadStacks() {
         pthread_setattr_default_np(&attr);
     }
     pthread_attr_destroy(&attr);
-#elif defined(__APPLE__) && defined(PROTOCORE_HAS_THREAD_STACK_BYTES)
-    // macOS has no process-wide default for new threads (a secondary thread
-    // gets 512 KiB); protoCore 2.8.0 gives the threads it creates this size.
+#endif
+#if defined(PROTOCORE_HAS_THREAD_STACK_BYTES)
+    // The threads protoCore creates (the evaluator, futures, pmap, actor
+    // workers) get this size from protoCore itself: on macOS since protoCore
+    // 2.8.0 (macOS has no process-wide default; a secondary thread gets
+    // 512 KiB), on Linux and Windows since 2.9.0. With an older protoCore
+    // they get it from glibc's default above and, on Windows, from the
+    // executable's /STACK reservation (CMakeLists.txt).
     proto::ProtoSpace::setThreadStackBytes(kThreadStackBytes);
 #endif
 }
 
-#if defined(_WIN32)
-// Windows: the thread's stack is reserved with kThreadStackBytes and committed
-// as it grows. There are no asynchronous signals to redirect: the console's
-// Ctrl+C handler runs on a thread of its own.
-int runOnEvaluatorThread(int (*body)(void*), void* arg) {
-    struct Job {
-        int (*body)(void*);
-        void* arg;
-        int result;
-        std::exception_ptr error;
-    } job{body, arg, 1, nullptr};
+namespace {
 
-    const auto entry = [](void* p) -> unsigned {
-        auto* j = static_cast<Job*>(p);
-        try {
-            j->result = j->body(j->arg);
-        } catch (...) {
-            j->error = std::current_exception();
-        }
-        return 0;
-    };
-    const auto handle = reinterpret_cast<HANDLE>(_beginthreadex(
-        nullptr, static_cast<unsigned>(kThreadStackBytes),
-        static_cast<unsigned (__stdcall*)(void*)>(entry), &job,
-        STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr));
-    if (!handle) return body(arg);
-    WaitForSingleObject(handle, INFINITE);
-    CloseHandle(handle);
+struct EvaluatorJob {
+    int (*body)(proto::ProtoContext*, void*);
+    void* arg;
+    int result;
+    std::exception_ptr error;
+};
 
-    if (job.error) std::rethrow_exception(job.error);
-    return job.result;
+// The main of the evaluator thread: args[0] is the EvaluatorJob, as a long.
+const proto::ProtoObject* evaluatorMain(proto::ProtoContext* ctx, const proto::ProtoObject*,
+                                        const proto::ParentLink*, const proto::ProtoList* args,
+                                        const proto::ProtoSparseList*) {
+    auto* job = reinterpret_cast<EvaluatorJob*>(args->getAt(ctx, 0)->asLong(ctx));
+    try {
+        job->result = job->body(ctx, job->arg);
+    } catch (...) {
+        job->error = std::current_exception();
+    }
+    return PROTO_NONE;
 }
-#else
-int runOnEvaluatorThread(int (*body)(void*), void* arg) {
-    struct Job {
-        int (*body)(void*);
-        void* arg;
-        int result;
-        std::exception_ptr error;
-    } job{body, arg, 1, nullptr};
 
-    pthread_attr_t attr;
-    if (pthread_attr_init(&attr) != 0) return body(arg);
-    const std::size_t bytes = std::max(kThreadStackBytes, defaultThreadStackBytes());
-    pthread_t thread;
-    const bool created =
-        pthread_attr_setstacksize(&attr, bytes) == 0 &&
-        pthread_create(&thread, &attr,
-            [](void* p) -> void* {
-                auto* j = static_cast<Job*>(p);
-                try {
-                    j->result = j->body(j->arg);
-                } catch (...) {
-                    j->error = std::current_exception();
-                }
-                return nullptr;
-            },
-            &job) == 0;
-    pthread_attr_destroy(&attr);
-    if (!created) return body(arg);
+} // namespace
 
+int runOnEvaluatorThread(proto::ProtoSpace& space, int (*body)(proto::ProtoContext*, void*),
+                         void* arg) {
+    EvaluatorJob job{body, arg, 1, nullptr};
+    proto::ProtoContext* ctx = space.rootContext;
+    const proto::ProtoThread* thread = nullptr;
+    {
+        // The argument list is rooted by the new thread; this context hands
+        // the cells made here to the collector.
+        proto::ProtoContext spawn(&space, ctx);
+        const proto::ProtoList* args =
+            spawn.newList()->appendLast(&spawn, spawn.fromLong(reinterpret_cast<long long>(&job)));
+        try {
+            thread = space.newThread(&spawn, proto::ProtoString::createSymbol(&spawn, "protoclj-evaluator"),
+                                     &evaluatorMain, args, nullptr);
+        } catch (const std::exception&) {
+            thread = nullptr;
+        }
+    }
+    if (!thread) return body(ctx, arg);
+
+#if !defined(_WIN32)
+    // While waiting, this thread blocks asynchronous signals, so they are
+    // delivered to the evaluator as they would be to a single-threaded
+    // program. (Windows has no asynchronous signals: the console's Ctrl+C
+    // handler runs on a thread of its own.)
     sigset_t all;
     sigset_t previous;
     sigfillset(&all);
     pthread_sigmask(SIG_BLOCK, &all, &previous);
-    pthread_join(thread, nullptr);
+#endif
+    const_cast<proto::ProtoThread*>(thread)->join(ctx);
+#if !defined(_WIN32)
     pthread_sigmask(SIG_SETMASK, &previous, nullptr);
+#endif
 
     if (job.error) std::rethrow_exception(job.error);
     return job.result;
 }
-#endif
 
 } // namespace protoClojure

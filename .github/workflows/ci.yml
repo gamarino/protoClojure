@@ -53,13 +53,14 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 2.6.2 (tag v2.6.2), SOVERSION 3.  Bump this deliberately.
-  # 2.6.1 is needed to create threads from threads (one per HTTP connection),
-  # 2.6.2 to keep the heap ceiling under dead mutables.
+  # protoCore 2.7.0, SOVERSION 3: the minimum CMakeLists.txt declares
+  # (PROTOCORE_MIN_VERSION), so Linux tests the floor; cross-platform.yml
+  # tests it on Windows too.  Bump this deliberately.
   PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'fc5d79db4f89f8a6eb473a52766b1908140a19d1' }}
   PROTOIO_REPO: gamarino/protoIO
-  # protoIO 0.1.0 (main, 2026-09-30).  Bump this deliberately.
-  PROTOIO_REF: ${{ github.event_name == 'schedule' && 'main' || '120c8c373db2ffd840f6c807a487afae251ff6d3' }}
+  # protoIO 0.2.2 (main, 2026-10-02): RunOptions for sh :dir/:env, the
+  # dual-stack wildcard listener.  Bump this deliberately.
+  PROTOIO_REF: ${{ github.event_name == 'schedule' && 'main' || '1611ff9cf8d499cdc42a6e108e42ecfc36fd8164' }}
 
 jobs:
   test:
@@ -124,7 +125,7 @@ jobs:
 
       - name: Configure protoClojure
         working-directory: protoClojure
-        run: cmake -B build_release -S . -DprotoIO_DIR="$GITHUB_WORKSPACE/protoIO/build_release"
+        run: cmake -B build_release -S . -DprotoIO_DIR="$GITHUB_WORKSPACE/protoIO/build_release" -DPROTOCLJ_WARNINGS_AS_ERRORS=ON
 
       - name: Build protoClojure
         working-directory: protoClojure

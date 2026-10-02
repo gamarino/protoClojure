@@ -5,6 +5,8 @@
 
 #include "runtime/StackGuard.h"
 
+#include "protoCore.h"
+
 #include <gtest/gtest.h>
 
 #if defined(_WIN32)
@@ -18,9 +20,42 @@
 #endif
 
 #include <cstddef>
+#include <cstdint>
+#include <cstdio>
 #include <string>
 
 namespace {
+
+// The calling thread's stack: its lowest and highest address, as the
+// platform reports them.
+void stackBounds(std::uintptr_t& low, std::uintptr_t& high) {
+#if defined(_WIN32)
+    ULONG_PTR l = 0, h = 0;
+    GetCurrentThreadStackLimits(&l, &h);
+    low = static_cast<std::uintptr_t>(l);
+    high = static_cast<std::uintptr_t>(h);
+#elif defined(__APPLE__)
+    high = reinterpret_cast<std::uintptr_t>(pthread_get_stackaddr_np(pthread_self()));
+    low = high - pthread_get_stacksize_np(pthread_self());
+#else
+    pthread_attr_t attr;
+    void* address = nullptr;
+    std::size_t bytes = 0;
+    low = high = 0;
+    if (pthread_getattr_np(pthread_self(), &attr) != 0) return;
+    pthread_attr_getstack(&attr, &address, &bytes);
+    pthread_attr_destroy(&attr);
+    low = reinterpret_cast<std::uintptr_t>(address);
+    high = low + bytes;
+#endif
+}
+
+// The calling thread's stack size.
+std::size_t currentStackBytes() {
+    std::uintptr_t low = 0, high = 0;
+    stackBounds(low, high);
+    return static_cast<std::size_t>(high - low);
+}
 
 using protoClojure::StackOverflowError;
 
@@ -45,7 +80,23 @@ struct Probe {
     bool overflowed = false;
     std::string message;
     StackUse use = StackUse::Evaluation;
+    // How far below the top of its stack the thread's first frame lies.
+    std::size_t entryOffset = 0;
 };
+
+// The body of a probe thread.
+void runProbe(Probe* pr) {
+    std::uintptr_t low = 0, high = 0;
+    stackBounds(low, high);
+    const char here = 0;
+    pr->entryOffset = static_cast<std::size_t>(high - reinterpret_cast<std::uintptr_t>(&here));
+    try {
+        recurse(pr->depth, pr->use);
+    } catch (const StackOverflowError& e) {
+        pr->overflowed = true;
+        pr->message = e.what();
+    }
+}
 
 // Runs `recurse` on a new thread with a `stackBytes` stack.
 Probe probeThread(std::size_t stackBytes, StackUse use = StackUse::Evaluation) {
@@ -56,13 +107,7 @@ Probe probeThread(std::size_t stackBytes, StackUse use = StackUse::Evaluation) {
     const auto handle = reinterpret_cast<HANDLE>(_beginthreadex(
         nullptr, static_cast<unsigned>(stackBytes),
         [](void* p) -> unsigned {
-            auto* pr = static_cast<Probe*>(p);
-            try {
-                recurse(pr->depth, pr->use);
-            } catch (const StackOverflowError& e) {
-                pr->overflowed = true;
-                pr->message = e.what();
-            }
+            runProbe(static_cast<Probe*>(p));
             return 0;
         },
         &probe, STACK_SIZE_PARAM_IS_A_RESERVATION, nullptr));
@@ -79,13 +124,7 @@ Probe probeThread(std::size_t stackBytes, StackUse use = StackUse::Evaluation) {
     pthread_t thread;
     const int rc = pthread_create(&thread, &attr,
         [](void* p) -> void* {
-            auto* pr = static_cast<Probe*>(p);
-            try {
-                recurse(pr->depth, pr->use);
-            } catch (const StackOverflowError& e) {
-                pr->overflowed = true;
-                pr->message = e.what();
-            }
+            runProbe(static_cast<Probe*>(p));
             return nullptr;
         },
         &probe);
@@ -125,6 +164,10 @@ TEST(StackGuard, SourceNestingNamesForms) {
 #endif
     EXPECT_NE(evaluation.message.find("calls or data nested too deeply"),
               std::string::npos) << evaluation.message;
+    // The measurement behind the slack below, printed so CI logs carry it.
+    std::printf("probe entry offsets below the stack top: evaluation %zu, source %zu bytes; "
+                "depths %zu and %zu\n",
+                evaluation.entryOffset, source.entryOffset, evaluation.depth, source.depth);
     // Same limit: the two probes stop within a level or two of each other.
     // On Windows each new thread starts a varying distance into its stack
     // reservation, so two probe threads differ by a few levels more.
@@ -155,34 +198,34 @@ TEST(StackGuard, MainThreadIsGuarded) {
     EXPECT_THROW(recurse(depth), StackOverflowError);
 }
 
+// The evaluator is a protoCore thread with the configured stack.
 TEST(StackGuard, EvaluatorThreadHasTheConfiguredStack) {
-    std::size_t reported = 0;
+    protoClojure::configureThreadStacks();
+    proto::ProtoSpace space;
+    struct Seen {
+        std::size_t bytes = 0;
+        bool protoThread = false;
+    } seen;
     const int result = protoClojure::runOnEvaluatorThread(
-        [](void* p) -> int {
-#if defined(_WIN32)
-            ULONG_PTR low = 0, high = 0;
-            GetCurrentThreadStackLimits(&low, &high);
-            const std::size_t bytes = static_cast<std::size_t>(high - low);
-#elif defined(__APPLE__)
-            const std::size_t bytes = pthread_get_stacksize_np(pthread_self());
-#else
-            pthread_attr_t attr;
-            if (pthread_getattr_np(pthread_self(), &attr) != 0) return -1;
-            std::size_t bytes = 0;
-            pthread_attr_getstacksize(&attr, &bytes);
-            pthread_attr_destroy(&attr);
-#endif
-            *static_cast<std::size_t*>(p) = bytes;
+        space,
+        [](proto::ProtoContext* ctx, void* p) -> int {
+            auto* s = static_cast<Seen*>(p);
+            s->bytes = currentStackBytes();
+            s->protoThread = ctx->thread != nullptr && ctx->thread != ctx->space->rootContext->thread;
             return 42;
         },
-        &reported);
+        &seen);
     EXPECT_EQ(result, 42);
-    EXPECT_GE(reported, protoClojure::kThreadStackBytes);
+    EXPECT_TRUE(seen.protoThread);
+    EXPECT_GE(seen.bytes, protoClojure::kThreadStackBytes);
 }
 
 TEST(StackGuard, EvaluatorThreadRethrowsOnTheCaller) {
+    protoClojure::configureThreadStacks();
+    proto::ProtoSpace space;
     EXPECT_THROW(protoClojure::runOnEvaluatorThread(
-                     [](void*) -> int {
+                     space,
+                     [](proto::ProtoContext*, void*) -> int {
                          std::size_t depth = 0;
                          recurse(depth);
                          return 0;
@@ -191,24 +234,30 @@ TEST(StackGuard, EvaluatorThreadRethrowsOnTheCaller) {
                  StackOverflowError);
 }
 
+// The threads protoCore creates -- future, pmap and actor worker threads --
+// get kThreadStackBytes once configureThreadStacks ran: through glibc's
+// default thread attribute on Linux, ProtoSpace::setThreadStackBytes on
+// macOS, and on Windows the executable's /STACK reservation (this test
+// program is linked with the same /STACK as protoclj.exe).
+std::size_t g_protoThreadStackBytes = 0;
+
+const proto::ProtoObject* reportStack(proto::ProtoContext*, const proto::ProtoObject*,
+                                      const proto::ParentLink*, const proto::ProtoList*,
+                                      const proto::ProtoSparseList*) {
+    g_protoThreadStackBytes = currentStackBytes();
+    return PROTO_NONE;
+}
+
 TEST(StackGuard, ConfiguredDefaultAppliesToNewThreads) {
-#if defined(_WIN32)
-    // Windows has no process-wide default for new threads' stacks; the guard
-    // still checks every thread against its own stack.
-    GTEST_SKIP() << "no default thread stack size on Windows";
-#elif !defined(__GLIBC__)
-    // Only glibc lets a process set the default stack of new threads
-    // (configureThreadStacks is a no-op elsewhere, macOS included).
-    GTEST_SKIP() << "no settable default thread stack size outside glibc";
-#else
     protoClojure::configureThreadStacks();
-    pthread_attr_t attr;
-    ASSERT_EQ(pthread_getattr_default_np(&attr), 0);
-    std::size_t bytes = 0;
-    pthread_attr_getstacksize(&attr, &bytes);
-    pthread_attr_destroy(&attr);
-    EXPECT_GE(bytes, protoClojure::kThreadStackBytes);
-#endif
+    proto::ProtoSpace space;
+    proto::ProtoContext* ctx = space.rootContext;
+    const proto::ProtoThread* thread = space.newThread(
+        ctx, proto::ProtoString::createSymbol(ctx, "stack-probe"), &reportStack, ctx->newList(),
+        nullptr);
+    ASSERT_NE(thread, nullptr);
+    const_cast<proto::ProtoThread*>(thread)->join(ctx);
+    EXPECT_GE(g_protoThreadStackBytes, protoClojure::kThreadStackBytes);
 }
 
 } // namespace

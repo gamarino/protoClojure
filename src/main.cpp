@@ -99,9 +99,9 @@ struct ScriptRun {
     std::vector<std::string> args;  // *command-line-args*
 };
 
-int runFile(const char* path, const std::vector<std::string>& scriptArgs) {
-    proto::ProtoSpace space;
-    proto::ProtoContext* ctx = space.rootContext;
+// Runs on the evaluator thread; `ctx` is that thread's context.
+int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::string>& scriptArgs) {
+    proto::ProtoSpace& space = *ctx->space;
 
     // Declared after the space so it is joined and printed BEFORE the space it
     // samples is destroyed. Inert unless PROTOCLJ_GC_STATS=1.
@@ -354,8 +354,10 @@ int main(int argc, char** argv) {
 
     if (argc < 2) {
         // No arguments → drop into the interactive REPL.
+        proto::ProtoSpace space;
         return protoClojure::runOnEvaluatorThread(
-            [](void*) { return protoClojure::runRepl(); }, nullptr);
+            space, [](proto::ProtoContext* ctx, void*) { return protoClojure::runRepl(ctx); },
+            nullptr);
     }
 
     // Walk argv. A non-flag argument is treated as a .clj file to run.
@@ -378,10 +380,12 @@ int main(int argc, char** argv) {
         // script (`*command-line-args*`), flags included.
         ScriptRun run{argv[i], {}};
         for (int j = i + 1; j < argc; ++j) run.args.emplace_back(argv[j]);
+        proto::ProtoSpace space;
         return protoClojure::runOnEvaluatorThread(
-            [](void* p) {
+            space,
+            [](proto::ProtoContext* ctx, void* p) {
                 auto* r = static_cast<ScriptRun*>(p);
-                return runFile(r->path, r->args);
+                return runFile(ctx, r->path, r->args);
             },
             static_cast<void*>(&run));
     }

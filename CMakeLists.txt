@@ -26,9 +26,23 @@ if(MSVC)
     # MSVC ignores (C5030), and use the standard C library (getenv, C4996).
     add_compile_options(/wd5030)
     add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
-    set(PROTOCLJ_WARNINGS /W3)
+    # /W4 for protoClojure's own targets, the counterpart of -Wall -Wextra:
+    # it includes the truncation warnings (C4244, C4267) that /W3 reports
+    # only in part, which matter where `long` is 32 bits.
+    set(PROTOCLJ_WARNINGS /W4)
 else()
     set(PROTOCLJ_WARNINGS -Wall -Wextra -Wpedantic)
+endif()
+# CI builds with warnings as errors, so a new warning fails the build instead
+# of scrolling by. Off by default: a newer compiler must not break a user's
+# build.
+option(PROTOCLJ_WARNINGS_AS_ERRORS "Treat warnings in protoClojure's own sources as errors" OFF)
+if(PROTOCLJ_WARNINGS_AS_ERRORS)
+    if(MSVC)
+        list(APPEND PROTOCLJ_WARNINGS /WX)
+    else()
+        list(APPEND PROTOCLJ_WARNINGS -Werror)
+    endif()
 endif()
 if(WIN32)
     # Windows has no rpath: a program finds its DLLs next to itself, so every
@@ -134,7 +148,10 @@ else()
     set(CMAKE_BUILD_RPATH_USE_LINK_PATH TRUE)
 endif()
 
-include_directories(${PROTOCORE_INCLUDE_DIRS} include headers src)
+# protoCore's headers are a dependency's: SYSTEM, so the warning level of
+# protoClojure's own sources does not apply to them.
+include_directories(SYSTEM ${PROTOCORE_INCLUDE_DIRS})
+include_directories(include headers src)
 
 # --- protoIO: files, processes, TCP, UDP, TLS and HTTP (src/runtime/IO.cpp) ---
 # The POSIX I/O layer shared by the protoCore runtimes (protoST, protoScala,
@@ -257,17 +274,56 @@ target_compile_options(protoclj PRIVATE ${PROTOCLJ_WARNINGS})
 # Windows finds a DLL next to the program that loads it. Copy the DLLs
 # protoClojure needs -- protoCore, and OpenSSL through protoIO -- into the
 # build's bin/, so protoclj and the unit tests run in place.
+#
+# protoCore's DLL is taken from the imported target's location, whatever its
+# file name (it may carry its ABI version). OpenSSL's are named for the
+# version that was found (OpenSSL 3 for x64: libcrypto-3-x64.dll and
+# libssl-3-x64.dll, beside its include directory); configuring fails when they
+# are missing rather than packaging whatever a pattern happens to match, and
+# OpenSSL's licence file, which must ship with its DLLs, is located as well.
 if(WIN32)
     set(PROTOCLJ_RUNTIME_DLLS "")
     if(TARGET ${PROTOCORE_LIBRARY})
         list(APPEND PROTOCLJ_RUNTIME_DLLS "$<TARGET_FILE:${PROTOCORE_LIBRARY}>")
     endif()
-    set(PROTOCLJ_OPENSSL_DLLS "")
-    if(OPENSSL_INCLUDE_DIR)
-        get_filename_component(PROTOCLJ_OPENSSL_BIN "${OPENSSL_INCLUDE_DIR}/../bin" ABSOLUTE)
-        file(GLOB PROTOCLJ_OPENSSL_DLLS
-            "${PROTOCLJ_OPENSSL_BIN}/libcrypto*.dll" "${PROTOCLJ_OPENSSL_BIN}/libssl*.dll")
+    # The OpenSSL protoIO links (found again here: protoIO's own find_package
+    # may have run in its subdirectory's scope).
+    find_package(OpenSSL REQUIRED)
+    string(REGEX MATCH "^[0-9]+" PROTOCLJ_OPENSSL_MAJOR "${OPENSSL_VERSION}")
+    if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+        set(PROTOCLJ_OPENSSL_SUFFIX "-${PROTOCLJ_OPENSSL_MAJOR}-x64")
+    else()
+        set(PROTOCLJ_OPENSSL_SUFFIX "-${PROTOCLJ_OPENSSL_MAJOR}")
     endif()
+    get_filename_component(PROTOCLJ_OPENSSL_ROOT "${OPENSSL_INCLUDE_DIR}/.." ABSOLUTE)
+    set(PROTOCLJ_OPENSSL_DLLS
+        "${PROTOCLJ_OPENSSL_ROOT}/bin/libcrypto${PROTOCLJ_OPENSSL_SUFFIX}.dll"
+        "${PROTOCLJ_OPENSSL_ROOT}/bin/libssl${PROTOCLJ_OPENSSL_SUFFIX}.dll")
+    foreach(_dll IN LISTS PROTOCLJ_OPENSSL_DLLS)
+        if(NOT EXISTS "${_dll}")
+            message(FATAL_ERROR
+                "protoClojure: OpenSSL ${OPENSSL_VERSION} was found in ${PROTOCLJ_OPENSSL_ROOT}, "
+                "but its DLL ${_dll} is missing. Point OPENSSL_ROOT_DIR at an OpenSSL "
+                "installation that has its DLLs in bin/.")
+        endif()
+    endforeach()
+    set(PROTOCLJ_OPENSSL_LICENSE "" CACHE FILEPATH
+        "OpenSSL's licence file, shipped with its DLLs (found under OPENSSL_ROOT_DIR when empty)")
+    if(NOT PROTOCLJ_OPENSSL_LICENSE)
+        find_file(PROTOCLJ_OPENSSL_LICENSE_FOUND
+            NAMES LICENSE.txt LICENSE license.txt
+            PATHS "${PROTOCLJ_OPENSSL_ROOT}" "${PROTOCLJ_OPENSSL_ROOT}/doc"
+                  "${PROTOCLJ_OPENSSL_ROOT}/share/doc/openssl"
+            NO_DEFAULT_PATH NO_CACHE)
+        set(PROTOCLJ_OPENSSL_LICENSE "${PROTOCLJ_OPENSSL_LICENSE_FOUND}")
+    endif()
+    if(NOT PROTOCLJ_OPENSSL_LICENSE OR NOT EXISTS "${PROTOCLJ_OPENSSL_LICENSE}")
+        message(FATAL_ERROR
+            "protoClojure: OpenSSL's licence file was not found under ${PROTOCLJ_OPENSSL_ROOT}; "
+            "it must ship with the OpenSSL DLLs. Name it with -DPROTOCLJ_OPENSSL_LICENSE=<file>.")
+    endif()
+    message(STATUS "protoClojure: OpenSSL ${OPENSSL_VERSION} DLLs from ${PROTOCLJ_OPENSSL_ROOT}/bin, "
+                   "licence ${PROTOCLJ_OPENSSL_LICENSE}")
     list(APPEND PROTOCLJ_RUNTIME_DLLS ${PROTOCLJ_OPENSSL_DLLS})
     # A target every library depends on, not a post-build step of protoclj:
     # the unit tests are run to list their tests as soon as they are linked.
@@ -308,13 +364,29 @@ endif()
 install(TARGETS protoclj
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT protoClojure)
-# protoIO is linked in statically, but OpenSSL is a DLL on Windows: install it
-# next to protoclj.exe, where Windows looks for it. (protoCore is a package of
-# its own and installs its DLL into its own prefix's bin/.)
-if(WIN32 AND PROTOCLJ_OPENSSL_DLLS)
+# Windows: the installed tree, and so the ZIP and the installer, is
+# self-contained. protoIO is linked in statically, but protoCore and OpenSSL
+# are DLLs, and Windows looks for a DLL next to the program first: both go
+# next to protoclj.exe (protoCore's whatever its file name), with OpenSSL's
+# licence, and so does the MSVC runtime (InstallRequiredSystemLibraries:
+# vcruntime140.dll, msvcp140.dll, ...), so protoclj.exe runs on a machine
+# without the Visual C++ Redistributable.
+if(WIN32)
+    if(TARGET ${PROTOCORE_LIBRARY})
+        install(FILES "$<TARGET_FILE:${PROTOCORE_LIBRARY}>"
+            DESTINATION ${CMAKE_INSTALL_BINDIR}
+            COMPONENT protoClojure)
+    endif()
     install(FILES ${PROTOCLJ_OPENSSL_DLLS}
         DESTINATION ${CMAKE_INSTALL_BINDIR}
         COMPONENT protoClojure)
+    install(FILES "${PROTOCLJ_OPENSSL_LICENSE}"
+        DESTINATION ${CMAKE_INSTALL_DOCDIR}
+        RENAME OpenSSL-LICENSE.txt
+        COMPONENT protoClojure)
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_DESTINATION ${CMAKE_INSTALL_BINDIR})
+    set(CMAKE_INSTALL_SYSTEM_RUNTIME_COMPONENT protoClojure)
+    include(InstallRequiredSystemLibraries)
 endif()
 
 # License and documentation (Markdown only — sources, specs, internal notes
@@ -418,11 +490,23 @@ elseif(UNIX)
     set(CPACK_RPM_PACKAGE_REQUIRES
         "protoCore >= ${PROTOCORE_MIN_VERSION_FULL}, protoCore < ${PROTOCORE_NEXT_MAJOR}")
 elseif(WIN32)
-    # Windows NSIS installer + plain ZIP.
-    # The ZIP was built and run on Windows 11 / MSVC 19.44 (`cpack -G ZIP`:
-    # protoclj.exe and the OpenSSL DLLs; protoCore's DLL comes with protoCore's
-    # own package). The NSIS installer is configured but has not been built.
-    set(CPACK_GENERATOR "NSIS;ZIP")
+    # A plain ZIP, self-contained (protoclj.exe, protoCore's and OpenSSL's
+    # DLLs, the MSVC runtime; see the install rules above). CI unpacks it
+    # into a clean directory and runs it with nothing of the build on PATH.
+    # The NSIS installer is added only when makensis is found, since cpack
+    # aborts the whole run when a generator's tool is missing; it is
+    # configured but has not been verified.
+    set(CPACK_GENERATOR "ZIP")
+    set(_pf86 "ProgramFiles(x86)")
+    find_program(PROTOCLOJURE_MAKENSIS_EXECUTABLE makensis
+        PATHS "$ENV{${_pf86}}/NSIS" "$ENV{ProgramFiles}/NSIS")
+    unset(_pf86)
+    if(PROTOCLOJURE_MAKENSIS_EXECUTABLE)
+        list(APPEND CPACK_GENERATOR "NSIS")
+        message(STATUS "CPack: NSIS generator enabled (makensis found)")
+    else()
+        message(STATUS "CPack: NSIS generator disabled (makensis not found)")
+    endif()
     set(CPACK_NSIS_HELP_LINK     "https://github.com/gamarino/protoClojure")
     set(CPACK_NSIS_URL_INFO_ABOUT "https://github.com/gamarino/protoClojure")
     set(CPACK_NSIS_PACKAGE_NAME  "protoClojure")

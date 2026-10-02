@@ -3,7 +3,10 @@ name: Cross-platform
 # macOS and Windows. Linux is ci.yml's; this workflow adds the two platforms
 # nobody here can run locally, against an INSTALLED protoCore package (the
 # supported mode on Windows) and the sibling protoIO source tree. Refs pinned:
-# the first protoCore and protoIO commits that pass on macOS and Windows.
+# protoCore 2.8.0, the first that passes on macOS (ProtoSpace::
+# setThreadStackBytes), and a second Windows job on protoCore 2.7.0, the
+# minimum CMakeLists.txt declares, as ci.yml tests it on Linux. (macOS has no
+# minimum job: below 2.8.0 its protoCore threads get 512 KiB stacks.)
 
 on:
   push:
@@ -21,9 +24,9 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  PROTOCORE_REF: 43b6dc0717e417aa6af1436a45bec187753a8130
   PROTOIO_REPO: gamarino/protoIO
-  PROTOIO_REF: 120c8c373db2ffd840f6c807a487afae251ff6d3
+  # protoIO 0.2.2
+  PROTOIO_REF: 1611ff9cf8d499cdc42a6e108e42ecfc36fd8164
 
 jobs:
   test:
@@ -36,8 +39,16 @@ jobs:
         include:
           - name: macOS (Apple clang, arm64)
             os: macos-14
+            # protoCore 2.8.0
+            protocore_ref: 43b6dc0717e417aa6af1436a45bec187753a8130
           - name: Windows (MSVC, x64)
             os: windows-2022
+            # protoCore 2.8.0
+            protocore_ref: 43b6dc0717e417aa6af1436a45bec187753a8130
+          - name: Windows (MSVC, x64), protoCore 2.7.0 minimum
+            os: windows-2022
+            # protoCore 2.7.0, PROTOCORE_MIN_VERSION
+            protocore_ref: fc5d79db4f89f8a6eb473a52766b1908140a19d1
     defaults:
       run:
         shell: bash
@@ -51,7 +62,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ env.PROTOCORE_REPO }}
-          ref: ${{ env.PROTOCORE_REF }}
+          ref: ${{ matrix.protocore_ref }}
           path: protoCore
 
       - name: Check out protoIO as a sibling
@@ -74,7 +85,7 @@ jobs:
         if: runner.os == 'Windows'
         run: |
           for d in "C:/Program Files/OpenSSL" "C:/Program Files/OpenSSL-Win64"; do
-            if [ -f "$d/include/openssl/ssl.h" ]; then echo "OPENSSL_ROOT_DIR=$d" >> "$GITHUB_ENV"; break; fi
+            if [ -f "$d/include/openssl/ssl.h" ]; then echo "OPENSSL_ROOT_DIR=$d" >> "$GITHUB_ENV"; ls "$d" "$d/bin"; break; fi
           done
           # A fixture runs `python3`; Windows ships python.exe only.
           mkdir -p "$RUNNER_TEMP/py3"
@@ -97,7 +108,7 @@ jobs:
         working-directory: protoClojure
         run: >
           cmake -B build -S . -G Ninja -DCMAKE_BUILD_TYPE=Release
-          -DPROTOCORE_REQUIRE_PACKAGE=ON
+          -DPROTOCORE_REQUIRE_PACKAGE=ON -DPROTOCLJ_WARNINGS_AS_ERRORS=ON
           "-DCMAKE_PREFIX_PATH=$GITHUB_WORKSPACE/prefix$EXTRA_PREFIX"
           ${OPENSSL_ROOT_DIR:+"-DOPENSSL_ROOT_DIR=$OPENSSL_ROOT_DIR"}
 
@@ -116,3 +127,34 @@ jobs:
         # stdin at EOF, as in ci.yml: a test that reads it must not hang the job.
         working-directory: protoClojure
         run: ctest --test-dir build -j2 --output-on-failure --timeout 600 < /dev/null
+
+      - name: Stack guard measurements
+        # Printed, not asserted here: where each probe thread's first frame
+        # lies below its stack top, and the depth it reached
+        # (tests/unit/test_stackguard.cpp, SourceNestingNamesForms).
+        if: success() || failure()
+        working-directory: protoClojure
+        run: ctest --test-dir build -R 'StackGuard' -V < /dev/null | grep -E 'probe entry|Test +#' || true
+
+      - name: Package the ZIP and run it from a clean directory (Windows)
+        # The ZIP must be self-contained: unpacked anywhere, protoclj.exe runs
+        # with nothing of the build, of protoCore's prefix or of OpenSSL on
+        # PATH -- only the system directories.
+        # Run after a failed test suite too: the two report different things.
+        if: runner.os == 'Windows' && (success() || failure())
+        working-directory: protoClojure/build
+        run: |
+          cpack -G ZIP
+          zip=$(ls protoclojure-*-win64.zip)
+          clean="$RUNNER_TEMP/zip-check"
+          rm -rf "$clean" && mkdir -p "$clean"
+          7z x -bd -o"$(cygpath -w "$clean")" "$(cygpath -w "$PWD/$zip")" >/dev/null
+          (cd "$clean" && find . -type f | sort)
+          exe=$(find "$clean" -name protoclj.exe)
+          for f in 'protoCore*.dll' 'libssl-*.dll' 'libcrypto-*.dll' 'vcruntime140*.dll' 'OpenSSL-LICENSE.txt'; do
+            if ! find "$clean" -iname "$f" | grep -q .; then echo "the ZIP lacks $f"; exit 1; fi
+          done
+          printf '(println (+ 1 2) (str "ok-" (count [1 2 3])))\n' > "$clean/t.clj"
+          out=$(cd "$clean" && PATH="/c/Windows/System32:/c/Windows" "$exe" t.clj)
+          echo "unpacked protoclj.exe printed: $out"
+          test "$out" = "3 ok-3"

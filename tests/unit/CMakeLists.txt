@@ -18,6 +18,13 @@ target_link_libraries(protoclj_unit_tests
     PRIVATE protoclj_reader protoclj_runtime gtest gtest_main)
 
 target_compile_options(protoclj_unit_tests PRIVATE ${PROTOCLJ_WARNINGS})
+if(MSVC)
+    # The /STACK reservation protoclj.exe is linked with (CMakeLists.txt), so
+    # the stack guard tests see what protoclj's threads get: with a protoCore
+    # older than 2.9.0, the threads protoCore creates on Windows (the
+    # evaluator, futures, actor workers) take this default.
+    target_link_options(protoclj_unit_tests PRIVATE /STACK:33554432)
+endif()
 
 include(GoogleTest)
 gtest_discover_tests(protoclj_unit_tests)

@@ -162,7 +162,7 @@ bool readLine(const char* prompt, bool interactive,
 // keys, the active CompilerMarkers / ReaderMarkers structs, and the keys
 // for `*1` / `*2` / `*3` rebinding.
 struct Session {
-    proto::ProtoSpace space;
+    proto::ProtoSpace& space;
     proto::ProtoContext* ctx;
 
     proto::ProtoObject* globals;
@@ -221,8 +221,8 @@ struct Session {
     // for the whole REPL session is the same fix protoST's REPL uses.
     std::vector<std::unique_ptr<BytecodeModule>> retainedModules;
 
-    Session()
-        : ctx(space.rootContext) {
+    explicit Session(proto::ProtoContext* c)
+        : space(*c->space), ctx(c) {
         ctx->resizeAutomaticLocals(13);
 
         globals = const_cast<proto::ProtoObject*>(
@@ -507,7 +507,7 @@ bool dispatchMeta(Session& s, const std::string& trimmed) {
 
 } // namespace
 
-int runRepl() {
+int runRepl(proto::ProtoContext* ctx) {
     const bool interactive = ::isatty(STDIN_FILENO) != 0;
 
     std::string histPath = historyPath();
@@ -518,7 +518,7 @@ int runRepl() {
     std::printf("protoClojure %s\n", versionString());
     std::puts("REPL — :help for commands, :quit or Ctrl-D to exit");
 
-    Session session;
+    Session session(ctx);
 
     const char* primary      = "user=> ";
     const char* continuation = "  #_=> ";
