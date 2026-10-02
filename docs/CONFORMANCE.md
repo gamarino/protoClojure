@@ -58,17 +58,21 @@ kernel guard works under real GC pressure.
 **0 unjustified findings**, 2 justified errors, 4 justified warnings, 2
 informational.
 
-Both `blocking_join_unbracketed` errors are joins protoCore cannot see, and both
+Both `blocking_join_unbracketed` errors were joins protoCore cannot see, and both
 are correct **only by construction**, which is why each carries the condition
-under which that stops being true:
+under which that stops being true. (Since 2026-10-02 only the first remains:
+the evaluator is a ProtoThread, joined with `ProtoThread::join`, which leaves
+the running set itself, and the second entry was deleted from
+`conformance-allow.txt`, as it said it must be once the space was constructed
+before the join.)
 
 - `src/runtime/GCCensus.cpp:59` joins the `PROTOCLJ_GC_STATS` sampler, a raw
   `std::thread` that touches no `ProtoObject*` and so is not in `runningThreads`.
   The registered main thread therefore holds the quorum for at most the ~200 µs
   the sampler needs to see `stop_`.
-- `src/runtime/StackGuard.cpp:146` is `main()`'s thread waiting for the evaluator
-  thread. The `ProtoSpace` is constructed **inside** the joined thread, so at the
-  moment of the join the joining thread is registered with no space.
+- *(Removed 2026-10-02.)* `src/runtime/StackGuard.cpp` was `main()`'s thread
+  waiting, with `pthread_join`, for the evaluator thread, inside which the
+  `ProtoSpace` was constructed.
 
 ## Judgement items
 

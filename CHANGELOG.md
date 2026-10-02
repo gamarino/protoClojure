@@ -8,16 +8,52 @@ The project has no tagged releases yet; the version declared in
 
 ## [Unreleased]
 
+### Changed — Windows-port review, 2026-10-02
+
+- **`sh` sets `:dir` and `:env` itself** (protoIO 0.2.2 `RunOptions`), with no
+  `/bin/sh -c 'cd ...'` or `env -i` on Linux and macOS and no Git for Windows
+  `sh`/`env` on Windows, where a stock system has neither. The program is
+  searched in protoclj's own `PATH`, as the JVM does; deviation D32 now covers
+  only `:in-enc` / `:out-enc`. Test: `cli/io-sh-dir-env-native`.
+- **Servers started without a host listen on IPv4 and IPv6** (one dual-stack
+  socket, protoIO 0.2.2). They bound 0.0.0.0 only, so on Windows each
+  `localhost` client (which tries `::1` first) was refused there before it
+  reached 127.0.0.1. Test: `cli/http-localhost-latency`.
+- **The evaluator runs on a protoCore thread** (`ProtoSpace::newThread`)
+  instead of a `pthread_create` / `_beginthreadex` thread; `main` owns the
+  `ProtoSpace`. `configureThreadStacks` asks protoCore for 32 MiB thread
+  stacks (`ProtoSpace::setThreadStackBytes`, honoured on every platform from
+  protoCore 2.9.0). `stop-server` waits for the accept thread on a condition
+  variable instead of sleeping. The unit test that a protoCore thread gets
+  32 MiB now runs on Windows too (it was skipped).
+- **Windows packages are self-contained**: protoCore's DLL (from the
+  imported target, whatever its file name), the OpenSSL DLLs of the version
+  found (configure fails if they are missing), OpenSSL's licence and the
+  MSVC runtime are installed next to `protoclj.exe`; the NSIS generator is
+  enabled only when `makensis` is found. CI runs the unpacked ZIP and the
+  silently installed installer with only the system directories on `PATH`.
+- **MSVC builds protoClojure's sources at `/W4`** (warning-free; `/WX` in CI,
+  `-Werror` on Linux and macOS, through `PROTOCLJ_WARNINGS_AS_ERRORS`).
+- **Requires protoIO 0.2.2.** On Windows that also brings: `.bat` / `.cmd`
+  targets refused by `sh`, crash exit codes as 128 + signal, open files
+  deletable and renamable, and TLS verification against the Windows
+  certificate stores.
+- CI tests protoCore 2.7.0, the declared minimum, on Windows as well as on
+  Linux. All 522 tests pass on Linux, macOS and Windows, none skipped.
+
 ### Added — Windows (MSVC), 2026-10-01
 
 - **Native Windows build.** protoClojure builds with Visual Studio 2022 against
   an installed protoCore and the sibling protoIO; `protoclj` runs scripts and
   the REPL natively and installs with `cmake --install` (or `cpack -G ZIP`).
-  503 of 520 tests pass on Windows 11 and one is skipped; the 16 left fail in
-  the Git Bash harness (Git's `mktemp` answers `/tmp` paths, `python3` is the
-  Store stub), not the runtime. Every Windows difference is behind `_WIN32` /
-  `_MSC_VER` / `WIN32`; on Linux the suite passes 520/520 as before, with the
-  same compile and link lines. See docs/INSTALLATION.md, "Windows (MSVC)".
+  In CI (`windows-2022`) all 520 tests of that day passed but one, skipped
+  (the default-thread-stack test; it runs on Windows since 2026-10-02). A
+  first run by hand on Windows 11 had counted 16 failures in the Git Bash
+  harness (Git's `mktemp` answers `/tmp` paths, `python3` was the Store
+  stub), none in the runtime; the harness and the fixtures were fixed before
+  CI ran. Every Windows difference is behind `_WIN32` / `_MSC_VER` / `WIN32`;
+  on Linux the suite passes 520/520 as before, with the same compile and link
+  lines. See docs/INSTALLATION.md, "Windows (MSVC)".
 - The runtime spells protoCore's 64-bit integers `proto::proto_long` /
   `proto::proto_ulong` (`long` / `unsigned long` outside Windows, where `long`
   is 32 bits).

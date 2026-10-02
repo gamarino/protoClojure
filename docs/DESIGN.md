@@ -238,6 +238,27 @@ The compiler does NOT do whole-program analysis. Each top-level form
 compiles independently — the REPL relies on this, and the JVM Clojure
 does it the same way.
 
+**The evaluator thread.** `main` creates the `ProtoSpace` and runs the
+script driver or the REPL on a protoCore thread of it
+(`runOnEvaluatorThread`, `ProtoSpace::newThread`), the same kind of thread
+as futures, `pmap` and actor workers, and joins it before the space is
+destroyed. Every non-tail call nests the VM on the native stack, so all of
+these threads need the same large stack: `configureThreadStacks` asks
+protoCore for 32 MiB (`ProtoSpace::setThreadStackBytes`, honoured on macOS
+since protoCore 2.8.0 and everywhere since 2.9.0) and, for an older
+protoCore, raises glibc's default thread stack size; on Windows
+`protoclj.exe` is also linked with a 32 MiB `/STACK` reservation, the
+default of any thread created without a size. The runtime creates no
+thread with a native API: the evaluator, futures, actor workers and the
+HTTP server's threads are all ProtoThreads. What remains native, and why:
+the stack guard reads the thread's stack bounds from the platform
+(`pthread_getattr_np`, `pthread_get_stackaddr_np`,
+`GetCurrentThreadStackLimits`), since protoCore reports a stack's size
+but not its address; the main thread blocks POSIX signals while it joins
+the evaluator, so they reach the evaluator; `deref` of a promise waits in
+1 ms sleeps while unmanaged; and the `PROTOCLJ_GC_STATS=1` diagnostic
+samples the collector from a `std::thread` of its own.
+
 ### 4.1 Exceptions
 
 The user-facing rules are in `LANGUAGE.md` §14; the code is
@@ -457,7 +478,9 @@ have. Decision (2026-09-30): the server does not use the actor pool.
   exception becomes a plain 500 and a report on standard error), writes
   it and closes. `connection: close` — one request per connection.
 - No native thread API is used: both kinds of thread are ProtoThreads,
-  joined with `ProtoThread::join`. The accept thread joins the connection
+  joined with `ProtoThread::join`, and `stop-server` waits for the accept
+  thread to leave its accept call (Windows, macOS) on a condition variable
+  the accept thread notifies, not by sleeping. The accept thread joins the connection
   threads that have finished each time it wakes, and all of them when it
   stops; `stop-server` joins the accept thread.
 - **Stopping.** Only the thread that owns a descriptor ever closes it, so a

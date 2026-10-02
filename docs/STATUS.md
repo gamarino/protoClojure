@@ -5,13 +5,13 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 520 test cases: 407
+scripts and an interactive REPL. `ctest` registers 522 test cases: 407
 conformance fixtures under `tests/conformance/`, 98 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 its key semantics, the lifetime of values that used to be interned, the
 vector representation, value equality and hashing, the
 native stack guard, the double printer and exception values
-(`tests/unit/`), and fifteen CLI checks (`tests/cli/`: `--help`, a
+(`tests/unit/`), and seventeen CLI checks (`tests/cli/`: `--help`, a
 generated program with 70,000 distinct literals of each kind, the native
 bulk builders under a heap ceiling, the garbage a `loop` makes under a heap
 ceiling, joins that must park for the collector, actor message payloads
@@ -19,9 +19,11 @@ under a heap ceiling, a stack overflow in the REPL, globals bound to nil in
 the REPL, source nested too deeply to read or compile, an uncaught
 exception in a script and in the REPL, exceptions thrown under a heap
 ceiling, `read-line` over standard input in pipelines,
-`*command-line-args*`, exit statuses, and an HTTP server under a heap
-ceiling);
-all pass. Benchmark numbers against Babashka 1.4.192
+`*command-line-args*`, exit statuses, `sh` with `:dir` and `:env` and no
+shell on `PATH`, `localhost` requests to a server started without a host,
+and an HTTP server under a heap ceiling);
+all pass on Linux, macOS and Windows (CI: 522 of 522 on each, none
+skipped, on Windows against protoCore 2.8.0 and the 2.7.0 minimum). Benchmark numbers against Babashka 1.4.192
 are in [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md). Shipped changes
 are listed in [`CHANGELOG.md`](../CHANGELOG.md).
 

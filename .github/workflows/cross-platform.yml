@@ -119,6 +119,8 @@ jobs:
       - name: Report the registered test count
         working-directory: protoClojure
         run: |
+          # The warning flags protoClojure's own sources are compiled with.
+          { grep -m1 -oE '"command": "[^"]*src.{1,2}main\.cpp' build/compile_commands.json | grep -oE '(/W[0-9X]|-W[a-z]+)' | sort -u | tr '\n' ' ' || true; }; echo
           COUNT=$(ctest --test-dir build -N | tail -1)
           echo "$COUNT"
           echo "protoClojure ctest (${{ runner.os }}): $COUNT" >> "$GITHUB_STEP_SUMMARY"
@@ -154,7 +156,25 @@ jobs:
           for f in 'protoCore*.dll' 'libssl-*.dll' 'libcrypto-*.dll' 'vcruntime140*.dll' 'OpenSSL-LICENSE.txt'; do
             if ! find "$clean" -iname "$f" | grep -q .; then echo "the ZIP lacks $f"; exit 1; fi
           done
-          printf '(println (+ 1 2) (str "ok-" (count [1 2 3])))\n' > "$clean/t.clj"
-          out=$(cd "$clean" && PATH="/c/Windows/System32:/c/Windows" "$exe" t.clj)
+          printf '(println (+ 1 2) (str "ok-" (count [1 2 3])))\n' > "$RUNNER_TEMP/t.clj"
+          out=$(cd "$clean" && PATH="/c/Windows/System32:/c/Windows" "$exe" "$(cygpath -w "$RUNNER_TEMP/t.clj")")
           echo "unpacked protoclj.exe printed: $out"
           test "$out" = "3 ok-3"
+
+      - name: Build the NSIS installer, install it silently and run it (Windows)
+        # The runner image has NSIS; CMakeLists.txt enables the generator only
+        # where makensis is found.
+        if: runner.os == 'Windows' && (success() || failure())
+        working-directory: protoClojure/build
+        run: |
+          cpack -G NSIS
+          installer=$(ls protoclojure-*-win64.exe)
+          target="$RUNNER_TEMP/nsis-check"
+          rm -rf "$target"
+          # /D must come last and unquoted; the installer runs synchronously.
+          "./$installer" /S /D=$(cygpath -w "$target")
+          (cd "$target" && find . -type f | sort)
+          out=$(PATH="/c/Windows/System32:/c/Windows" "$target/bin/protoclj.exe" "$(cygpath -w "$RUNNER_TEMP/t.clj")")
+          echo "installed protoclj.exe printed: $out"
+          test "$out" = "3 ok-3"
+          "$target/bin/protoclj.exe" --version

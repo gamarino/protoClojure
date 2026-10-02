@@ -19,6 +19,7 @@
 #include <pthread.h>
 #endif
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -65,11 +66,16 @@ using protoClojure::StackUse;
 // Each level keeps a buffer alive across the call, so the recursion uses at
 // least 512 bytes of stack per level and cannot become a loop. The depth
 // bound is beyond any stack the tests create (it would take 512 GiB).
+// The lowest frame address `recurse` reached on this thread.
+thread_local std::uintptr_t t_lowestFrame = UINTPTR_MAX;
+
 [[gnu::noinline]]
 void recurse(std::size_t& depth, StackUse use = StackUse::Evaluation) {
     protoClojure::checkNativeStack(use);
     volatile char pad[512];
     pad[0] = 1;
+    const auto here = reinterpret_cast<std::uintptr_t>(&pad[0]);
+    if (here < t_lowestFrame) t_lowestFrame = here;
     if (++depth > (std::size_t{1} << 30)) return;
     recurse(depth, use);
     pad[1] = pad[0];
@@ -80,8 +86,12 @@ struct Probe {
     bool overflowed = false;
     std::string message;
     StackUse use = StackUse::Evaluation;
-    // How far below the top of its stack the thread's first frame lies.
+    // How far below the top of its stack the thread's first frame lies, and
+    // how far above the bottom the deepest level of `recurse` stopped.
     std::size_t entryOffset = 0;
+    std::size_t stopAboveLow = 0;
+    // Stack bytes per level of `recurse`.
+    std::size_t frameBytes = 0;
 };
 
 // The body of a probe thread.
@@ -89,12 +99,18 @@ void runProbe(Probe* pr) {
     std::uintptr_t low = 0, high = 0;
     stackBounds(low, high);
     const char here = 0;
-    pr->entryOffset = static_cast<std::size_t>(high - reinterpret_cast<std::uintptr_t>(&here));
+    const auto entry = reinterpret_cast<std::uintptr_t>(&here);
+    pr->entryOffset = static_cast<std::size_t>(high - entry);
+    t_lowestFrame = UINTPTR_MAX;
     try {
         recurse(pr->depth, pr->use);
     } catch (const StackOverflowError& e) {
         pr->overflowed = true;
         pr->message = e.what();
+    }
+    if (t_lowestFrame != UINTPTR_MAX) {
+        pr->stopAboveLow = static_cast<std::size_t>(t_lowestFrame - low);
+        if (pr->depth > 0) pr->frameBytes = static_cast<std::size_t>(entry - t_lowestFrame) / pr->depth;
     }
 }
 
@@ -164,20 +180,30 @@ TEST(StackGuard, SourceNestingNamesForms) {
 #endif
     EXPECT_NE(evaluation.message.find("calls or data nested too deeply"),
               std::string::npos) << evaluation.message;
-    // The measurement behind the slack below, printed so CI logs carry it.
+    // Same limit: the two probes stop at the same distance above the bottom of
+    // their stacks, within one level of `recurse`. Compared in bytes, not in
+    // levels: on Windows each thread's first frame lies a different distance
+    // below the top of its stack (measured on the CI runners: 920 and 2312
+    // bytes for two probes, 376 and 1544 in another run; stack-top
+    // randomisation within the first page), so two probe threads reach
+    // depths that differ by up to a page's worth of levels (~7) although they
+    // stop at the same limit. On Linux and macOS the offsets are equal.
     std::printf("probe entry offsets below the stack top: evaluation %zu, source %zu bytes; "
-                "depths %zu and %zu\n",
-                evaluation.entryOffset, source.entryOffset, evaluation.depth, source.depth);
-    // Same limit: the two probes stop within a level or two of each other.
-    // On Windows each new thread starts a varying distance into its stack
-    // reservation, so two probe threads differ by a few levels more.
-#if defined(_WIN32)
-    constexpr std::size_t kSlack = 8;
-#else
-    constexpr std::size_t kSlack = 2;
-#endif
-    EXPECT_LE(source.depth, evaluation.depth + kSlack);
-    EXPECT_LE(evaluation.depth, source.depth + kSlack);
+                "stopped %zu and %zu bytes above the bottom; depths %zu and %zu\n",
+                evaluation.entryOffset, source.entryOffset, evaluation.stopAboveLow,
+                source.stopAboveLow, evaluation.depth, source.depth);
+    ASSERT_GT(evaluation.frameBytes, 0u);
+    const std::size_t level = std::max(evaluation.frameBytes, source.frameBytes);
+    EXPECT_LE(source.stopAboveLow, evaluation.stopAboveLow + level);
+    EXPECT_LE(evaluation.stopAboveLow, source.stopAboveLow + level);
+    // And the depths differ by no more than the entry offsets explain, plus
+    // one level for rounding.
+    const std::size_t entryGap = evaluation.entryOffset > source.entryOffset
+                                     ? evaluation.entryOffset - source.entryOffset
+                                     : source.entryOffset - evaluation.entryOffset;
+    const std::size_t depthGap = evaluation.depth > source.depth ? evaluation.depth - source.depth
+                                                                 : source.depth - evaluation.depth;
+    EXPECT_LE(depthGap, entryGap / level + 1);
 }
 
 TEST(StackGuard, LimitFollowsTheThreadStackSize) {
