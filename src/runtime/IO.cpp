@@ -536,20 +536,6 @@ void closeConnection(Connection* c) {
     protoio::close(c->fd);
 }
 
-// The host a listening socket binds when none was named: every interface.
-// protoIO resolves the empty host to the wildcard addresses and binds the
-// first. Linux lists 0.0.0.0 first; Windows lists :: first, and a Windows
-// IPv6 socket is IPv6-only by default, so a server there would not answer
-// 127.0.0.1. macOS lists :: first too, and its IPv6 socket takes IPv4
-// clients as IPv4-mapped addresses, so :remote-addr read ::ffff:127.0.0.1.
-// Naming 0.0.0.0 on both binds what Linux binds.
-std::string listenHost(const std::string& host) {
-#if defined(_WIN32) || defined(__APPLE__)
-    if (host.empty()) return "0.0.0.0";
-#endif
-    return host;
-}
-
 void report(const std::string& text) {
     std::fprintf(stderr, "protoclj: %s\n", text.c_str());
     std::fflush(stderr);
@@ -1418,7 +1404,7 @@ IOPRIM(prim_run_server) {
     server->cc = callContext();
     server->host = host;
     const std::pair<int, int> bound = blocking(ctx, [&] {
-        const int fd = protoio::net::tcpListen(listenHost(host), port);
+        const int fd = protoio::net::tcpListen(host, port);
         return std::make_pair(fd, protoio::net::sockName(fd).port);
     });
     server->listenFd = bound.first;
@@ -1501,7 +1487,7 @@ IOPRIM(prim_tcp_listen) {
     const std::string host = n == 2 ? stringArg(ctx, arg(ctx, args, 0), "tcp-listen") : "";
     const int port = portArg(ctx, arg(ctx, args, n - 1), "tcp-listen");
     const std::pair<int, int> bound = blocking(ctx, [&] {
-        const int fd = protoio::net::tcpListen(listenHost(host), port);
+        const int fd = protoio::net::tcpListen(host, port);
         return std::make_pair(fd, protoio::net::sockName(fd).port);
     });
     return newHandle(ctx, HandleKind::ServerSocket, bound.first,
