@@ -489,12 +489,16 @@ returns, as a JVM agent's `send` pool thread is. Long blocking work
 belongs in a `future`, which gets its own thread.
 
 **Processes.** `sh` is `protoio::process::run`, which feeds `:in` and
-drains standard output and error together without SIGPIPE. protoIO's
-`run` has no working-directory or environment parameter, so `:dir` and
-`:env` go through `/bin/sh -c 'cd -- "$0" && exec "$@"'` and `env -i`,
-after checking up front, as the JVM would, that the directory exists and
-the program is on `PATH` (otherwise the shell's exit 127 would replace the
-`IOException`).
+drains standard output and error together without SIGPIPE. `:dir` and
+`:env` are `RunOptions::directory` and `RunOptions::environment` (protoIO
+0.2.1): the spawn call itself sets the child's working directory and
+replaces its environment (posix_spawn's file actions and `envp`;
+`CreateProcessW`'s directory and environment block), so no shell or `env`
+program is involved and both work on a stock Windows. The program is
+searched in protoclj's own `PATH`, as the JVM's `ProcessBuilder` searches
+it, so `:env` need not carry `PATH`; on Windows protoIO adds `SystemRoot`
+when `:env` lacks it, as the JVM does. A `:dir` that does not exist is
+checked up front, for the JVM's message.
 
 ## 5. Namespaces and vars (planned)
 

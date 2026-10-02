@@ -1189,49 +1189,6 @@ IOPRIM(prim_copy) {
 
 // ---------------------------------------------------------------- shell
 
-// Searches `cmd` in PATH as posix_spawnp would; true when it names an
-// executable file.
-bool commandExists(const std::string& cmd, std::string* found = nullptr) {
-    auto executable = [](const std::string& p) {
-        const auto st = protoio::file::stat(p);
-        return st && st->isFile;
-    };
-#if defined(_WIN32)
-    // Windows: PATH is ';'-separated, either slash separates directories, and
-    // a program may be named without its ".exe", which CreateProcess (and so
-    // protoIO's run) appends.
-    auto program = [&](const std::string& p) {
-        for (const std::string& name : {p, p + ".exe"}) {
-            if (!executable(name)) continue;
-            if (found) *found = name;
-            return true;
-        }
-        return false;
-    };
-    if (cmd.find_first_of("/\\") != std::string::npos) return program(cmd);
-    const auto path = protoio::process::getenv("PATH");
-    const std::string dirs = path ? *path : "";
-    constexpr char kPathListSeparator = ';';
-#else
-    (void)found;  // the found path is only needed on Windows
-    auto program = executable;
-    if (cmd.find('/') != std::string::npos) return executable(cmd);
-    const auto path = protoio::process::getenv("PATH");
-    const std::string dirs = path ? *path : "/usr/local/bin:/usr/bin:/bin";
-    constexpr char kPathListSeparator = ':';
-#endif
-    std::size_t start = 0;
-    for (;;) {
-        const std::size_t colon = dirs.find(kPathListSeparator, start);
-        std::string dir = dirs.substr(start, colon == std::string::npos ? std::string::npos
-                                                                        : colon - start);
-        if (dir.empty()) dir = ".";
-        if (program(dir + "/" + cmd)) return true;
-        if (colon == std::string::npos) return false;
-        start = colon + 1;
-    }
-}
-
 // (sh cmd & args-and-options): runs a program and answers
 // {:exit n :out "..." :err "..."} (clojure.java.shell/sh). Options: :in (a
 // string fed to its standard input), :dir (its working directory), :env (a
@@ -1253,57 +1210,33 @@ IOPRIM(prim_sh) {
     if (const PO* in = option(ctx, opts, ":in"); in && in != PROTO_NONE) input = strOf(ctx, in);
     std::optional<std::string> dir;
     if (const PO* d = option(ctx, opts, ":dir"); d && d != PROTO_NONE) dir = pathArg(ctx, d, "sh");
-    std::optional<std::vector<std::string>> env;
+    using Environment = std::vector<std::pair<std::string, std::string>>;
+    std::optional<Environment> env;
     if (const PO* e = option(ctx, opts, ":env"); e && e != PROTO_NONE) {
         if (!isMap(e)) wrongType(ctx, "sh :env", "a map", e);
         env.emplace();
         mapForEach(ctx, e, &*env, [](proto::ProtoContext* c, void* self, const PO* k, const PO* v) {
             std::string name = isString(k) ? bytesOf(c, k) : namedName(c, k);
-            static_cast<std::vector<std::string>*>(self)->push_back(name + "=" + strOf(c, v));
+            static_cast<Environment*>(self)->emplace_back(std::move(name), strOf(c, v));
         });
     }
+    // protoIO sets the child's directory and environment itself (posix_spawn
+    // file actions and envp; CreateProcessW's directory and environment
+    // block): no shell and no `env` program in between, on any platform. The
+    // program is searched in this process's PATH, as the JVM searches it.
     const protoio::process::RunResult r = blocking(ctx, [&] {
-        if (!dir && !env) return protoio::process::run(argv, input);
-        // posix_spawn has no working directory or fresh environment in
-        // protoIO's run: go through `sh -c 'cd DIR && exec "$@"'` and
-        // `env -i`, after checking what the JVM would refuse up front.
+        protoio::process::RunOptions run;
+        run.input = input;
         if (dir) {
+            // The JVM's message for a directory that does not exist.
             const auto st = protoio::file::stat(*dir);
             if (!st || !st->isDirectory)
                 throw protoio::Error(Kind::Process, "Cannot run program \"" + argv[0] +
                                      "\" (in directory \"" + *dir + "\"): No such file or directory", 2);
+            run.directory = dir;
         }
-#if defined(_WIN32)
-        // `env -i` (Git for Windows') cannot search a PATH it has just
-        // cleared: give it the program's full path.
-        std::string found;
-        if (!commandExists(argv[0], &found))
-            throw protoio::Error(Kind::Process, "Cannot run program \"" + argv[0] +
-                                 "\": No such file or directory", 2);
-        if (env) argv[0] = found;
-#else
-        if (!commandExists(argv[0]))
-            throw protoio::Error(Kind::Process, "Cannot run program \"" + argv[0] +
-                                 "\": No such file or directory", 2);
-#endif
-        std::vector<std::string> full;
-        if (dir) {
-#if defined(_WIN32)
-            // Windows has no /bin/sh: the `sh` and `env` on PATH (Git for
-            // Windows ships both) do the same, until protoIO's run can set a
-            // child's directory and environment itself.
-            full = {"sh", "-c", "cd -- \"$0\" && exec \"$@\"", *dir};
-#else
-            full = {"/bin/sh", "-c", "cd -- \"$0\" && exec \"$@\"", *dir};
-#endif
-        }
-        if (env) {
-            full.push_back("env");
-            full.push_back("-i");
-            for (const std::string& kv : *env) full.push_back(kv);
-        }
-        full.insert(full.end(), argv.begin(), argv.end());
-        return protoio::process::run(full, input);
+        run.environment = std::move(env);
+        return protoio::process::run(argv, run);
     });
     const std::vector<const PO*> kv{
         kw(ctx, ":exit"), ctx->fromLong(r.exitCode),

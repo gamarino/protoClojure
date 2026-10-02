@@ -83,6 +83,8 @@ add_test(NAME cli/io-command-line-args
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/io-command-line-args.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/io-exit-codes
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/io-exit-codes.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/io-sh-dir-env-native
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/io-sh-dir-env-native.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/http-server-under-heap-limit
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/http-server-under-heap-limit.sh" "$<TARGET_FILE:protoclj>")
 

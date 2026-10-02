@@ -145,7 +145,7 @@ include_directories(${PROTOCORE_INCLUDE_DIRS} include headers src)
 # sibling source tree ../protoIO built as part of this one. OpenSSL (TLS for
 # sockets and https) comes with protoIO's PUBLIC link interface;
 # dpkg-shlibdeps turns it into the package's libssl dependency.
-find_package(protoIO 0.1 CONFIG QUIET)
+find_package(protoIO 0.2.1 CONFIG QUIET)
 if(protoIO_FOUND)
     message(STATUS "protoClojure: installed protoIO ${protoIO_VERSION} from ${protoIO_DIR}")
 elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../protoIO/CMakeLists.txt")
