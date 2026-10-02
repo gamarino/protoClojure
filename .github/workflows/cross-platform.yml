@@ -172,7 +172,9 @@ jobs:
           target="$RUNNER_TEMP/nsis-check"
           rm -rf "$target"
           # /D must come last and unquoted; the installer runs synchronously.
-          "./$installer" /S /D=$(cygpath -w "$target")
+          # MSYS2_ARG_CONV_EXCL: Git Bash would turn /S into the drive S:\,
+          # and the installer would wait at its first page.
+          MSYS2_ARG_CONV_EXCL='*' timeout 300 "./$installer" /S "/D=$(cygpath -w "$target")"
           (cd "$target" && find . -type f | sort)
           out=$(PATH="/c/Windows/System32:/c/Windows" "$target/bin/protoclj.exe" "$(cygpath -w "$RUNNER_TEMP/t.clj")")
           echo "installed protoclj.exe printed: $out"
