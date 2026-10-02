@@ -3,10 +3,10 @@ name: Cross-platform
 # macOS and Windows. Linux is ci.yml's; this workflow adds the two platforms
 # nobody here can run locally, against an INSTALLED protoCore package (the
 # supported mode on Windows) and the sibling protoIO source tree. Refs pinned:
-# protoCore 2.8.0, the first that passes on macOS (ProtoSpace::
-# setThreadStackBytes), and a second Windows job on protoCore 2.7.0, the
-# minimum CMakeLists.txt declares, as ci.yml tests it on Linux. (macOS has no
-# minimum job: below 2.8.0 its protoCore threads get 512 KiB stacks.)
+# protoCore 2.9.4 on macOS and Windows, as ci.yml on Linux, and a second
+# Windows job on protoCore 2.7.0, the minimum CMakeLists.txt declares: the
+# repository's only floor job. (No macOS floor job: below 2.8.0 protoCore's
+# threads get 512 KiB stacks there, ProtoSpace::setThreadStackBytes.)
 
 on:
   push:
@@ -25,7 +25,7 @@ concurrency:
 env:
   PROTOCORE_REPO: numaes/protoCore
   PROTOIO_REPO: gamarino/protoIO
-  # protoIO 0.2.2
+  # protoIO 0.2.2 (main), the floor find_package(protoIO 0.2.2) requires
   PROTOIO_REF: 1611ff9cf8d499cdc42a6e108e42ecfc36fd8164
 
 jobs:
@@ -39,15 +39,16 @@ jobs:
         include:
           - name: macOS (Apple clang, arm64)
             os: macos-14
-            # protoCore 2.8.0
-            protocore_ref: 43b6dc0717e417aa6af1436a45bec187753a8130
+            # protoCore 2.9.4 (tag v2.9.4)
+            protocore_ref: 9cb0ef540826ee6c3162998db84ddf48464d6e2a
           - name: Windows (MSVC, x64)
             os: windows-2022
-            # protoCore 2.8.0
-            protocore_ref: 43b6dc0717e417aa6af1436a45bec187753a8130
+            # protoCore 2.9.4 (tag v2.9.4)
+            protocore_ref: 9cb0ef540826ee6c3162998db84ddf48464d6e2a
           - name: Windows (MSVC, x64), protoCore 2.7.0 minimum
             os: windows-2022
-            # protoCore 2.7.0, PROTOCORE_MIN_VERSION
+            # THE FLOOR JOB, the only one: protoCore 2.7.0 (tag v2.7.0),
+            # PROTOCORE_MIN_VERSION in CMakeLists.txt
             protocore_ref: fc5d79db4f89f8a6eb473a52766b1908140a19d1
     defaults:
       run:

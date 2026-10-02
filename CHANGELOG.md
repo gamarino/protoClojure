@@ -8,6 +8,14 @@ The project has no tagged releases yet; the version declared in
 
 ## [Unreleased]
 
+### Changed — protoCore 2.9.4 in CI, 2026-10-02
+
+- **CI builds protoCore 2.9.4** (tag `v2.9.4`, `9cb0ef5`) on Linux, macOS and
+  Windows for every push and pull request; it built 2.7.0 on Linux and 2.8.0
+  on macOS and Windows. The declared minimum, 2.7.0, is tested by one job
+  only, the Windows floor job of `cross-platform.yml`; Linux no longer
+  builds it. protoIO stays pinned to 0.2.2 (`1611ff9`).
+
 ### Changed — Windows-port review, 2026-10-02
 
 - **`sh` sets `:dir` and `:env` itself** (protoIO 0.2.2 `RunOptions`), with no
@@ -39,7 +47,7 @@ The project has no tagged releases yet; the version declared in
   deletable and renamable, and TLS verification against the Windows
   certificate stores.
 - CI tests protoCore 2.7.0, the declared minimum, on Windows as well as on
-  Linux. All 522 tests pass on Linux, macOS and Windows, none skipped.
+  Linux (since the entry above, on Windows only). All 522 tests pass on Linux, macOS and Windows, none skipped.
 
 ### Added — Windows (MSVC), 2026-10-01
 

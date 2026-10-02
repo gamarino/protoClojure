@@ -203,7 +203,7 @@ conformance fixtures call Unix tools (`mktemp`, `rm`, `basename`, `sleep`,
 `python3`) through `sh`, so Git's `usr/bin` must be on `PATH` (it is inside Git
 Bash), and `python3` must be a real Python, not the Microsoft Store stub (CI
 copies `python.exe` to `python3.exe`). With that, all 522 tests pass, none
-skipped, in CI (`windows-2022`, MSVC, protoCore 2.8.0, and again against
+skipped, in CI (`windows-2022`, MSVC, protoCore 2.9.4, and again against
 protoCore 2.7.0, the declared minimum); protoClojure's own sources build
 warning-free at `/W4`, and CI builds them with `/WX`.
 
@@ -253,7 +253,7 @@ sibling developer fallback was a hard error.
 | Linux / Debian-Ubuntu | TGZ, DEB | **VERIFIED.** Installed with `dpkg -i` as root in a throwaway `ubuntu:24.04` container and run there from `/usr/bin/protoclj`, outside any repository, with no `LD_LIBRARY_PATH` set. |
 | Linux / Fedora-RHEL | TGZ, RPM | **VERIFIED.** `cpack -G RPM` executed in a throwaway `fedora:41` container (glibc 2.40, `rpm` 4.20.1); the RPM installed with `rpm -i` and `protoclj` ran correctly there. This closes the gap left by decision D-I2. |
 | macOS | DragNDrop | **UNVERIFIED.** Configured and reviewed only; there is no macOS host here. Review is not verification. |
-| Windows | ZIP, NSIS | **VERIFIED in CI** (2026-10-02, `windows-2022`, MSVC, protoCore 2.8.0 and 2.7.0). Built and tested (522/522, see [Windows (MSVC)](#windows-msvc)); the ZIP, unpacked into an empty directory, and the NSIS installer, installed silently, each run `protoclj.exe` with only the Windows system directories on `PATH` (it carries protoCore's and OpenSSL's DLLs, OpenSSL's licence and the MSVC runtime). Earlier, by hand (2026-10-01, Windows 11, MSVC 19.44): `cmake --install` into a user prefix, then `protoclj --version`, a script, an example and the REPL from `cmd.exe`. The installer's interactive pages have not been exercised. |
+| Windows | ZIP, NSIS | **VERIFIED in CI** (2026-10-02, `windows-2022`, MSVC, protoCore 2.9.4 and 2.7.0). Built and tested (522/522, see [Windows (MSVC)](#windows-msvc)); the ZIP, unpacked into an empty directory, and the NSIS installer, installed silently, each run `protoclj.exe` with only the Windows system directories on `PATH` (it carries protoCore's and OpenSSL's DLLs, OpenSSL's licence and the MSVC runtime). Earlier, by hand (2026-10-01, Windows 11, MSVC 19.44): `cmake --install` into a user prefix, then `protoclj --version`, a script, an example and the REPL from `cmd.exe`. The installer's interactive pages have not been exercised. |
 
 ### Known defect: the DEB dependency floor does not encode the ABI
 
