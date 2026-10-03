@@ -23,7 +23,7 @@ ceiling, `read-line` over standard input in pipelines,
 shell on `PATH`, `localhost` requests to a server started without a host,
 and an HTTP server under a heap ceiling);
 all pass on Linux, macOS and Windows (CI: 522 of 522 on each, none
-skipped, against protoCore 2.9.4, and on Windows also against the 2.7.0 minimum). Benchmark numbers against Babashka 1.4.192
+skipped, against protoCore 2.10.2 (runs 37109197692, 37109197694), and on Windows also against the 2.7.0 minimum). Benchmark numbers against Babashka 1.4.192
 are in [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md). Shipped changes
 are listed in [`CHANGELOG.md`](../CHANGELOG.md).
 
