@@ -3,7 +3,7 @@ name: Cross-platform
 # macOS and Windows. Linux is ci.yml's; this workflow adds the two platforms
 # nobody here can run locally, against an INSTALLED protoCore package (the
 # supported mode on Windows) and the sibling protoIO source tree. Refs pinned:
-# protoCore 2.9.4 on macOS and Windows, as ci.yml on Linux, and a second
+# protoCore 2.10.2 on macOS and Windows, as ci.yml on Linux, and a second
 # Windows job on protoCore 2.7.0, the minimum CMakeLists.txt declares: the
 # repository's only floor job. (No macOS floor job: below 2.8.0 protoCore's
 # threads get 512 KiB stacks there, ProtoSpace::setThreadStackBytes.)
@@ -39,12 +39,12 @@ jobs:
         include:
           - name: macOS (Apple clang, arm64)
             os: macos-14
-            # protoCore 2.9.4 (tag v2.9.4)
-            protocore_ref: 9cb0ef540826ee6c3162998db84ddf48464d6e2a
+            # protoCore 2.10.2 (tag v2.10.2)
+            protocore_ref: b7f6d82a3960cb74e070e053aa644ec2f79c7fc2
           - name: Windows (MSVC, x64)
             os: windows-2022
-            # protoCore 2.9.4 (tag v2.9.4)
-            protocore_ref: 9cb0ef540826ee6c3162998db84ddf48464d6e2a
+            # protoCore 2.10.2 (tag v2.10.2)
+            protocore_ref: b7f6d82a3960cb74e070e053aa644ec2f79c7fc2
           - name: Windows (MSVC, x64), protoCore 2.7.0 minimum
             os: windows-2022
             # THE FLOOR JOB, the only one: protoCore 2.7.0 (tag v2.7.0),

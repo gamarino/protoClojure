@@ -8,6 +8,14 @@ The project has no tagged releases yet; the version declared in
 
 ## [Unreleased]
 
+### Changed — protoCore 2.10.2 in CI, 2026-10-03
+
+- **CI builds protoCore 2.10.2** (tag `v2.10.2`, `b7f6d82`) on Linux, macOS
+  and Windows instead of 2.9.4; the Windows floor job stays on 2.7.0 and
+  protoIO on 0.2.2. No source change was needed: the full suite passes locally
+  against 2.10.2 (522/522). protoClojure does not enable protoCore's adaptive
+  heap.
+
 ### Changed — protoCore 2.9.4 in CI, 2026-10-02
 
 - **CI builds protoCore 2.9.4** (tag `v2.9.4`, `9cb0ef5`) on Linux, macOS and
