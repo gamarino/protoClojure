@@ -8,6 +8,18 @@ The project has no tagged releases yet; the version declared in
 
 ## [Unreleased]
 
+### Changed — protoCore 2.14.1 in CI, 2026-10-04
+
+- **CI builds protoCore 2.14.1** (tag `v2.14.1`, `9495155`) on Linux, macOS
+  and Windows instead of 2.10.2: the collector's pacing and multi-cursor
+  sweep (2.12.0), its control law (2.13.0), the sweep's helper threads
+  (2.14.0) and the thread-exit quorum fix (2.14.1). The Windows floor job
+  stays on 2.7.0 (protoClojure does not use `setAttributes`: its state
+  changes go through atoms, vars and persistent collections) and protoIO on
+  0.2.2. No source change was needed: the full suite passes locally against
+  2.14.1 (522/522, ldd-verified). protoClojure does not enable protoCore's
+  adaptive heap.
+
 ### Changed — protoCore 2.10.2 in CI, 2026-10-03
 
 - **CI builds protoCore 2.10.2** (tag `v2.10.2`, `b7f6d82`) on Linux, macOS
