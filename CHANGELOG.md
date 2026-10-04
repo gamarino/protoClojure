@@ -17,8 +17,9 @@ The project has no tagged releases yet; the version declared in
   stays on 2.7.0 (protoClojure does not use `setAttributes`: its state
   changes go through atoms, vars and persistent collections) and protoIO on
   0.2.2. No source change was needed: the full suite passes locally against
-  2.14.1 (522/522, ldd-verified). protoClojure does not enable protoCore's
-  adaptive heap.
+  2.14.1 (522/522, ldd-verified), and CI is green on Linux, macOS and Windows
+  (522 of 522 on each; runs 37169479198, 37169480523). protoClojure does not
+  enable protoCore's adaptive heap.
 
 ### Changed — protoCore 2.10.2 in CI, 2026-10-03
 
