@@ -268,6 +268,32 @@ The benchmark harness expects a Babashka binary at `/tmp/proto-bench/bb` by defa
 ./benchmarks/bench.sh ./build_release/protoclj /usr/local/bin/bb
 ```
 
+### Memory
+
+`protoclj` runs protoCore's adaptive heap controller (protoCore
+[docs/GarbageCollector.md](https://github.com/numaes/protoCore/blob/master/docs/GarbageCollector.md),
+"Adaptive heap controller"). The heap budget is **75 % of the smaller of
+physical memory and the process memory limit** (the cgroup limit on Linux, the
+job object's on Windows); within it, a soft limit starts at 128 MiB of cells and
+grows only while the program waits for the collector, so a program that
+allocates much more than it keeps runs in a bounded heap. **Memory is not
+returned to the operating system**: the resident size stays at the run's
+high-water mark. A program whose live data exceeds the budget stops with
+protoCore's out-of-memory message.
+
+| Environment variable | Effect |
+|---|---|
+| `PROTOCORE_HEAP_LIMIT_CELLS=<hard>` or `<soft>,<hard>` | Sets the budget (and the initial soft limit) in 64-byte cells; `1000000` is about 64 MiB. |
+| `PROTOCORE_ADAPTIVE_HEAP=0` | Turns the controller off: the budget becomes a fixed hard limit. |
+| `PROTOCORE_ADAPTIVE_HEAP_START=budget` | Starts the soft limit at the budget, for a run known to fit. |
+| `PROTOCORE_HEAP_TRACE=1` | Prints one line per collection cycle on standard error. |
+
+Before this default (2026-10-10), protoclj set no limit and protoCore never
+started a collection by itself: a program grew its heap with every allocation
+(with six allocating tasks, `coll_alloc` was killed at 16 GB). A protoclj built
+against a protoCore older than 2.10.0 (the declared minimum is 2.7.0) has no
+controller and keeps that old behaviour.
+
 ### Packaging
 
 protoClojure configures installable packages for Linux, macOS, and Windows via CPack — the same machinery protoST uses. The platform-appropriate generators are selected automatically; you pick which artifact you want with `cpack -G`. All artifacts contain the `protoclj` binary, the documentation, the example `.clj` scripts under `share/protoClojure/examples`, and the benchmark scripts under `share/protoClojure/benchmarks`.

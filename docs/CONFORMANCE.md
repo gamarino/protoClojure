@@ -96,9 +96,13 @@ already have most of an answer in the tree:
 ## Informational
 
 - protoClojure never calls `setHeapLimits` and installs no
-  `outOfMemoryCallback`, so no cycle starts by itself in an ordinary run and rule
-  8 is unreachable as configured. Its GC-observing CLI fixtures set
-  `PROTOCORE_HEAP_LIMIT_CELLS` from outside for exactly this reason.
+  `outOfMemoryCallback`. Until 2026-10-10 no cycle started by itself in an
+  ordinary run and rule 8 was unreachable as configured; its GC-observing CLI
+  fixtures set `PROTOCORE_HEAP_LIMIT_CELLS` from outside for exactly this
+  reason. Since then protoclj enables protoCore's adaptive heap controller
+  (README, "Memory"), whose budget is a hard limit: cycles start under heap
+  pressure, and a live set above the budget ends in protoCore's out-of-memory
+  abort.
 - The safepoint added on a 64-event stride in the VM
   (`src/runtime/ExecutionEngine.h:184-186`, `.cpp:242-256`) has a documented
   kill switch, `PROTOCLJ_NO_GC_SAFEPOINT=1`, and

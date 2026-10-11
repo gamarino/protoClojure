@@ -151,6 +151,24 @@ endif()
 # protoCore's headers are a dependency's: SYSTEM, so the warning level of
 # protoClojure's own sources does not apply to them.
 include_directories(SYSTEM ${PROTOCORE_INCLUDE_DIRS})
+
+# protoCore's adaptive heap controller (2.10.0+), which protoclj enables on its
+# space (src/main.cpp). Below 2.10.0 -- the floor is 2.7.0 -- protoclj builds
+# without it, and the tests that check it (tests/CMakeLists.txt) are not
+# registered.
+set(PROTOCLJ_HAS_ADAPTIVE_HEAP OFF)
+foreach(_dir IN LISTS PROTOCORE_INCLUDE_DIRS)
+    if(EXISTS "${_dir}/protoCore.h")
+        file(STRINGS "${_dir}/protoCore.h" _ah REGEX "^#define PROTOCORE_HAS_ADAPTIVE_HEAP ")
+        if(_ah)
+            set(PROTOCLJ_HAS_ADAPTIVE_HEAP ON)
+        endif()
+        break()
+    endif()
+endforeach()
+unset(_dir)
+unset(_ah)
+message(STATUS "protoClojure: adaptive heap controller: ${PROTOCLJ_HAS_ADAPTIVE_HEAP}")
 include_directories(include headers src)
 
 # --- protoIO: files, processes, TCP, UDP, TLS and HTTP (src/runtime/IO.cpp) ---

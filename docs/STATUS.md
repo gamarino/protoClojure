@@ -562,7 +562,14 @@ See `LANGUAGE.md` for the full discussion. Summary:
 
 ## Known issues
 
-- **Nothing is ever collected unless a heap ceiling is set. Severity: high.
+- **Resolved on 2026-10-10: protoclj now runs protoCore's adaptive heap
+  controller** (`src/main.cpp`, README "Memory"), which starts cycles under
+  heap pressure within a budget of 75 % of memory; the `churn` program below
+  now collects with nothing in the environment. The entry is kept as it was
+  written. Built against a protoCore older than 2.10.0 (the floor is 2.7.0)
+  there is no controller and the issue remains.
+
+  **Nothing is ever collected unless a heap ceiling is set. Severity: high.
   The fix belongs in protoCore, so it is not made here.** protoCore starts a
   collection cycle from exactly one place, the heap-limit enforcement path
   (`ProtoSpace::reclaimWaitLocked`, reached from `waitForHeapHeadroom`).

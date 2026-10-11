@@ -341,6 +341,24 @@ void prepareStandardStreams() {
 #endif
 }
 
+// The process's memory policy: protoCore's adaptive heap controller
+// (protoCore docs/GarbageCollector.md, "Adaptive heap controller"; README.md,
+// "Memory"). The heap budget is 75 % of the smaller of physical memory and the
+// process memory limit (cgroup on Linux, job object on Windows); a soft limit
+// inside it grows only while the program waits for the collector. Memory is
+// never returned to the operating system. PROTOCORE_HEAP_LIMIT_CELLS=<hard> or
+// <soft>,<hard> sets the budget in cells; PROTOCORE_ADAPTIVE_HEAP=0 applies it
+// as a fixed hard limit instead. Built against a protoCore older than 2.10.0
+// (the floor is 2.7.0) there is no controller, and protoCore starts no
+// collection cycle by itself unless PROTOCORE_HEAP_LIMIT_CELLS is set.
+void applyHeapPolicy(proto::ProtoSpace& space) {
+#if defined(PROTOCORE_HAS_ADAPTIVE_HEAP)
+    space.enableAdaptiveHeap();
+#else
+    (void)space;
+#endif
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -355,6 +373,7 @@ int main(int argc, char** argv) {
     if (argc < 2) {
         // No arguments → drop into the interactive REPL.
         proto::ProtoSpace space;
+        applyHeapPolicy(space);
         return protoClojure::runOnEvaluatorThread(
             space, [](proto::ProtoContext* ctx, void*) { return protoClojure::runRepl(ctx); },
             nullptr);
@@ -381,6 +400,7 @@ int main(int argc, char** argv) {
         ScriptRun run{argv[i], {}};
         for (int j = i + 1; j < argc; ++j) run.args.emplace_back(argv[j]);
         proto::ProtoSpace space;
+        applyHeapPolicy(space);
         return protoClojure::runOnEvaluatorThread(
             space,
             [](proto::ProtoContext* ctx, void* p) {
