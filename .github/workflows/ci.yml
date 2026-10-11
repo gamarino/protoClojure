@@ -53,11 +53,11 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 2.14.1 (tag v2.14.1, 9495155), SOVERSION 3.  The minimum
+  # protoCore 2.14.2 (tag v2.14.2, 17bc118), SOVERSION 3.  The minimum
   # CMakeLists.txt declares (PROTOCORE_MIN_VERSION, 2.7.0) is tested by one
   # job only, the floor job in cross-platform.yml (Windows).  Bump this
   # deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '949515598fedc17b74e48ad00163e1844de6e5d2' }}
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '17bc118e3af265b84fe322901c9e6b9a448a82d3' }}
   PROTOIO_REPO: gamarino/protoIO
   # protoIO 0.2.2 (main, 2026-10-02): RunOptions for sh :dir/:env, the
   # dual-stack wildcard listener.  Bump this deliberately.
