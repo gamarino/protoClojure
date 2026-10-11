@@ -51,7 +51,8 @@ The project has no tagged releases yet; the version declared in
   and Windows instead of 2.14.1 (the collector adjustments, including the
   controller's live-set floor). The Windows floor job stays on 2.7.0 and
   protoIO on 0.2.2. The full suite passes locally against 2.14.2 (525/525,
-  ldd-verified).
+  ldd-verified), and CI is green on the branch: Linux, macOS and Windows 525
+  of 525, the 2.7.0 floor job 522 of 522 (runs 38104010751, 38104012172).
 
 ### Changed — protoCore 2.14.1 in CI, 2026-10-04
 
