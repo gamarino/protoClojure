@@ -8,6 +8,15 @@ The project has no tagged releases yet; the version declared in
 
 ## [Unreleased]
 
+### Changed — protoCore 2.14.5 in CI, 2026-10-11
+
+- **CI builds protoCore 2.14.5** (tag `v2.14.5`, `063c6d5`) on Linux, macOS
+  and Windows instead of 2.14.2: the controller's out-of-memory rule uses the
+  live set and the collector's registries outlive static destruction
+  (2.14.4); an embedder exits LeakSanitizer-clean (2.14.5). The Windows floor
+  job stays on 2.7.0. No source change was needed; the suite passes 525/525
+  locally against 2.14.5 (ldd-verified).
+
 ### Changed — protoCore's adaptive heap controller by default; protoCore 2.14.2 in CI, 2026-10-10
 
 - **protoclj runs protoCore's adaptive heap controller.** `main` calls
