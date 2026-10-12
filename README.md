@@ -123,6 +123,16 @@ Measured on 2026-06-14, the move from a per-actor `std::mutex` + `std::deque` to
 
 ## Performance — what is measured
 
+**protoCore 2.14.6 (measured 2026-10-12).**  `/` on two integers reaches
+protoCore's `divide`, which no longer allocates a temporary: a loop of
+2,000,000 divisions, the same commit (`359d8f6`) built against protoCore
+2.14.5 and 2.14.6, -37.5 % cycles (A/A -0.9 %).  `benchmarks/bench.sh`
+(none of its workloads divides) against Babashka 1.4.192, two rounds, with
+2.14.6: `fib` 533 ms (1.20x bb), `tak` 46.5 ms (1.66x), `sum-loop` 66 ms
+(0.40x), `reduce-list` 30.5 ms (1.65x), `sum-squares` 22.5 ms (1.32x);
+each within 2.5 ms of 2.14.5.  These differ from the table below, which was
+measured in June at an older commit.  Details: [protoCore's report](https://github.com/numaes/protoCore/blob/master/docs/reports/2026-10-12-cross-runtime-int-compare.md).
+
 **On call-dispatch-bound recursion (`fib`, `tak`), protoClojure is 1.2-1.4× slower than Babashka 1.4.192. On `loop`/`recur` arithmetic, `reduce` over a list and `map` + `reduce` it is faster (0.36-0.75× Babashka's time). On LargeInteger workloads Babashka does not finish with default arithmetic.** The harness is [`benchmarks/bench.sh`](benchmarks/bench.sh): three runs per workload, best wall-clock time of three, each run a single process invocation including start-up. Babashka is GraalVM-native; both runtimes ran on the same machine.
 
 | Workload | protoclj (ms) | bb (ms) | ratio | Notes |
