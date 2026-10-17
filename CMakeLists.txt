@@ -424,6 +424,7 @@ install(DIRECTORY docs/
 # from a freshly installed package).
 install(DIRECTORY examples/
     DESTINATION ${CMAKE_INSTALL_DATADIR}/protoClojure/examples
+    USE_SOURCE_PERMISSIONS
     COMPONENT protoClojure
     FILES_MATCHING PATTERN "*.clj")
 

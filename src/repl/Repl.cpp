@@ -70,7 +70,7 @@ namespace {
 //
 // Decides whether an accumulated buffer is a complete top-level form or
 // the user is still typing. Cheap, lexical only: tracks `()`, `[]`, `{}`,
-// `"…"` strings, `;` line comments, and `\X` character literals. A
+// `"…"` strings, `;` and `#!` line comments, and `\X` character literals. A
 // negative paren / bracket / brace count → genuine error (we let the
 // reader report it). String continuation → still typing.
 enum class Balance { Incomplete, Balanced, Error };
@@ -85,7 +85,7 @@ Balance scanBalance(const std::string& src) {
             if (c == '"') inStr = false;
             continue;
         }
-        if (c == ';') {
+        if (c == ';' || (c == '#' && i + 1 < src.size() && src[i + 1] == '!')) {
             // Line comment — skip to newline (or EOF).
             while (i < src.size() && src[i] != '\n') ++i;
             continue;

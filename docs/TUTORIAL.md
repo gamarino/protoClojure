@@ -64,6 +64,7 @@ nREPL server are planned (see [`ROADMAP.md`](ROADMAP.md)).
 
 ```bash
 $ protoclj script.clj           # run a file
+$ ./script.clj                  # run a file whose first line is #!/usr/bin/env protoclj
 $ protoclj                      # interactive REPL
 $ protoclj --version            # print the version
 $ protoclj -e '(+ 1 2)'         # planned

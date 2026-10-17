@@ -137,6 +137,41 @@ $ protoclj greet.clj Ada
 hello, Ada
 ```
 
+### Scripts as commands
+
+A script that starts with an interpreter line runs as a command of its own.
+`#!` is a comment in Clojure, so the line costs nothing to the program;
+the operating system reads it and starts `protoclj` on the file. Two such
+filters ship in `examples/`: `13-filter-grep.clj PATTERN` prints the lines
+that contain PATTERN and exits with grep's statuses, and
+`14-filter-count.clj` counts lines like `wc -l`:
+
+```clojure
+#!/usr/bin/env protoclj
+;; 14-filter-count.clj
+(defn count-lines [n]
+  (if (nil? (read-line))
+    n
+    (recur (inc n))))
+
+(println (count-lines 0))
+```
+
+Make them executable once, and the shell composes them, with each other
+and with the standard tools:
+
+```bash
+$ chmod +x examples/13-filter-grep.clj examples/14-filter-count.clj
+$ printf 'pump-1 ok\npump-2 ALARM\npump-3 ALARM\n' | examples/13-filter-grep.clj ALARM | examples/14-filter-count.clj
+2
+$ printf 'pump-1 ok\n' | examples/13-filter-grep.clj ALARM || echo "no alarm"
+no alarm
+```
+
+The second pipeline shows the exit status at work: no line matched, so the
+filter exits with 1 and `||` runs. `/usr/bin/env` looks `protoclj` up on
+`PATH`, so the script runs with whichever `protoclj` comes first there.
+
 ## 14.4 Other programs
 
 `sh` runs a program and answers a map with its exit status and both

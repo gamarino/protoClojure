@@ -8,6 +8,26 @@ The project has no tagged releases yet; the version declared in
 
 ## [Unreleased]
 
+### Added — `#!` comments: scripts run as commands, 2026-10-17
+
+- **`#!` is a line comment**, as in Clojure (LispReader's `CommentReader`):
+  the lexer skips from `#!` to the end of the line wherever it appears, and
+  the REPL's completeness check does too. A script whose first line is
+  `#!/usr/bin/env protoclj` and that is executable runs as a command and
+  chains in pipelines. Before, such a script failed with `read error:
+  reserved-for-later token: #`. Line numbers in read errors are unchanged.
+- **Examples:** `examples/13-filter-grep.clj` (lines that contain a
+  pattern, grep's exit statuses) and `examples/14-filter-count.clj` (a line
+  count), executable; the install keeps their permissions
+  (`USE_SOURCE_PERMISSIONS`).
+- **Tests:** a lexer unit test, the conformance fixture
+  `01-literals/hash-bang-comment.clj`, and the CLI check
+  `cli/shebang-scripts`, which runs the two examples as commands through
+  `env` in real pipelines (results, exit statuses 1 and 2, an early
+  `head`) and checks that a read error after the line names its real line.
+- **Docs:** LANGUAGE.md §2.1, §2.8 and §18.2 ("Scripts as commands"),
+  tutorial §14.3, TUTORIAL.md, README, STATUS.md.
+
 ### Changed — protoCore 2.14.5 in CI, 2026-10-11
 
 - **CI builds protoCore 2.14.5** (tag `v2.14.5`, `063c6d5`) on Linux, macOS

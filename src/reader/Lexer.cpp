@@ -101,9 +101,11 @@ void Lexer::advance() {
 }
 
 // Clojure treats commas as whitespace ([1, 2, 3] is identical to [1 2 3]).
-// Line comments start with `;` and run to end of line. Block comments do not
-// exist (Clojure uses `#_` form-discarding for compile-time skipping; that is
-// a reader-level concern, not a lexer one).
+// Line comments start with `;` or `#!` and run to end of line; `#!` is
+// Clojure's dispatch-macro comment (LispReader's CommentReader), which lets a
+// script start with a `#!/usr/bin/env protoclj` interpreter line. Block
+// comments do not exist (Clojure uses `#_` form-discarding for compile-time
+// skipping; that is a reader-level concern, not a lexer one).
 void Lexer::skipWhitespaceAndComments() {
     while (!eof()) {
         char c = current();
@@ -111,7 +113,7 @@ void Lexer::skipWhitespaceAndComments() {
             advance();
             continue;
         }
-        if (c == ';') {
+        if (c == ';' || (c == '#' && lookahead() == '!')) {
             while (!eof() && current() != '\n') advance();
             continue;
         }

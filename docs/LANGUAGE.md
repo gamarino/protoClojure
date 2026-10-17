@@ -147,7 +147,10 @@ comments and commas as whitespace. The rest of this section is planned.
 
 Whitespace separates tokens. Commas count as whitespace (an unusual
 Clojure inheritance — `[1, 2, 3]` is identical to `[1 2 3]`). A line
-comment begins with `;` and runs to end of line. A form-discarding
+comment begins with `;` or `#!` and runs to end of line; `#!` is
+Clojure's dispatch-macro comment, which lets a script start with a
+`#!/usr/bin/env protoclj` interpreter line (§18.2). Like Clojure, the
+reader treats `#!` as a comment wherever it appears, not only on line 1. A form-discarding
 comment is `#_<form>` — the next form is read and dropped.
 
 ### 2.2 Numbers
@@ -285,6 +288,7 @@ truthy).
 - `#'sym` → var-quote: produces the var, not the value (`@#'my-fn`
   returns the current value).
 - `#_form` → discard the next form.
+- `#!` → a comment to end of line (implemented; §2.1).
 - `^{:a 1} form` → attach metadata to `form`. `^kw` is `{:tag kw}`;
   `^Type` is `{:tag Type}`.
 - `@form` → `(deref form)` (implemented).
@@ -1211,6 +1215,18 @@ variable as a map of strings (Java: `System/getenv`). `(exit)` and
 was printed (Java: `System/exit`). The arguments given after the script's
 path, `protoclj script.clj a b`, are bound to `*command-line-args*` as a
 list of strings, or nil when there are none.
+
+**Scripts as commands.** A script whose first line is
+`#!/usr/bin/env protoclj` and that has execute permission (`chmod +x`)
+runs as a command: `./grep.clj ALARM` is `protoclj grep.clj ALARM`. With
+`read-line`, `println`, `*command-line-args*` and `exit` it is a Unix
+filter that chains with other commands in a pipeline
+(`examples/13-filter-grep.clj`, `examples/14-filter-count.clj`); a filter
+stops when the program reading its output exits. `env` finds `protoclj` on
+`PATH`. On Linux an interpreter line passes at most one argument, so an
+option for protoclj needs `#!/usr/bin/env -S protoclj ...`. Windows has no
+interpreter lines: there a script runs as `protoclj script.clj`, and the
+line is an ordinary comment.
 
 ### 18.3 HTTP client
 

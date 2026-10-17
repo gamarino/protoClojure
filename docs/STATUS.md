@@ -5,13 +5,14 @@
 > implemented here, it is not implemented.
 
 **Current state.** Version 0.0.1, no tagged release. The interpreter runs
-scripts and an interactive REPL. `ctest` registers 522 test cases: 407
-conformance fixtures under `tests/conformance/`, 98 GoogleTest unit
+scripts and an interactive REPL. `ctest` registers 528 test cases: 408
+conformance fixtures under `tests/conformance/`, 99 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,
 its key semantics, the lifetime of values that used to be interned, the
 vector representation, value equality and hashing, the
 native stack guard, the double printer and exception values
-(`tests/unit/`), and seventeen CLI checks (`tests/cli/`: `--help`, a
+(`tests/unit/`), and 21 CLI checks (`tests/cli/`: `--help`, three checks
+of the adaptive heap controller, a
 generated program with 70,000 distinct literals of each kind, the native
 bulk builders under a heap ceiling, the garbage a `loop` makes under a heap
 ceiling, joins that must park for the collector, actor message payloads
@@ -21,8 +22,9 @@ exception in a script and in the REPL, exceptions thrown under a heap
 ceiling, `read-line` over standard input in pipelines,
 `*command-line-args*`, exit statuses, `sh` with `:dir` and `:env` and no
 shell on `PATH`, `localhost` requests to a server started without a host,
-and an HTTP server under a heap ceiling);
-all pass on Linux, macOS and Windows (CI: 522 of 522 on each, none
+an HTTP server under a heap ceiling, and scripts run as commands through a
+`#!` line); all 528 pass locally on Linux (2026-10-17). The last CI record
+predates the six newest cases: 522 of 522 on Linux, macOS and Windows, none
 skipped, against protoCore 2.14.1 (runs 37169479198, 37169480523), and on Windows also against the 2.7.0 minimum). Benchmark numbers against Babashka 1.4.192
 are in [`benchmarks/RESULTS.md`](../benchmarks/RESULTS.md). Shipped changes
 are listed in [`CHANGELOG.md`](../CHANGELOG.md).
@@ -87,6 +89,9 @@ The design specifications written during development are archived under
 - [x] Maps `{...}`
 - [x] `@form` — read as `(deref form)`
 - [x] Line comments `;`; commas as whitespace
+- [x] `#!` line comments, as in Clojure (anywhere, to end of line), so a
+      script starting with `#!/usr/bin/env protoclj` runs as a command
+      (`tests/cli/shebang-scripts.sh`, `examples/13-filter-grep.clj`)
 - [x] Nesting depth — the reader and the compiler recurse once per level of
       nesting and check the native stack at each level: forms nested deeper
       than the 32 MiB stack allows are a read error, reported where reading

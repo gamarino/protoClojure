@@ -43,6 +43,21 @@ TEST(Lexer, SkipsLineComments) {
     EXPECT_EQ(toks[0].intValue, 42);
 }
 
+// `#!` is Clojure's other line comment (LispReader's CommentReader), so a
+// script can start with a `#!/usr/bin/env protoclj` interpreter line. As
+// in Clojure it is a comment wherever it appears, not only on line 1.
+TEST(Lexer, SkipsHashBangComments) {
+    auto toks = tokenise("#!/usr/bin/env protoclj\n42 #! (unbalanced\n7");
+    ASSERT_EQ(toks.size(), 3u);
+    EXPECT_EQ(toks[0].kind, TokenKind::Integer);
+    EXPECT_EQ(toks[0].intValue, 42);
+    EXPECT_EQ(toks[0].line, 2);
+    EXPECT_EQ(toks[1].intValue, 7);
+    EXPECT_EQ(toks[1].line, 3);
+    EXPECT_EQ(toks[2].kind, TokenKind::EndOfFile);
+    EXPECT_EQ(tokenise("#!only a comment").size(), 1u);
+}
+
 TEST(Lexer, PositiveInteger) {
     auto toks = tokenise("42");
     ASSERT_EQ(toks.size(), 2u);

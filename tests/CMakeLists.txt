@@ -126,6 +126,9 @@ add_test(NAME cli/io-exit-codes
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/io-exit-codes.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/io-sh-dir-env-native
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/io-sh-dir-env-native.sh" "$<TARGET_FILE:protoclj>")
+# Scripts with a `#!/usr/bin/env protoclj` line run as commands in pipelines.
+add_test(NAME cli/shebang-scripts
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/shebang-scripts.sh" "$<TARGET_FILE:protoclj>")
 # A server without a host answers ::1, so "localhost" is served at once.
 add_test(NAME cli/http-localhost-latency
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/http-localhost-latency.sh" "$<TARGET_FILE:protoclj>")
