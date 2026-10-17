@@ -357,6 +357,26 @@ endif()
 enable_testing()
 add_subdirectory(tests)
 
+# --- Version consistency ---
+# protoclj prints the constants of headers/protoClojure.h, so they must match
+# project() above; configuring fails when one is bumped without the other.
+file(STRINGS "${CMAKE_SOURCE_DIR}/headers/protoClojure.h" PROTOCLJ_VERSION_LINES
+    REGEX "constexpr int kVersion(Major|Minor|Patch) = [0-9]+;")
+set(PROTOCLJ_HEADER_VERSION "")
+foreach(part Major Minor Patch)
+    foreach(line IN LISTS PROTOCLJ_VERSION_LINES)
+        if(line MATCHES "kVersion${part} = ([0-9]+);")
+            list(APPEND PROTOCLJ_HEADER_VERSION "${CMAKE_MATCH_1}")
+        endif()
+    endforeach()
+endforeach()
+list(JOIN PROTOCLJ_HEADER_VERSION "." PROTOCLJ_HEADER_VERSION)
+if(NOT PROTOCLJ_HEADER_VERSION STREQUAL PROJECT_VERSION)
+    message(FATAL_ERROR "headers/protoClojure.h declares version "
+        "'${PROTOCLJ_HEADER_VERSION}' but project() declares ${PROJECT_VERSION}; "
+        "update both.")
+endif()
+
 # --- Friendly info at configure time ---
 message(STATUS "protoClojure ${PROJECT_VERSION}")
 message(STATUS "protoCore lib: ${PROTOCORE_LIBRARY}")
