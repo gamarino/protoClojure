@@ -14,7 +14,7 @@ deviates is [`docs/STATUS.md`](STATUS.md). The tutorial describes the
 language protoClojure is converging on; not every snippet runs against
 the current `protoclj` binary.
 
-> **What runs today (protoClojure 0.0.1).** Functions, closures,
+> **What runs today (protoClojure 0.0.2).** Functions, closures,
 > multi-arity and variadic functions, lists, vectors, maps and strings
 > (chapters 2, 4 and 5, in part); atoms, watches, futures and promises
 > (chapter 6, in part); the local REPL (chapter 10, in part); actors

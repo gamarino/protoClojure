@@ -4,7 +4,7 @@
 > finished, or dropped. If a feature you expect is not listed as
 > implemented here, it is not implemented.
 
-**Current state.** Version 0.0.1, no tagged release. The interpreter runs
+**Current state.** Version 0.0.2 (2026-10-17), a preview tag. The interpreter runs
 scripts and an interactive REPL. `ctest` registers 528 test cases: 408
 conformance fixtures under `tests/conformance/`, 99 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,

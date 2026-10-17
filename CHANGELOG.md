@@ -3,10 +3,17 @@
 All notable changes to protoClojure are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-The project has no tagged releases yet; the version declared in
-`CMakeLists.txt` (and printed by `protoclj --version`) is 0.0.1.
+The version declared in `CMakeLists.txt` (and printed by `protoclj --version`)
+is 0.0.2, the first tag: a preview with a Linux `.deb`. v0.1.0 remains the
+first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
+
+## [0.0.2] - 2026-10-17
+
+A preview tag of everything below. The `.deb` is built in a clean Ubuntu 24.04
+container with GCC 13 against protoCore 2.14.6 and declares
+`protocore (>= 2.14.6)`.
 
 ### Added — `#!` comments: scripts run as commands, 2026-10-17
 

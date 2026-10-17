@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoClojure VERSION 0.0.1 LANGUAGES CXX)
+project(protoClojure VERSION 0.0.2 LANGUAGES CXX)
 
 # Default to RelWithDebInfo so casual builds are not -O0 (matches the protoST
 # convention). Override with -DCMAKE_BUILD_TYPE=Release for a stripped -O3.
