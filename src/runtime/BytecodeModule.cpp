@@ -1,4 +1,5 @@
 #include "BytecodeModule.h"
+#include "protoCore.h"
 
 #include <cstring>
 #include <stdexcept>
@@ -99,8 +100,11 @@ std::size_t BytecodeModule::addString(const std::string& s) {
     return findOrAdd(stringIndex_, s, consts_, Const{ConstKind::String, 0, 0.0, s});
 }
 
-std::size_t BytecodeModule::addSymbol(const std::string& s) {
-    return findOrAdd(symbolIndex_, s, consts_, Const{ConstKind::Symbol, 0, 0.0, s});
+std::size_t BytecodeModule::addSymbol(proto::ProtoContext* ctx, const std::string& s) {
+    // Interned once here, not on every PUSH_VAR / STORE_GLOBAL execution.
+    const auto* key = reinterpret_cast<const proto::ProtoObject*>(
+        proto::ProtoString::createSymbol(ctx, s.c_str()));
+    return findOrAdd(symbolIndex_, s, consts_, Const{ConstKind::Symbol, 0, 0.0, s, key});
 }
 
 std::size_t BytecodeModule::addNamed(const std::string& spelling,

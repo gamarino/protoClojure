@@ -5,6 +5,8 @@
 
 #include "runtime/BytecodeModule.h"
 
+#include "protoCore.h"
+
 #include <gtest/gtest.h>
 
 #include <cmath>
@@ -17,13 +19,21 @@ using protoClojure::kMaxOperand;
 using protoClojure::kOperandShift;
 using protoClojure::Op;
 
+namespace {
+// Symbol constants are interned when added, which needs a protoCore context.
+proto::ProtoContext* symbolContext() {
+    static proto::ProtoSpace space;
+    return space.rootContext;
+}
+}
+
 TEST(BytecodeModule, EqualConstantsOfOneKindShareAnEntry) {
     BytecodeModule m;
     const std::size_t one = m.addLong(1);
     EXPECT_EQ(m.addLong(1), one);
     EXPECT_EQ(m.addDouble(2.5), m.addDouble(2.5));
     EXPECT_EQ(m.addString("a"), m.addString("a"));
-    EXPECT_EQ(m.addSymbol("f"), m.addSymbol("f"));
+    EXPECT_EQ(m.addSymbol(symbolContext(), "f"), m.addSymbol(symbolContext(), "f"));
     EXPECT_EQ(m.addNamed(":a", nullptr), m.addNamed(":a", nullptr));
     EXPECT_EQ(m.addBigInteger("12345678901234567890"),
               m.addBigInteger("12345678901234567890"));
@@ -37,13 +47,25 @@ TEST(BytecodeModule, ConstantsOfDifferentKindsOrBitsStayDistinct) {
     const std::set<std::size_t> indices{
         m.addLong(1),       m.addDouble(1.0),     m.addString("1"),
         m.addString("a"),   m.addString(":a"),    m.addNamed(":a", nullptr),
-        m.addNamed("a", nullptr), m.addSymbol("a"), m.addDouble(0.0),
+        m.addNamed("a", nullptr), m.addSymbol(symbolContext(), "a"), m.addDouble(0.0),
         m.addDouble(-0.0),  m.addLong(0)};
     EXPECT_EQ(indices.size(), 11u);
     EXPECT_EQ(m.constCount(), 11u);
     EXPECT_EQ(m.constAt(m.addLong(1)).kind, BytecodeModule::ConstKind::Long);
     EXPECT_EQ(m.constAt(m.addDouble(1.0)).kind, BytecodeModule::ConstKind::Double);
     EXPECT_TRUE(std::signbit(m.constAt(m.addDouble(-0.0)).dval));
+}
+
+TEST(BytecodeModule, SymbolConstantsCarryTheirInternedKey) {
+    BytecodeModule m;
+    proto::ProtoContext* ctx = symbolContext();
+    const std::size_t shortName = m.addSymbol(ctx, "assoc");
+    const std::size_t longName = m.addSymbol(ctx, "a-global-name-longer-than-an-inline-string");
+    EXPECT_EQ(m.constAt(shortName).named,
+              reinterpret_cast<const proto::ProtoObject*>(proto::ProtoString::createSymbol(ctx, "assoc")));
+    EXPECT_EQ(m.constAt(longName).named,
+              reinterpret_cast<const proto::ProtoObject*>(proto::ProtoString::createSymbol(
+                  ctx, "a-global-name-longer-than-an-inline-string")));
 }
 
 TEST(BytecodeModule, ManyDistinctConstantsGetSequentialIndices) {

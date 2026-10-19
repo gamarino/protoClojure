@@ -40,6 +40,7 @@
 
 namespace proto {
 class ProtoObject;
+class ProtoContext;
 }
 
 namespace protoClojure {
@@ -51,7 +52,7 @@ public:
         Double,    // IEEE-754 64-bit float literal
         String,
         Symbol,    // a global name for PUSH_VAR / STORE_GLOBAL, interned at
-                   // execution time via ProtoString::createSymbol
+                   // compile time (ProtoString::createSymbol) into `named`
         Named,     // a keyword or quoted-symbol value for PUSH_CONST,
                    // interned at compile time (Named.h)
         BigInteger,  // an integer beyond the long long range, kept as its
@@ -65,7 +66,10 @@ public:
         long long ival = 0;
         double    dval = 0.0;
         std::string sval;        // only the std-side raw bytes; never enters protoCore
-        const proto::ProtoObject* named = nullptr;  // Named: the interned value
+        const proto::ProtoObject* named = nullptr;  // Named: the interned value;
+                                                    // Symbol: the interned key
+                                                    // (perennial: an inline string
+                                                    // or a symbol-table copy)
     };
 
     // Const-pool insertion. Returns the index for use in PUSH_CONST / PUSH_VAR;
@@ -75,7 +79,7 @@ public:
     std::size_t addBigInteger(const std::string& digits);
     std::size_t addDouble(double v);
     std::size_t addString(const std::string& s);
-    std::size_t addSymbol(const std::string& s);
+    std::size_t addSymbol(proto::ProtoContext* ctx, const std::string& s);
     // A keyword or quoted-symbol value: `value` is internNamed(spelling).
     // De-duplicated by spelling: interning maps a spelling to one value.
     std::size_t addNamed(const std::string& spelling,
