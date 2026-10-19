@@ -123,6 +123,21 @@ Measured on 2026-06-14, the move from a per-actor `std::mutex` + `std::deque` to
 
 ## Performance — what is measured
 
+**protoCore 2.14.7 (measured 2026-10-19).** 2.14.7 changes the write path: a
+new value for an existing key copies the root-to-key path without rebalancing,
+and allocating a cell no longer takes a spinlock. The same binaries on
+protoCore 2.14.6 and 2.14.7, each run loading a fresh copy of the library,
+three rounds: `benchmarks/bench.sh` against Babashka 1.4.192 with 2.14.7:
+`fib` 489 ms (1.20x bb), `tak` 46 ms (1.74x), `sum-loop` 64 ms (0.41x),
+`reduce-list` 30 ms (1.67x), `sum-squares` 23 ms (1.35x), unchanged from
+2.14.6 (geomean 0.0 %). The same five programs on Clojure 1.12.0 on OpenJDK 25
+(first measured here, median of three): 813-864 ms as a process (JVM
+start-up), 6-30 ms in steady state inside one process, 3-16x faster than
+protoClojure once warm. An `assoc` costs about 1,225 cycles. Measured under
+TLP's battery power profile (powersave, EPP balance_power): compare ratios,
+not absolute times, with older figures. Details: [protoCore's
+report](https://github.com/numaes/protoCore/blob/master/docs/reports/2026-10-18-write-path.md).
+
 **protoCore 2.14.6 (measured 2026-10-13).**  `/` on two integers reaches
 protoCore's `divide`, which no longer allocates a temporary: a loop of
 2,000,000 divisions, the same commit (`359d8f6`) built against protoCore
