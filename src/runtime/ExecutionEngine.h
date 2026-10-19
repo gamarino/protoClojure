@@ -110,6 +110,14 @@ private:
     //
     // Dispatches to executeFrame<true> when `mod` contains a `try`, else to
     // executeFrame<false>; inlined into its callers.
+    //
+    // The result must stay rooted while the frame's context is destroyed:
+    // its destructor submits the frame's young generation, and a collection
+    // can run there. A caller that will hold the result in one of its own
+    // traced slots passes that slot as `resultSlot`, and the frame stores the
+    // result there before it ends (no allocation). Without one, the frame
+    // anchors it through `ProtoContext::returnValue` (a ReturnReference cell
+    // in the caller's young chain).
     const proto::ProtoObject* execute(proto::ProtoContext* parent,
                                       const BytecodeModule& mod,
                                       const ActiveCallContext& env,
@@ -118,7 +126,8 @@ private:
                                       const proto::ProtoObject* captures,
                                       const proto::ProtoObject* const* kwVals,
                                       unsigned int kwCount,
-                                      const proto::ProtoObject* kwMap);
+                                      const proto::ProtoObject* kwMap,
+                                      const proto::ProtoObject** resultSlot = nullptr);
 
     // The frame itself. Only the <true> instantiation carries the C++
     // try/catch that routes an exception to the body's handlers
@@ -133,7 +142,8 @@ private:
                                            const proto::ProtoObject* captures,
                                            const proto::ProtoObject* const* kwVals,
                                            unsigned int kwCount,
-                                           const proto::ProtoObject* kwMap);
+                                           const proto::ProtoObject* kwMap,
+                                           const proto::ProtoObject** resultSlot);
 
     // protoClojure's garbage-collection safepoint.
     //

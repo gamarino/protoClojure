@@ -310,13 +310,14 @@ ExecutionEngine::execute(proto::ProtoContext* parent,
                          const proto::ProtoObject* captures,
                          const proto::ProtoObject* const* kwVals,
                          unsigned int kwCount,
-                         const proto::ProtoObject* kwMap) {
+                         const proto::ProtoObject* kwMap,
+                         const proto::ProtoObject** resultSlot) {
     if (mod.hasHandlers()) [[unlikely]] {
         return executeFrame<true>(parent, mod, env, args, argCount, captures,
-                                  kwVals, kwCount, kwMap);
+                                  kwVals, kwCount, kwMap, resultSlot);
     }
     return executeFrame<false>(parent, mod, env, args, argCount, captures,
-                               kwVals, kwCount, kwMap);
+                               kwVals, kwCount, kwMap, resultSlot);
 }
 
 const proto::ProtoObject*
@@ -513,7 +514,8 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                               const proto::ProtoObject* captures,
                               const proto::ProtoObject* const* kwVals,
                               unsigned int kwCount,
-                              const proto::ProtoObject* kwMap) {
+                              const proto::ProtoObject* kwMap,
+                              const proto::ProtoObject** resultSlot) {
     // Every call nests here on the native stack: raise StackOverflowError
     // instead of recursing past the end of the thread's stack.
     checkNativeStack();
@@ -722,10 +724,15 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
             }
 
             sp -= (argc + 1);
+            // The callable's slot (now the top of the stack) receives the
+            // result before the callee's frame ends; pushVal then writes the
+            // same value there. The caller's slots do not move during the
+            // call: only this frame's own pushes resize them.
             const proto::ProtoObject* result = execute(
                 &frame, *subMod, env, callArgs, passArgc, capsVal,
                 kwBased ? kwVals : nullptr, kwCount,
-                kwBased ? kwArgsMap : nullptr);
+                kwBased ? kwArgsMap : nullptr,
+                frame.getAutomaticLocals() + stackBase + sp);
             pushVal(result);
             return;
         }
@@ -1250,12 +1257,15 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
     return (sp == 0) ? PROTO_NONE : frame.getAutomaticLocal(stackBase + sp - 1);
     };
 
-    // The result is anchored through `frame.returnValue`: the context's
-    // destructor roots it in the caller's young chain before it submits this
-    // frame's young generation, so a collection that runs in between (the
-    // submission can park for one) cannot take a value this frame built.
+    // Root the result before `frame` is destroyed (see execute): in the
+    // caller's slot when it gave one, else through frame.returnValue.
+    auto anchor = [&](const proto::ProtoObject* r) {
+        if (resultSlot) *resultSlot = r;
+        else frame.returnValue = r;
+        return r;
+    };
     if constexpr (!kHandlers) {
-        return frame.returnValue = dispatchLoop();
+        return anchor(dispatchLoop());
     } else {
         // An exception escaping an instruction — raised here, by a primitive
         // or by a nested call, whose frames it has already unwound — lands in
@@ -1275,7 +1285,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
         for (;;) {
             std::exception_ptr passOn;
             try {
-                return frame.returnValue = dispatchLoop();
+                return anchor(dispatchLoop());
             } catch (const std::exception& error) {
                 if (handlers.empty()) {
                     passOn = std::current_exception();
@@ -1295,10 +1305,12 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
 template const proto::ProtoObject* ExecutionEngine::executeFrame<false>(
     proto::ProtoContext*, const BytecodeModule&, const ActiveCallContext&,
     const proto::ProtoObject* const*, unsigned int, const proto::ProtoObject*,
-    const proto::ProtoObject* const*, unsigned int, const proto::ProtoObject*);
+    const proto::ProtoObject* const*, unsigned int, const proto::ProtoObject*,
+    const proto::ProtoObject**);
 template const proto::ProtoObject* ExecutionEngine::executeFrame<true>(
     proto::ProtoContext*, const BytecodeModule&, const ActiveCallContext&,
     const proto::ProtoObject* const*, unsigned int, const proto::ProtoObject*,
-    const proto::ProtoObject* const*, unsigned int, const proto::ProtoObject*);
+    const proto::ProtoObject* const*, unsigned int, const proto::ProtoObject*,
+    const proto::ProtoObject**);
 
 } // namespace protoClojure
