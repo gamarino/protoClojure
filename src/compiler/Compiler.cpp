@@ -780,7 +780,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 throw CompileError("def: name must be a symbol");
             }
             compileForm(ctx, exprForm, out, markers);
-            std::size_t nameIdx = out.addSymbol(asUtf8(ctx, nameForm));
+            std::size_t nameIdx = out.addSymbol(ctx, asUtf8(ctx, nameForm));
             out.emit(Op::STORE_GLOBAL, nameIdx);
             return;
         }
@@ -1072,7 +1072,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             }
 
             if (headName == "defn") {
-                std::size_t nameIdx = out.addSymbol(asUtf8(ctx, nameForm));
+                std::size_t nameIdx = out.addSymbol(ctx, asUtf8(ctx, nameForm));
                 out.emit(Op::STORE_GLOBAL, nameIdx);
             }
             return;
@@ -1196,7 +1196,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             // We re-route through the (fn [] body...) compilation by
             // building a small helper: emit a Fn whose body is the
             // remaining `(future ...)` forms.
-            std::size_t hmIdx = out.addSymbol("make-future");
+            std::size_t hmIdx = out.addSymbol(ctx, "make-future");
             out.emit(Op::PUSH_VAR, hmIdx);
 
             // Compile an inline (fn [] body...). compileArity expects
@@ -1350,7 +1350,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             } else if (int slot = resolveLocal(headName); slot >= 0) {
                 out.emit(Op::PUSH_LOCAL, slot);
             } else {
-                std::size_t headIdx = out.addSymbol(headName);
+                std::size_t headIdx = out.addSymbol(ctx, headName);
                 out.emit(Op::PUSH_VAR, headIdx);
             }
         } else {
@@ -1392,7 +1392,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
     if (isWrappedMap(ctx, form, markers)) {
         const proto::ProtoList* entries = mapEntries(ctx, form, markers);
         proto::proto_ulong ne = entries->getSize(ctx);  // already validated even
-        std::size_t headIdx = out.addSymbol("hash-map");
+        std::size_t headIdx = out.addSymbol(ctx, "hash-map");
         out.emit(Op::PUSH_VAR, headIdx);
         for (proto::proto_ulong i = 0; i < ne; ++i) {
             compileForm(ctx, entries->getAt(ctx, (int)i), out, markers);
@@ -1408,7 +1408,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
     if (isWrappedVector(ctx, form, markers)) {
         const proto::ProtoList* items = vectorItems(ctx, form, markers);
         proto::proto_ulong ni = items->getSize(ctx);
-        std::size_t headIdx = out.addSymbol("vector");
+        std::size_t headIdx = out.addSymbol(ctx, "vector");
         out.emit(Op::PUSH_VAR, headIdx);
         for (proto::proto_ulong i = 0; i < ni; ++i) {
             compileForm(ctx, items->getAt(ctx, (int)i), out, markers);
@@ -1453,7 +1453,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             out.emit(Op::PUSH_LOCAL, slot);
             return;
         }
-        std::size_t idx = out.addSymbol(name);
+        std::size_t idx = out.addSymbol(ctx, name);
         out.emit(Op::PUSH_VAR, idx);
         return;
     }

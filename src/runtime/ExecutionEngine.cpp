@@ -808,8 +808,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 const auto& c = mod.constAt(operand);
                 if (c.kind != BytecodeModule::ConstKind::Symbol)
                     throw std::runtime_error("VM: PUSH_VAR const is not a symbol");
-                const proto::ProtoString* key =
-                    proto::ProtoString::createSymbol(&frame, c.sval.c_str());
+                const auto* key = reinterpret_cast<const proto::ProtoString*>(c.named);
                 const proto::ProtoObject* v =
                     env.globals->getAttribute(&frame, key);
                 // getAttribute returns PROTO_NONE both for a global bound to
@@ -986,8 +985,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                     throw std::runtime_error("VM: STORE_GLOBAL key not a symbol");
                 if (sp == 0)
                     throw std::runtime_error("VM: STORE_GLOBAL with empty stack");
-                const proto::ProtoString* key =
-                    proto::ProtoString::createSymbol(&frame, c.sval.c_str());
+                const auto* key = reinterpret_cast<const proto::ProtoString*>(c.named);
                 const proto::ProtoObject* val =
                     frame.getAutomaticLocal(stackBase + sp - 1);
                 const_cast<proto::ProtoObject*>(env.globals)
