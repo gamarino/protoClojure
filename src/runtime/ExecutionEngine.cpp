@@ -341,7 +341,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
 
         if (isMulti) {
             const proto::ProtoObject* aritiesObj =
-                callable->getAttribute(ctx, cc->aritiesKey);
+                callable->getOwnAttributeDirect(ctx, cc->aritiesKey);
             const proto::ProtoList* aritiesList = aritiesObj->asList(ctx);
             int k = pickArity(ctx, aritiesList, argc);
             if (k < 0)
@@ -354,13 +354,13 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
             capsVal = spec->getAt(ctx, 3);
         } else {
             const proto::ProtoObject* ptrObj =
-                callable->getAttribute(ctx, cc->bytecodeKey);
+                callable->getOwnAttributeDirect(ctx, cc->bytecodeKey);
             if (!ptrObj || !ptrObj->isInteger(ctx))
                 throw std::runtime_error("VM: invoke: malformed fn-wrapper");
             subMod = reinterpret_cast<const BytecodeModule*>(ptrObj->asLong(ctx));
             // C optimisation — only fetch captures when the body needs them.
             if (subMod->captureCount() > 0) {
-                capsVal = callable->getAttribute(ctx, cc->capturesKey);
+                capsVal = callable->getOwnAttributeDirect(ctx, cc->capturesKey);
             }
         }
 
@@ -625,7 +625,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
             if (isMulti) {
                 // Multi-arity — read __arities__ and pick the spec.
                 const proto::ProtoObject* aritiesObj =
-                    callable->getAttribute(&frame, env.aritiesKey);
+                    callable->getOwnAttributeDirect(&frame, env.aritiesKey);
                 const proto::ProtoList* aritiesList = aritiesObj->asList(&frame);
                 int k = pickArity(&frame, aritiesList, argc);
                 if (k < 0)
@@ -642,13 +642,13 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 // captures (the dominant case for top-level defns:
                 // fib, sum-loop, factorial, ...).
                 const proto::ProtoObject* ptrObj =
-                    callable->getAttribute(&frame, env.bytecodeKey);
+                    callable->getOwnAttributeDirect(&frame, env.bytecodeKey);
                 if (!ptrObj || !ptrObj->isInteger(&frame))
                     throw std::runtime_error("VM: malformed fn-wrapper");
                 subMod = reinterpret_cast<const BytecodeModule*>(
                     ptrObj->asLong(&frame));
                 if (subMod->captureCount() > 0) {
-                    capsVal = callable->getAttribute(&frame, env.capturesKey);
+                    capsVal = callable->getOwnAttributeDirect(&frame, env.capturesKey);
                 }
             }
 
@@ -809,18 +809,17 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 if (c.kind != BytecodeModule::ConstKind::Symbol)
                     throw std::runtime_error("VM: PUSH_VAR const is not a symbol");
                 const auto* key = reinterpret_cast<const proto::ProtoString*>(c.named);
+                // Every global is an own attribute of the globals object
+                // (STORE_GLOBAL, installPrimitives), so one own read answers
+                // both the value and its presence: nullptr is a missing
+                // global, PROTO_NONE a global bound to nil.
                 const proto::ProtoObject* v =
-                    env.globals->getAttribute(&frame, key);
-                // getAttribute returns PROTO_NONE both for a global bound to
-                // nil and for a missing one; only a miss pays for the
-                // presence probe. Every global is an own attribute of the
-                // globals object (STORE_GLOBAL, installPrimitives).
-                if ((!v || v == PROTO_NONE) &&
-                    env.globals->hasOwnAttribute(&frame, key) != PROTO_TRUE) [[unlikely]] {
+                    env.globals->getOwnAttributeDirect(&frame, key);
+                if (!v) [[unlikely]] {
                     throw std::runtime_error(
                         "VM: unable to resolve symbol: " + c.sval);
                 }
-                pushVal(v ? v : PROTO_NONE);
+                pushVal(v);
                 break;
             }
 
@@ -934,7 +933,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 const BytecodeModule* kwMod = nullptr;
                 if (callable->getPrototype(&frame) == env.fnSingleProto) {
                     const proto::ProtoObject* ptrObj =
-                        callable->getAttribute(&frame, env.bytecodeKey);
+                        callable->getOwnAttributeDirect(&frame, env.bytecodeKey);
                     if (ptrObj && ptrObj->isInteger(&frame)) {
                         const BytecodeModule* subMod =
                             reinterpret_cast<const BytecodeModule*>(
@@ -1251,8 +1250,12 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
     return (sp == 0) ? PROTO_NONE : frame.getAutomaticLocal(stackBase + sp - 1);
     };
 
+    // The result is anchored through `frame.returnValue`: the context's
+    // destructor roots it in the caller's young chain before it submits this
+    // frame's young generation, so a collection that runs in between (the
+    // submission can park for one) cannot take a value this frame built.
     if constexpr (!kHandlers) {
-        return dispatchLoop();
+        return frame.returnValue = dispatchLoop();
     } else {
         // An exception escaping an instruction — raised here, by a primitive
         // or by a nested call, whose frames it has already unwound — lands in
@@ -1272,7 +1275,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
         for (;;) {
             std::exception_ptr passOn;
             try {
-                return dispatchLoop();
+                return frame.returnValue = dispatchLoop();
             } catch (const std::exception& error) {
                 if (handlers.empty()) {
                     passOn = std::current_exception();
