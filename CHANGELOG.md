@@ -29,6 +29,13 @@ first planned release (`docs/ROADMAP.md`).
   the 64-slot initial operand stack) instead of empty and then grown with
   `resizeAutomaticLocals`; likewise `invoke`'s call scope.  `fib` -5 %
   cycles from this, -12.7 % with protoCore 3.0.0's integer paths.
+- **A frame's operand stack has the capacity its body needs**
+  (`BytecodeModule::maxStack`, a flow analysis of the finished code: the
+  deepest point along every path, joins keeping the larger depth) instead of
+  a fixed 64 slots; a push no longer tests the capacity, and `apply` reserves
+  room for the list it spreads.  Measured: instructions -1 % to -6 %, cycles
+  within -2.7 % to +4.6 % of before (`fib` +1.4 %, `sum-loop` +4.6 %, `tak`
+  -2.2 %, `churn` -2.7 %) -- no net gain; filling 64 slots was cheap.
 
 ## [0.0.2] - 2026-10-17
 

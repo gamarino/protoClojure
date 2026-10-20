@@ -32,6 +32,7 @@
 #pragma once
 #include "Opcodes.h"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -108,6 +109,19 @@ public:
     // body without one in a frame that has no exception-handler machinery
     // at all (ExecutionEngine::executeFrame).
     bool hasHandlers()  const { return hasHandlers_; }
+
+    // The deepest the operand stack gets in this body, from a flow analysis
+    // of the finished code (computed on first use, then cached): the
+    // capacity the VM gives a frame's operand stack.  CALL_APPLY spreads a
+    // list of a length known only at run time, which this does not count;
+    // the VM reserves room for it before spreading.
+    unsigned int maxStack() const {
+        const int cached = maxStack_.load(std::memory_order_relaxed);
+        if (cached >= 0) return static_cast<unsigned int>(cached);
+        const unsigned int m = computeMaxStack();
+        maxStack_.store(static_cast<int>(m), std::memory_order_relaxed);
+        return m;
+    }
 
     // Function metadata used by user-fn dispatch in the VM.
     int  arity()        const { return arity_; }
@@ -202,6 +216,11 @@ private:
     bool                                         isKwBased_  = false;
     int                                          asSlot_     = -1;
     std::vector<KwKey>                           kwKeys_;
+    // -1 until maxStack() has run; the code is final by then, and two
+    // threads computing it at once store the same value.
+    mutable std::atomic<int>                     maxStack_{-1};
+
+    unsigned int computeMaxStack() const;
 };
 
 } // namespace protoClojure

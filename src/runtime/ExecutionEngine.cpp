@@ -35,11 +35,10 @@ namespace protoClojure {
 
 namespace {
 
-// Initial operand-stack capacity of a frame. Locals (params + let-bindings)
-// live in slots 0..(arity + localCount - 1); the operand stack lives starting
-// at offset arity + localCount and doubles whenever a push finds it full (a
-// call or a literal with many arguments, apply over a long list).
-constexpr unsigned int kInitialOperandStackSize = 64;
+// A frame's locals (params + let-bindings) live in slots
+// 0..(arity + localCount - 1); its operand stack starts at offset
+// arity + localCount with the capacity the compiled body needs
+// (BytecodeModule::maxStack); `apply` reserves room for the list it spreads.
 
 // The most parameters one call binds (a variadic fn binds its rest
 // arguments as one).
@@ -495,7 +494,10 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
     const unsigned int locBase   = 0;
     const unsigned int stackBase = static_cast<unsigned int>(mod.arity()
                                                               + mod.localCount());
-    unsigned int stackCapacity = kInitialOperandStackSize;
+    // The operand stack's capacity is the deepest the compiled body gets
+    // (BytecodeModule::maxStack); it still grows below if CALL_APPLY spreads
+    // a long list.
+    unsigned int stackCapacity = mod.maxStack();
 
     // Built at its full initial size: the slots come from the thread's slot
     // stack once, instead of an empty context grown by resizeAutomaticLocals.
@@ -555,18 +557,21 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
     // nothing at all. See ExecutionEngine.h::gcSafepoint.
     gcSafepoint(&frame);
 
+    // No capacity test per push: the capacity is the body's maxStack, the
+    // deepest any instruction takes the stack, and CALL_APPLY reserves room
+    // before it spreads a list (reserveStack). setAutomaticLocal still
+    // refuses an index past the slots.
     auto pushVal = [&](const proto::ProtoObject* v) {
-        // The constant test first: below the initial capacity a push
-        // compares against an immediate and never reads stackCapacity.
-        if (sp >= kInitialOperandStackSize && sp >= stackCapacity) {
-            // Full: double the capacity. resizeAutomaticLocals copies the
-            // slots into a larger buffer and allocates no protoCore cell,
-            // so no collection can run in between.
-            stackCapacity *= 2;
-            frame.resizeAutomaticLocals(stackBase + stackCapacity);
-        }
         frame.setAutomaticLocal(stackBase + sp, v);
         ++sp;
+    };
+    // Room for `extra` more values: resizeAutomaticLocals copies the slots
+    // into a larger buffer and allocates no protoCore cell, so no collection
+    // can run in between.
+    auto reserveStack = [&](proto::proto_ulong extra) {
+        if (sp + extra <= stackCapacity) return;
+        stackCapacity = static_cast<unsigned int>(sp + extra);
+        frame.resizeAutomaticLocals(stackBase + stackCapacity);
     };
     auto popVal = [&]() -> const proto::ProtoObject* {
         if (sp == 0) {
@@ -871,6 +876,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 if (!argsList)
                     throw std::runtime_error("VM: CALL_APPLY: not a list");
                 proto::proto_ulong ln = argsList->getSize(&frame);
+                reserveStack(ln);
                 for (proto::proto_ulong i = 0; i < ln; ++i) {
                     pushVal(argsList->getAt(&frame, static_cast<int>(i)));
                 }

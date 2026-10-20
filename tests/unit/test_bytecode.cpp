@@ -93,3 +93,71 @@ TEST(BytecodeModule, OperandsUseTwentyFourBits) {
                  std::length_error);
     EXPECT_THROW(m.patchOperand(m.pos(), 0), std::out_of_range);
 }
+
+// maxStack: the deepest point of the operand stack, from a flow analysis of
+// the finished code (BytecodeModule::computeMaxStack).  Hand-assembled
+// bodies with known depths.
+
+TEST(BytecodeModuleMaxStack, StraightLineCountsTheDeepestPush) {
+    BytecodeModule m;
+    const auto c = m.addLong(1);
+    m.emit(Op::PUSH_CONST, c);
+    m.emit(Op::PUSH_CONST, c);
+    m.emit(Op::ADD, 0);            // two in, one out
+    m.emit(Op::RETURN, 0);
+    EXPECT_EQ(m.maxStack(), 2u);
+}
+
+TEST(BytecodeModuleMaxStack, ACallHoldsTheCallableAndItsArguments) {
+    BytecodeModule m;
+    const auto f = m.addSymbol(symbolContext(), "f");
+    const auto c = m.addLong(1);
+    m.emit(Op::PUSH_VAR, f);
+    for (int i = 0; i < 3; ++i) m.emit(Op::PUSH_CONST, c);
+    m.emit(Op::CALL, 3);           // callable and three arguments in, the result out
+    m.emit(Op::PUSH_CONST, c);
+    m.emit(Op::ADD, 0);
+    m.emit(Op::RETURN, 0);
+    EXPECT_EQ(m.maxStack(), 4u);
+}
+
+TEST(BytecodeModuleMaxStack, BranchesKeepTheDeeperPath) {
+    BytecodeModule m;
+    const auto c = m.addLong(1);
+    m.emit(Op::PUSH_TRUE, 0);          // 0: depth 0 -> 1
+    m.emit(Op::JUMP_IF_FALSE, 2);      // 1: pops; else at 4, depth 0
+    m.emit(Op::PUSH_CONST, c);         // 2: then: 0 -> 1
+    m.emit(Op::JUMP, 3);               // 3: to 7
+    m.emit(Op::PUSH_CONST, c);         // 4: else: 0 -> 1
+    m.emit(Op::PUSH_CONST, c);         // 5: 1 -> 2, the deepest point
+    m.emit(Op::ADD, 0);                // 6: 2 -> 1
+    m.emit(Op::RETURN, 0);             // 7
+    EXPECT_EQ(m.maxStack(), 2u);
+}
+
+TEST(BytecodeModuleMaxStack, ALoopBackEdgeTerminatesTheAnalysis) {
+    BytecodeModule m;
+    const auto c = m.addLong(1);
+    m.emit(Op::PUSH_CONST, c);         // 0: 0 -> 1
+    m.emit(Op::POP, 0);                // 1: 1 -> 0
+    m.emit(Op::JUMP_BACK, 3);          // 2: back to 0
+    EXPECT_EQ(m.maxStack(), 1u);
+}
+
+TEST(BytecodeModuleMaxStack, AHandlerStartsOneDeeper) {
+    BytecodeModule m;
+    const auto c = m.addLong(1);
+    m.emit(Op::PUSH_CONST, c);         // 0: 0 -> 1
+    m.emit(Op::TRY_BEGIN, 2);          // 1: handler at 4, entered at depth 2
+    m.emit(Op::TRY_END, 0);            // 2
+    m.emit(Op::RETURN, 0);             // 3
+    m.emit(Op::POP, 0);                // 4: the exception
+    m.emit(Op::RETURN, 0);             // 5
+    EXPECT_EQ(m.maxStack(), 2u);
+}
+
+TEST(BytecodeModuleMaxStack, AnEmptyBodyNeedsNoStack) {
+    BytecodeModule m;
+    m.emit(Op::RETURN, 0);
+    EXPECT_EQ(m.maxStack(), 0u);
+}
