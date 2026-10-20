@@ -123,6 +123,31 @@ Measured on 2026-06-14, the move from a per-actor `std::mutex` + `std::deque` to
 
 ## Performance — what is measured
 
+**protoCore 2.14.8 and the call path (measured 2026-10-20).**
+`benchmarks/bench.sh` against Babashka 1.4.192, three rounds, each run behind
+a quiet gate (1.0-2.4 busy CPUs) and on a fresh copy of protoCore 2.14.8;
+`main` before (`354e728`) and after (`ef3b328`) merging `perf/call-path`,
+alternating, Release; medians of the three rounds (each round is bench.sh's
+best of three).
+
+| Workload | protoclj ms | bb ms | ratio | before the merge | 2.14.7 (2026-10-19) |
+|---|---:|---:|---:|---:|---:|
+| `fib` | 424 | 423 | **1.00x** | 437 ms, 1.03x | 489 ms, 1.20x |
+| `tak` | 43 | 27 | 1.59x | 45 ms, 1.67x | 46 ms, 1.74x |
+| `sum-loop` | 65 | 162 | **0.40x** | 67 ms, 0.41x | 64 ms, 0.41x |
+| `reduce-list` | 30 | 18 | 1.67x | 30 ms, 1.67x | 30 ms, 1.67x |
+| `sum-squares` | 23 | 17 | 1.39x | 22 ms, 1.33x | 23 ms, 1.35x |
+
+`fib` now matches Babashka: 489 -> 437 ms comes from protoCore 2.14.8's
+context slot stack (a call's 64-127 slots no longer go through
+`new`/`delete`), 437 -> 424 ms from the call path. The call path's changes
+(own reads of the function wrapper's attributes and of globals, one
+argument copy, the result rooted in the caller's stack slot) move every
+workload by -4 % to +4.5 %, within the spread; what they fix is that a
+returned object was reachable from no root between the callee's return and
+the caller's next store. The JVM figures of 2026-10-19 below are unchanged.
+Raw results: [`benchmarks/reports/2026-10-20/`](benchmarks/reports/2026-10-20/).
+
 **protoCore 2.14.7 (measured 2026-10-19).** 2.14.7 changes the write path: a
 new value for an existing key copies the root-to-key path without rebalancing,
 and allocating a cell no longer takes a spinlock. The same binaries on
@@ -167,7 +192,7 @@ These are the most recent numbers in [`benchmarks/RESULTS.md`](benchmarks/RESULT
 
 The features added afterwards cost about 15% on `fib(30)` (620 ms → 712 ms); the extra parameters threaded through every recursive VM call are the likely cause, and recovering that cost is on the [roadmap](docs/ROADMAP.md).
 
-JVM Clojure has not been measured. It has a JIT and adaptive inlining that protoClojure does not have, and no claim is made here about protoClojure's speed relative to it.
+JVM Clojure was first measured on 2026-10-19 (the protoCore 2.14.7 paragraph above): 813-864 ms per program as a process, dominated by JVM start-up, and 3-16x faster than protoClojure once its JIT is warm inside one process.
 
 ## How protoClojure compares
 

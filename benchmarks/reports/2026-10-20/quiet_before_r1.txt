@@ -1,0 +1,1 @@
+(3.65966796875, ['20.0 git-remote-http', '15.8 pycharm', 'busy_cpus=1.30'])
