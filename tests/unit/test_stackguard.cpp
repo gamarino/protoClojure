@@ -268,8 +268,8 @@ TEST(StackGuard, EvaluatorThreadRethrowsOnTheCaller) {
 std::size_t g_protoThreadStackBytes = 0;
 
 const proto::ProtoObject* reportStack(proto::ProtoContext*, const proto::ProtoObject*,
-                                      const proto::ParentLink*, const proto::ProtoList*,
-                                      const proto::ProtoSparseList*) {
+                                      const proto::ParentLink*, const proto::ProtoArguments*,
+                                      const proto::ProtoKeywordArguments*) {
     g_protoThreadStackBytes = currentStackBytes();
     return PROTO_NONE;
 }

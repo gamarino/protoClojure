@@ -286,8 +286,8 @@ const proto::ProtoObject* exceptionFromError(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_ex_info(proto::ProtoContext* ctx,
                                        const proto::ProtoObject*,
                                        const proto::ParentLink*,
-                                       const proto::ProtoList* args,
-                                       const proto::ProtoSparseList*) {
+                                       const proto::ProtoArguments* args,
+                                       const proto::ProtoKeywordArguments*) {
     const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n != 2 && n != 3)
         throwClassed(ctx, "ArityException",
@@ -315,7 +315,7 @@ const proto::ProtoObject* prim_ex_info(proto::ProtoContext* ctx,
 namespace {
 
 const proto::ProtoObject* oneArg(proto::ProtoContext* ctx,
-                                 const proto::ProtoList* args, const char* name) {
+                                 const proto::ProtoArguments* args, const char* name) {
     const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n != 1)
         throwClassed(ctx, "ArityException",
@@ -329,8 +329,8 @@ const proto::ProtoObject* oneArg(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_ex_data(proto::ProtoContext* ctx,
                                        const proto::ProtoObject*,
                                        const proto::ParentLink*,
-                                       const proto::ProtoList* args,
-                                       const proto::ProtoSparseList*) {
+                                       const proto::ProtoArguments* args,
+                                       const proto::ProtoKeywordArguments*) {
     const proto::ProtoObject* e = oneArg(ctx, args, "ex-data");
     return isException(ctx, e) ? exceptionData(ctx, e) : PROTO_NONE;
 }
@@ -339,8 +339,8 @@ const proto::ProtoObject* prim_ex_data(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_ex_message(proto::ProtoContext* ctx,
                                           const proto::ProtoObject*,
                                           const proto::ParentLink*,
-                                          const proto::ProtoList* args,
-                                          const proto::ProtoSparseList*) {
+                                          const proto::ProtoArguments* args,
+                                          const proto::ProtoKeywordArguments*) {
     const proto::ProtoObject* e = oneArg(ctx, args, "ex-message");
     return isException(ctx, e) ? exceptionMessage(ctx, e) : PROTO_NONE;
 }
@@ -349,8 +349,8 @@ const proto::ProtoObject* prim_ex_message(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_ex_cause(proto::ProtoContext* ctx,
                                         const proto::ProtoObject*,
                                         const proto::ParentLink*,
-                                        const proto::ProtoList* args,
-                                        const proto::ProtoSparseList*) {
+                                        const proto::ProtoArguments* args,
+                                        const proto::ProtoKeywordArguments*) {
     const proto::ProtoObject* e = oneArg(ctx, args, "ex-cause");
     return isException(ctx, e) ? exceptionCause(ctx, e) : PROTO_NONE;
 }

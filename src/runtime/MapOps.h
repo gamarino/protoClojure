@@ -113,12 +113,6 @@ const proto::ProtoObject* mapAssocPairs(proto::ProtoContext* ctx,
                                         const proto::ProtoObject* const* kv,
                                         proto::proto_ulong n);
 
-// Same, taking the `n` keys and values from `items[from .. from+n)`.
-const proto::ProtoObject* mapAssocPairs(proto::ProtoContext* ctx,
-                                        const proto::ProtoObject* base,
-                                        const proto::ProtoList* items,
-                                        proto::proto_ulong from,
-                                        proto::proto_ulong n);
 
 // Return `m` without `key`. Returns `m` itself when the key is absent.
 const proto::ProtoObject* mapDissoc(proto::ProtoContext* ctx,

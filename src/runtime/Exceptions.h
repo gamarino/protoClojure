@@ -49,6 +49,8 @@ class ProtoContext;
 class ProtoObject;
 class ProtoList;
 class ProtoSparseList;
+class ProtoArguments;
+class ProtoKeywordArguments;
 class ParentLink;
 }
 
@@ -155,16 +157,16 @@ const proto::ProtoObject* exceptionFromError(proto::ProtoContext* ctx,
 // ---- Primitives -------------------------------------------------------------
 
 const proto::ProtoObject* prim_ex_info(proto::ProtoContext*, const proto::ProtoObject*,
-                                       const proto::ParentLink*, const proto::ProtoList*,
-                                       const proto::ProtoSparseList*);
+                                       const proto::ParentLink*, const proto::ProtoArguments*,
+                                       const proto::ProtoKeywordArguments*);
 const proto::ProtoObject* prim_ex_data(proto::ProtoContext*, const proto::ProtoObject*,
-                                       const proto::ParentLink*, const proto::ProtoList*,
-                                       const proto::ProtoSparseList*);
+                                       const proto::ParentLink*, const proto::ProtoArguments*,
+                                       const proto::ProtoKeywordArguments*);
 const proto::ProtoObject* prim_ex_message(proto::ProtoContext*, const proto::ProtoObject*,
-                                          const proto::ParentLink*, const proto::ProtoList*,
-                                          const proto::ProtoSparseList*);
+                                          const proto::ParentLink*, const proto::ProtoArguments*,
+                                          const proto::ProtoKeywordArguments*);
 const proto::ProtoObject* prim_ex_cause(proto::ProtoContext*, const proto::ProtoObject*,
-                                        const proto::ParentLink*, const proto::ProtoList*,
-                                        const proto::ProtoSparseList*);
+                                        const proto::ParentLink*, const proto::ProtoArguments*,
+                                        const proto::ProtoKeywordArguments*);
 
 } // namespace protoClojure

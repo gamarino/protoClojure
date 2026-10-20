@@ -176,35 +176,6 @@ const proto::ProtoObject* foldKeywordPairs(proto::ProtoContext* frame,
     return kwMap;
 }
 
-// Packs `argc` arguments into a ProtoList stored in `scope`'s slot `slot` —
-// the positional-argument list every C++ primitive is called with.
-//
-// Up to kBulkArgs, protoCore builds the list straight from the contiguous
-// source array: at five arguments or fewer — every ordinary call — that is a
-// single cell, where the old append-one-at-a-time loop cost one cell per
-// argument plus one.
-//
-// Beyond kBulkArgs the list is grown through a ListBuilder, which hands each
-// chunk's dead intermediate versions to the collector as it goes. The
-// argument count is under the program's control (a 70,000-element vector
-// literal compiles to `(vector ...)` with 70,000 arguments, and `apply`
-// spreads a list of any length), and appending N times inside this one
-// context used to pin ~N*log2(N) cells until the primitive returned: under a
-// heap ceiling the call ran out of memory with a tiny live set.
-[[gnu::noinline]] PROTOCLJ_MSVC_NOINLINE
-void packArguments(proto::ProtoContext& scope, unsigned int slot,
-                   const proto::ProtoObject* const* args, unsigned int argc) {
-    constexpr unsigned int kBulkArgs = 256;
-    if (argc <= kBulkArgs) {
-        scope.setAutomaticLocal(slot,
-            scope.newList(argc, args)->asObject(&scope));
-        return;
-    }
-    ListBuilder packed(&scope);
-    for (unsigned int i = 0; i < argc; ++i) packed.push(args[i]);
-    scope.setAutomaticLocal(slot, packed.finish());
-}
-
 // An active exception handler of a frame (TRY_BEGIN / TRY_END).
 struct TryHandler {
     const Instr* target;   // first instruction of the handler code
@@ -429,21 +400,19 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
                           isMap(callable), args, argc);
     }
 
-    // C++ primitive — wrap args into a fresh ProtoList and dispatch.
+    // C++ primitive. The caller's `args` need not be traced memory, so they
+    // are copied into the call scope's slots (the thread's slot stack, no
+    // allocation) and the primitive reads them there (protoCore's array
+    // call form): slot 0 the callable, 1..argc the arguments.
     proto::ProtoContext callScope(ctx->space, ctx);
-    callScope.resizeAutomaticLocals(2);
-    constexpr unsigned int kSlotArgs     = 0;
-    constexpr unsigned int kSlotCallable = 1;
-    callScope.setAutomaticLocal(kSlotCallable, callable);
-    packArguments(callScope, kSlotArgs, args, argc);
-    const proto::ProtoObject* primCallable =
-        callScope.getAutomaticLocal(kSlotCallable);
-    proto::ProtoMethod fn = primCallable->asMethod(&callScope);
+    callScope.resizeAutomaticLocals(argc + 1);
+    callScope.setAutomaticLocal(0, callable);
+    for (unsigned int i = 0; i < argc; ++i) callScope.setAutomaticLocal(i + 1, args[i]);
+    proto::ProtoMethod fn = callable->asMethod(&callScope);
     if (!fn) throw std::runtime_error("VM: invoke: value is not callable");
-    const proto::ProtoObject* self = primCallable->asMethodSelf(&callScope);
-    const proto::ProtoList* argsList =
-        callScope.getAutomaticLocal(kSlotArgs)->asList(&callScope);
-    return fn(&callScope, self, nullptr, argsList, nullptr);
+    const proto::ProtoObject* self = callable->asMethodSelf(&callScope);
+    const proto::ProtoArguments positional(callScope.getAutomaticLocals() + 1, argc);
+    return fn(&callScope, self, nullptr, &positional, nullptr);
 }
 
 const proto::ProtoObject*
@@ -754,27 +723,19 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
             return;
         }
 
-        // C++ primitive.
+        // C++ primitive. The callable and its arguments already sit
+        // contiguously in the frame's operand stack, which the collector
+        // traces: the primitive reads them there (protoCore's array call
+        // form), nothing is packed or copied.
         proto::ProtoContext callScope(frame.space, &frame);
-        callScope.resizeAutomaticLocals(2);
-        constexpr unsigned int kSlotArgs     = 0;
-        constexpr unsigned int kSlotCallable = 1;
-        callScope.setAutomaticLocal(kSlotCallable, callable);
-        // The arguments already sit contiguously in the frame's operand
-        // stack, so they can be packed straight from there.
-        packArguments(callScope, kSlotArgs,
-                      frame.getAutomaticLocals() + stackBase + sp - argc, argc);
-        const proto::ProtoObject* primCallable =
-            callScope.getAutomaticLocal(kSlotCallable);
-        proto::ProtoMethod fn = primCallable->asMethod(&callScope);
+        proto::ProtoMethod fn = callable->asMethod(&callScope);
         if (!fn)
             throw std::runtime_error("VM: value is not callable in CALL");
-        const proto::ProtoObject* self =
-            primCallable->asMethodSelf(&callScope);
-        const proto::ProtoList* argsList =
-            callScope.getAutomaticLocal(kSlotArgs)->asList(&callScope);
+        const proto::ProtoObject* self = callable->asMethodSelf(&callScope);
+        const proto::ProtoArguments positional(
+            frame.getAutomaticLocals() + stackBase + sp - argc, argc);
         const proto::ProtoObject* result =
-            fn(&callScope, self, nullptr, argsList, nullptr);
+            fn(&callScope, self, nullptr, &positional, nullptr);
         sp -= (argc + 1);
         pushVal(result);
     };

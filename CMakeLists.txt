@@ -71,10 +71,12 @@ endif()
 # move together.
 # 2.7.0: the Windows port spells protoCore's 64-bit integers
 # proto::proto_long / proto_ulong, which first exist there.
-set(PROTOCORE_MIN_VERSION      "2.7.0")
-set(PROTOCORE_MIN_VERSION_FULL "2.7.0")
-set(PROTOCORE_NEXT_MAJOR       "3.0.0")
-set(PROTOCORE_ABI_SOVERSION    "3")
+# 3.0.0: methods receive their arguments as ProtoArguments /
+# ProtoKeywordArguments descriptors (protoCore docs/CALLING_CONVENTION.md).
+set(PROTOCORE_MIN_VERSION      "3.0.0")
+set(PROTOCORE_MIN_VERSION_FULL "3.0.0")
+set(PROTOCORE_NEXT_MAJOR       "4.0.0")
+set(PROTOCORE_ABI_SOVERSION    "4")
 option(PROTOCORE_REQUIRE_PACKAGE
     "Require an installed protoCore CMake package; never fall back to ../protoCore" OFF)
 

@@ -340,19 +340,6 @@ const proto::ProtoObject* mapAssocPairs(proto::ProtoContext* ctx,
     return b.result();
 }
 
-const proto::ProtoObject* mapAssocPairs(proto::ProtoContext* ctx,
-                                        const proto::ProtoObject* base,
-                                        const proto::ProtoList* items,
-                                        proto::proto_ulong from,
-                                        proto::proto_ulong n) {
-    requireEven(n);
-    MapBuilder b(ctx, base);
-    for (proto::proto_ulong i = from; i < from + n; i += 2) {
-        b.assoc(items->getAt(b.ctx(), static_cast<int>(i)),
-                items->getAt(b.ctx(), static_cast<int>(i + 1)));
-    }
-    return b.result();
-}
 
 const proto::ProtoObject* mapDissoc(proto::ProtoContext* ctx,
                                     const proto::ProtoObject* m,

@@ -571,8 +571,8 @@ See `LANGUAGE.md` for the full discussion. Summary:
   controller** (`src/main.cpp`, README "Memory"), which starts cycles under
   heap pressure within a budget of 75 % of memory; the `churn` program below
   now collects with nothing in the environment. The entry is kept as it was
-  written. Built against a protoCore older than 2.10.0 (the floor is 2.7.0)
-  there is no controller and the issue remains.
+  written. Built against a protoCore older than 2.10.0 there was no
+  controller and the issue remained (the floor is now 3.0.0).
 
   **Nothing is ever collected unless a heap ceiling is set. Severity: high.
   The fix belongs in protoCore, so it is not made here.** protoCore starts a

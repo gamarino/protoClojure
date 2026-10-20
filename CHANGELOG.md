@@ -9,6 +9,23 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Changed — protoCore 3.0.0: primitives read their arguments in place, 2026-10-20
+
+- **Built against protoCore 3.0.0** (SOVERSION 4), now the declared minimum:
+  every C++ primitive receives its arguments as protoCore's
+  `ProtoArguments` / `ProtoKeywordArguments` descriptors (protoCore
+  `docs/CALLING_CONVENTION.md`) instead of a `ProtoList`.
+- **A call to a primitive no longer packs its arguments.**  The `CALL`
+  opcode hands the primitive a descriptor over the arguments where they
+  already are, in the frame's operand stack; `invoke` (a primitive calling a
+  function back, as `map` and `reduce` do) copies them into the call scope's
+  slots.  Before, each call built a fresh `ProtoList` of its arguments.  A
+  loop calling `str` and `count` once per iteration allocates 4.0 cells per
+  iteration instead of 6.0; `cli/loop-garbage-is-reclaimed` scales its bar
+  to the garbage the workload now makes.
+- `(list ...)` and `(vector ...)` build their list once from the arguments
+  (`asList`); `mapAssocPairs` lost its list overload.
+
 ## [0.0.2] - 2026-10-17
 
 A preview tag of everything below. The `.deb` is built in a clean Ubuntu 24.04

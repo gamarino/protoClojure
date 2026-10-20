@@ -342,8 +342,8 @@ protoCore's out-of-memory message.
 Before this default (2026-10-10), protoclj set no limit and protoCore never
 started a collection by itself: a program grew its heap with every allocation
 (with six allocating tasks, `coll_alloc` was killed at 16 GB). A protoclj built
-against a protoCore older than 2.10.0 (the declared minimum is 2.7.0) has no
-controller and keeps that old behaviour.
+against a protoCore older than 2.10.0 had no controller and kept that old
+behaviour (the declared minimum is now 3.0.0).
 
 ### Packaging
 

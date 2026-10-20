@@ -56,7 +56,7 @@ namespace {
 // of range; the caller's error prints the argument itself (printedValue),
 // not the saturated value. Anything but an integer raises the
 // ClassCastException analogue naming the primitive and the type.
-long long indexArg(proto::ProtoContext* ctx, const proto::ProtoList* args,
+long long indexArg(proto::ProtoContext* ctx, const proto::ProtoArguments* args,
                    int i, const char* primName) {
     const proto::ProtoObject* a = args->getAt(ctx, i);
     if (!a || !a->isInteger(ctx)) {
@@ -78,7 +78,7 @@ long long indexArg(proto::ProtoContext* ctx, const proto::ProtoList* args,
 // analogue naming the primitive and the argument's type (throwNotANumber),
 // the same error the arithmetic opcodes raise.
 const proto::ProtoObject* numberArg(proto::ProtoContext* ctx,
-                                    const proto::ProtoList* args,
+                                    const proto::ProtoArguments* args,
                                     int i, const char* primName) {
     const proto::ProtoObject* a = args->getAt(ctx, i);
     if (isNumber(ctx, a)) return a;
@@ -374,8 +374,8 @@ void appendStr(proto::ProtoContext* ctx, std::string& out,
 const proto::ProtoObject* prim_println(proto::ProtoContext* ctx,
                                        const proto::ProtoObject* /*self*/,
                                        const proto::ParentLink* /*parents*/,
-                                       const proto::ProtoList* args,
-                                       const proto::ProtoSparseList* /*kwargs*/) {
+                                       const proto::ProtoArguments* args,
+                                       const proto::ProtoKeywordArguments* /*kwargs*/) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     std::string line;
     for (proto::proto_ulong i = 0; i < n; ++i) {
@@ -403,7 +403,7 @@ const proto::ProtoObject* prim_println(proto::ProtoContext* ctx,
 // held across allocations, so that loop runs in a GC critical section.
 template <typename Op>
 const proto::ProtoObject* numericFold(proto::ProtoContext* ctx,
-                                      const proto::ProtoList* args,
+                                      const proto::ProtoArguments* args,
                                       proto::proto_ulong n, Op op) {
     if (n == 2) return op(args->getAt(ctx, 0), args->getAt(ctx, 1));
     proto::ProtoContext::CriticalSection guard(ctx);
@@ -413,7 +413,7 @@ const proto::ProtoObject* numericFold(proto::ProtoContext* ctx,
     return acc;
 }
 
-void checkNumbers(proto::ProtoContext* ctx, const proto::ProtoList* args,
+void checkNumbers(proto::ProtoContext* ctx, const proto::ProtoArguments* args,
                   proto::proto_ulong n, const char* primName) {
     for (proto::proto_ulong i = 0; i < n; ++i)
         numberArg(ctx, args, static_cast<int>(i), primName);
@@ -422,8 +422,8 @@ void checkNumbers(proto::ProtoContext* ctx, const proto::ProtoList* args,
 const proto::ProtoObject* prim_plus(proto::ProtoContext* ctx,
                                     const proto::ProtoObject*,
                                     const proto::ParentLink*,
-                                    const proto::ProtoList* args,
-                                    const proto::ProtoSparseList*) {
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     checkNumbers(ctx, args, n, "+");
     if (n == 0) return ctx->fromLong(0);
@@ -437,8 +437,8 @@ const proto::ProtoObject* prim_plus(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_minus(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
                                      const proto::ParentLink*,
-                                     const proto::ProtoList* args,
-                                     const proto::ProtoSparseList*) {
+                                     const proto::ProtoArguments* args,
+                                     const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n == 0) throw std::runtime_error("- : needs at least one arg");
     checkNumbers(ctx, args, n, "-");
@@ -457,8 +457,8 @@ const proto::ProtoObject* prim_minus(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_mul(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
                                    const proto::ParentLink*,
-                                   const proto::ProtoList* args,
-                                   const proto::ProtoSparseList*) {
+                                   const proto::ProtoArguments* args,
+                                   const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     checkNumbers(ctx, args, n, "*");
     if (n == 0) return ctx->fromLong(1);
@@ -478,8 +478,8 @@ const proto::ProtoObject* prim_mul(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_div(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
                                    const proto::ParentLink*,
-                                   const proto::ProtoList* args,
-                                   const proto::ProtoSparseList*) {
+                                   const proto::ProtoArguments* args,
+                                   const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n == 0) throw std::runtime_error("/: needs at least one arg");
     checkNumbers(ctx, args, n, "/");
@@ -507,8 +507,8 @@ const proto::ProtoObject* prim_div(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_inc(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
                                    const proto::ParentLink*,
-                                   const proto::ProtoList* args,
-                                   const proto::ProtoSparseList*) {
+                                   const proto::ProtoArguments* args,
+                                   const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("inc: expects 1 arg");
     const proto::ProtoObject* x = numberArg(ctx, args, 0, "inc");
@@ -519,8 +519,8 @@ const proto::ProtoObject* prim_inc(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_dec(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
                                    const proto::ParentLink*,
-                                   const proto::ProtoList* args,
-                                   const proto::ProtoSparseList*) {
+                                   const proto::ProtoArguments* args,
+                                   const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("dec: expects 1 arg");
     const proto::ProtoObject* x = numberArg(ctx, args, 0, "dec");
@@ -537,7 +537,7 @@ const proto::ProtoObject* prim_dec(proto::ProtoContext* ctx,
 // pair and the chain stops at the first pair that fails, as in Clojure.
 template <typename DoublePred, typename SignPred>
 const proto::ProtoObject* monotonicChain(proto::ProtoContext* ctx,
-                                         const proto::ProtoList* args,
+                                         const proto::ProtoArguments* args,
                                          const char* name,
                                          DoublePred holdsForDoubles,
                                          SignPred holdsForSign) {
@@ -558,8 +558,8 @@ const proto::ProtoObject* monotonicChain(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_lt(proto::ProtoContext* ctx,
                                   const proto::ProtoObject*,
                                   const proto::ParentLink*,
-                                  const proto::ProtoList* args,
-                                  const proto::ProtoSparseList*) {
+                                  const proto::ProtoArguments* args,
+                                  const proto::ProtoKeywordArguments*) {
     return monotonicChain(ctx, args, "<", [](double a, double b){ return a < b; },
                           [](int sign){ return sign < 0; });
 }
@@ -567,8 +567,8 @@ const proto::ProtoObject* prim_lt(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_le(proto::ProtoContext* ctx,
                                   const proto::ProtoObject*,
                                   const proto::ParentLink*,
-                                  const proto::ProtoList* args,
-                                  const proto::ProtoSparseList*) {
+                                  const proto::ProtoArguments* args,
+                                  const proto::ProtoKeywordArguments*) {
     return monotonicChain(ctx, args, "<=", [](double a, double b){ return a <= b; },
                           [](int sign){ return sign <= 0; });
 }
@@ -576,8 +576,8 @@ const proto::ProtoObject* prim_le(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_gt(proto::ProtoContext* ctx,
                                   const proto::ProtoObject*,
                                   const proto::ParentLink*,
-                                  const proto::ProtoList* args,
-                                  const proto::ProtoSparseList*) {
+                                  const proto::ProtoArguments* args,
+                                  const proto::ProtoKeywordArguments*) {
     return monotonicChain(ctx, args, ">", [](double a, double b){ return a > b; },
                           [](int sign){ return sign > 0; });
 }
@@ -585,8 +585,8 @@ const proto::ProtoObject* prim_gt(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_ge(proto::ProtoContext* ctx,
                                   const proto::ProtoObject*,
                                   const proto::ParentLink*,
-                                  const proto::ProtoList* args,
-                                  const proto::ProtoSparseList*) {
+                                  const proto::ProtoArguments* args,
+                                  const proto::ProtoKeywordArguments*) {
     return monotonicChain(ctx, args, ">=", [](double a, double b){ return a >= b; },
                           [](int sign){ return sign >= 0; });
 }
@@ -594,8 +594,8 @@ const proto::ProtoObject* prim_ge(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_eq(proto::ProtoContext* ctx,
                                   const proto::ProtoObject*,
                                   const proto::ParentLink*,
-                                  const proto::ProtoList* args,
-                                  const proto::ProtoSparseList*) {
+                                  const proto::ProtoArguments* args,
+                                  const proto::ProtoKeywordArguments*) {
     // Value equality (valuesEqual) over every adjacent pair, like Clojure's
     // variadic =. The 0- and 1-argument forms are true.
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
@@ -611,8 +611,8 @@ const proto::ProtoObject* prim_eq(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_not_eq(proto::ProtoContext* ctx,
                                       const proto::ProtoObject* self,
                                       const proto::ParentLink* parentLink,
-                                      const proto::ProtoList* args,
-                                      const proto::ProtoSparseList* kwArgs) {
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments* kwArgs) {
     return prim_eq(ctx, self, parentLink, args, kwArgs) == PROTO_TRUE
                ? PROTO_FALSE : PROTO_TRUE;
 }
@@ -625,8 +625,8 @@ const proto::ProtoObject* prim_not_eq(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_str(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
                                    const proto::ParentLink*,
-                                   const proto::ProtoList* args,
-                                   const proto::ProtoSparseList*) {
+                                   const proto::ProtoArguments* args,
+                                   const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     std::string text;
     for (proto::proto_ulong i = 0; i < n; ++i) {
@@ -652,35 +652,32 @@ const proto::ProtoList* asSeqOrNull(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_list(proto::ProtoContext* ctx,
                                     const proto::ProtoObject*,
                                     const proto::ParentLink*,
-                                    const proto::ProtoList* args,
-                                    const proto::ProtoSparseList*) {
-    // The call already handed us the positional arguments AS a ProtoList, and
-    // every ProtoList is immutable, so `(list ...)` simply IS that list.
-    // Copying it element by element rebuilt the whole tree and left one
-    // root-to-leaf path of garbage behind per element.
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
+    // The arguments as a ProtoList, built once in bulk (asList); the call's
+    // own list when it came with one. Copying element by element rebuilt
+    // the whole tree and left one root-to-leaf path of garbage per element.
     if (!args) return ctx->newList()->asObject(ctx);
-    return args->asObject(ctx);
+    return args->asList(ctx)->asObject(ctx);
 }
 
 // `(vector x y z)`, and the bytecode form `[x y z]`, which desugars to a
-// call here. The call already handed us the positional arguments AS an
-// immutable ProtoList, and a vector's elements ARE a ProtoList
-// (VectorOps.h), so building one is a box: O(1), whatever the literal's
-// length. It used to be an O(N) tuple build.
+// call here. A vector's elements ARE a ProtoList (VectorOps.h), so building
+// one is the arguments' list (asList, built once in bulk) in a box.
 const proto::ProtoObject* prim_vector(proto::ProtoContext* ctx,
                                       const proto::ProtoObject*,
                                       const proto::ParentLink*,
-                                      const proto::ProtoList* args,
-                                      const proto::ProtoSparseList*) {
-    return newVector(ctx, args ? args : ctx->newList());
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
+    return newVector(ctx, args ? args->asList(ctx) : ctx->newList());
 }
 
 // (vec coll) — converts any seqable (list or vector) to a vector.
 const proto::ProtoObject* prim_vec(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
                                    const proto::ParentLink*,
-                                   const proto::ProtoList* args,
-                                   const proto::ProtoSparseList*) {
+                                   const proto::ProtoArguments* args,
+                                   const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("vec: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
@@ -718,8 +715,8 @@ void throwNthOutOfBounds(proto::ProtoContext* ctx, const proto::ProtoObject* ind
 const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
                                    const proto::ParentLink*,
-                                   const proto::ProtoList* args,
-                                   const proto::ProtoSparseList*) {
+                                   const proto::ProtoArguments* args,
+                                   const proto::ProtoKeywordArguments*) {
     proto::proto_ulong ac = args ? args->getSize(ctx) : 0;
     if (ac != 2 && ac != 3)
         throw std::runtime_error("nth: expects (nth coll i) or (nth coll i nf)");
@@ -765,8 +762,8 @@ const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_vector_p(proto::ProtoContext* ctx,
                                         const proto::ProtoObject*,
                                         const proto::ParentLink*,
-                                        const proto::ProtoList* args,
-                                        const proto::ProtoSparseList*) {
+                                        const proto::ProtoArguments* args,
+                                        const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("vector?: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
@@ -776,8 +773,8 @@ const proto::ProtoObject* prim_vector_p(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_list_p(proto::ProtoContext* ctx,
                                       const proto::ProtoObject*,
                                       const proto::ParentLink*,
-                                      const proto::ProtoList* args,
-                                      const proto::ProtoSparseList*) {
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("list?: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
@@ -793,8 +790,8 @@ const proto::ProtoObject* prim_list_p(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_map_p(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
                                      const proto::ParentLink*,
-                                     const proto::ProtoList* args,
-                                     const proto::ProtoSparseList*) {
+                                     const proto::ProtoArguments* args,
+                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("map?: expects 1 arg");
     return isMap(args->getAt(ctx, 0)) ? PROTO_TRUE : PROTO_FALSE;
@@ -805,21 +802,21 @@ const proto::ProtoObject* prim_map_p(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_hash_map(proto::ProtoContext* ctx,
                                         const proto::ProtoObject*,
                                         const proto::ParentLink*,
-                                        const proto::ProtoList* args,
-                                        const proto::ProtoSparseList*) {
+                                        const proto::ProtoArguments* args,
+                                        const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n % 2 != 0)
         throw std::runtime_error("hash-map: needs an even number of args");
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("hash-map: no active VM context");
-    return mapAssocPairs(ctx, nullptr, args, 0, n);
+    return mapAssocPairs(ctx, nullptr, args->values(), n);
 }
 
 const proto::ProtoObject* prim_assoc(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
                                      const proto::ParentLink*,
-                                     const proto::ProtoList* args,
-                                     const proto::ProtoSparseList*) {
+                                     const proto::ProtoArguments* args,
+                                     const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n < 3 || (n - 1) % 2 != 0)
         throw std::runtime_error("assoc: expects (assoc m k v ...)");
@@ -828,7 +825,7 @@ const proto::ProtoObject* prim_assoc(proto::ProtoContext* ctx,
     const proto::ProtoObject* m = args->getAt(ctx, 0);
     if (!isMap(m))
         throw std::runtime_error("assoc: first arg must be a map");
-    return mapAssocPairs(ctx, m, args, 1, n - 1);
+    return mapAssocPairs(ctx, m, args->values() + 1, n - 1);
 }
 
 // (dissoc m) / (dissoc m k & ks) — `m` without the given keys, matched by
@@ -838,8 +835,8 @@ const proto::ProtoObject* prim_assoc(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_dissoc(proto::ProtoContext* ctx,
                                       const proto::ProtoObject*,
                                       const proto::ParentLink*,
-                                      const proto::ProtoList* args,
-                                      const proto::ProtoSparseList*) {
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n < 1)
         throw std::runtime_error("dissoc: expects (dissoc m k ...)");
@@ -867,8 +864,8 @@ const proto::ProtoObject* prim_dissoc(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_get(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
                                    const proto::ParentLink*,
-                                   const proto::ProtoList* args,
-                                   const proto::ProtoSparseList*) {
+                                   const proto::ProtoArguments* args,
+                                   const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n != 2 && n != 3)
         throw std::runtime_error("get: expects (get m k) or (get m k not-found)");
@@ -886,8 +883,8 @@ const proto::ProtoObject* prim_get(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_contains_p(proto::ProtoContext* ctx,
                                           const proto::ProtoObject*,
                                           const proto::ParentLink*,
-                                          const proto::ProtoList* args,
-                                          const proto::ProtoSparseList*) {
+                                          const proto::ProtoArguments* args,
+                                          const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
         throw std::runtime_error("contains?: expects (contains? coll k)");
     const ActiveCallContext* cc = activeCallContext();
@@ -925,8 +922,8 @@ static const proto::ProtoObject* mapWalk(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_keys(proto::ProtoContext* ctx,
                                     const proto::ProtoObject*,
                                     const proto::ParentLink*,
-                                    const proto::ProtoList* args,
-                                    const proto::ProtoSparseList*) {
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("keys: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
@@ -937,8 +934,8 @@ const proto::ProtoObject* prim_keys(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_vals(proto::ProtoContext* ctx,
                                     const proto::ProtoObject*,
                                     const proto::ParentLink*,
-                                    const proto::ProtoList* args,
-                                    const proto::ProtoSparseList*) {
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("vals: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
@@ -949,8 +946,8 @@ const proto::ProtoObject* prim_vals(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_first(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
                                      const proto::ParentLink*,
-                                     const proto::ProtoList* args,
-                                     const proto::ProtoSparseList*) {
+                                     const proto::ProtoArguments* args,
+                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("first: expects 1 arg");
     const proto::ProtoList* lst = asSeqOrNull(ctx, args->getAt(ctx, 0));
@@ -961,8 +958,8 @@ const proto::ProtoObject* prim_first(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_rest(proto::ProtoContext* ctx,
                                     const proto::ProtoObject*,
                                     const proto::ParentLink*,
-                                    const proto::ProtoList* args,
-                                    const proto::ProtoSparseList*) {
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("rest: expects 1 arg");
     const proto::ProtoList* lst = asSeqOrNull(ctx, args->getAt(ctx, 0));
@@ -975,8 +972,8 @@ const proto::ProtoObject* prim_rest(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_cons(proto::ProtoContext* ctx,
                                     const proto::ProtoObject*,
                                     const proto::ParentLink*,
-                                    const proto::ProtoList* args,
-                                    const proto::ProtoSparseList*) {
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
         throw std::runtime_error("cons: expects (cons x coll)");
     const proto::ProtoObject* x    = args->getAt(ctx, 0);
@@ -999,8 +996,8 @@ static const proto::ProtoString* asProtoString(const proto::ProtoObject* v) {
 const proto::ProtoObject* prim_count(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
                                      const proto::ParentLink*,
-                                     const proto::ProtoList* args,
-                                     const proto::ProtoSparseList*) {
+                                     const proto::ProtoArguments* args,
+                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("count: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
@@ -1017,8 +1014,8 @@ const proto::ProtoObject* prim_count(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_empty_p(proto::ProtoContext* ctx,
                                        const proto::ProtoObject*,
                                        const proto::ParentLink*,
-                                       const proto::ProtoList* args,
-                                       const proto::ProtoSparseList*) {
+                                       const proto::ProtoArguments* args,
+                                       const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("empty?: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
@@ -1034,8 +1031,8 @@ const proto::ProtoObject* prim_empty_p(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_nil_p(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
                                      const proto::ParentLink*,
-                                     const proto::ProtoList* args,
-                                     const proto::ProtoSparseList*) {
+                                     const proto::ProtoArguments* args,
+                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("nil?: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
@@ -1045,8 +1042,8 @@ const proto::ProtoObject* prim_nil_p(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_not(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
                                    const proto::ParentLink*,
-                                   const proto::ProtoList* args,
-                                   const proto::ProtoSparseList*) {
+                                   const proto::ProtoArguments* args,
+                                   const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("not: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
@@ -1056,8 +1053,8 @@ const proto::ProtoObject* prim_not(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_reverse(proto::ProtoContext* ctx,
                                        const proto::ProtoObject*,
                                        const proto::ParentLink*,
-                                       const proto::ProtoList* args,
-                                       const proto::ProtoSparseList*) {
+                                       const proto::ProtoArguments* args,
+                                       const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("reverse: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
@@ -1088,8 +1085,8 @@ const proto::ProtoObject* prim_reverse(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_map(proto::ProtoContext* ctx,
                                    const proto::ProtoObject*,
                                    const proto::ParentLink*,
-                                   const proto::ProtoList* args,
-                                   const proto::ProtoSparseList*) {
+                                   const proto::ProtoArguments* args,
+                                   const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
         throw std::runtime_error(
             "map: only (map f coll) is supported; multi-collection map is not implemented yet");
@@ -1115,8 +1112,8 @@ const proto::ProtoObject* prim_map(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_filter(proto::ProtoContext* ctx,
                                       const proto::ProtoObject*,
                                       const proto::ParentLink*,
-                                      const proto::ProtoList* args,
-                                      const proto::ProtoSparseList*) {
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
         throw std::runtime_error("filter: expects (filter pred coll)");
     const proto::ProtoObject* pred = args->getAt(ctx, 0);
@@ -1142,8 +1139,8 @@ const proto::ProtoObject* prim_filter(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_reduce(proto::ProtoContext* ctx,
                                       const proto::ProtoObject*,
                                       const proto::ParentLink*,
-                                      const proto::ProtoList* args,
-                                      const proto::ProtoSparseList*) {
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
     // Two shapes: (reduce f coll) — init is first elem;
     //             (reduce f init coll) — explicit init.
     proto::proto_ulong ac = args ? args->getSize(ctx) : 0;
@@ -1187,8 +1184,8 @@ const proto::ProtoObject* prim_reduce(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_subs(proto::ProtoContext* ctx,
                                     const proto::ProtoObject*,
                                     const proto::ParentLink*,
-                                    const proto::ProtoList* args,
-                                    const proto::ProtoSparseList*) {
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
     proto::proto_ulong ac = args ? args->getSize(ctx) : 0;
     if (ac != 2 && ac != 3)
         throw std::runtime_error("subs: expects (subs s start) or (subs s start end)");
@@ -1215,8 +1212,8 @@ const proto::ProtoObject* prim_subs(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_upper_case(proto::ProtoContext* ctx,
                                           const proto::ProtoObject*,
                                           const proto::ParentLink*,
-                                          const proto::ProtoList* args,
-                                          const proto::ProtoSparseList*) {
+                                          const proto::ProtoArguments* args,
+                                          const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("upper-case: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
@@ -1231,8 +1228,8 @@ const proto::ProtoObject* prim_upper_case(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_lower_case(proto::ProtoContext* ctx,
                                           const proto::ProtoObject*,
                                           const proto::ParentLink*,
-                                          const proto::ProtoList* args,
-                                          const proto::ProtoSparseList*) {
+                                          const proto::ProtoArguments* args,
+                                          const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("lower-case: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
@@ -1247,8 +1244,8 @@ const proto::ProtoObject* prim_lower_case(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_starts_with_p(proto::ProtoContext* ctx,
                                              const proto::ProtoObject*,
                                              const proto::ParentLink*,
-                                             const proto::ProtoList* args,
-                                             const proto::ProtoSparseList*) {
+                                             const proto::ProtoArguments* args,
+                                             const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
         throw std::runtime_error("starts-with?: expects (starts-with? s prefix)");
     const proto::ProtoObject* sv = args->getAt(ctx, 0);
@@ -1263,8 +1260,8 @@ const proto::ProtoObject* prim_starts_with_p(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_ends_with_p(proto::ProtoContext* ctx,
                                            const proto::ProtoObject*,
                                            const proto::ParentLink*,
-                                           const proto::ProtoList* args,
-                                           const proto::ProtoSparseList*) {
+                                           const proto::ProtoArguments* args,
+                                           const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
         throw std::runtime_error("ends-with?: expects (ends-with? s suffix)");
     const proto::ProtoObject* sv = args->getAt(ctx, 0);
@@ -1280,8 +1277,8 @@ const proto::ProtoObject* prim_ends_with_p(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_includes_p(proto::ProtoContext* ctx,
                                           const proto::ProtoObject*,
                                           const proto::ParentLink*,
-                                          const proto::ProtoList* args,
-                                          const proto::ProtoSparseList*) {
+                                          const proto::ProtoArguments* args,
+                                          const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
         throw std::runtime_error("includes?: expects (includes? s sub)");
     const proto::ProtoObject* sv = args->getAt(ctx, 0);
@@ -1296,8 +1293,8 @@ const proto::ProtoObject* prim_includes_p(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_index_of(proto::ProtoContext* ctx,
                                         const proto::ProtoObject*,
                                         const proto::ParentLink*,
-                                        const proto::ProtoList* args,
-                                        const proto::ProtoSparseList*) {
+                                        const proto::ProtoArguments* args,
+                                        const proto::ProtoKeywordArguments*) {
     proto::proto_ulong ac = args ? args->getSize(ctx) : 0;
     if (ac != 2 && ac != 3)
         throw std::runtime_error("index-of: expects (index-of s sub) or (index-of s sub from)");
@@ -1322,8 +1319,8 @@ const proto::ProtoObject* prim_index_of(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_replace(proto::ProtoContext* ctx,
                                        const proto::ProtoObject*,
                                        const proto::ParentLink*,
-                                       const proto::ProtoList* args,
-                                       const proto::ProtoSparseList*) {
+                                       const proto::ProtoArguments* args,
+                                       const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 3)
         throw std::runtime_error("replace: expects (replace s match replacement)");
     const proto::ProtoObject* sv = args->getAt(ctx, 0);
@@ -1357,8 +1354,8 @@ const proto::ProtoObject* prim_replace(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_join(proto::ProtoContext* ctx,
                                     const proto::ProtoObject*,
                                     const proto::ParentLink*,
-                                    const proto::ProtoList* args,
-                                    const proto::ProtoSparseList*) {
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
     proto::proto_ulong ac = args ? args->getSize(ctx) : 0;
     if (ac != 1 && ac != 2)
         throw std::runtime_error("join: expects (join coll) or (join sep coll)");
@@ -1390,8 +1387,8 @@ const proto::ProtoObject* prim_join(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_split(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
                                      const proto::ParentLink*,
-                                     const proto::ProtoList* args,
-                                     const proto::ProtoSparseList*) {
+                                     const proto::ProtoArguments* args,
+                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
         throw std::runtime_error("split: expects (split s delim)");
     const proto::ProtoObject* sv = args->getAt(ctx, 0);
@@ -1434,8 +1431,8 @@ static bool isAsciiWs(unsigned char c) {
 const proto::ProtoObject* prim_trim(proto::ProtoContext* ctx,
                                     const proto::ProtoObject*,
                                     const proto::ParentLink*,
-                                    const proto::ProtoList* args,
-                                    const proto::ProtoSparseList*) {
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("trim: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
@@ -1452,8 +1449,8 @@ const proto::ProtoObject* prim_trim(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_triml(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
                                      const proto::ParentLink*,
-                                     const proto::ProtoList* args,
-                                     const proto::ProtoSparseList*) {
+                                     const proto::ProtoArguments* args,
+                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("triml: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
@@ -1469,8 +1466,8 @@ const proto::ProtoObject* prim_triml(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_trimr(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
                                      const proto::ParentLink*,
-                                     const proto::ProtoList* args,
-                                     const proto::ProtoSparseList*) {
+                                     const proto::ProtoArguments* args,
+                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("trimr: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
@@ -1486,8 +1483,8 @@ const proto::ProtoObject* prim_trimr(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_blank_p(proto::ProtoContext* ctx,
                                        const proto::ProtoObject*,
                                        const proto::ParentLink*,
-                                       const proto::ProtoList* args,
-                                       const proto::ProtoSparseList*) {
+                                       const proto::ProtoArguments* args,
+                                       const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("blank?: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
@@ -1503,8 +1500,8 @@ const proto::ProtoObject* prim_blank_p(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_string_p(proto::ProtoContext* ctx,
                                         const proto::ProtoObject*,
                                         const proto::ParentLink*,
-                                        const proto::ProtoList* args,
-                                        const proto::ProtoSparseList*) {
+                                        const proto::ProtoArguments* args,
+                                        const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("string?: expects 1 arg");
     return isStringLike(args->getAt(ctx, 0)) ? PROTO_TRUE : PROTO_FALSE;
@@ -1522,8 +1519,8 @@ const proto::ProtoObject* prim_string_p(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_atom(proto::ProtoContext* ctx,
                                     const proto::ProtoObject*,
                                     const proto::ParentLink*,
-                                    const proto::ProtoList* args,
-                                    const proto::ProtoSparseList*) {
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n != 1)
         throw std::runtime_error("atom: expects (atom initial-value)");
@@ -1538,8 +1535,8 @@ const proto::ProtoObject* prim_atom(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_atom_p(proto::ProtoContext* ctx,
                                       const proto::ProtoObject*,
                                       const proto::ParentLink*,
-                                      const proto::ProtoList* args,
-                                      const proto::ProtoSparseList*) {
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("atom?: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
@@ -1599,8 +1596,8 @@ void throwExecutionException(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_deref(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
                                      const proto::ParentLink*,
-                                     const proto::ProtoList* args,
-                                     const proto::ProtoSparseList*) {
+                                     const proto::ProtoArguments* args,
+                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("deref: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
@@ -1737,8 +1734,8 @@ static void fireWatches(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_reset_bang(proto::ProtoContext* ctx,
                                           const proto::ProtoObject*,
                                           const proto::ParentLink*,
-                                          const proto::ProtoList* args,
-                                          const proto::ProtoSparseList*) {
+                                          const proto::ProtoArguments* args,
+                                          const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
         throw std::runtime_error("reset!: expects (reset! atom new-value)");
     const ActiveCallContext* cc = activeCallContext();
@@ -1769,8 +1766,8 @@ const proto::ProtoObject* prim_reset_bang(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_swap_bang(proto::ProtoContext* ctx,
                                          const proto::ProtoObject*,
                                          const proto::ParentLink*,
-                                         const proto::ProtoList* args,
-                                         const proto::ProtoSparseList*) {
+                                         const proto::ProtoArguments* args,
+                                         const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n < 2)
         throw std::runtime_error("swap!: expects (swap! atom f & args)");
@@ -1849,8 +1846,8 @@ const proto::ProtoObject* futureThreadMain(
         proto::ProtoContext* ctx,
         const proto::ProtoObject* /*self*/,
         const proto::ParentLink*,
-        const proto::ProtoList* args,
-        const proto::ProtoSparseList*) {
+        const proto::ProtoArguments* args,
+        const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) == 0) return PROTO_NONE;
     const proto::ProtoObject* fut = args->getAt(ctx, 0);
     if (!fut) return PROTO_NONE;
@@ -1983,8 +1980,8 @@ static void shutdownFuturesImpl(proto::ProtoContext* ctx) {
 const proto::ProtoObject* prim_make_future(proto::ProtoContext* ctx,
                                            const proto::ProtoObject*,
                                            const proto::ParentLink*,
-                                           const proto::ProtoList* args,
-                                           const proto::ProtoSparseList*) {
+                                           const proto::ProtoArguments* args,
+                                           const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("future: expects 1 thunk");
     const ActiveCallContext* cc = activeCallContext();
@@ -1995,8 +1992,8 @@ const proto::ProtoObject* prim_make_future(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_future_p(proto::ProtoContext* ctx,
                                         const proto::ProtoObject*,
                                         const proto::ParentLink*,
-                                        const proto::ProtoList* args,
-                                        const proto::ProtoSparseList*) {
+                                        const proto::ProtoArguments* args,
+                                        const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("future?: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
@@ -2009,8 +2006,8 @@ const proto::ProtoObject* prim_future_p(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_realized_p(proto::ProtoContext* ctx,
                                           const proto::ProtoObject*,
                                           const proto::ParentLink*,
-                                          const proto::ProtoList* args,
-                                          const proto::ProtoSparseList*) {
+                                          const proto::ProtoArguments* args,
+                                          const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("realized?: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
@@ -2043,8 +2040,8 @@ const proto::ProtoObject* pmapWorkerMain(
         proto::ProtoContext* ctx,
         const proto::ProtoObject* /*self*/,
         const proto::ParentLink*,
-        const proto::ProtoList* args,
-        const proto::ProtoSparseList*) {
+        const proto::ProtoArguments* args,
+        const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) == 0) return PROTO_NONE;
     const proto::ProtoObject* fut = args->getAt(ctx, 0);
     if (!fut) return PROTO_NONE;
@@ -2088,8 +2085,8 @@ const proto::ProtoObject* pmapWorkerMain(
 const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
                                     const proto::ProtoObject*,
                                     const proto::ParentLink*,
-                                    const proto::ProtoList* args,
-                                    const proto::ProtoSparseList*) {
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
         throw std::runtime_error("pmap: expects (pmap f coll)");
     const proto::ProtoObject* f    = args->getAt(ctx, 0);
@@ -2207,8 +2204,8 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_promise(proto::ProtoContext* ctx,
                                        const proto::ProtoObject*,
                                        const proto::ParentLink*,
-                                       const proto::ProtoList* args,
-                                       const proto::ProtoSparseList*) {
+                                       const proto::ProtoArguments* args,
+                                       const proto::ProtoKeywordArguments*) {
     if (args && args->getSize(ctx) != 0)
         throw std::runtime_error("promise: takes no arguments");
     const ActiveCallContext* cc = activeCallContext();
@@ -2223,8 +2220,8 @@ const proto::ProtoObject* prim_promise(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_promise_p(proto::ProtoContext* ctx,
                                          const proto::ProtoObject*,
                                          const proto::ParentLink*,
-                                         const proto::ProtoList* args,
-                                         const proto::ProtoSparseList*) {
+                                         const proto::ProtoArguments* args,
+                                         const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("promise?: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
@@ -2267,8 +2264,8 @@ static ActorState* actorStateFrom(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_actor(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
                                      const proto::ParentLink*,
-                                     const proto::ProtoList* args,
-                                     const proto::ProtoSparseList*) {
+                                     const proto::ProtoArguments* args,
+                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("actor: expects (actor initial-state)");
     const ActiveCallContext* cc = activeCallContext();
@@ -2304,8 +2301,8 @@ const proto::ProtoObject* prim_actor(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_actor_p(proto::ProtoContext* ctx,
                                        const proto::ProtoObject*,
                                        const proto::ParentLink*,
-                                       const proto::ProtoList* args,
-                                       const proto::ProtoSparseList*) {
+                                       const proto::ProtoArguments* args,
+                                       const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throw std::runtime_error("actor?: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
@@ -2318,7 +2315,7 @@ const proto::ProtoObject* prim_actor_p(proto::ProtoContext* ctx,
 
 // Shared core for send / send-h / send-m / send-l.
 static const proto::ProtoObject* sendCore(proto::ProtoContext* ctx,
-                                           const proto::ProtoList* args,
+                                           const proto::ProtoArguments* args,
                                            const char* primName,
                                            ActorPriority priority) {
     if (!args || args->getSize(ctx) < 2)
@@ -2366,32 +2363,32 @@ static const proto::ProtoObject* sendCore(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_send(proto::ProtoContext* ctx,
                                     const proto::ProtoObject*,
                                     const proto::ParentLink*,
-                                    const proto::ProtoList* args,
-                                    const proto::ProtoSparseList*) {
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
     return sendCore(ctx, args, "send", ActorPriority::Medium);
 }
 
 const proto::ProtoObject* prim_send_h(proto::ProtoContext* ctx,
                                       const proto::ProtoObject*,
                                       const proto::ParentLink*,
-                                      const proto::ProtoList* args,
-                                      const proto::ProtoSparseList*) {
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
     return sendCore(ctx, args, "send-h", ActorPriority::High);
 }
 
 const proto::ProtoObject* prim_send_m(proto::ProtoContext* ctx,
                                       const proto::ProtoObject*,
                                       const proto::ParentLink*,
-                                      const proto::ProtoList* args,
-                                      const proto::ProtoSparseList*) {
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
     return sendCore(ctx, args, "send-m", ActorPriority::Medium);
 }
 
 const proto::ProtoObject* prim_send_l(proto::ProtoContext* ctx,
                                       const proto::ProtoObject*,
                                       const proto::ParentLink*,
-                                      const proto::ProtoList* args,
-                                      const proto::ProtoSparseList*) {
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
     return sendCore(ctx, args, "send-l", ActorPriority::Low);
 }
 
@@ -2399,8 +2396,8 @@ const proto::ProtoObject* prim_send_l(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_actor_stats(proto::ProtoContext* ctx,
                                            const proto::ProtoObject*,
                                            const proto::ParentLink*,
-                                           const proto::ProtoList*,
-                                           const proto::ProtoSparseList*) {
+                                           const proto::ProtoArguments*,
+                                           const proto::ProtoKeywordArguments*) {
     auto s = ActorScheduler::instance().stats();
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throw std::runtime_error("actor-stats: no active VM context");
@@ -2418,8 +2415,8 @@ const proto::ProtoObject* prim_actor_stats(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_deliver(proto::ProtoContext* ctx,
                                        const proto::ProtoObject*,
                                        const proto::ParentLink*,
-                                       const proto::ProtoList* args,
-                                       const proto::ProtoSparseList*) {
+                                       const proto::ProtoArguments* args,
+                                       const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
         throw std::runtime_error("deliver: expects (deliver promise value)");
     const ActiveCallContext* cc = activeCallContext();
@@ -2437,8 +2434,8 @@ const proto::ProtoObject* prim_compare_and_set_bang(
         proto::ProtoContext* ctx,
         const proto::ProtoObject*,
         const proto::ParentLink*,
-        const proto::ProtoList* args,
-        const proto::ProtoSparseList*) {
+        const proto::ProtoArguments* args,
+        const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 3)
         throw std::runtime_error("compare-and-set!: expects (compare-and-set! atom old new)");
     const ActiveCallContext* cc = activeCallContext();
@@ -2456,8 +2453,8 @@ const proto::ProtoObject* prim_compare_and_set_bang(
 const proto::ProtoObject* prim_add_watch(proto::ProtoContext* ctx,
                                          const proto::ProtoObject*,
                                          const proto::ParentLink*,
-                                         const proto::ProtoList* args,
-                                         const proto::ProtoSparseList*) {
+                                         const proto::ProtoArguments* args,
+                                         const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 3)
         throw std::runtime_error("add-watch: expects (add-watch atom key fn)");
     const ActiveCallContext* cc = activeCallContext();
@@ -2489,8 +2486,8 @@ const proto::ProtoObject* prim_add_watch(proto::ProtoContext* ctx,
 const proto::ProtoObject* prim_remove_watch(proto::ProtoContext* ctx,
                                             const proto::ProtoObject*,
                                             const proto::ParentLink*,
-                                            const proto::ProtoList* args,
-                                            const proto::ProtoSparseList*) {
+                                            const proto::ProtoArguments* args,
+                                            const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
         throw std::runtime_error("remove-watch: expects (remove-watch atom key)");
     const ActiveCallContext* cc = activeCallContext();

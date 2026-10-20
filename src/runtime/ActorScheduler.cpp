@@ -35,8 +35,8 @@ static const proto::ProtoObject* actorWorkerEntry(
         proto::ProtoContext* ctx,
         const proto::ProtoObject* /*self*/,
         const proto::ParentLink*,
-        const proto::ProtoList* args,
-        const proto::ProtoSparseList*) {
+        const proto::ProtoArguments* args,
+        const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) == 0) return PROTO_NONE;
     const proto::ProtoObject* sched = args->getAt(ctx, 0);
     if (!sched || !sched->isInteger(ctx)) return PROTO_NONE;

@@ -252,11 +252,11 @@ auto blocking(proto::ProtoContext* ctx, F&& f) -> decltype(f()) {
 
 // ============================================================== arguments
 
-proto::proto_ulong argCount(proto::ProtoContext* ctx, const proto::ProtoList* args) {
+proto::proto_ulong argCount(proto::ProtoContext* ctx, const proto::ProtoArguments* args) {
     return args ? args->getSize(ctx) : 0;
 }
 
-const PO* arg(proto::ProtoContext* ctx, const proto::ProtoList* args, proto::proto_ulong i) {
+const PO* arg(proto::ProtoContext* ctx, const proto::ProtoArguments* args, proto::proto_ulong i) {
     const PO* v = args->getAt(ctx, static_cast<int>(i));
     return v ? v : PROTO_NONE;
 }
@@ -301,7 +301,7 @@ int openFd(proto::ProtoContext* ctx, const PO* v, const char* who,
 
 // Options after the positional arguments, starting at `from`: one map, or
 // keyword/value pairs (`:append true`). Answers a map, or nullptr for none.
-const PO* optionsArg(proto::ProtoContext* ctx, const proto::ProtoList* args,
+const PO* optionsArg(proto::ProtoContext* ctx, const proto::ProtoArguments* args,
                      proto::proto_ulong from, const char* who) {
     const proto::proto_ulong n = argCount(ctx, args);
     if (from >= n) return nullptr;
@@ -313,7 +313,7 @@ const PO* optionsArg(proto::ProtoContext* ctx, const proto::ProtoList* args,
     if ((n - from) % 2 != 0)
         throwClassed(ctx, "IllegalArgumentException",
                      std::string(who) + ": options must be a map or keyword/value pairs");
-    return mapAssocPairs(ctx, nullptr, args, from, n - from);
+    return mapAssocPairs(ctx, nullptr, args->values() + from, n - from);
 }
 
 // The option `spelling` (":append") of `opts`, or nullptr when absent.
@@ -741,7 +741,7 @@ void serveConnection(proto::ProtoContext* ctx, HttpServer* s, Connection* c) {
 // The main of a connection thread: args are the server and the connection,
 // each a pointer carried as an integer.
 const PO* connectionMain(proto::ProtoContext* ctx, const PO*, const proto::ParentLink*,
-                         const proto::ProtoList* args, const proto::ProtoSparseList*) {
+                         const proto::ProtoArguments* args, const proto::ProtoKeywordArguments*) {
     auto* s = reinterpret_cast<HttpServer*>(args->getAt(ctx, 0)->asLong(ctx));
     auto* c = reinterpret_cast<Connection*>(args->getAt(ctx, 1)->asLong(ctx));
     setActiveCallContext(s->cc);
@@ -762,7 +762,7 @@ const PO* connectionMain(proto::ProtoContext* ctx, const PO*, const proto::Paren
 // connection thread per connection, then joins them all and closes the
 // listening socket.
 const PO* acceptMain(proto::ProtoContext* ctx, const PO*, const proto::ParentLink*,
-                     const proto::ProtoList* args, const proto::ProtoSparseList*) {
+                     const proto::ProtoArguments* args, const proto::ProtoKeywordArguments*) {
     auto* s = reinterpret_cast<HttpServer*>(args->getAt(ctx, 0)->asLong(ctx));
     setActiveCallContext(s->cc);
     while (!s->stopping.load()) {
@@ -881,7 +881,7 @@ HttpServer* serverOf(proto::ProtoContext* ctx, const PO* h, const char* who) {
 
 #define IOPRIM(NAME)                                                                 \
     const PO* NAME(proto::ProtoContext* ctx, const PO*, const proto::ParentLink*,  \
-                   const proto::ProtoList* args, const proto::ProtoSparseList*)
+                   const proto::ProtoArguments* args, const proto::ProtoKeywordArguments*)
 
 bool isHttpUrl(const std::string& s) {
     return s.rfind("http://", 0) == 0 || s.rfind("https://", 0) == 0;
@@ -1372,7 +1372,7 @@ IOPRIM(prim_http_request) {
     return httpCall(ctx, "http-request", opts, std::nullopt, std::nullopt);
 }
 
-const PO* httpVerb(proto::ProtoContext* ctx, const proto::ProtoList* args, const char* who,
+const PO* httpVerb(proto::ProtoContext* ctx, const proto::ProtoArguments* args, const char* who,
                    const char* method) {
     const proto::proto_ulong n = argCount(ctx, args);
     if (n < 1) arity(ctx, n, who);

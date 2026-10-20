@@ -130,8 +130,8 @@ struct EvaluatorJob {
 
 // The main of the evaluator thread: args[0] is the EvaluatorJob, as a long.
 const proto::ProtoObject* evaluatorMain(proto::ProtoContext* ctx, const proto::ProtoObject*,
-                                        const proto::ParentLink*, const proto::ProtoList* args,
-                                        const proto::ProtoSparseList*) {
+                                        const proto::ParentLink*, const proto::ProtoArguments* args,
+                                        const proto::ProtoKeywordArguments*) {
     auto* job = reinterpret_cast<EvaluatorJob*>(args->getAt(ctx, 0)->asLong(ctx));
     try {
         job->result = job->body(ctx, job->arg);

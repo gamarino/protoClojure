@@ -50,12 +50,18 @@ LIMIT=400000
 # (count "garbage-0") + ... + (count "garbage-399999"): 8 + the digit count.
 EXPECTED=5488890
 
-# The workload allocates about 2,360,000 cells (measured with no ceiling: the
-# heap grows to 2,621,440 from 262,144). Reclaiming less than this would mean
-# most of the garbage is still pinned, which is the defect. Deliberately not a
-# "> 0" bar: forcing a cycle is not the same as submitting a young generation,
-# and a cycle that submits nothing still reclaims a few stray cells.
-MIN_RECLAIMED=1500000
+# The workload allocates 4.0 cells per iteration, about 1,600,000 in all
+# (counted at protoCore's cell allocator, 1,000 and 2,000 iterations,
+# 2026-10-20). Before protoCore 3.0.0 it allocated 6.0: each call to a C++
+# primitive (`str`, `count`) packed its arguments into a fresh ProtoList, and
+# the primitives now read them from the operand stack. Of that garbage the
+# ceiling leaves at most ~1,200,000 cells reclaimable; this bar is 75 % of it,
+# the proportion the 2.x bar (1,500,000 of ~2,000,000) used. Reclaiming less
+# would mean most of the garbage is still pinned, which is the defect.
+# Deliberately not a "> 0" bar: forcing a cycle is not the same as submitting
+# a young generation, and a cycle that submits nothing still reclaims a few
+# stray cells.
+MIN_RECLAIMED=900000
 # Cycles must actually run, or "reclaimed" means nothing.
 MIN_CYCLES=3
 # The loop's real live set is two SmallIntegers plus the program's globals,
@@ -126,7 +132,7 @@ if (( cycles < MIN_CYCLES )); then
 fi
 if (( reclaimed < MIN_RECLAIMED )); then
     echo "FAIL: $reclaimed cells reclaimed over the run, expected at least"
-    echo "      $MIN_RECLAIMED — the workload creates about 2,360,000 cells of"
+    echo "      $MIN_RECLAIMED — the workload creates about 1,600,000 cells of"
     echo "      garbage, so this means the loop's young generation is still"
     echo "      being pinned rather than submitted."
     fail=1
