@@ -25,6 +25,10 @@ first planned release (`docs/ROADMAP.md`).
   to the garbage the workload now makes.
 - `(list ...)` and `(vector ...)` build their list once from the arguments
   (`asList`); `mapAssocPairs` lost its list overload.
+- **A frame's context is built at its initial size** (arguments, locals and
+  the 64-slot initial operand stack) instead of empty and then grown with
+  `resizeAutomaticLocals`; likewise `invoke`'s call scope.  `fib` -5 %
+  cycles from this, -12.7 % with protoCore 3.0.0's integer paths.
 
 ## [0.0.2] - 2026-10-17
 

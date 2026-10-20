@@ -53,12 +53,12 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 3.0.0 (branch feature/args-calling-convention, 0500e0b),
+  # protoCore 3.0.0 (branch feature/args-calling-convention, cf52f9f),
   # SOVERSION 4: methods receive ProtoArguments / ProtoKeywordArguments.  It is
   # also the minimum CMakeLists.txt declares (PROTOCORE_MIN_VERSION, 3.0.0),
   # which the floor job in cross-platform.yml (Windows) tests.  Bump this
   # deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '0500e0ba36cbbf25911d00fe628bca9da40d4eea' }}
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'cf52f9f5056919bb07326afc7159d5b3d78c03a3' }}
   PROTOIO_REPO: gamarino/protoIO
   # protoIO 0.2.2 (main, 2026-10-02): RunOptions for sh :dir/:env, the
   # dual-stack wildcard listener.  Bump this deliberately.

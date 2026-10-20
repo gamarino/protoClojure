@@ -404,8 +404,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
     // are copied into the call scope's slots (the thread's slot stack, no
     // allocation) and the primitive reads them there (protoCore's array
     // call form): slot 0 the callable, 1..argc the arguments.
-    proto::ProtoContext callScope(ctx->space, ctx);
-    callScope.resizeAutomaticLocals(argc + 1);
+    proto::ProtoContext callScope(ctx->space, ctx, nullptr, nullptr, nullptr, nullptr, argc + 1);
     callScope.setAutomaticLocal(0, callable);
     for (unsigned int i = 0; i < argc; ++i) callScope.setAutomaticLocal(i + 1, args[i]);
     proto::ProtoMethod fn = callable->asMethod(&callScope);
@@ -498,8 +497,10 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                                                               + mod.localCount());
     unsigned int stackCapacity = kInitialOperandStackSize;
 
-    proto::ProtoContext frame(parent->space, parent);
-    frame.resizeAutomaticLocals(stackBase + stackCapacity);
+    // Built at its full initial size: the slots come from the thread's slot
+    // stack once, instead of an empty context grown by resizeAutomaticLocals.
+    proto::ProtoContext frame(parent->space, parent, nullptr, nullptr, nullptr, nullptr,
+                              stackBase + stackCapacity);
     unsigned int sp = 0;   // 0 means "stack empty"; sp <= stackCapacity
 
     // Bind incoming args (call site is responsible for matching arity).
