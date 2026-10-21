@@ -321,8 +321,8 @@ first and its result built after.
 
 ### Bytecode VM
 
-- [x] 38 opcodes — see `src/runtime/Opcodes.h`
-- [x] Exception opcodes `TRY_BEGIN` / `TRY_END` / `THROW` / `RETHROW` /
+- [x] 39 opcodes — see `src/runtime/Opcodes.h`
+- [x] Exception opcodes `TRY_BEGIN` / `TRY_END` / `THROW` / `STORE_CAUGHT` / `RETHROW` /
       `EXC_MATCH` / `EXC_MATCH_TYPE` / `RESOLVE_CLASS`, and the module-member
       opcodes `GET_MEMBER` / `CALL_MEMBER`,
       over a per-frame handler stack; only a body containing a `try` runs in

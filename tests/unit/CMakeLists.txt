@@ -10,12 +10,13 @@ add_executable(protoclj_unit_tests
     test_mapops.cpp
     test_value_lifetime.cpp
     test_reader.cpp
+    test_rethrow.cpp
     test_stackguard.cpp
     test_values.cpp
 )
 
 target_link_libraries(protoclj_unit_tests
-    PRIVATE protoclj_reader protoclj_runtime gtest gtest_main)
+    PRIVATE protoclj_reader protoclj_compiler protoclj_runtime gtest gtest_main)
 
 target_compile_options(protoclj_unit_tests PRIVATE ${PROTOCLJ_WARNINGS})
 if(MSVC)

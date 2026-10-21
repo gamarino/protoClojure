@@ -48,6 +48,7 @@ const char* opName(Op op) {
         case Op::RESOLVE_CLASS: return "RESOLVE_CLASS";
         case Op::GET_MEMBER:    return "GET_MEMBER";
         case Op::CALL_MEMBER:   return "CALL_MEMBER";
+        case Op::STORE_CAUGHT:  return "STORE_CAUGHT";
     }
     return "?";
 }
@@ -143,7 +144,7 @@ void BytecodeModule::patchOperand(std::size_t at, std::size_t operand) {
 // ExecutionEngine::executeFrame:
 //   +1  PUSH_CONST PUSH_VAR PUSH_NIL PUSH_TRUE PUSH_FALSE PUSH_LOCAL DUP
 //       RESOLVE_CLASS
-//   -1  POP STORE_LOCAL JUMP_IF_FALSE JUMP_IF_TRUE, ADD .. EQ (two in, one out)
+//   -1  POP STORE_LOCAL STORE_CAUGHT JUMP_IF_FALSE JUMP_IF_TRUE, ADD .. EQ (two in, one out)
 //       EXC_MATCH_TYPE
 //    0  NOP STORE_GLOBAL JUMP JUMP_BACK TRY_END EXC_MATCH GET_MEMBER
 //  -argc CALL CALL_KW CALL_MEMBER (callable or receiver and argc arguments
@@ -182,7 +183,7 @@ unsigned int BytecodeModule::computeMaxStack() const {
             case Op::PUSH_FALSE: case Op::PUSH_LOCAL: case Op::DUP:
             case Op::RESOLVE_CLASS:
                 after = d + 1; break;
-            case Op::POP: case Op::STORE_LOCAL:
+            case Op::POP: case Op::STORE_LOCAL: case Op::STORE_CAUGHT:
             case Op::ADD: case Op::SUB: case Op::MUL: case Op::LT: case Op::LE:
             case Op::GT: case Op::GE: case Op::EQ: case Op::CALL_APPLY:
             case Op::EXC_MATCH_TYPE:

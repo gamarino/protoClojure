@@ -609,18 +609,18 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
     //       TRY_END
     //       JUMP Ldone
     //   Lcatch:                         ; stack: exception
-    //       STORE_LOCAL ex
+    //       STORE_CAUGHT ex             ; the slot, and the C++ exception
     //       PUSH_LOCAL ex, EXC_MATCH C1, JUMP_IF_FALSE L2, <catch body 1>, JUMP Ldone
     //   L2: ...
-    //       PUSH_LOCAL ex, THROW        ; no clause matched: rethrow
+    //       RETHROW ex                  ; no clause matched: the original
     //   Ldone:
     //       TRY_END                     ; the finally handler
     //       <finally>, POP              ; normal path
     //       JUMP Lend
     //   Lfinally:                       ; stack: exception
-    //       STORE_LOCAL fx
+    //       STORE_CAUGHT fx
     //       <finally>, POP
-    //       PUSH_LOCAL fx, THROW
+    //       RETHROW fx
     //   Lend:
     //
     // The finally forms are compiled twice, once per path, as javac does.
@@ -645,7 +645,7 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
 
         patchTo(catchBeginAt, out.pos());
         const int exSlot = scopes_[scopeIdx].nextSlot++;
-        out.emit(Op::STORE_LOCAL, exSlot);
+        out.emit(Op::STORE_CAUGHT, exSlot);
         for (const CatchClause& c : catches) {
             out.emit(Op::PUSH_LOCAL, exSlot);
             if (c.classId >= 0) {
@@ -673,8 +673,7 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
             doneJumps.push_back(out.emit(Op::JUMP, 0));
             patchTo(nextAt, out.pos());
         }
-        out.emit(Op::PUSH_LOCAL, exSlot);
-        out.emit(Op::RETHROW, 0);
+        out.emit(Op::RETHROW, exSlot);
         for (std::size_t at : doneJumps) patchTo(at, out.pos());
     }
 
@@ -684,10 +683,9 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
         const std::size_t endAt = out.emit(Op::JUMP, 0);
         patchTo(finallyBeginAt, out.pos());
         const int fxSlot = scopes_[scopeIdx].nextSlot++;
-        out.emit(Op::STORE_LOCAL, fxSlot);
+        out.emit(Op::STORE_CAUGHT, fxSlot);
         compileFinally();
-        out.emit(Op::PUSH_LOCAL, fxSlot);
-        out.emit(Op::RETHROW, 0);
+        out.emit(Op::RETHROW, fxSlot);
         patchTo(endAt, out.pos());
     }
 }

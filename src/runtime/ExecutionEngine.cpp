@@ -210,6 +210,16 @@ void rethrowValue(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     throw proto::ProtoException(ctx, v);
 }
 
+// STORE_CAUGHT's frame-state half, out of line: the vector's growth path
+// stays out of the dispatch loop (see pushTryHandler).
+[[gnu::noinline]] PROTOCLJ_MSVC_NOINLINE
+void storeCaught(std::vector<std::exception_ptr>& caught, std::exception_ptr& justCaught,
+                 unsigned int slot) {
+    if (caught.size() <= slot) caught.resize(slot + 1);
+    caught[slot] = std::move(justCaught);
+    justCaught = nullptr;
+}
+
 // The prefix and the member of a qualified name `a/b`.
 void splitQualified(const std::string& name, std::string& prefix, std::string& member) {
     const std::size_t slash = name.find('/');
@@ -857,6 +867,14 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
     // and never allocated, in a frame that runs no `try`.
     std::vector<TryHandler> handlers;
 
+    // The C++ exception each catch slot holds (STORE_CAUGHT / RETHROW),
+    // indexed by local slot, and the one just caught, waiting for the
+    // handler's STORE_CAUGHT. Frame state: a rethrow raises the very
+    // exception object this frame caught, never a copy, whatever runtime
+    // subclass of ProtoException it is. Empty in a frame that runs no `try`.
+    std::vector<std::exception_ptr> caught;
+    std::exception_ptr justCaught;
+
     // The dispatch loop. Returns the frame's value at RETURN or at the end
     // of the code.
     auto dispatchLoop = [&]() PROTOCLJ_LAMBDA_ALWAYS_INLINE -> const proto::ProtoObject* {
@@ -1309,9 +1327,22 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 if (sp == 0) throwError(&frame, "VM: THROW on empty stack");
                 throwValue(&frame, peekAt(0));
 
+            case Op::STORE_CAUGHT:
+                if constexpr (kHandlers) {
+                    storeCaught(caught, justCaught, operand);
+                    frame.setAutomaticLocal(locBase + operand, popVal());
+                } else {
+                    throwError(&frame, "VM: STORE_CAUGHT in a frame without handlers");
+                }
+                break;
+
             case Op::RETHROW:
-                if (sp == 0) throwError(&frame, "VM: RETHROW on empty stack");
-                rethrowValue(&frame, peekAt(0));
+                // Outside any C++ catch clause: rethrow_exception starts the
+                // search here, as a `throw;` in the handler would.
+                if (operand < caught.size() && caught[operand])
+                    std::rethrow_exception(caught[operand]);
+                // A translated C++ error: raise its value.
+                rethrowValue(&frame, frame.getAutomaticLocal(locBase + operand));
 
             case Op::EXC_MATCH: {
                 const proto::ProtoObject* v = popVal();
@@ -1400,6 +1431,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                     handlers.pop_back();
                     sp = h.sp;
                     pushVal(thrown.value());
+                    justCaught = std::current_exception();
                     ip = h.target;
                 }
             } catch (const std::exception& error) {
@@ -1412,6 +1444,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                     handlers.pop_back();
                     sp = h.sp;
                     pushVal(exceptionFromError(&frame, error));
+                    justCaught = nullptr;   // RETHROW raises the value
                     ip = h.target;
                 }
             }

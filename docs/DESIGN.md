@@ -367,7 +367,9 @@ nil for it.
 **Bytecode.** A frame keeps a stack of active handlers, each a code
 position and an operand-stack depth. `TRY_BEGIN` pushes one, `TRY_END`
 pops it on the normal path, `THROW` raises the value on top of the stack
-(`throw`), `RETHROW` raises it unchanged whatever it is (a value no clause
+(`throw`), `STORE_CAUGHT <slot>` starts a handler by storing the caught
+value in a slot and keeping the caught C++ exception for that slot,
+`RETHROW <slot>` rethrows that original exception (a value no clause
 matched, the end of a finally handler), `EXC_MATCH <class>` tests a value
 against a built-in class, and `EXC_MATCH_TYPE` tests it against a type
 pushed at run time (`RESOLVE_CLASS <name>`, or a local, or `GET_MEMBER`).
@@ -380,26 +382,33 @@ pushed at run time (`RESOLVE_CLASS <name>`, or a local, or `GET_MEMBER`).
     TRY_END
     JUMP Ldone
 Lcatch:                         ; stack: the exception
-    STORE_LOCAL ex
+    STORE_CAUGHT ex
     PUSH_LOCAL ex; EXC_MATCH C1; JUMP_IF_FALSE L2; <h1>; JUMP Ldone
 L2: PUSH_LOCAL ex; RESOLVE_CLASS m/T; EXC_MATCH_TYPE; JUMP_IF_FALSE L3; <h2>; JUMP Ldone
-L3: PUSH_LOCAL ex; RETHROW      ; no clause matched: rethrow the same value
+L3: RETHROW ex                  ; no clause matched: the original exception
 Ldone:
     TRY_END                     ; the finally handler
     <f>; POP                    ; normal path
     JUMP Lend
 Lfinally:                       ; stack: the exception
-    STORE_LOCAL fx
+    STORE_CAUGHT fx
     <f>; POP
-    PUSH_LOCAL fx; RETHROW
+    RETHROW fx
 Lend:
 ```
 
 (here C1 is a built-in class and C2 the module member `m/T`). The rethrow
-throws a new `ProtoException` carrying the same value; a runtime subclass
-of `ProtoException` raised by another language loses its extra state
-across a Clojure `try` that does not handle it (protoClojure's own
-subclass, `ClojureThrow`, has none).
+is protoCore's rule E3, "rethrown unchanged": the handler loop's
+`catch (const proto::ProtoException&)` keeps `std::current_exception()`,
+`STORE_CAUGHT` files it under the handler's slot in a per-frame vector of
+`std::exception_ptr` (frame state, never global or thread-local), and
+`RETHROW` calls `std::rethrow_exception` on it. The very exception object
+continues, so a runtime subclass of `ProtoException` raised by another
+language keeps its dynamic type and its extra state, and the value its
+identity, across a Clojure `try` that does not handle it
+(`tests/unit/test_rethrow.cpp`). A handler entered for a translated C++
+error (`exceptionFromError`) has no original to rethrow; `RETHROW` raises
+its value as a new `ProtoException`.
 
 The finally handler encloses the catch clauses too, so `finally` runs
 after a handled exception and when a catch clause throws; its forms are

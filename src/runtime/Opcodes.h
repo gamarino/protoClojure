@@ -113,9 +113,16 @@ enum class Op : uint8_t {
                            //           (exceptionMatches).
 
     // Unified exceptions and module members (docs/DESIGN.md §4.1, §4.3).
-    RETHROW         = 33,  // pop; raise the value unchanged, whatever it is:
-                           //       the rethrow of a value no catch clause
-                           //       handled, and the end of a finally handler.
+    RETHROW         = 33,  // operand = local slot written by STORE_CAUGHT.
+                           //       Rethrows the ORIGINAL C++ exception the
+                           //       handler caught (std::rethrow_exception),
+                           //       so a runtime subclass of ProtoException
+                           //       keeps its type and extras; when the
+                           //       handler caught a translated C++ error,
+                           //       raises the slot's value as a new
+                           //       ProtoException. The rethrow of a value no
+                           //       catch clause handled, and the end of a
+                           //       finally handler. Reads no stack.
     EXC_MATCH_TYPE  = 34,  // operand = const-pool string idx (the clause's
                            //           class name, for messages). Stack:
                            //           [value, type]. pop both; push true
@@ -141,6 +148,11 @@ enum class Op : uint8_t {
                            //           receiver as `self` (a protoCore
                            //           method) or as a Clojure fn; pops
                            //           receiver and args, pushes the result.
+    STORE_CAUGHT    = 38,  // operand = local slot. The first instruction of
+                           //           a handler: pop the caught value into
+                           //           the slot, and keep the caught C++
+                           //           exception (std::exception_ptr) as
+                           //           frame state for that slot's RETHROW.
 };
 
 // One instruction word: opcode in the low byte, operand in the high 24 bits.

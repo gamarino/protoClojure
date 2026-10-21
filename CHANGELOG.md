@@ -27,10 +27,16 @@ first planned release (`docs/ROADMAP.md`).
   reaches the clause — a local, a var or a module member
   (`(catch geometry/NegativeRadius e ...)`) — and matched by protoCore's
   `isInstanceOf` (D34). New opcodes `RETHROW`, `EXC_MATCH_TYPE`,
-  `RESOLVE_CLASS`, `GET_MEMBER`, `CALL_MEMBER`. `Object` is accepted as a
+  `RESOLVE_CLASS`, `GET_MEMBER`, `CALL_MEMBER`, `STORE_CAUGHT`. `Object` is accepted as a
   catch class and, like `Throwable`, catches every value; `Exception`
   catches a module's error too. `throw` accepts a caught module error.
   `ex-message` reads a module error's `message` attribute.
+- **A rethrow continues the original exception** (protoCore rule E3): a
+  `try` whose clauses do not match, and the end of a `finally`, rethrow the
+  very C++ exception the frame caught (`STORE_CAUGHT` keeps it per handler
+  slot as a `std::exception_ptr`; `RETHROW` calls `std::rethrow_exception`),
+  so another runtime's `ProtoException` subclass keeps its type and extras
+  across Clojure code (`tests/unit/test_rethrow.cpp`).
 - **`(import-module "logical/path")`** loads a module through Unified Module
   Discovery; `alias/member` reads a member and `(alias/member args...)`
   calls it with the module as its receiver (`INTEROP.md` §0). A C++
