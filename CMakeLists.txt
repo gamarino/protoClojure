@@ -291,6 +291,34 @@ target_link_libraries(protoclj PRIVATE
     protoclj_runtime)
 target_compile_options(protoclj PRIVATE ${PROTOCLJ_WARNINGS})
 
+# --- Geometry test binary (protoCore's example UMD module) -----------------
+# protoclj with protoCore's example geometry module (protoCore
+# examples/exceptions/, provider alias `example_geometry`) linked in: the same
+# src/main.cpp, which registers the provider and puts it first in the space's
+# resolution chain when PROTOCLJ_EXAMPLE_GEOMETRY is defined. It runs the
+# Clojure test tests/modules/geometry-exceptions.clj, which imports the module
+# with `(import-module "example/geometry")` and catches its error types. Built
+# only against the developer protoCore tree, where the example library is.
+if(DEFINED PROTOCORE_LIB_DIR)
+    find_library(PROTOCLJ_GEOMETRY_LIBRARY NAMES protocore_example_geometry
+        PATHS "${PROTOCORE_LIB_DIR}/examples/exceptions" NO_DEFAULT_PATH)
+    find_path(PROTOCLJ_GEOMETRY_INCLUDE_DIR NAMES geometry_module/GeometryModule.h
+        PATHS "${PROTOCORE_DIR}/examples/exceptions" NO_DEFAULT_PATH)
+endif()
+if(PROTOCLJ_GEOMETRY_LIBRARY AND PROTOCLJ_GEOMETRY_INCLUDE_DIR)
+    add_executable(protoclj_geometry src/main.cpp)
+    target_compile_definitions(protoclj_geometry PRIVATE PROTOCLJ_EXAMPLE_GEOMETRY)
+    target_include_directories(protoclj_geometry PRIVATE "${PROTOCLJ_GEOMETRY_INCLUDE_DIR}")
+    target_link_libraries(protoclj_geometry PRIVATE
+        protoclj_repl protoclj_reader protoclj_compiler protoclj_runtime
+        "${PROTOCLJ_GEOMETRY_LIBRARY}")
+    target_compile_options(protoclj_geometry PRIVATE ${PROTOCLJ_WARNINGS})
+    message(STATUS "protoClojure: geometry module test enabled (${PROTOCLJ_GEOMETRY_LIBRARY})")
+else()
+    message(STATUS "protoClojure: protoCore's example geometry module not found; "
+                   "the module exception test is not built")
+endif()
+
 # Windows finds a DLL next to the program that loads it. Copy the DLLs
 # protoClojure needs -- protoCore, and OpenSSL through protoIO -- into the
 # build's bin/, so protoclj and the unit tests run in place.

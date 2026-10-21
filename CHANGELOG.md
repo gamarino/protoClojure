@@ -9,6 +9,57 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Changed — protoCore 3.0.0: the unified exception model, 2026-10-21
+
+- **Every throw is a `proto::ProtoException`.** `ClojureThrow` now derives
+  from protoCore's `ProtoException` (no longer from `std::runtime_error`),
+  protoCore pins the thrown value while it is in flight, and the runtime's
+  own root set `protoclj-exceptions-in-flight` is gone. The VM's handler
+  catches `const proto::ProtoException&` first and selects by the value's
+  prototype chain; a `std::exception` (a module defect, a
+  `StackOverflowError`) is still translated into a classed exception there.
+- **Exception classes are protoCore prototypes.** Each of the 23 built-in
+  classes is a prototype whose parent is its superclass, and an exception
+  is a child of its class; the class id is inherited, so the test of a
+  built-in class stays an integer walk.
+- **A module's error types are caught by name.** A `catch` naming no
+  built-in class names a type resolved at run time, when an exception
+  reaches the clause — a local, a var or a module member
+  (`(catch geometry/NegativeRadius e ...)`) — and matched by protoCore's
+  `isInstanceOf` (D34). New opcodes `RETHROW`, `EXC_MATCH_TYPE`,
+  `RESOLVE_CLASS`, `GET_MEMBER`, `CALL_MEMBER`. `Object` is accepted as a
+  catch class and, like `Throwable`, catches every value; `Exception`
+  catches a module's error too. `throw` accepts a caught module error.
+  `ex-message` reads a module error's `message` attribute.
+- **`(import-module "logical/path")`** loads a module through Unified Module
+  Discovery; `alias/member` reads a member and `(alias/member args...)`
+  calls it with the module as its receiver (`INTEROP.md` §0). A C++
+  exception escaping such a call becomes a `RuntimeException` carrying its
+  `what()`.
+- **protoCore's errors arrive as Clojure classes** through the error factory
+  installed at start-up: division by zero and overflow as
+  `ArithmeticException` (`"Divide by zero"`), a type mismatch as
+  `ClassCastException`, a malformed integer literal as
+  `NumberFormatException`, another malformed argument as
+  `IllegalArgumentException`, an arity mismatch as `ArityException`
+  (`DESIGN.md` §4.1). Integer `/` leaves the zero divisor to protoCore.
+  This fixes the 16 tests that protoCore 3.0.0 broke (big-integer reads and
+  arithmetic terminated the process: protoCore's overflow is no longer a
+  `std::overflow_error`).
+- **Primitives raise `ProtoException`s at the raise site** (`throwClassed`,
+  or `throwError` for the older `"Class: message"` texts) instead of
+  `std::runtime_error`s classified when they reach a `try`; the VM's errors
+  likewise.
+- **Top level.** The script driver, the REPL and the HTTP server report an
+  uncaught `ProtoException` by its value (a module error by its `name` and
+  `message`), and stop any other C++ exception with a message.
+- **Behaviour change:** `(try 1 (catch NoSuchException e 2))` now compiles
+  and answers 1; `Unable to resolve classname: NoSuchException` is raised,
+  as a `RuntimeException`, when an exception reaches the clause (D34).
+- **Test build `protoclj_geometry`** (developer protoCore tree only) links
+  protoCore's example geometry module and runs
+  `tests/modules/geometry-exceptions.clj`.
+
 ### Changed — protoCore 3.0.0: primitives read their arguments in place, 2026-10-20
 
 - **Built against protoCore 3.0.0** (SOVERSION 4), now the declared minimum:

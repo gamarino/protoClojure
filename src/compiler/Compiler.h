@@ -69,6 +69,10 @@ struct CompilerMarkers {
     NamedLayout               named;             // keyword and symbol values
 };
 
+// True for a qualified symbol `a/b` (a module member): a non-empty prefix
+// and member around the first '/'. `/` itself and keywords are not.
+bool isQualifiedName(const std::string& name);
+
 class Compiler {
 public:
     // Compile a single form, appending instructions to `out`. Does NOT
@@ -144,6 +148,15 @@ private:
     // Compiles `(try body* (catch Class name body*)* (finally body*)?)`.
     void compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
                     BytecodeModule& out, const CompilerMarkers& markers);
+
+    // Pushes the type a catch clause names when it is no built-in class,
+    // resolved at run time (docs/DESIGN.md §4.1).
+    void compileCatchType(proto::ProtoContext* ctx, const std::string& name,
+                          BytecodeModule& out);
+
+    // Pushes the receiver `a` of a qualified name `a/b` (a local or a global).
+    void compileQualifiedPrefix(proto::ProtoContext* ctx, const std::string& name,
+                                BytecodeModule& out);
 
     // Compiles `(with-open [name init ...] body*)` by rewriting it into
     // `let` + `try` / `finally` forms.

@@ -60,7 +60,7 @@ long long indexArg(proto::ProtoContext* ctx, const proto::ProtoArguments* args,
                    int i, const char* primName) {
     const proto::ProtoObject* a = args->getAt(ctx, i);
     if (!a || !a->isInteger(ctx)) {
-        throw std::runtime_error(std::string("ClassCastException: ") + primName +
+        throwClassed(ctx, "ClassCastException", std::string(primName) +
                                  " expects an integer, got " +
                                  valueTypeName(ctx, a));
     }
@@ -440,7 +440,7 @@ const proto::ProtoObject* prim_minus(proto::ProtoContext* ctx,
                                      const proto::ProtoArguments* args,
                                      const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
-    if (n == 0) throw std::runtime_error("- : needs at least one arg");
+    if (n == 0) throwError(ctx, "- : needs at least one arg");
     checkNumbers(ctx, args, n, "-");
     if (n == 1) {
         // Negation. A float keeps its sign bit, so (- 0.0) is -0.0.
@@ -481,7 +481,7 @@ const proto::ProtoObject* prim_div(proto::ProtoContext* ctx,
                                    const proto::ProtoArguments* args,
                                    const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
-    if (n == 0) throw std::runtime_error("/: needs at least one arg");
+    if (n == 0) throwError(ctx, "/: needs at least one arg");
     checkNumbers(ctx, args, n, "/");
     bool anyFloat = false;
     for (proto::proto_ulong i = 0; i < n && !anyFloat; ++i)
@@ -493,10 +493,9 @@ const proto::ProtoObject* prim_div(proto::ProtoContext* ctx,
             acc /= args->getAt(ctx, static_cast<int>(i))->asDouble(ctx);
         return ctx->fromDouble(acc);
     }
-    for (proto::proto_ulong i = (n == 1 ? 0 : 1); i < n; ++i) {
-        if (args->getAt(ctx, static_cast<int>(i))->integerSign(ctx) == 0)
-            throw std::runtime_error("ArithmeticException: Divide by zero");
-    }
+    // A zero divisor: protoCore raises its DivisionByZero error, which the
+    // error factory (Exceptions.cpp) builds as ArithmeticException "Divide
+    // by zero".
     if (n == 1) return ctx->fromLong(1)->divide(ctx, args->getAt(ctx, 0));
     return numericFold(ctx, args, n,
         [ctx](const proto::ProtoObject* a, const proto::ProtoObject* b) {
@@ -510,7 +509,7 @@ const proto::ProtoObject* prim_inc(proto::ProtoContext* ctx,
                                    const proto::ProtoArguments* args,
                                    const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("inc: expects 1 arg");
+        throwError(ctx, "inc: expects 1 arg");
     const proto::ProtoObject* x = numberArg(ctx, args, 0, "inc");
     if (x->isFloat(ctx)) return ctx->fromDouble(x->asDouble(ctx) + 1.0);
     return x->add(ctx, ctx->fromLong(1));
@@ -522,7 +521,7 @@ const proto::ProtoObject* prim_dec(proto::ProtoContext* ctx,
                                    const proto::ProtoArguments* args,
                                    const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("dec: expects 1 arg");
+        throwError(ctx, "dec: expects 1 arg");
     const proto::ProtoObject* x = numberArg(ctx, args, 0, "dec");
     if (x->isFloat(ctx)) return ctx->fromDouble(x->asDouble(ctx) - 1.0);
     return x->subtract(ctx, ctx->fromLong(1));
@@ -645,7 +644,7 @@ const proto::ProtoList* asSeqOrNull(proto::ProtoContext* ctx,
     if (!v || v == PROTO_NONE) return nullptr;
     if (isListTag(v)) return v->asList(ctx);
     if (isVector(v)) return vectorItems(ctx, v);
-    throw std::runtime_error(
+    throwError(ctx,
         "seq op: argument is not a list or vector");
 }
 
@@ -679,7 +678,7 @@ const proto::ProtoObject* prim_vec(proto::ProtoContext* ctx,
                                    const proto::ProtoArguments* args,
                                    const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("vec: expects 1 arg");
+        throwError(ctx, "vec: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (isVector(v)) return v;  // already a vector
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
@@ -699,7 +698,7 @@ std::string printedValue(proto::ProtoContext* ctx, const proto::ProtoObject* v) 
 [[noreturn, gnu::cold]]
 void throwNthOutOfBounds(proto::ProtoContext* ctx, const proto::ProtoObject* index,
                          long long count) {
-    throw std::runtime_error("IndexOutOfBoundsException: nth index " +
+    throwClassed(ctx, "IndexOutOfBoundsException", "nth index " +
                              printedValue(ctx, index) + " is out of bounds (count " +
                              std::to_string(count) + ")");
 }
@@ -719,7 +718,7 @@ const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
                                    const proto::ProtoKeywordArguments*) {
     proto::proto_ulong ac = args ? args->getSize(ctx) : 0;
     if (ac != 2 && ac != 3)
-        throw std::runtime_error("nth: expects (nth coll i) or (nth coll i nf)");
+        throwError(ctx, "nth: expects (nth coll i) or (nth coll i nf)");
     const proto::ProtoObject* coll = args->getAt(ctx, 0);
     long long idx = indexArg(ctx, args, 1, "nth");
     const proto::ProtoObject* notFound = (ac == 3) ? args->getAt(ctx, 2) : nullptr;
@@ -732,7 +731,7 @@ const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
         const long long sz = static_cast<long long>(s->getSize(ctx));
         if (idx < 0 || idx >= sz) {
             if (notFound) return notFound;
-            throw std::runtime_error("StringIndexOutOfBoundsException: nth index " +
+            throwClassed(ctx, "StringIndexOutOfBoundsException", "nth index " +
                                      printedValue(ctx, args->getAt(ctx, 1)) +
                                      " is out of bounds (count " +
                                      std::to_string(sz) + ")");
@@ -743,8 +742,8 @@ const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
 
     const bool vector = isVector(coll);
     if (!vector && !isListTag(coll)) {
-        throw std::runtime_error(
-            std::string("UnsupportedOperationException: nth not supported on ") +
+        throwClassed(ctx, "UnsupportedOperationException",
+            std::string("nth not supported on ") +
             valueTypeName(ctx, coll));
     }
 
@@ -765,7 +764,7 @@ const proto::ProtoObject* prim_vector_p(proto::ProtoContext* ctx,
                                         const proto::ProtoArguments* args,
                                         const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("vector?: expects 1 arg");
+        throwError(ctx, "vector?: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     return isVector(v) ? PROTO_TRUE : PROTO_FALSE;
 }
@@ -776,7 +775,7 @@ const proto::ProtoObject* prim_list_p(proto::ProtoContext* ctx,
                                       const proto::ProtoArguments* args,
                                       const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("list?: expects 1 arg");
+        throwError(ctx, "list?: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     return (v && isListTag(v)) ? PROTO_TRUE : PROTO_FALSE;
 }
@@ -793,7 +792,7 @@ const proto::ProtoObject* prim_map_p(proto::ProtoContext* ctx,
                                      const proto::ProtoArguments* args,
                                      const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("map?: expects 1 arg");
+        throwError(ctx, "map?: expects 1 arg");
     return isMap(args->getAt(ctx, 0)) ? PROTO_TRUE : PROTO_FALSE;
 }
 
@@ -806,9 +805,9 @@ const proto::ProtoObject* prim_hash_map(proto::ProtoContext* ctx,
                                         const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n % 2 != 0)
-        throw std::runtime_error("hash-map: needs an even number of args");
+        throwError(ctx, "hash-map: needs an even number of args");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("hash-map: no active VM context");
+    if (!cc) throwError(ctx, "hash-map: no active VM context");
     return mapAssocPairs(ctx, nullptr, args->values(), n);
 }
 
@@ -819,12 +818,12 @@ const proto::ProtoObject* prim_assoc(proto::ProtoContext* ctx,
                                      const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n < 3 || (n - 1) % 2 != 0)
-        throw std::runtime_error("assoc: expects (assoc m k v ...)");
+        throwError(ctx, "assoc: expects (assoc m k v ...)");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("assoc: no active VM context");
+    if (!cc) throwError(ctx, "assoc: no active VM context");
     const proto::ProtoObject* m = args->getAt(ctx, 0);
     if (!isMap(m))
-        throw std::runtime_error("assoc: first arg must be a map");
+        throwError(ctx, "assoc: first arg must be a map");
     return mapAssocPairs(ctx, m, args->values() + 1, n - 1);
 }
 
@@ -839,13 +838,13 @@ const proto::ProtoObject* prim_dissoc(proto::ProtoContext* ctx,
                                       const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n < 1)
-        throw std::runtime_error("dissoc: expects (dissoc m k ...)");
+        throwError(ctx, "dissoc: expects (dissoc m k ...)");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("dissoc: no active VM context");
+    if (!cc) throwError(ctx, "dissoc: no active VM context");
     const proto::ProtoObject* m = args->getAt(ctx, 0);
     if (!m || m == PROTO_NONE) return PROTO_NONE;
     if (!isMap(m)) {
-        throw std::runtime_error(std::string("ClassCastException: dissoc expects a map, got ") +
+        throwClassed(ctx, "ClassCastException", std::string("dissoc expects a map, got ") +
                                  valueTypeName(ctx, m));
     }
     // mapDissoc returns an unrooted map: each intermediate map is rooted in
@@ -868,9 +867,9 @@ const proto::ProtoObject* prim_get(proto::ProtoContext* ctx,
                                    const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n != 2 && n != 3)
-        throw std::runtime_error("get: expects (get m k) or (get m k not-found)");
+        throwError(ctx, "get: expects (get m k) or (get m k not-found)");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("get: no active VM context");
+    if (!cc) throwError(ctx, "get: no active VM context");
     const proto::ProtoObject* m = args->getAt(ctx, 0);
     const proto::ProtoObject* k = args->getAt(ctx, 1);
     const proto::ProtoObject* nf = (n == 3) ? args->getAt(ctx, 2) : PROTO_NONE;
@@ -886,9 +885,9 @@ const proto::ProtoObject* prim_contains_p(proto::ProtoContext* ctx,
                                           const proto::ProtoArguments* args,
                                           const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
-        throw std::runtime_error("contains?: expects (contains? coll k)");
+        throwError(ctx, "contains?: expects (contains? coll k)");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("contains?: no active VM context");
+    if (!cc) throwError(ctx, "contains?: no active VM context");
     const proto::ProtoObject* m = args->getAt(ctx, 0);
     const proto::ProtoObject* k = args->getAt(ctx, 1);
     if (!isMap(m)) return PROTO_FALSE;
@@ -925,9 +924,9 @@ const proto::ProtoObject* prim_keys(proto::ProtoContext* ctx,
                                     const proto::ProtoArguments* args,
                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("keys: expects 1 arg");
+        throwError(ctx, "keys: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("keys: no active VM context");
+    if (!cc) throwError(ctx, "keys: no active VM context");
     return mapWalk(ctx, args->getAt(ctx, 0), /*wantValues=*/false);
 }
 
@@ -937,9 +936,9 @@ const proto::ProtoObject* prim_vals(proto::ProtoContext* ctx,
                                     const proto::ProtoArguments* args,
                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("vals: expects 1 arg");
+        throwError(ctx, "vals: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("vals: no active VM context");
+    if (!cc) throwError(ctx, "vals: no active VM context");
     return mapWalk(ctx, args->getAt(ctx, 0), /*wantValues=*/true);
 }
 
@@ -949,7 +948,7 @@ const proto::ProtoObject* prim_first(proto::ProtoContext* ctx,
                                      const proto::ProtoArguments* args,
                                      const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("first: expects 1 arg");
+        throwError(ctx, "first: expects 1 arg");
     const proto::ProtoList* lst = asSeqOrNull(ctx, args->getAt(ctx, 0));
     if (!lst || lst->getSize(ctx) == 0) return PROTO_NONE;
     return lst->getFirst(ctx);
@@ -961,7 +960,7 @@ const proto::ProtoObject* prim_rest(proto::ProtoContext* ctx,
                                     const proto::ProtoArguments* args,
                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("rest: expects 1 arg");
+        throwError(ctx, "rest: expects 1 arg");
     const proto::ProtoList* lst = asSeqOrNull(ctx, args->getAt(ctx, 0));
     if (!lst || lst->getSize(ctx) == 0) {
         return ctx->newList()->asObject(ctx);
@@ -975,7 +974,7 @@ const proto::ProtoObject* prim_cons(proto::ProtoContext* ctx,
                                     const proto::ProtoArguments* args,
                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
-        throw std::runtime_error("cons: expects (cons x coll)");
+        throwError(ctx, "cons: expects (cons x coll)");
     const proto::ProtoObject* x    = args->getAt(ctx, 0);
     const proto::ProtoObject* coll = args->getAt(ctx, 1);
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
@@ -999,7 +998,7 @@ const proto::ProtoObject* prim_count(proto::ProtoContext* ctx,
                                      const proto::ProtoArguments* args,
                                      const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("count: expects 1 arg");
+        throwError(ctx, "count: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!v || v == PROTO_NONE) return ctx->fromLong(0);
     if (isStringLike(v)) {
@@ -1017,7 +1016,7 @@ const proto::ProtoObject* prim_empty_p(proto::ProtoContext* ctx,
                                        const proto::ProtoArguments* args,
                                        const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("empty?: expects 1 arg");
+        throwError(ctx, "empty?: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!v || v == PROTO_NONE) return PROTO_TRUE;
     if (isStringLike(v)) {
@@ -1034,7 +1033,7 @@ const proto::ProtoObject* prim_nil_p(proto::ProtoContext* ctx,
                                      const proto::ProtoArguments* args,
                                      const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("nil?: expects 1 arg");
+        throwError(ctx, "nil?: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     return (!v || v == PROTO_NONE) ? PROTO_TRUE : PROTO_FALSE;
 }
@@ -1045,7 +1044,7 @@ const proto::ProtoObject* prim_not(proto::ProtoContext* ctx,
                                    const proto::ProtoArguments* args,
                                    const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("not: expects 1 arg");
+        throwError(ctx, "not: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     return (!v || v == PROTO_NONE || v == PROTO_FALSE) ? PROTO_TRUE : PROTO_FALSE;
 }
@@ -1056,7 +1055,7 @@ const proto::ProtoObject* prim_reverse(proto::ProtoContext* ctx,
                                        const proto::ProtoArguments* args,
                                        const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("reverse: expects 1 arg");
+        throwError(ctx, "reverse: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     // String input → reverse character by character (codepoint-aware
     // via std::string + UTF-8 walk would be a follow-up; v0.15 reverses
@@ -1088,14 +1087,14 @@ const proto::ProtoObject* prim_map(proto::ProtoContext* ctx,
                                    const proto::ProtoArguments* args,
                                    const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
-        throw std::runtime_error(
+        throwError(ctx,
             "map: only (map f coll) is supported; multi-collection map is not implemented yet");
     const proto::ProtoObject* f    = args->getAt(ctx, 0);
     const proto::ProtoObject* coll = args->getAt(ctx, 1);
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
     if (!lst) return ctx->newList()->asObject(ctx);
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("map: no active VM context");
+    if (!cc) throwError(ctx, "map: no active VM context");
     proto::proto_ulong n = lst->getSize(ctx);
     // The result grows with the input, so it is built in chunks: `invoke` runs
     // in the builder's context (it pushes frames, and the context stack is
@@ -1115,13 +1114,13 @@ const proto::ProtoObject* prim_filter(proto::ProtoContext* ctx,
                                       const proto::ProtoArguments* args,
                                       const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
-        throw std::runtime_error("filter: expects (filter pred coll)");
+        throwError(ctx, "filter: expects (filter pred coll)");
     const proto::ProtoObject* pred = args->getAt(ctx, 0);
     const proto::ProtoObject* coll = args->getAt(ctx, 1);
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
     if (!lst) return ctx->newList()->asObject(ctx);
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("filter: no active VM context");
+    if (!cc) throwError(ctx, "filter: no active VM context");
     proto::proto_ulong n = lst->getSize(ctx);
     ListBuilder out(ctx);
     for (proto::proto_ulong i = 0; i < n; ++i) {
@@ -1145,13 +1144,13 @@ const proto::ProtoObject* prim_reduce(proto::ProtoContext* ctx,
     //             (reduce f init coll) — explicit init.
     proto::proto_ulong ac = args ? args->getSize(ctx) : 0;
     if (ac != 2 && ac != 3)
-        throw std::runtime_error("reduce: expects (reduce f coll) or (reduce f init coll)");
+        throwError(ctx, "reduce: expects (reduce f coll) or (reduce f init coll)");
     const proto::ProtoObject* f = args->getAt(ctx, 0);
     const proto::ProtoObject* coll = args->getAt(ctx, ac == 2 ? 1 : 2);
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
     proto::proto_ulong n = lst ? lst->getSize(ctx) : 0;
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("reduce: no active VM context");
+    if (!cc) throwError(ctx, "reduce: no active VM context");
 
     const proto::ProtoObject* acc;
     proto::proto_ulong start;
@@ -1188,10 +1187,10 @@ const proto::ProtoObject* prim_subs(proto::ProtoContext* ctx,
                                     const proto::ProtoKeywordArguments*) {
     proto::proto_ulong ac = args ? args->getSize(ctx) : 0;
     if (ac != 2 && ac != 3)
-        throw std::runtime_error("subs: expects (subs s start) or (subs s start end)");
+        throwError(ctx, "subs: expects (subs s start) or (subs s start end)");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!isStringLike(v))
-        throw std::runtime_error("subs: first arg must be a string");
+        throwError(ctx, "subs: first arg must be a string");
     const proto::ProtoString* s = asProtoString(v);
     long long start = indexArg(ctx, args, 1, "subs");
     long long sz = static_cast<long long>(s->getSize(ctx));
@@ -1199,8 +1198,8 @@ const proto::ProtoObject* prim_subs(proto::ProtoContext* ctx,
     if (start < 0 || start > sz || end < start || end > sz) {
         // The StringIndexOutOfBoundsException analogue, with the bounds as
         // written and Java's "begin B, end E, length L" message.
-        throw std::runtime_error(
-            "StringIndexOutOfBoundsException: subs begin " +
+        throwClassed(ctx, "StringIndexOutOfBoundsException",
+            "subs begin " +
             printedValue(ctx, args->getAt(ctx, 1)) + ", end " +
             (ac == 3 ? printedValue(ctx, args->getAt(ctx, 2)) : std::to_string(sz)) +
             ", length " + std::to_string(sz));
@@ -1215,10 +1214,10 @@ const proto::ProtoObject* prim_upper_case(proto::ProtoContext* ctx,
                                           const proto::ProtoArguments* args,
                                           const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("upper-case: expects 1 arg");
+        throwError(ctx, "upper-case: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!isStringLike(v))
-        throw std::runtime_error("upper-case: arg must be a string");
+        throwError(ctx, "upper-case: arg must be a string");
     std::string raw = asProtoString(v)->toStdString(ctx);
     for (auto& c : raw) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     return reinterpret_cast<const proto::ProtoObject*>(
@@ -1231,10 +1230,10 @@ const proto::ProtoObject* prim_lower_case(proto::ProtoContext* ctx,
                                           const proto::ProtoArguments* args,
                                           const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("lower-case: expects 1 arg");
+        throwError(ctx, "lower-case: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!isStringLike(v))
-        throw std::runtime_error("lower-case: arg must be a string");
+        throwError(ctx, "lower-case: arg must be a string");
     std::string raw = asProtoString(v)->toStdString(ctx);
     for (auto& c : raw) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return reinterpret_cast<const proto::ProtoObject*>(
@@ -1247,11 +1246,11 @@ const proto::ProtoObject* prim_starts_with_p(proto::ProtoContext* ctx,
                                              const proto::ProtoArguments* args,
                                              const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
-        throw std::runtime_error("starts-with?: expects (starts-with? s prefix)");
+        throwError(ctx, "starts-with?: expects (starts-with? s prefix)");
     const proto::ProtoObject* sv = args->getAt(ctx, 0);
     const proto::ProtoObject* pv = args->getAt(ctx, 1);
     if (!isStringLike(sv) || !isStringLike(pv))
-        throw std::runtime_error("starts-with?: both args must be strings");
+        throwError(ctx, "starts-with?: both args must be strings");
     std::string s = asProtoString(sv)->toStdString(ctx);
     std::string p = asProtoString(pv)->toStdString(ctx);
     return (s.rfind(p, 0) == 0) ? PROTO_TRUE : PROTO_FALSE;
@@ -1263,11 +1262,11 @@ const proto::ProtoObject* prim_ends_with_p(proto::ProtoContext* ctx,
                                            const proto::ProtoArguments* args,
                                            const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
-        throw std::runtime_error("ends-with?: expects (ends-with? s suffix)");
+        throwError(ctx, "ends-with?: expects (ends-with? s suffix)");
     const proto::ProtoObject* sv = args->getAt(ctx, 0);
     const proto::ProtoObject* pv = args->getAt(ctx, 1);
     if (!isStringLike(sv) || !isStringLike(pv))
-        throw std::runtime_error("ends-with?: both args must be strings");
+        throwError(ctx, "ends-with?: both args must be strings");
     std::string s = asProtoString(sv)->toStdString(ctx);
     std::string p = asProtoString(pv)->toStdString(ctx);
     if (p.size() > s.size()) return PROTO_FALSE;
@@ -1280,11 +1279,11 @@ const proto::ProtoObject* prim_includes_p(proto::ProtoContext* ctx,
                                           const proto::ProtoArguments* args,
                                           const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
-        throw std::runtime_error("includes?: expects (includes? s sub)");
+        throwError(ctx, "includes?: expects (includes? s sub)");
     const proto::ProtoObject* sv = args->getAt(ctx, 0);
     const proto::ProtoObject* pv = args->getAt(ctx, 1);
     if (!isStringLike(sv) || !isStringLike(pv))
-        throw std::runtime_error("includes?: both args must be strings");
+        throwError(ctx, "includes?: both args must be strings");
     std::string s = asProtoString(sv)->toStdString(ctx);
     std::string p = asProtoString(pv)->toStdString(ctx);
     return (s.find(p) != std::string::npos) ? PROTO_TRUE : PROTO_FALSE;
@@ -1297,11 +1296,11 @@ const proto::ProtoObject* prim_index_of(proto::ProtoContext* ctx,
                                         const proto::ProtoKeywordArguments*) {
     proto::proto_ulong ac = args ? args->getSize(ctx) : 0;
     if (ac != 2 && ac != 3)
-        throw std::runtime_error("index-of: expects (index-of s sub) or (index-of s sub from)");
+        throwError(ctx, "index-of: expects (index-of s sub) or (index-of s sub from)");
     const proto::ProtoObject* sv = args->getAt(ctx, 0);
     const proto::ProtoObject* pv = args->getAt(ctx, 1);
     if (!isStringLike(sv) || !isStringLike(pv))
-        throw std::runtime_error("index-of: first two args must be strings");
+        throwError(ctx, "index-of: first two args must be strings");
     std::string s = asProtoString(sv)->toStdString(ctx);
     std::string p = asProtoString(pv)->toStdString(ctx);
     // The start position follows Java's String.indexOf, at any magnitude: a
@@ -1322,12 +1321,12 @@ const proto::ProtoObject* prim_replace(proto::ProtoContext* ctx,
                                        const proto::ProtoArguments* args,
                                        const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 3)
-        throw std::runtime_error("replace: expects (replace s match replacement)");
+        throwError(ctx, "replace: expects (replace s match replacement)");
     const proto::ProtoObject* sv = args->getAt(ctx, 0);
     const proto::ProtoObject* mv = args->getAt(ctx, 1);
     const proto::ProtoObject* rv = args->getAt(ctx, 2);
     if (!isStringLike(sv) || !isStringLike(mv) || !isStringLike(rv))
-        throw std::runtime_error("replace: all three args must be strings");
+        throwError(ctx, "replace: all three args must be strings");
     std::string s = asProtoString(sv)->toStdString(ctx);
     std::string m = asProtoString(mv)->toStdString(ctx);
     std::string r = asProtoString(rv)->toStdString(ctx);
@@ -1358,13 +1357,13 @@ const proto::ProtoObject* prim_join(proto::ProtoContext* ctx,
                                     const proto::ProtoKeywordArguments*) {
     proto::proto_ulong ac = args ? args->getSize(ctx) : 0;
     if (ac != 1 && ac != 2)
-        throw std::runtime_error("join: expects (join coll) or (join sep coll)");
+        throwError(ctx, "join: expects (join coll) or (join sep coll)");
     std::string sep;
     const proto::ProtoObject* coll;
     if (ac == 2) {
         const proto::ProtoObject* sv = args->getAt(ctx, 0);
         if (!isStringLike(sv))
-            throw std::runtime_error("join: separator must be a string");
+            throwError(ctx, "join: separator must be a string");
         sep = asProtoString(sv)->toStdString(ctx);
         coll = args->getAt(ctx, 1);
     } else {
@@ -1390,11 +1389,11 @@ const proto::ProtoObject* prim_split(proto::ProtoContext* ctx,
                                      const proto::ProtoArguments* args,
                                      const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
-        throw std::runtime_error("split: expects (split s delim)");
+        throwError(ctx, "split: expects (split s delim)");
     const proto::ProtoObject* sv = args->getAt(ctx, 0);
     const proto::ProtoObject* dv = args->getAt(ctx, 1);
     if (!isStringLike(sv) || !isStringLike(dv))
-        throw std::runtime_error("split: both args must be strings");
+        throwError(ctx, "split: both args must be strings");
     std::string s = asProtoString(sv)->toStdString(ctx);
     std::string d = asProtoString(dv)->toStdString(ctx);
     // One piece per delimiter occurrence: the result grows with the input
@@ -1434,10 +1433,10 @@ const proto::ProtoObject* prim_trim(proto::ProtoContext* ctx,
                                     const proto::ProtoArguments* args,
                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("trim: expects 1 arg");
+        throwError(ctx, "trim: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!isStringLike(v))
-        throw std::runtime_error("trim: arg must be a string");
+        throwError(ctx, "trim: arg must be a string");
     std::string s = asProtoString(v)->toStdString(ctx);
     std::size_t a = 0, b = s.size();
     while (a < b && isAsciiWs(static_cast<unsigned char>(s[a]))) ++a;
@@ -1452,10 +1451,10 @@ const proto::ProtoObject* prim_triml(proto::ProtoContext* ctx,
                                      const proto::ProtoArguments* args,
                                      const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("triml: expects 1 arg");
+        throwError(ctx, "triml: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!isStringLike(v))
-        throw std::runtime_error("triml: arg must be a string");
+        throwError(ctx, "triml: arg must be a string");
     std::string s = asProtoString(v)->toStdString(ctx);
     std::size_t a = 0;
     while (a < s.size() && isAsciiWs(static_cast<unsigned char>(s[a]))) ++a;
@@ -1469,10 +1468,10 @@ const proto::ProtoObject* prim_trimr(proto::ProtoContext* ctx,
                                      const proto::ProtoArguments* args,
                                      const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("trimr: expects 1 arg");
+        throwError(ctx, "trimr: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!isStringLike(v))
-        throw std::runtime_error("trimr: arg must be a string");
+        throwError(ctx, "trimr: arg must be a string");
     std::string s = asProtoString(v)->toStdString(ctx);
     std::size_t b = s.size();
     while (b > 0 && isAsciiWs(static_cast<unsigned char>(s[b - 1]))) --b;
@@ -1486,7 +1485,7 @@ const proto::ProtoObject* prim_blank_p(proto::ProtoContext* ctx,
                                        const proto::ProtoArguments* args,
                                        const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("blank?: expects 1 arg");
+        throwError(ctx, "blank?: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!v || v == PROTO_NONE) return PROTO_TRUE;
     if (!isStringLike(v)) return PROTO_FALSE;
@@ -1503,7 +1502,7 @@ const proto::ProtoObject* prim_string_p(proto::ProtoContext* ctx,
                                         const proto::ProtoArguments* args,
                                         const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("string?: expects 1 arg");
+        throwError(ctx, "string?: expects 1 arg");
     return isStringLike(args->getAt(ctx, 0)) ? PROTO_TRUE : PROTO_FALSE;
 }
 
@@ -1523,9 +1522,9 @@ const proto::ProtoObject* prim_atom(proto::ProtoContext* ctx,
                                     const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n != 1)
-        throw std::runtime_error("atom: expects (atom initial-value)");
+        throwError(ctx, "atom: expects (atom initial-value)");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("atom: no active VM context");
+    if (!cc) throwError(ctx, "atom: no active VM context");
     proto::ProtoObject* a = const_cast<proto::ProtoObject*>(
         cc->atomMarkerProto->newChild(ctx, /*isMutable=*/true));
     a->setAttribute(ctx, cc->valueKey, args->getAt(ctx, 0));
@@ -1538,9 +1537,9 @@ const proto::ProtoObject* prim_atom_p(proto::ProtoContext* ctx,
                                       const proto::ProtoArguments* args,
                                       const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("atom?: expects 1 arg");
+        throwError(ctx, "atom?: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("atom?: no active VM context");
+    if (!cc) throwError(ctx, "atom?: no active VM context");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!v) return PROTO_FALSE;
     return (v->getPrototype(ctx) == cc->atomMarkerProto) ? PROTO_TRUE : PROTO_FALSE;
@@ -1554,31 +1553,31 @@ const proto::ProtoString* threadErrorKey(proto::ProtoContext* ctx) {
 }
 
 // Records the error being handled on `holder` (a future or a pmap element)
-// under threadErrorKey, as an exception value: the object of a Clojure
-// `throw`, or the classed exception of a C++ error (exceptionFromError).
-// Call only from inside a catch block, where the in-flight exception is still
-// pinned. `holder` is mutable and rooted by the caller.
+// under threadErrorKey: the value of a ProtoException (a Clojure `throw`, a
+// protoCore error, a module's error), or the classed exception of any other
+// C++ error (caughtErrorValue). A raised nil, which only foreign code can
+// raise, is recorded as a RuntimeException so that a failure is never
+// mistaken for a result. Call only from inside a catch block, where the
+// in-flight exception is still pinned. `holder` is mutable and rooted by the
+// caller.
 void recordThreadError(proto::ProtoContext* ctx, const proto::ProtoObject* holder) {
     proto::ProtoContext scope(ctx->space, ctx);
     scope.resizeAutomaticLocals(1);
-    try {
-        throw;
-    } catch (const std::exception& e) {
-        scope.setAutomaticLocal(0, exceptionFromError(&scope, e));
-    } catch (...) {
+    scope.setAutomaticLocal(0, caughtErrorValue(&scope));
+    if (scope.getAutomaticLocal(0) == PROTO_NONE) {
         scope.setAutomaticLocal(0, exceptionFromError(
-            &scope, std::runtime_error("unknown error")));
+            &scope, std::runtime_error("a foreign error raised nil")));
     }
     const_cast<proto::ProtoObject*>(holder)->setAttribute(
         &scope, threadErrorKey(&scope), scope.getAutomaticLocal(0));
 }
 
-// The exception the body of `holder` (a future or a pmap element) raised, or
+// The value the body of `holder` (a future or a pmap element) raised, or
 // nullptr when it returned normally. Reachable from `holder`.
 const proto::ProtoObject* threadFailure(proto::ProtoContext* ctx,
                                         const proto::ProtoObject* holder) {
     const proto::ProtoObject* error = holder->getAttribute(ctx, threadErrorKey(ctx));
-    return isException(ctx, error) ? error : nullptr;
+    return (error && error != PROTO_NONE) ? error : nullptr;
 }
 
 // JVM Clojure's deref of a failed future raises a
@@ -1589,7 +1588,7 @@ const proto::ProtoObject* threadFailure(proto::ProtoContext* ctx,
 [[noreturn]]
 void throwExecutionException(proto::ProtoContext* ctx,
                              const proto::ProtoObject* cause) {
-    throwClassed(ctx, "ExecutionException", exceptionToString(ctx, cause),
+    throwClassed(ctx, "ExecutionException", describeThrown(ctx, cause),
                  nullptr, cause);
 }
 
@@ -1599,11 +1598,11 @@ const proto::ProtoObject* prim_deref(proto::ProtoContext* ctx,
                                      const proto::ProtoArguments* args,
                                      const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("deref: expects 1 arg");
+        throwError(ctx, "deref: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("deref: no active VM context");
+    if (!cc) throwError(ctx, "deref: no active VM context");
     const proto::ProtoObject* a = args->getAt(ctx, 0);
-    if (!a) throw std::runtime_error("deref: nil");
+    if (!a) throwError(ctx, "deref: nil");
     const proto::ProtoObject* proto = a->getPrototype(ctx);
     if (proto == cc->atomMarkerProto) {
         const proto::ProtoObject* v = a->getAttribute(ctx, cc->valueKey);
@@ -1672,7 +1671,7 @@ const proto::ProtoObject* prim_deref(proto::ProtoContext* ctx,
             if (th) th->returnFromUnmanaged();
         }
     }
-    throw std::runtime_error("deref: not an atom, future, or promise");
+    throwError(ctx, "deref: not an atom, future, or promise");
 }
 
 // Session 18 — fire all registered watches on a successful atom
@@ -1737,12 +1736,12 @@ const proto::ProtoObject* prim_reset_bang(proto::ProtoContext* ctx,
                                           const proto::ProtoArguments* args,
                                           const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
-        throw std::runtime_error("reset!: expects (reset! atom new-value)");
+        throwError(ctx, "reset!: expects (reset! atom new-value)");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("reset!: no active VM context");
+    if (!cc) throwError(ctx, "reset!: no active VM context");
     const proto::ProtoObject* a = args->getAt(ctx, 0);
     if (!a || a->getPrototype(ctx) != cc->atomMarkerProto)
-        throw std::runtime_error("reset!: not an atom");
+        throwError(ctx, "reset!: not an atom");
     const proto::ProtoObject* nv = args->getAt(ctx, 1);
     // One compare-and-set per attempt, so the old value handed to the
     // watches is exactly the value this reset! replaced, even when other
@@ -1770,17 +1769,17 @@ const proto::ProtoObject* prim_swap_bang(proto::ProtoContext* ctx,
                                          const proto::ProtoKeywordArguments*) {
     proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n < 2)
-        throw std::runtime_error("swap!: expects (swap! atom f & args)");
+        throwError(ctx, "swap!: expects (swap! atom f & args)");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("swap!: no active VM context");
+    if (!cc) throwError(ctx, "swap!: no active VM context");
     const proto::ProtoObject* a = args->getAt(ctx, 0);
     if (!a || a->getPrototype(ctx) != cc->atomMarkerProto)
-        throw std::runtime_error("swap!: not an atom");
+        throwError(ctx, "swap!: not an atom");
     const proto::ProtoObject* f = args->getAt(ctx, 1);
 
     // Build (old + extras) buffer once; old gets overwritten per attempt.
     if (n - 2 > 15)
-        throw std::runtime_error("swap!: >15 extra args not supported");
+        throwError(ctx, "swap!: >15 extra args not supported");
     const unsigned int extras = static_cast<unsigned int>(n - 2);
     const proto::ProtoObject* buf[17];
     for (unsigned int i = 0; i < extras; ++i) {
@@ -1983,9 +1982,9 @@ const proto::ProtoObject* prim_make_future(proto::ProtoContext* ctx,
                                            const proto::ProtoArguments* args,
                                            const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("future: expects 1 thunk");
+        throwError(ctx, "future: expects 1 thunk");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("future: no active VM context");
+    if (!cc) throwError(ctx, "future: no active VM context");
     return buildFuture(ctx, cc, args->getAt(ctx, 0));
 }
 
@@ -1995,9 +1994,9 @@ const proto::ProtoObject* prim_future_p(proto::ProtoContext* ctx,
                                         const proto::ProtoArguments* args,
                                         const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("future?: expects 1 arg");
+        throwError(ctx, "future?: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("future?: no active VM context");
+    if (!cc) throwError(ctx, "future?: no active VM context");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!v) return PROTO_FALSE;
     return (v->getPrototype(ctx) == cc->futureMarkerProto) ? PROTO_TRUE : PROTO_FALSE;
@@ -2009,9 +2008,9 @@ const proto::ProtoObject* prim_realized_p(proto::ProtoContext* ctx,
                                           const proto::ProtoArguments* args,
                                           const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("realized?: expects 1 arg");
+        throwError(ctx, "realized?: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("realized?: no active VM context");
+    if (!cc) throwError(ctx, "realized?: no active VM context");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!v) return PROTO_FALSE;
     const proto::ProtoObject* proto = v->getPrototype(ctx);
@@ -2088,13 +2087,13 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
                                     const proto::ProtoArguments* args,
                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
-        throw std::runtime_error("pmap: expects (pmap f coll)");
+        throwError(ctx, "pmap: expects (pmap f coll)");
     const proto::ProtoObject* f    = args->getAt(ctx, 0);
     const proto::ProtoObject* coll = args->getAt(ctx, 1);
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
     if (!lst) return ctx->newList()->asObject(ctx);
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("pmap: no active VM context");
+    if (!cc) throwError(ctx, "pmap: no active VM context");
     proto::proto_ulong n = lst->getSize(ctx);
 
     const proto::ProtoString* fKey =
@@ -2207,9 +2206,9 @@ const proto::ProtoObject* prim_promise(proto::ProtoContext* ctx,
                                        const proto::ProtoArguments* args,
                                        const proto::ProtoKeywordArguments*) {
     if (args && args->getSize(ctx) != 0)
-        throw std::runtime_error("promise: takes no arguments");
+        throwError(ctx, "promise: takes no arguments");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("promise: no active VM context");
+    if (!cc) throwError(ctx, "promise: no active VM context");
     // A pending promise has no own value attribute: deliverPromise installs
     // it with one compare-and-set, which is why the promise is mutable.
     const proto::ProtoObject* p =
@@ -2223,9 +2222,9 @@ const proto::ProtoObject* prim_promise_p(proto::ProtoContext* ctx,
                                          const proto::ProtoArguments* args,
                                          const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("promise?: expects 1 arg");
+        throwError(ctx, "promise?: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("promise?: no active VM context");
+    if (!cc) throwError(ctx, "promise?: no active VM context");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!v) return PROTO_FALSE;
     return (v->getPrototype(ctx) == cc->promiseMarkerProto) ? PROTO_TRUE : PROTO_FALSE;
@@ -2254,10 +2253,10 @@ static ActorState* actorStateFrom(proto::ProtoContext* ctx,
                                   const proto::ProtoObject* v,
                                   const char* primName) {
     if (!v || v->getPrototype(ctx) != cc->actorMarkerProto)
-        throw std::runtime_error(std::string(primName) + ": not an actor");
+        throwError(ctx, std::string(primName) + ": not an actor");
     const proto::ProtoObject* h = v->getAttribute(ctx, cc->actorStateKey);
     if (!h || !h->isInteger(ctx))
-        throw std::runtime_error(std::string(primName) + ": broken actor handle");
+        throwError(ctx, std::string(primName) + ": broken actor handle");
     return reinterpret_cast<ActorState*>(h->asLong(ctx));
 }
 
@@ -2267,9 +2266,9 @@ const proto::ProtoObject* prim_actor(proto::ProtoContext* ctx,
                                      const proto::ProtoArguments* args,
                                      const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("actor: expects (actor initial-state)");
+        throwError(ctx, "actor: expects (actor initial-state)");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("actor: no active VM context");
+    if (!cc) throwError(ctx, "actor: no active VM context");
 
     auto& sched = ActorScheduler::instance();
     sched.ensureStarted(ctx->space, ctx, *cc);
@@ -2304,9 +2303,9 @@ const proto::ProtoObject* prim_actor_p(proto::ProtoContext* ctx,
                                        const proto::ProtoArguments* args,
                                        const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
-        throw std::runtime_error("actor?: expects 1 arg");
+        throwError(ctx, "actor?: expects 1 arg");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("actor?: no active VM context");
+    if (!cc) throwError(ctx, "actor?: no active VM context");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!v) return PROTO_FALSE;
     return (v->getPrototype(ctx) == cc->actorMarkerProto)
@@ -2319,9 +2318,9 @@ static const proto::ProtoObject* sendCore(proto::ProtoContext* ctx,
                                            const char* primName,
                                            ActorPriority priority) {
     if (!args || args->getSize(ctx) < 2)
-        throw std::runtime_error(std::string(primName) + ": expects (… actor f & args)");
+        throwError(ctx, std::string(primName) + ": expects (… actor f & args)");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error(std::string(primName) + ": no active VM context");
+    if (!cc) throwError(ctx, std::string(primName) + ": no active VM context");
     ActorState* state = actorStateFrom(ctx, cc, args->getAt(ctx, 0), primName);
     const proto::ProtoObject* f = args->getAt(ctx, 1);
 
@@ -2400,7 +2399,7 @@ const proto::ProtoObject* prim_actor_stats(proto::ProtoContext* ctx,
                                            const proto::ProtoKeywordArguments*) {
     auto s = ActorScheduler::instance().stats();
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("actor-stats: no active VM context");
+    if (!cc) throwError(ctx, "actor-stats: no active VM context");
     // Counts are SmallInts and keywords are interned (reachable through the
     // intern table, Named.h): nothing here needs rooting before the map is
     // built.
@@ -2418,12 +2417,12 @@ const proto::ProtoObject* prim_deliver(proto::ProtoContext* ctx,
                                        const proto::ProtoArguments* args,
                                        const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
-        throw std::runtime_error("deliver: expects (deliver promise value)");
+        throwError(ctx, "deliver: expects (deliver promise value)");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("deliver: no active VM context");
+    if (!cc) throwError(ctx, "deliver: no active VM context");
     const proto::ProtoObject* p = args->getAt(ctx, 0);
     if (!p || p->getPrototype(ctx) != cc->promiseMarkerProto)
-        throw std::runtime_error("deliver: not a promise");
+        throwError(ctx, "deliver: not a promise");
     const proto::ProtoObject* v = args->getAt(ctx, 1);
     // Single-shot: the first delivery wins and returns the promise; later
     // ones change nothing and return nil.
@@ -2437,12 +2436,12 @@ const proto::ProtoObject* prim_compare_and_set_bang(
         const proto::ProtoArguments* args,
         const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 3)
-        throw std::runtime_error("compare-and-set!: expects (compare-and-set! atom old new)");
+        throwError(ctx, "compare-and-set!: expects (compare-and-set! atom old new)");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("compare-and-set!: no active VM context");
+    if (!cc) throwError(ctx, "compare-and-set!: no active VM context");
     const proto::ProtoObject* a = args->getAt(ctx, 0);
     if (!a || a->getPrototype(ctx) != cc->atomMarkerProto)
-        throw std::runtime_error("compare-and-set!: not an atom");
+        throwError(ctx, "compare-and-set!: not an atom");
     const proto::ProtoObject* expected = args->getAt(ctx, 1);
     const proto::ProtoObject* nv       = args->getAt(ctx, 2);
     bool ok = a->setAttributeIfEqual(ctx, cc->valueKey, expected, nv);
@@ -2456,12 +2455,12 @@ const proto::ProtoObject* prim_add_watch(proto::ProtoContext* ctx,
                                          const proto::ProtoArguments* args,
                                          const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 3)
-        throw std::runtime_error("add-watch: expects (add-watch atom key fn)");
+        throwError(ctx, "add-watch: expects (add-watch atom key fn)");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("add-watch: no active VM context");
+    if (!cc) throwError(ctx, "add-watch: no active VM context");
     const proto::ProtoObject* a = args->getAt(ctx, 0);
     if (!a || a->getPrototype(ctx) != cc->atomMarkerProto)
-        throw std::runtime_error("add-watch: not an atom");
+        throwError(ctx, "add-watch: not an atom");
     const proto::ProtoObject* k = args->getAt(ctx, 1);
     const proto::ProtoObject* f = args->getAt(ctx, 2);
 
@@ -2489,12 +2488,12 @@ const proto::ProtoObject* prim_remove_watch(proto::ProtoContext* ctx,
                                             const proto::ProtoArguments* args,
                                             const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2)
-        throw std::runtime_error("remove-watch: expects (remove-watch atom key)");
+        throwError(ctx, "remove-watch: expects (remove-watch atom key)");
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("remove-watch: no active VM context");
+    if (!cc) throwError(ctx, "remove-watch: no active VM context");
     const proto::ProtoObject* a = args->getAt(ctx, 0);
     if (!a || a->getPrototype(ctx) != cc->atomMarkerProto)
-        throw std::runtime_error("remove-watch: not an atom");
+        throwError(ctx, "remove-watch: not an atom");
     const proto::ProtoObject* k = args->getAt(ctx, 1);
 
     // CAS the watches map without `k`; `neu` is rooted across the CAS, which
@@ -2511,6 +2510,38 @@ const proto::ProtoObject* prim_remove_watch(proto::ProtoContext* ctx,
                                    scope.getAutomaticLocal(0))) break;
     }
     return a;
+}
+
+// (import-module "logical/path"): the module object protoCore's Unified
+// Module Discovery resolves for the path through the space's resolution
+// chain (ProtoSpace::getImportModule), cached process-wide. Its members are
+// read as `alias/member` and called as `(alias/member args...)`, with the
+// module as the receiver; its error types are caught as
+// `(catch alias/ErrorType e ...)` (docs/INTEROP.md).
+const proto::ProtoObject* prim_import_module(proto::ProtoContext* ctx,
+                                             const proto::ProtoObject*,
+                                             const proto::ParentLink*,
+                                             const proto::ProtoArguments* args,
+                                             const proto::ProtoKeywordArguments*) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    if (n != 1)
+        throwClassed(ctx, "ArityException",
+            "Wrong number of args (" + std::to_string(n) + ") passed to: import-module");
+    const proto::ProtoObject* path = args->getAt(ctx, 0);
+    if (!path || path == PROTO_NONE || !proto::ProtoObject::isStringTagFast(path))
+        throwClassed(ctx, "ClassCastException",
+            std::string("import-module expects a string path, got ") + valueTypeName(ctx, path));
+    const std::string logical =
+        reinterpret_cast<const proto::ProtoString*>(path)->toStdString(ctx);
+    const proto::ProtoObject* wrapper =
+        ctx->space->getImportModule(ctx, logical.c_str(), "exports");
+    const proto::ProtoObject* module = (wrapper && wrapper != PROTO_NONE)
+        ? wrapper->getAttribute(ctx, proto::ProtoString::createSymbol(ctx, "exports"))
+        : nullptr;
+    if (!module || module == PROTO_NONE)
+        throwClassed(ctx, "FileNotFoundException",
+            "Could not locate module " + logical + " on the resolution chain");
+    return module;
 }
 
 // Every built-in function and the global name it is installed under. The
@@ -2620,9 +2651,12 @@ constexpr PrimitiveEntry kPrimitives[] = {
     {"ex-data",    &prim_ex_data},
     {"ex-message", &prim_ex_message},
     {"ex-cause",   &prim_ex_cause},
+
+    // Modules (Unified Module Discovery).
+    {"import-module", &prim_import_module},
 };
 
-// A linear scan of the 80 entries; printing a function is not a hot path.
+// A linear scan of the 81 entries; printing a function is not a hot path.
 const char* primitiveName(proto::ProtoMethod fn) {
     for (const PrimitiveEntry& p : kPrimitives) {
         if (p.fn == fn) return p.name;
@@ -2730,7 +2764,7 @@ const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v)
 
 void throwNotANumber(proto::ProtoContext* ctx, const char* operation,
                      const proto::ProtoObject* v) {
-    throw std::runtime_error(std::string("ClassCastException: ") + operation +
+    throwClassed(ctx, "ClassCastException", std::string(operation) +
                              " expects a number, got " + valueTypeName(ctx, v));
 }
 

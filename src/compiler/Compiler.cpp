@@ -66,7 +66,8 @@ std::size_t addIntegerConst(proto::ProtoContext* ctx,
                             BytecodeModule& out) {
     try {
         return out.addLong(value->asLong(ctx));
-    } catch (const std::overflow_error&) {
+    } catch (const proto::ProtoException&) {
+        // protoCore's Overflow error: the integer does not fit a long long.
         return out.addBigInteger(value->asIntegerString(ctx, 10)->toStdString(ctx));
     }
 }
@@ -517,8 +518,13 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
     // Split the form into body forms, catch clauses and the finally clause,
     // with JVM Clojure's rules and messages: body forms first, then catch
     // clauses, then at most one finally, last.
+    // A clause naming a built-in class (classId >= 0) is matched by class
+    // id; any other name is a type resolved at run time, when an exception
+    // reaches the clause (classId < 0): a local, a var, or a module member
+    // `alias/Type`.
     struct CatchClause {
         int classId;
+        std::string className;
         std::string binding;
         const proto::ProtoList* form;   // (catch Class name body...)
     };
@@ -546,11 +552,10 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
                     "catch: expects (catch ClassName binding body...)");
             }
             const std::string className = asUtf8(ctx, cl->getAt(ctx, 1));
-            const int classId = exceptionClassId(className);
-            if (classId < 0) {
-                throw CompileError("Unable to resolve classname: " + className);
-            }
-            catches.push_back({classId, asUtf8(ctx, cl->getAt(ctx, 2)), cl});
+            // `Object` catches every value, as `Throwable` does.
+            const int classId = (className == "Object" || className == "java.lang.Object")
+                ? kThrowableClassId : exceptionClassId(className);
+            catches.push_back({classId, className, asUtf8(ctx, cl->getAt(ctx, 2)), cl});
         } else if (clause == "finally") {
             finallyForm = f->asList(ctx);
         } else {
@@ -643,7 +648,12 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
         out.emit(Op::STORE_LOCAL, exSlot);
         for (const CatchClause& c : catches) {
             out.emit(Op::PUSH_LOCAL, exSlot);
-            out.emit(Op::EXC_MATCH, static_cast<std::size_t>(c.classId));
+            if (c.classId >= 0) {
+                out.emit(Op::EXC_MATCH, static_cast<std::size_t>(c.classId));
+            } else {
+                compileCatchType(ctx, c.className, out);
+                out.emit(Op::EXC_MATCH_TYPE, out.addSymbol(ctx, c.className));
+            }
             const std::size_t nextAt = out.emit(Op::JUMP_IF_FALSE, 0);
             // The binding names the exception's slot for the clause body
             // only; an outer binding of the same name is restored after.
@@ -664,7 +674,7 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
             patchTo(nextAt, out.pos());
         }
         out.emit(Op::PUSH_LOCAL, exSlot);
-        out.emit(Op::THROW, 0);
+        out.emit(Op::RETHROW, 0);
         for (std::size_t at : doneJumps) patchTo(at, out.pos());
     }
 
@@ -677,9 +687,47 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
         out.emit(Op::STORE_LOCAL, fxSlot);
         compileFinally();
         out.emit(Op::PUSH_LOCAL, fxSlot);
-        out.emit(Op::THROW, 0);
+        out.emit(Op::RETHROW, 0);
         patchTo(endAt, out.pos());
     }
+}
+
+// Pushes the type a catch clause names when it is not a built-in class: a
+// local, member `b` of a local `a` for `a/b`, or else a run-time lookup of
+// the global (or the global's member) by RESOLVE_CLASS.
+void Compiler::compileCatchType(proto::ProtoContext* ctx, const std::string& name,
+                                BytecodeModule& out) {
+    if (int slot = resolveLocal(name); slot >= 0) {
+        out.emit(Op::PUSH_LOCAL, slot);
+        return;
+    }
+    if (isQualifiedName(name)) {
+        const std::size_t slash = name.find('/');
+        if (int slot = resolveLocal(name.substr(0, slash)); slot >= 0) {
+            out.emit(Op::PUSH_LOCAL, slot);
+            out.emit(Op::GET_MEMBER, out.addSymbol(ctx, name.substr(slash + 1)));
+            return;
+        }
+    }
+    out.emit(Op::RESOLVE_CLASS, out.addSymbol(ctx, name));
+}
+
+// Pushes the receiver `a` of a qualified name `a/b`: a local, or a global
+// looked up at run time.
+void Compiler::compileQualifiedPrefix(proto::ProtoContext* ctx, const std::string& name,
+                                      BytecodeModule& out) {
+    const std::string prefix = name.substr(0, name.find('/'));
+    if (int slot = resolveLocal(prefix); slot >= 0) {
+        out.emit(Op::PUSH_LOCAL, slot);
+    } else {
+        out.emit(Op::PUSH_VAR, out.addSymbol(ctx, prefix));
+    }
+}
+
+bool isQualifiedName(const std::string& name) {
+    if (name.size() < 3 || name[0] == ':') return false;
+    const std::size_t slash = name.find('/');
+    return slash != std::string::npos && slash > 0 && slash + 1 < name.size();
 }
 
 int Compiler::resolveLocal(const std::string& name) {
@@ -1349,6 +1397,17 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 compileForm(ctx, head, out, markers);
             } else if (int slot = resolveLocal(headName); slot >= 0) {
                 out.emit(Op::PUSH_LOCAL, slot);
+            } else if (isQualifiedName(headName)) {
+                // `(alias/member args...)`: a call of a module member with
+                // the module as the receiver (CALL_MEMBER), resolved at run
+                // time. Arguments are positional.
+                compileQualifiedPrefix(ctx, headName, out);
+                for (proto::proto_ulong i = 1; i < n; ++i) {
+                    compileForm(ctx, lst->getAt(ctx, static_cast<int>(i)), out, markers);
+                }
+                out.emit(Op::CALL_MEMBER, n - 1);
+                out.emit(Op::NOP, out.addSymbol(ctx, headName.substr(headName.find('/') + 1)));
+                return;
             } else {
                 std::size_t headIdx = out.addSymbol(ctx, headName);
                 out.emit(Op::PUSH_VAR, headIdx);
@@ -1451,6 +1510,13 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         int slot = resolveLocal(name);
         if (slot >= 0) {
             out.emit(Op::PUSH_LOCAL, slot);
+            return;
+        }
+        if (isQualifiedName(name)) {
+            // `alias/member`: the member of the value of `alias` (a module
+            // imported with import-module), read at run time.
+            compileQualifiedPrefix(ctx, name, out);
+            out.emit(Op::GET_MEMBER, out.addSymbol(ctx, name.substr(name.find('/') + 1)));
             return;
         }
         std::size_t idx = out.addSymbol(ctx, name);

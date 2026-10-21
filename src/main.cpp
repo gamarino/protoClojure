@@ -13,12 +13,17 @@
 #include "repl/Repl.h"
 #include "runtime/ActorScheduler.h"
 #include "runtime/BytecodeModule.h"
+#include "runtime/Exceptions.h"
 #include "runtime/ExecutionEngine.h"
 #include "runtime/GCCensus.h"
 #include "runtime/IO.h"
 #include "runtime/Named.h"
 #include "runtime/Primitives.h"
 #include "runtime/StackGuard.h"
+
+#if defined(PROTOCLJ_EXAMPLE_GEOMETRY)
+#include "geometry_module/GeometryModule.h"
+#endif
 
 #include <cstring>
 #include <cstdio>
@@ -281,6 +286,10 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
             // (BytecodeModule::emit).
             std::fprintf(stderr, "%s: compile error: %s\n", path, e.what());
             return 1;
+        } catch (const proto::ProtoException& e) {
+            std::fprintf(stderr, "%s: compile error: %s\n", path,
+                         protoClojure::describeThrown(ctx, e.value()).c_str());
+            return 1;
         }
         // Statement-level discard, except for the last form whose value is
         // the file's value.
@@ -301,10 +310,39 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
                 valueKey, watchesKey,
                 thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
                 actorStateKey, mailboxKey, namedLayout);
+    } catch (const proto::ProtoException& e) {
+        // An uncaught Clojure exception, protoCore error or module error:
+        // reported by its value, as JVM Clojure reports an uncaught
+        // Throwable (docs/DESIGN.md §4.1).
+        // The report prints the exception's data map, and the printer needs
+        // a call context (keywords, atoms, ...); the one run installed is
+        // gone by now.
+        const protoClojure::ActiveCallContext reportCc{&eng,
+            ctx->getAutomaticLocal(kSlotGlobals),
+            ctx->getAutomaticLocal(kSlotFnSingle), ctx->getAutomaticLocal(kSlotFnMulti),
+            ctx->getAutomaticLocal(kSlotAtomMarker), ctx->getAutomaticLocal(kSlotFutureMarker),
+            ctx->getAutomaticLocal(kSlotPromiseMarker), ctx->getAutomaticLocal(kSlotActorMarker),
+            bytecodeKey, arityKey, capturesKey, aritiesKey, valueKey, watchesKey,
+            thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
+            actorStateKey, mailboxKey, namedLayout};
+        protoClojure::setActiveCallContext(reportCc);
+        std::fprintf(stderr, "%s: runtime error: %s\n", path,
+                     protoClojure::describeThrown(ctx, e.value()).c_str());
+        protoClojure::clearActiveCallContext();
+        protoClojure::shutdownIO(ctx);
+        protoClojure::shutdownFutures(ctx);
+        protoClojure::ActorScheduler::instance().shutdown(ctx);
+        return 1;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "%s: runtime error: %s\n", path, e.what());
         // Stop HTTP servers and drain the actor scheduler before
         // unwinding so worker threads don't outlive the ProtoSpace.
+        protoClojure::shutdownIO(ctx);
+        protoClojure::shutdownFutures(ctx);
+        protoClojure::ActorScheduler::instance().shutdown(ctx);
+        return 1;
+    } catch (...) {
+        std::fprintf(stderr, "%s: runtime error: unknown C++ exception\n", path);
         protoClojure::shutdownIO(ctx);
         protoClojure::shutdownFutures(ctx);
         protoClojure::ActorScheduler::instance().shutdown(ctx);
@@ -359,6 +397,29 @@ void applyHeapPolicy(proto::ProtoSpace& space) {
 #endif
 }
 
+// The test build protoclj_geometry (CMakeLists.txt) links protoCore's example
+// geometry module: it registers the module's provider and puts it first in
+// the space's resolution chain, so `(import-module "example/geometry")`
+// finds it. The ordinary protoclj resolves modules through protoCore's
+// default chain only.
+void prepareModules(proto::ProtoSpace& space) {
+#if defined(PROTOCLJ_EXAMPLE_GEOMETRY)
+    example::registerGeometryProvider();
+    proto::ProtoContext* ctx = space.rootContext;
+    const proto::ProtoList* chain = ctx->newList()->appendLast(
+        ctx, ctx->fromUTF8String("provider:example_geometry"));
+    const proto::ProtoObject* existing = space.getResolutionChain();
+    if (existing && existing != PROTO_NONE && existing->asList(ctx)) {
+        const proto::ProtoList* rest = existing->asList(ctx);
+        for (proto::proto_ulong i = 0; i < rest->getSize(ctx); ++i)
+            chain = chain->appendLast(ctx, rest->getAt(ctx, static_cast<int>(i)));
+    }
+    space.setResolutionChain(chain->asObject(ctx));
+#else
+    (void)space;
+#endif
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -374,6 +435,7 @@ int main(int argc, char** argv) {
         // No arguments → drop into the interactive REPL.
         proto::ProtoSpace space;
         applyHeapPolicy(space);
+        prepareModules(space);
         return protoClojure::runOnEvaluatorThread(
             space, [](proto::ProtoContext* ctx, void*) { return protoClojure::runRepl(ctx); },
             nullptr);
@@ -401,6 +463,7 @@ int main(int argc, char** argv) {
         for (int j = i + 1; j < argc; ++j) run.args.emplace_back(argv[j]);
         proto::ProtoSpace space;
         applyHeapPolicy(space);
+        prepareModules(space);
         return protoClojure::runOnEvaluatorThread(
             space,
             [](proto::ProtoContext* ctx, void* p) {

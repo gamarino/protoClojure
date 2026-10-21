@@ -137,27 +137,35 @@ TEST_F(ExceptionsFixture, ThrowClassedCarriesClassMessageAndToString) {
     try {
         throwClassed(&live, "java.net.UnknownHostException", "no.such.host");
         FAIL() << "throwClassed returned";
-    } catch (const ClojureThrow& t) {
+    } catch (const proto::ProtoException& t) {
         live.setAutomaticLocal(1, t.value());
-        EXPECT_STREQ(t.what(), "UnknownHostException: no.such.host");
+        EXPECT_EQ(describeThrown(&live, t.value()), "UnknownHostException: no.such.host");
         EXPECT_STREQ(exceptionClassName(exceptionClassOf(&live, t.value())),
                      "UnknownHostException");
         EXPECT_EQ(message(t.value()), "no.such.host");
-        // exceptionFromError hands back the thrown object itself.
-        EXPECT_EQ(exceptionFromError(&live, t), t.value());
+        // The value is an instance of its class prototype and its ancestors,
+        // so a handler selects it by protoCore's isInstanceOf.
+        EXPECT_TRUE(t.isInstanceOf(&live, exceptionClassPrototype(
+            exceptionClassId("UnknownHostException"))));
+        EXPECT_TRUE(t.isInstanceOf(&live, exceptionClassPrototype(
+            exceptionClassId("IOException"))));
+        EXPECT_FALSE(t.isInstanceOf(&live, exceptionClassPrototype(
+            exceptionClassId("RuntimeException"))));
+        // caughtErrorValue hands back the thrown object itself.
+        try { throw; } catch (...) { EXPECT_EQ(caughtErrorValue(&live), t.value()); }
     }
     EXPECT_THROW(throwClassed(&live, "NoSuchException", "x"), std::logic_error);
 }
 
-// The premise of the pin: an exception whose only owner is a destroyed
-// context survives collections while a ClojureThrow for it exists. Built in a
+// The premise of protoCore's pin: an exception whose only owner is a
+// destroyed context survives collections while a ProtoException for it
+// exists. Built in a
 // context that is destroyed before the collections run, exactly as the VM
-// frames between a `throw` and its `catch` are. Replacing the root-set add in
-// the ClojureThrow constructor with kNullHandle makes this fail: the message
+// frames between a `throw` and its `catch` are. Without the pin the message
 // cell is freed and recycled by the throwaway allocations.
 TEST_F(ExceptionsFixture, InFlightExceptionSurvivesCollections) {
     constexpr int kExceptions = 64;
-    std::vector<ClojureThrow> inFlight;
+    std::vector<proto::ProtoException> inFlight;
     inFlight.reserve(kExceptions);
     for (int i = 0; i < kExceptions; ++i) {
         proto::ProtoContext frame(&space, &live, nullptr, nullptr, nullptr, nullptr);
@@ -177,4 +185,34 @@ TEST_F(ExceptionsFixture, InFlightExceptionSurvivesCollections) {
         ASSERT_EQ(exceptionClassOf(&live, e), exceptionClassId("IOException")) << i;
         EXPECT_EQ(message(e), "in-flight exception number " + std::to_string(i));
     }
+}
+
+// protoCore's own errors arrive as Clojure exceptions through the error
+// factory initExceptions installs.
+TEST_F(ExceptionsFixture, ProtoCoreErrorsArriveAsClojureClasses) {
+    struct Case { const char* what; const char* cls; const char* msg; };
+    auto classOfRaised = [&](auto&& raise, std::string& msg) -> std::string {
+        try {
+            raise();
+        } catch (const proto::ProtoException& e) {
+            live.setAutomaticLocal(1, e.value());
+            msg = message(e.value());
+            return exceptionClassName(exceptionClassOf(&live, e.value()));
+        }
+        return "<nothing raised>";
+    };
+    std::string msg;
+    EXPECT_EQ(classOfRaised([&] { (void) live.fromLong(1)->divide(&live, live.fromLong(0)); }, msg),
+              "ArithmeticException");
+    EXPECT_EQ(msg, "Divide by zero");
+    EXPECT_EQ(classOfRaised([&] { (void) live.fromString("ten", 10); }, msg),
+              "NumberFormatException");
+    EXPECT_EQ(classOfRaised([&] { (void) live.fromLong(1)->shiftLeft(&live, -1); }, msg),
+              "IllegalArgumentException");
+    EXPECT_EQ(classOfRaised([&] {
+        (void) live.fromString("123456789012345678901234567890", 10)->asLong(&live); }, msg),
+              "ArithmeticException");
+    EXPECT_EQ(classOfRaised([&] {
+        (void) live.fromUTF8String("x")->add(&live, live.fromLong(1)); }, msg),
+              "ClassCastException");
 }

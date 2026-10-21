@@ -157,3 +157,15 @@ foreach(conf_file ${PROTOCLJ_CONFORMANCE_FILES})
                     "${CMAKE_CURRENT_SOURCE_DIR}/conformance/${conf_file}")
     endif()
 endforeach()
+
+# --- Module exceptions (protoCore's example geometry module) -------------------
+# A Clojure program run by protoclj_geometry (CMakeLists.txt), which links the
+# module's provider: it imports `example/geometry` and catches the module's
+# error types by name, protoCore's errors as Clojure classes, and a C++
+# exception from the module as a RuntimeException.
+if(TARGET protoclj_geometry)
+    add_test(NAME modules/geometry-exceptions.clj
+        COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/conformance/run.sh"
+                "$<TARGET_FILE:protoclj_geometry>"
+                "${CMAKE_CURRENT_SOURCE_DIR}/modules/geometry-exceptions.clj")
+endif()

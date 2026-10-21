@@ -962,8 +962,9 @@ try` is a compile error, while a `loop` wholly inside a `try`, or a `try`
 inside the arguments of a `recur`, is fine. `try` works at the top level
 of a file and in the REPL as well as in function bodies.
 
-**`throw`.** `(throw e)` raises the exception `e`. Throwing a value that
-is not an exception raises `ClassCastException`.
+**`throw`.** `(throw e)` raises the exception `e`. A caught module error
+(below) can be thrown too. Throwing any other value raises
+`ClassCastException`.
 
 **Functions.**
 
@@ -972,14 +973,17 @@ is not an exception raises `ClassCastException`.
   must be non-nil.` is an `IllegalArgumentException`) and an optional cause.
 - `(ex-data e)` — the data map of an `ExceptionInfo`; nil for any other
   value, other exceptions included.
-- `(ex-message e)` — the message of any exception; nil for a non-exception.
+- `(ex-message e)` — the message of any exception, or the `message`
+  attribute of a module's error; nil for any other value.
 - `(ex-cause e)` — the cause of an exception, or nil.
 
 **Classes.** A `catch` names one of a fixed hierarchy of classes that
 mirrors the Java classes a Clojure programmer catches, by its simple name
 or its qualified Java name (`ExceptionInfo` or `clojure.lang.ExceptionInfo`,
-`IOException` or `java.io.IOException`). An unknown name is the compile
-error `Unable to resolve classname: Foo`.
+`IOException` or `java.io.IOException`). Each class is a protoCore
+prototype whose parent is its superclass, and an exception is a child of
+its class. Any other name in a `catch` names a type resolved at run time
+(see "Errors raised by modules" below).
 
 ```
 Throwable
@@ -996,8 +1000,8 @@ Throwable
 ```
 
 `(catch Exception e ...)` catches every exception but a
-`StackOverflowError`, which is an `Error`; `(catch Throwable e ...)`
-catches everything. The I/O classes are raised by the I/O functions (§18),
+`StackOverflowError`, which is an `Error`; `(catch Throwable e ...)` and
+`(catch Object e ...)` catch everything, a module's error included. The I/O classes are raised by the I/O functions (§18),
 with an ex-data map such as `{:type :file-not-found, :errno 2}`.
 
 **Errors raised by the runtime.** An error raised by a built-in function or
@@ -1010,6 +1014,42 @@ arity and argument-type errors of built-in functions, such as
 `inc: expects 1 arg` — is a `RuntimeException` whose message is the whole
 text (D26).
 
+**Errors raised by protoCore.** protoCore's own errors arrive as Clojure
+classes: a division by zero is an `ArithmeticException` with message
+`"Divide by zero"`, an overflow an `ArithmeticException`, an operand of
+the wrong type a `ClassCastException`, a malformed integer literal a
+`NumberFormatException`, another malformed argument an
+`IllegalArgumentException`, a call with too many arguments an
+`ArityException` (`DESIGN.md` §4.1 has the table).
+
+**Errors raised by modules.** A module loaded with `import-module` (C++,
+or another language on protoCore) raises errors whose types are its own
+prototypes. A `catch` names them as members of the module, or through a
+var, and selects by the thrown value's prototype chain, so a clause
+naming a module's base type catches its subtypes:
+
+```clojure
+(def geometry (import-module "example/geometry"))
+
+(try (geometry/circleArea -1)
+     (catch geometry/NegativeRadius e (ex-message e)))
+;; "circleArea: the radius -1.000000 is negative"
+
+(try (geometry/triangleArea 1 2 10)
+     (catch geometry/GeometryError e :some-geometry-error))   ;; :some-geometry-error
+```
+
+The type is looked up when an exception reaches the clause, not when the
+`try` is compiled (D34): a clause after a matching one is never looked up,
+a name that resolves to nothing raises `RuntimeException: Unable to
+resolve classname: Foo` at that moment, and a name that resolves to a
+value that is not a type (a number, a collection, an atom, nil) raises
+`IllegalArgumentException`. A module's error is caught by its own types
+and by `Exception`, `Throwable` and `Object`, never by another built-in
+class. A C++ exception a module lets escape (a `std::exception`, which is
+a defect of the module) arrives as a `RuntimeException` whose message is
+the C++ error's text.
+
 **Printing.** `str` of an exception is its toString: the class, the
 message and, for an `ExceptionInfo`, the data —
 `(str (ex-info "boom" {:a 1}))` is `"ExceptionInfo: boom {:a 1}"`.
@@ -1021,7 +1061,10 @@ message and, for an `ExceptionInfo`, the data —
 with exit status 1 after every `finally` on the way has run, and reports
 `<file>: runtime error: <toString>` on standard error
 (`script.clj: runtime error: ExceptionInfo: boom {:a 1}`); the REPL prints
-`error: <toString>` and reads the next form.
+`error: <toString>` and reads the next form. An uncaught module error is
+reported by its `name` and `message` attributes
+(`runtime error: NegativeRadius: circleArea: the radius -1.000000 is
+negative`).
 
 **Threads.** A `deref` of a future whose body raised an exception raises an
 `ExecutionException` whose `ex-cause` is that exception (§12); `pmap` does
@@ -1030,7 +1073,9 @@ message handler is swallowed and the actor's state becomes `nil` (§12).
 
 **Departures from JVM Clojure.** Exceptions are not Java objects: no stack
 traces, no user-defined exception classes, no `class` / `instance?` on
-them, and the class names above are the only ones `catch` accepts (D27).
+them, and the built-in class names above, `Object`, and the types of modules
+are what `catch` accepts (D27); a non-built-in catch type is resolved at
+run time (D34).
 Most errors of the built-in functions are `RuntimeException`s rather than
 the `ArityException` or `ClassCastException` JVM Clojure raises, and an
 unresolved global is a `RuntimeException` raised at run time rather than a

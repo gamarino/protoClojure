@@ -43,6 +43,11 @@ const char* opName(Op op) {
         case Op::TRY_END:       return "TRY_END";
         case Op::THROW:         return "THROW";
         case Op::EXC_MATCH:     return "EXC_MATCH";
+        case Op::RETHROW:       return "RETHROW";
+        case Op::EXC_MATCH_TYPE: return "EXC_MATCH_TYPE";
+        case Op::RESOLVE_CLASS: return "RESOLVE_CLASS";
+        case Op::GET_MEMBER:    return "GET_MEMBER";
+        case Op::CALL_MEMBER:   return "CALL_MEMBER";
     }
     return "?";
 }
@@ -137,14 +142,17 @@ void BytecodeModule::patchOperand(std::size_t at, std::size_t operand) {
 // stays an upper bound.  Each instruction's effect mirrors
 // ExecutionEngine::executeFrame:
 //   +1  PUSH_CONST PUSH_VAR PUSH_NIL PUSH_TRUE PUSH_FALSE PUSH_LOCAL DUP
+//       RESOLVE_CLASS
 //   -1  POP STORE_LOCAL JUMP_IF_FALSE JUMP_IF_TRUE, ADD .. EQ (two in, one out)
-//    0  NOP STORE_GLOBAL JUMP JUMP_BACK TRY_END EXC_MATCH
-//  -argc CALL CALL_KW (callable and argc arguments in, the result out)
+//       EXC_MATCH_TYPE
+//    0  NOP STORE_GLOBAL JUMP JUMP_BACK TRY_END EXC_MATCH GET_MEMBER
+//  -argc CALL CALL_KW CALL_MEMBER (callable or receiver and argc arguments
+//       in, the result out; CALL_MEMBER's data word is a NOP)
 //   -1  CALL_APPLY (callable and list in, the result out; the spread
 //       arguments are pushed at run time and are not counted)
 //  1-caps MAKE_FN (its block's captures), MAKE_FN_MULTI (all its arities')
 //   TRY_BEGIN: the handler starts one deeper (the exception is pushed)
-//   RETURN, THROW: no successor.
+//   RETURN, THROW, RETHROW: no successor.
 // A jump's target is the next instruction plus (or, for JUMP_BACK, minus)
 // its operand.
 unsigned int BytecodeModule::computeMaxStack() const {
@@ -172,14 +180,17 @@ unsigned int BytecodeModule::computeMaxStack() const {
         switch (op) {
             case Op::PUSH_CONST: case Op::PUSH_VAR: case Op::PUSH_NIL: case Op::PUSH_TRUE:
             case Op::PUSH_FALSE: case Op::PUSH_LOCAL: case Op::DUP:
+            case Op::RESOLVE_CLASS:
                 after = d + 1; break;
             case Op::POP: case Op::STORE_LOCAL:
             case Op::ADD: case Op::SUB: case Op::MUL: case Op::LT: case Op::LE:
             case Op::GT: case Op::GE: case Op::EQ: case Op::CALL_APPLY:
+            case Op::EXC_MATCH_TYPE:
                 after = d - 1; break;
             case Op::NOP: case Op::STORE_GLOBAL: case Op::TRY_END: case Op::EXC_MATCH:
+            case Op::GET_MEMBER:
                 break;
-            case Op::CALL: case Op::CALL_KW:
+            case Op::CALL: case Op::CALL_KW: case Op::CALL_MEMBER:
                 after = d - static_cast<int>(operand); break;
             case Op::MAKE_FN:
                 after = d + 1 - (operand < blocks_.size() ? blocks_[operand]->captureCount() : 0);
@@ -204,7 +215,7 @@ unsigned int BytecodeModule::computeMaxStack() const {
             case Op::TRY_BEGIN:
                 reach(next + operand, d + 1);
                 break;
-            case Op::RETURN: case Op::THROW:
+            case Op::RETURN: case Op::THROW: case Op::RETHROW:
                 continue;
             default:
                 return 64;   // an opcode this analysis does not know: the old fixed capacity

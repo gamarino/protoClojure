@@ -5,6 +5,7 @@
 // exercise collections built directly with protoCore, past the small inline
 // forms of lists and tuples.
 
+#include "runtime/Exceptions.h"
 #include "runtime/MapOps.h"
 #include "runtime/Named.h"
 #include "runtime/VectorOps.h"
@@ -290,11 +291,16 @@ TEST_F(ValuesFixture, ValueTypeNamesForErrorMessages) {
     EXPECT_FALSE(protoClojure::isNumber(ctx, PROTO_NONE));
     EXPECT_FALSE(protoClojure::isNumber(ctx, ctx->fromUTF8String("1")));
 
+    // A classed exception needs the class prototypes (installPrimitives
+    // creates them through initExceptions).
+    protoClojure::initExceptions(ctx, const_cast<proto::ProtoObject*>(
+        space.objectPrototype->newChild(ctx, /*isMutable=*/true)));
     try {
         protoClojure::throwNotANumber(ctx, "*", ctx->fromUTF8String("ab"));
         FAIL() << "throwNotANumber returned";
-    } catch (const std::runtime_error& e) {
-        EXPECT_STREQ(e.what(), "ClassCastException: * expects a number, got a string");
+    } catch (const proto::ProtoException& e) {
+        EXPECT_EQ(protoClojure::describeThrown(ctx, e.value()),
+                  "ClassCastException: * expects a number, got a string");
     }
 }
 

@@ -709,6 +709,10 @@ void serveConnection(proto::ProtoContext* ctx, HttpServer* s, Connection* c) {
             const PO* argv[1] = {req.getAutomaticLocal(0)};
             req.setAutomaticLocal(1, s->cc.engine->invoke(&req, s->handler, argv, 1));
             answer = answerOf(&req, req.getAutomaticLocal(1));
+        } catch (const proto::ProtoException& e) {
+            // A Clojure exception, a protoCore error or a module's error.
+            answer.error = std::string("run-server: the handler threw ") +
+                           describeThrown(&req, e.value());
         } catch (const std::exception& e) {
             answer.error = std::string("run-server: the handler threw ") + e.what();
         }
@@ -748,6 +752,9 @@ const PO* connectionMain(proto::ProtoContext* ctx, const PO*, const proto::Paren
     t_servingFor = s;
     try {
         serveConnection(ctx, s, c);
+    } catch (const proto::ProtoException& e) {
+        report(std::string("run-server: ") + describeThrown(ctx, e.value()));
+        closeConnection(c);
     } catch (const std::exception& e) {
         report(std::string("run-server: ") + e.what());
         closeConnection(c);

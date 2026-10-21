@@ -55,9 +55,10 @@ constexpr int kRuntimeException = 3;
 constexpr int kExceptionInfo    = 4;
 
 // Set once per ProtoSpace by initExceptions, before any thread other than the
-// initialising one runs Clojure code.
-const proto::ProtoObject* g_exceptionMarker = nullptr;
-proto::ProtoRootSet*      g_inFlightRoots   = nullptr;
+// initialising one runs Clojure code. The prototypes are reachable from the
+// globals namespace, which every entry point roots, so the error factory
+// reaches them through GC-rooted state.
+const proto::ProtoObject* g_classPrototypes[kExceptionClassCount] = {};
 
 const proto::ProtoString* classKey(proto::ProtoContext* ctx) {
     return proto::ProtoString::createSymbol(ctx, "__ex_class__");
@@ -116,21 +117,110 @@ bool exceptionClassIsA(int cls, int ancestor) {
 
 // ---- Exception values -------------------------------------------------------
 
+const proto::ProtoObject* exceptionClassPrototype(int id) {
+    return (id >= 0 && id < kExceptionClassCount) ? g_classPrototypes[id] : nullptr;
+}
+
+namespace {
+
+// The class protoCore error `kind` arrives as, and its message: JVM
+// Clojure's "Divide by zero" for a division by zero, protoCore's own text
+// otherwise. A malformed integer literal (Integer::fromString) is a
+// NumberFormatException; any other malformed argument an
+// IllegalArgumentException (its superclass).
+int errorKindClass(proto::ProtoErrorKind kind, const char* message) {
+    switch (kind) {
+        case proto::ProtoErrorKind::DivisionByZero: return exceptionClassId("ArithmeticException");
+        case proto::ProtoErrorKind::Overflow:       return exceptionClassId("ArithmeticException");
+        case proto::ProtoErrorKind::TypeMismatch:   return exceptionClassId("ClassCastException");
+        case proto::ProtoErrorKind::ArityMismatch:  return exceptionClassId("ArityException");
+        case proto::ProtoErrorKind::InvalidArgument:
+            return (message && std::strstr(message, "fromString"))
+                ? exceptionClassId("NumberFormatException")
+                : exceptionClassId("IllegalArgumentException");
+    }
+    return kRuntimeException;
+}
+
+// The space's error factory (ProtoSpace::setErrorFactory): builds the
+// Clojure exception the error would be had Clojure code raised it. It must
+// not throw; if building the instance fails, it answers the class prototype
+// itself, which every catch of the class still selects.
+const proto::ProtoObject* clojureErrorFactory(proto::ProtoContext* ctx,
+                                              proto::ProtoErrorKind kind,
+                                              const char* message) {
+    const int cls = errorKindClass(kind, message);
+    try {
+        const char* text = kind == proto::ProtoErrorKind::DivisionByZero
+            ? "Divide by zero" : (message ? message : "");
+        // Young cells of the raising context, alive while it is.
+        return makeException(ctx, cls, ctx->fromUTF8String(text), nullptr, nullptr);
+    } catch (...) {
+        return g_classPrototypes[cls];
+    }
+}
+
+const proto::ProtoString* nameKey(proto::ProtoContext* ctx) {
+    return proto::ProtoString::createSymbol(ctx, "name");
+}
+const proto::ProtoString* foreignMessageKey(proto::ProtoContext* ctx) {
+    return proto::ProtoString::createSymbol(ctx, "message");
+}
+
+} // namespace
+
 void initExceptions(proto::ProtoContext* ctx, proto::ProtoObject* globals) {
-    const proto::ProtoObject* marker = ctx->space->objectPrototype->newChild(ctx);
+    // One prototype per class; a parent always precedes its children in the
+    // table, so each class is created as a child of its finished parent.
+    const proto::ProtoList* all = ctx->newList();
+    for (int i = 0; i < kExceptionClassCount; ++i) {
+        const ExceptionClass& c = kExceptionClasses[i];
+        const proto::ProtoObject* parent = c.parent < 0
+            ? ctx->space->objectPrototype : g_classPrototypes[c.parent];
+        const proto::ProtoObject* cls = parent->newChild(ctx);
+        cls = cls->setAttribute(ctx, classKey(ctx), ctx->fromLong(i));
+        cls = cls->setAttribute(ctx, nameKey(ctx), ctx->fromUTF8String(c.name));
+        g_classPrototypes[i] = cls;
+        all = all->appendLast(ctx, cls);
+    }
     // Reachable from the globals namespace, which every entry point roots.
     globals->setAttribute(ctx,
-        proto::ProtoString::createSymbol(ctx, "__exception_marker__"), marker);
-    g_exceptionMarker = marker;
-    // One root set per space; protoCore deletes it with the space.
-    g_inFlightRoots = ctx->space->createRootSet("protoclj-exceptions-in-flight");
+        proto::ProtoString::createSymbol(ctx, "__exception_classes__"),
+        all->asObject(ctx));
+    ctx->space->setErrorFactory(&clojureErrorFactory);
 }
 
 bool isException(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    if (!v || v == PROTO_NONE || !g_exceptionMarker) return false;
+    if (!v || v == PROTO_NONE || !g_classPrototypes[0]) return false;
     // Only object cells have a prototype worth asking for (pointer tag 0).
     if ((reinterpret_cast<std::uintptr_t>(v) & 0x3F) != 0) return false;
-    return v->getPrototype(ctx) == g_exceptionMarker;
+    return v->isInstanceOf(ctx, g_classPrototypes[0]) == PROTO_TRUE;
+}
+
+bool isForeignObject(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    if (!v || v == PROTO_NONE) return false;
+    if ((reinterpret_cast<std::uintptr_t>(v) & 0x3F) != 0) return false;
+    return std::strcmp(valueTypeName(ctx, v), "an object") == 0;
+}
+
+bool isThrowable(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    return isException(ctx, v) || isForeignObject(ctx, v);
+}
+
+bool exceptionMatches(proto::ProtoContext* ctx, const proto::ProtoObject* v,
+                      int cls) {
+    if (cls == kThrowableClassId) return true;           // every value
+    if (isException(ctx, v))
+        return exceptionClassIsA(exceptionClassOf(ctx, v), cls);
+    if (cls == kExceptionClassId) return true;           // a foreign error
+    // A foreign value whose chain includes a Clojure class.
+    return valueIsInstanceOf(ctx, v, exceptionClassPrototype(cls));
+}
+
+bool valueIsInstanceOf(proto::ProtoContext* ctx, const proto::ProtoObject* v,
+                       const proto::ProtoObject* type) {
+    if (!v || !type || type == PROTO_NONE) return false;
+    return v->isInstanceOf(ctx, type) == PROTO_TRUE;
 }
 
 int exceptionClassOf(proto::ProtoContext* ctx, const proto::ProtoObject* e) {
@@ -157,13 +247,12 @@ const proto::ProtoObject* makeException(proto::ProtoContext* ctx, int cls,
                                         const proto::ProtoObject* message,
                                         const proto::ProtoObject* data,
                                         const proto::ProtoObject* cause) {
-    if (!g_exceptionMarker)
+    if (cls < 0 || cls >= kExceptionClassCount || !g_classPrototypes[cls])
         throw std::logic_error("makeException: initExceptions was not called");
-    // An immutable object: each setAttribute returns a new object with the
-    // same prototype. The intermediates are young cells of `ctx`, which stays
-    // alive for the whole construction.
-    const proto::ProtoObject* e = g_exceptionMarker->newChild(ctx);
-    e = e->setAttribute(ctx, classKey(ctx), ctx->fromLong(cls));
+    // An immutable child of the class prototype: each setAttribute returns a
+    // new object with the same parents. The intermediates are young cells of
+    // `ctx`, which stays alive for the whole construction.
+    const proto::ProtoObject* e = g_classPrototypes[cls]->newChild(ctx);
     e = e->setAttribute(ctx, messageKey(ctx), orNil(message));
     e = e->setAttribute(ctx, dataKey(ctx), orNil(data));
     e = e->setAttribute(ctx, causeKey(ctx), orNil(cause));
@@ -206,26 +295,34 @@ void appendExceptionForm(proto::ProtoContext* ctx, std::string& out,
     out += '}';
 }
 
+std::string describeThrown(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    if (isException(ctx, v)) return exceptionToString(ctx, v);
+    std::string out;
+    if (isForeignObject(ctx, v)) {
+        const proto::ProtoObject* name = v->getAttribute(ctx, nameKey(ctx));
+        const proto::ProtoObject* message = v->getAttribute(ctx, foreignMessageKey(ctx));
+        if (isStringValue(name)) out = stringBytes(ctx, name);
+        if (isStringValue(message)) {
+            if (!out.empty()) out += ": ";
+            out += stringBytes(ctx, message);
+        }
+        if (!out.empty()) return out;
+    }
+    printValueTo(ctx, out, v, /*readable=*/true);
+    return out;
+}
+
+const proto::ProtoObject* thrownMessage(proto::ProtoContext* ctx,
+                                        const proto::ProtoObject* v) {
+    if (isException(ctx, v)) return exceptionMessage(ctx, v);
+    if (isForeignObject(ctx, v)) {
+        const proto::ProtoObject* m = v->getAttribute(ctx, foreignMessageKey(ctx));
+        if (isStringValue(m)) return m;
+    }
+    return PROTO_NONE;
+}
+
 // ---- Throwing and catching --------------------------------------------------
-
-// The GC pin of an exception in flight: a handle in the space's root set,
-// released when the last copy of the ClojureThrow goes away.
-// Not copyable: a copy's destructor would release the handle a second time.
-struct ClojureThrow::Pin {
-    proto::ProtoRootSet*          roots;
-    proto::ProtoRootSet::Handle   handle;
-    Pin(proto::ProtoRootSet* rs, const proto::ProtoObject* obj)
-        : roots(rs), handle(rs ? rs->add(obj) : proto::ProtoRootSet::kNullHandle) {}
-    Pin(const Pin&) = delete;
-    Pin& operator=(const Pin&) = delete;
-    ~Pin() { if (roots) roots->remove(handle); }
-};
-
-ClojureThrow::ClojureThrow(proto::ProtoContext* ctx,
-                           const proto::ProtoObject* exception)
-    : std::runtime_error(exceptionToString(ctx, exception)),
-      value_(exception),
-      pin_(std::make_shared<Pin>(g_inFlightRoots, exception)) {}
 
 void throwException(proto::ProtoContext* ctx, const proto::ProtoObject* e) {
     throw ClojureThrow(ctx, e);
@@ -240,8 +337,8 @@ void throwClassed(proto::ProtoContext* ctx, const char* className,
         throw std::logic_error(std::string("throwClassed: unknown class ") +
                                className);
     // The message string and the exception are rooted in a slot of a child
-    // context until the ClojureThrow has pinned the exception; the pin then
-    // keeps it alive after this context is gone.
+    // context until the ProtoException has pinned the exception; protoCore's
+    // pin then keeps it alive after this context is gone.
     proto::ProtoContext scope(ctx->space, ctx);
     scope.resizeAutomaticLocals(2);
     scope.setAutomaticLocal(0, scope.fromUTF8String(message.c_str()));
@@ -251,25 +348,50 @@ void throwClassed(proto::ProtoContext* ctx, const char* className,
     throw pending;
 }
 
-const proto::ProtoObject* exceptionFromError(proto::ProtoContext* ctx,
-                                             const std::exception& error) {
-    if (const auto* thrown = dynamic_cast<const ClojureThrow*>(&error))
-        return thrown->value();
+namespace {
 
-    // "<ClassName>: <message>" names the class when ClassName is a built-in
-    // class, simple or qualified. Anything else is a RuntimeException whose
-    // message is the whole text.
-    const std::string text = error.what();
-    int cls = kRuntimeException;
-    std::string message = text;
+// Splits "<ClassName>: <message>" into a built-in class and the message;
+// RuntimeException and the whole text when the prefix names no class.
+int classFromText(const std::string& text, std::string& message) {
+    message = text;
     const std::size_t colon = text.find(": ");
     if (colon != std::string::npos && colon > 0) {
         const int named = exceptionClassId(text.substr(0, colon));
         if (named >= 0) {
-            cls = named;
             message = text.substr(colon + 2);
+            return named;
         }
     }
+    return kRuntimeException;
+}
+
+} // namespace
+
+void throwError(proto::ProtoContext* ctx, const std::string& text) {
+    std::string message;
+    const int cls = classFromText(text, message);
+    throwClassed(ctx, exceptionClassName(cls), message);
+}
+
+const proto::ProtoObject* caughtErrorValue(proto::ProtoContext* ctx) {
+    try {
+        throw;
+    } catch (const proto::ProtoException& e) {
+        return e.value();
+    } catch (const std::exception& e) {
+        return exceptionFromError(ctx, e);
+    } catch (...) {
+        return exceptionFromError(ctx, std::runtime_error("unknown C++ exception"));
+    }
+}
+
+const proto::ProtoObject* exceptionFromError(proto::ProtoContext* ctx,
+                                             const std::exception& error) {
+    // "<ClassName>: <message>" names the class when ClassName is a built-in
+    // class, simple or qualified. Anything else is a RuntimeException whose
+    // message is the whole text.
+    std::string message;
+    const int cls = classFromText(error.what(), message);
     proto::ProtoContext scope(ctx->space, ctx);
     scope.resizeAutomaticLocals(1);
     scope.setAutomaticLocal(0, scope.fromUTF8String(message.c_str()));
@@ -305,7 +427,7 @@ const proto::ProtoObject* prim_ex_info(proto::ProtoContext* ctx,
     if (!isMap(data))
         throwClassed(ctx, "ClassCastException",
             std::string("ex-info expects a map, got ") + valueTypeName(ctx, data));
-    if (cause != PROTO_NONE && !isException(ctx, cause))
+    if (cause != PROTO_NONE && !isThrowable(ctx, cause))
         throwClassed(ctx, "ClassCastException",
             std::string("ex-info expects an exception as the cause, got ") +
             valueTypeName(ctx, cause));
@@ -335,14 +457,15 @@ const proto::ProtoObject* prim_ex_data(proto::ProtoContext* ctx,
     return isException(ctx, e) ? exceptionData(ctx, e) : PROTO_NONE;
 }
 
-// (ex-message e): the message of an exception; nil for any other value.
+// (ex-message e): the message of an exception, or the `message` attribute
+// of a foreign error object; nil for any other value.
 const proto::ProtoObject* prim_ex_message(proto::ProtoContext* ctx,
                                           const proto::ProtoObject*,
                                           const proto::ParentLink*,
                                           const proto::ProtoArguments* args,
                                           const proto::ProtoKeywordArguments*) {
     const proto::ProtoObject* e = oneArg(ctx, args, "ex-message");
-    return isException(ctx, e) ? exceptionMessage(ctx, e) : PROTO_NONE;
+    return thrownMessage(ctx, e);
 }
 
 // (ex-cause e): the cause of an exception; nil for any other value.

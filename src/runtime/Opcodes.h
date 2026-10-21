@@ -103,11 +103,44 @@ enum class Op : uint8_t {
                            //           exception value and jumps there.
     TRY_END         = 30,  // pops the innermost handler (normal exit).
     THROW           = 31,  // pop; raise the value as an exception. A value
-                           //       that is not an exception raises a
+                           //       that `throw` does not accept (neither a
+                           //       Clojure exception nor a foreign object,
+                           //       Exceptions.h isThrowable) raises a
                            //       ClassCastException instead.
-    EXC_MATCH       = 32,  // operand = exception class id (Exceptions.h).
-                           //           pop; push true when the value is an
-                           //           exception of that class or a subclass.
+    EXC_MATCH       = 32,  // operand = built-in exception class id
+                           //           (Exceptions.h). pop; push true when a
+                           //           catch of that class handles the value
+                           //           (exceptionMatches).
+
+    // Unified exceptions and module members (docs/DESIGN.md §4.1, §4.3).
+    RETHROW         = 33,  // pop; raise the value unchanged, whatever it is:
+                           //       the rethrow of a value no catch clause
+                           //       handled, and the end of a finally handler.
+    EXC_MATCH_TYPE  = 34,  // operand = const-pool string idx (the clause's
+                           //           class name, for messages). Stack:
+                           //           [value, type]. pop both; push true
+                           //           when `type` is on the value's
+                           //           prototype chain. A `type` that is not
+                           //           a prototype object raises
+                           //           IllegalArgumentException.
+    RESOLVE_CLASS   = 35,  // operand = const-pool symbol idx. Push the
+                           //           catch type the symbol names at run
+                           //           time: the global `X`, or member `b`
+                           //           of the global `a` for `a/b`. A name
+                           //           that does not resolve raises
+                           //           "Unable to resolve classname: X".
+    GET_MEMBER      = 36,  // operand = const-pool symbol idx. pop an object;
+                           //           push its attribute of that name (its
+                           //           prototype chain included). A missing
+                           //           member raises RuntimeException.
+    CALL_MEMBER     = 37,  // operand = argc; the NEXT word is a NOP whose
+                           //           operand is the const-pool symbol idx
+                           //           of the member (skipped by the VM).
+                           //           Stack: [receiver, arg1..argN]. Calls
+                           //           the receiver's member with the
+                           //           receiver as `self` (a protoCore
+                           //           method) or as a Clojure fn; pops
+                           //           receiver and args, pushes the result.
 };
 
 // One instruction word: opcode in the low byte, operand in the high 24 bits.

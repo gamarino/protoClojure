@@ -1,42 +1,56 @@
 /*
  * Exceptions — Clojure's exception values and the C++ side of `throw`,
- * `try`, `catch` and `finally`.
+ * `try`, `catch` and `finally`, on protoCore's unified exception model
+ * (protoCore docs/EXCEPTIONS.md).
  *
- * Representation. An exception is an immutable protoCore object whose
- * prototype is the process's exception marker (created by initExceptions).
- * It carries four attributes:
+ * Classes. JVM Clojure catches by Java class. protoClojure has no Java
+ * classes (deviation D2), so the classes a program can name are a fixed
+ * hierarchy mirroring the Java classes a Clojure programmer catches
+ * (kExceptionClasses in Exceptions.cpp; docs/DESIGN.md has the tree). Each
+ * class is a protoCore prototype object, created by initExceptions: the
+ * parent of `ArithmeticException` is `RuntimeException`, whose parent is
+ * `Exception`, and so on up to `Throwable`. A class carries two attributes,
+ * `__ex_class__` (its index in the table, a SmallInteger) and `name` (its
+ * simple name, the attribute other protoCore languages and modules read). A
+ * class is named by its simple name (`ArithmeticException`) or by its
+ * qualified Java name (`java.lang.ArithmeticException`).
  *
- *   __ex_class__    the class, as a SmallInteger id into the built-in
- *                   class table below (never a string, so a class test is
- *                   an integer compare and a walk up at most five parents);
+ * Representation. An exception is an immutable child of its class prototype
+ * carrying three attributes:
+ *
  *   __ex_message__  the message, a string, or nil;
  *   __ex_data__     the data map of an ExceptionInfo (`ex-info`), or nil;
  *   __ex_cause__    the exception that caused this one, or nil.
  *
- * Classes. JVM Clojure catches by Java class. protoClojure has no Java
- * classes (deviation D2), so the classes a program can name are a small
- * fixed hierarchy mirroring the Java classes a Clojure programmer catches
- * (kExceptionClasses in Exceptions.cpp; docs/DESIGN.md has the tree). A
- * class is named by its simple name (`ArithmeticException`) or by its
- * qualified Java name (`java.lang.ArithmeticException`,
- * `clojure.lang.ExceptionInfo`).
+ * Its class id is inherited from the class prototype, so the class test of a
+ * built-in class is an integer walk of at most five parents, and any other
+ * type (a module's error prototype) is tested by protoCore's isInstanceOf.
  *
- * In flight. A thrown exception travels up the native stack as a C++
- * `ClojureThrow`. The VM frames it unwinds through are destroyed on the way,
- * and with them the contexts whose young generations may be the only thing
- * keeping the exception object alive, so a ClojureThrow pins its object in a
- * protoCore ProtoRootSet for as long as it (or a copy of it) exists. The
- * frame that catches it stores the object in one of its own slots before
- * the ClojureThrow is destroyed.
+ * Foreign values. A value raised by a module (C++, or another language) is
+ * any protoCore value, typically an object whose prototype chain is the
+ * module's error hierarchy. `catch` selects it by that chain: a clause names
+ * the module's prototype through a var or a module member
+ * (`(catch geometry/NegativeRadius e ...)`). `Throwable` and `Object` catch
+ * every value, `Exception` every value that is not a Clojure Error (a
+ * foreign error is treated as a library's exception). docs/DESIGN.md §4.1.
  *
- * Errors raised by C++ code. Primitives, the VM and the stack guard raise
- * std::runtime_error whose message starts with the class name
- * ("ArithmeticException: Divide by zero"). When such an error reaches a
- * `try`, exceptionFromError turns it into an exception of that class with
- * the rest of the text as its message; an error whose message names no
- * known class becomes a RuntimeException carrying the whole message
- * (deviation D26). New C++ code raises exceptions with throwClassed, which
- * can also attach a data map and a cause.
+ * In flight. A thrown value travels up the native stack as a C++ `throw` of
+ * a proto::ProtoException (ClojureThrow, a subclass with no extra state, when
+ * Clojure code raised it). protoCore pins the value for as long as the
+ * exception (or a copy of it) exists; the frame that catches it stores the
+ * value in one of its own slots. Every handler catches the base type,
+ * `const proto::ProtoException&`, never only ClojureThrow.
+ *
+ * Errors raised by C++ code. Primitives and the VM raise classed exceptions
+ * with throwClassed, or with throwError, which reads the class from a
+ * "<Class>: <message>" prefix ("ArithmeticException: Divide by zero"). An
+ * error raised by protoCore itself (division by zero, a malformed integer
+ * literal, ...) arrives as a ProtoException whose value the error factory
+ * installed by initExceptions built (the table is in Exceptions.cpp). A C++
+ * exception that is not a ProtoException (`std::exception`, from a module or
+ * a library) is a module defect: at a `try` it becomes a RuntimeException
+ * carrying `what()` (exceptionFromError), and at the top level the driver
+ * reports it as a runtime error.
  */
 #pragma once
 
@@ -44,15 +58,7 @@
 #include <stdexcept>
 #include <string>
 
-namespace proto {
-class ProtoContext;
-class ProtoObject;
-class ProtoList;
-class ProtoSparseList;
-class ProtoArguments;
-class ProtoKeywordArguments;
-class ParentLink;
-}
+#include "protoCore.h"   // proto::ProtoException
 
 namespace protoClojure {
 
@@ -68,15 +74,52 @@ const char* exceptionClassName(int id);
 // True when class `cls` is `ancestor` or a subclass of it.
 bool exceptionClassIsA(int cls, int ancestor);
 
+// The ids of the two classes with a rule of their own in exceptionMatches.
+constexpr int kThrowableClassId = 0;
+constexpr int kExceptionClassId = 1;
+
+// The prototype object of built-in class `id` (initExceptions creates them).
+const proto::ProtoObject* exceptionClassPrototype(int id);
+
 // ---- Exception values -------------------------------------------------------
 
-// Creates the exception marker and the root set that pins exceptions in
-// flight, for the ProtoSpace of `ctx`; the marker is kept alive as a hidden
-// attribute of `globals`. Called by installPrimitives.
+// Creates the class prototypes for the ProtoSpace of `ctx`, keeps them alive
+// as a hidden attribute of `globals`, and installs the space's error factory
+// (protoCore errors as Clojure exceptions). Called by installPrimitives,
+// before any other thread runs code in the space.
 void initExceptions(proto::ProtoContext* ctx, proto::ProtoObject* globals);
 
-// True when `v` is an exception value.
+// True when `v` is a Clojure exception value: an instance of Throwable.
 bool isException(proto::ProtoContext* ctx, const proto::ProtoObject* v);
+
+// True when `v` is a protoCore object that is no Clojure value (no
+// collection, fn, atom, exception, ...): what a module typically raises.
+bool isForeignObject(proto::ProtoContext* ctx, const proto::ProtoObject* v);
+
+// True when `throw` accepts `v`: a Clojure exception or a foreign object.
+bool isThrowable(proto::ProtoContext* ctx, const proto::ProtoObject* v);
+
+// True when a `catch` of built-in class `cls` handles the thrown value `v`
+// (see the file comment for Throwable / Object and Exception).
+bool exceptionMatches(proto::ProtoContext* ctx, const proto::ProtoObject* v,
+                      int cls);
+
+// True when a `catch` of the type `type` (a prototype object resolved at
+// run time) handles the thrown value `v`: `type` is on v's prototype chain.
+bool valueIsInstanceOf(proto::ProtoContext* ctx, const proto::ProtoObject* v,
+                       const proto::ProtoObject* type);
+
+// The text of any thrown value, as the top-level report and the message of
+// an ExecutionException show it: a Clojure exception's toString; for a
+// foreign object, its `name` attribute and its `message` attribute
+// ("NegativeRadius: circleArea: ..."); else its printed form.
+std::string describeThrown(proto::ProtoContext* ctx, const proto::ProtoObject* v);
+
+// The message of a thrown value, as `ex-message` answers it: a Clojure
+// exception's message, a foreign object's `message` attribute when it is a
+// string; nil otherwise.
+const proto::ProtoObject* thrownMessage(proto::ProtoContext* ctx,
+                                        const proto::ProtoObject* v);
 
 // The parts of exception `e` (which must be an exception): its class id,
 // and its message, data and cause (PROTO_NONE when absent).
@@ -112,24 +155,18 @@ void appendExceptionForm(proto::ProtoContext* ctx, std::string& out,
 
 // ---- Throwing and catching --------------------------------------------------
 
-// A Clojure exception in flight on the native stack. `what()` is the
-// exception's toString, so every existing `catch (const std::exception&)` —
-// the script driver, the REPL — reports it as it reports any runtime error.
-// The exception object is pinned as a GC root for as long as any copy of the
-// ClojureThrow exists (see the file comment).
-class ClojureThrow : public std::runtime_error {
+// A value thrown by Clojure code (or by the runtime's C++ on its behalf).
+// It adds no state to proto::ProtoException: protoCore pins the value while
+// any copy is in flight, and every handler catches the base type. It does
+// not derive from std::exception: a language value is not a C++ failure.
+class ClojureThrow : public proto::ProtoException {
 public:
-    // `exception` must be rooted by the caller at the moment of the call.
-    ClojureThrow(proto::ProtoContext* ctx, const proto::ProtoObject* exception);
-    const proto::ProtoObject* value() const { return value_; }
-
-private:
-    struct Pin;
-    const proto::ProtoObject* value_;
-    std::shared_ptr<Pin> pin_;
+    // `value` must be rooted by the caller at the moment of the call.
+    ClojureThrow(proto::ProtoContext* ctx, const proto::ProtoObject* value)
+        : proto::ProtoException(ctx, value) {}
 };
 
-// Throws the exception `e` (rooted by the caller).
+// Throws the value `e` (rooted by the caller) as a ClojureThrow.
 [[noreturn]] void throwException(proto::ProtoContext* ctx,
                                  const proto::ProtoObject* e);
 
@@ -146,13 +183,25 @@ private:
                                const proto::ProtoObject* data = nullptr,
                                const proto::ProtoObject* cause = nullptr);
 
-// The exception value for an error caught in C++: the object of a
-// ClojureThrow, or, for any other std::exception, a new exception of the
-// class its message starts with (see the file comment). The result is not
-// rooted (a new one is a young cell of `ctx`): the caller stores it in a
-// slot before anything else allocates.
+// Throws a classed exception from a message in the "<Class>: <message>"
+// form; a message whose prefix names no built-in class raises a
+// RuntimeException carrying the whole text (deviation D26). The helper for
+// the runtime's older string-shaped errors.
+[[noreturn]] void throwError(proto::ProtoContext* ctx, const std::string& text);
+
+// The exception value for a C++ exception that is not a ProtoException (a
+// module defect, or a StackOverflowError): a new exception of the class its
+// message starts with, else a RuntimeException carrying `what()`. The result
+// is not rooted (a young cell of `ctx`): the caller stores it in a slot
+// before anything else allocates.
 const proto::ProtoObject* exceptionFromError(proto::ProtoContext* ctx,
                                              const std::exception& error);
+
+// The value of the exception being handled. Call only inside a catch block:
+// a ProtoException answers its value (pinned while the handler runs), any
+// other C++ exception the result of exceptionFromError. The caller roots the
+// result before the handler ends.
+const proto::ProtoObject* caughtErrorValue(proto::ProtoContext* ctx);
 
 // ---- Primitives -------------------------------------------------------------
 

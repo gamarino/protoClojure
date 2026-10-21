@@ -53,7 +53,8 @@ directories that cover them.
 | Futures and `pmap` on OS threads | `22-futures` | 18 |
 | Watches, promises | `23-watches`, `24-promises` | 12 |
 | Actors | `25-actors` | 9 |
-| Exceptions: `try` / `catch` / `finally`, `throw`, `ex-info`, catchable primitive errors | `26-exceptions` | 47 |
+| Exceptions: `try` / `catch` / `finally`, `throw`, `ex-info`, catchable primitive errors | `26-exceptions` | 50 |
+| A module's error types caught by name (protoCore's example geometry module) | `tests/modules` | 1 |
 | Input and output: files, `with-open`, `sh`, the environment, HTTP client and Ring server, TCP / UDP / TLS sockets | `27-io` | 69 |
 | Interactive REPL | — (no conformance fixtures) | — |
 
@@ -124,9 +125,21 @@ The design specifications written during development are archived under
       handled exception and when a catch clause throws; a throw in `finally`
       replaces the exception in flight; `recur` across a `try` is the compile
       error `Cannot recur across try`; `try` works at the top level, in
-      `fn`, `let`, `loop` bodies, futures and actor handlers. Classes are a
-      fixed built-in hierarchy (`LANGUAGE.md` §14, `DESIGN.md` §4.1), named
-      simply or qualified (`java.io.IOException`, `clojure.lang.ExceptionInfo`)
+      `fn`, `let`, `loop` bodies, futures and actor handlers. The built-in
+      classes are a fixed hierarchy of protoCore prototypes (`LANGUAGE.md`
+      §14, `DESIGN.md` §4.1), named simply or qualified
+      (`java.io.IOException`, `clojure.lang.ExceptionInfo`); `Object` and
+      `Throwable` catch every value
+- [x] protoCore's unified exception model: every throw is a
+      `proto::ProtoException`, every handler selects by the value's
+      prototype chain, so a module's error type is caught by name,
+      `(catch geometry/NegativeRadius e ...)`, resolved when an exception
+      reaches the clause (D34); protoCore's own errors arrive as Clojure
+      classes through the error factory (`DESIGN.md` §4.1 has the table)
+- [x] `(import-module "logical/path")` loads a module through Unified
+      Module Discovery; `alias/member` reads a member and
+      `(alias/member args...)` calls it with the module as the receiver
+      (`INTEROP.md` §0)
 - [x] Errors raised by the runtime are exceptions of the class their message
       names: `(try (/ 1 0) (catch ArithmeticException e (ex-message e)))` is
       `"Divide by zero"`; `StackOverflowError` is an `Error` a `try` can
@@ -262,7 +275,7 @@ first and its result built after.
       and `IllegalArgumentException`, with ex-data
       `{:type :file-not-found :errno 2}` and the like
 
-### Primitives installed at startup (80, plus 36 I/O)
+### Primitives installed at startup (81, plus 36 I/O)
 
 - [x] Arithmetic and comparison: `+ - * / inc dec < <= > >= = not=`
 - [x] Output: `println str` — one printer (`printTo` in
@@ -308,8 +321,10 @@ first and its result built after.
 
 ### Bytecode VM
 
-- [x] 33 opcodes — see `src/runtime/Opcodes.h`
-- [x] Exception opcodes `TRY_BEGIN` / `TRY_END` / `THROW` / `EXC_MATCH`
+- [x] 38 opcodes — see `src/runtime/Opcodes.h`
+- [x] Exception opcodes `TRY_BEGIN` / `TRY_END` / `THROW` / `RETHROW` /
+      `EXC_MATCH` / `EXC_MATCH_TYPE` / `RESOLVE_CLASS`, and the module-member
+      opcodes `GET_MEMBER` / `CALL_MEMBER`,
       over a per-frame handler stack; only a body containing a `try` runs in
       a frame with the C++ catch region, so code without one runs at the
       speed it had before exceptions (`DESIGN.md` §4.1)
@@ -557,13 +572,14 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D24 | Map iteration and print order is unspecified for maps of every size and can change between runs of the same program (JVM Clojure keeps insertion order for array maps of up to 8 entries) | (perm) |
 | D25 | `count` of a map is O(n), not O(1) (JVM Clojure: O(1)). Two keys whose hashes collide in their low 54 bits share one slot of the underlying `ProtoMap`, so the slot count is a lower bound on the number of entries, not the number itself; `count` therefore walks the entries. `empty?` stays O(1), because a slot always holds at least one entry | (perm) |
 | D26 | A runtime error whose message names no class is a `RuntimeException` carrying the whole message: most arity and argument-type errors raised by primitives (`(inc 1 2)`: `inc: expects 1 arg`, where JVM Clojure raises `ArityException`; `(upper-case 1)`: `upper-case: arg must be a string`, where it raises `ClassCastException`), and an unresolved global, which is caught at run time as a `RuntimeException` where JVM Clojure reports it at compile time. The class-naming errors (`ArithmeticException`, `ClassCastException` for arithmetic on non-numbers, `IndexOutOfBoundsException`, `StringIndexOutOfBoundsException`, `UnsupportedOperationException`, `StackOverflowError`) have JVM Clojure's classes | v0.x |
-| D27 | Exceptions are not Java objects: there are no stack traces, no user-defined exception classes, no `class` / `instance?` and no `.getMessage`-style interop; `catch` names one of 23 built-in classes (`DESIGN.md` §4.1). An exception prints on one line as `#error {:type C, :message "m", :data {...}, :cause #error {...}}` (JVM Clojure: a multi-line `#error` map with `:via`, `:trace` and a root-cause `:cause` string), and its toString and the uncaught-error report use the simple class name, `ArithmeticException: Divide by zero` (JVM Clojure: `java.lang.ArithmeticException: Divide by zero`). `throw` of a value that is not an exception raises `ClassCastException: throw expects an exception, got an integer` | (perm) |
+| D27 | Exceptions are not Java objects: there are no stack traces, no user-defined exception classes, no `class` / `instance?` and no `.getMessage`-style interop; `catch` names one of 23 built-in classes, `Object`, or a type held by a var or a module member (D34, `DESIGN.md` §4.1). An exception prints on one line as `#error {:type C, :message "m", :data {...}, :cause #error {...}}` (JVM Clojure: a multi-line `#error` map with `:via`, `:trace` and a root-cause `:cause` string), and its toString and the uncaught-error report use the simple class name, `ArithmeticException: Divide by zero` (JVM Clojure: `java.lang.ArithmeticException: Divide by zero`). `throw` of a value that is neither an exception nor a foreign (module) object raises `ClassCastException: throw expects an exception, got an integer` | (perm) |
 | D28 | The I/O functions are globals, not in `clojure.java.io`, `clojure.java.shell` or babashka's `babashka.http-client` (there are no namespaces yet), and small functions stand in for Java interop: `close` / `write` / `(read-line r)` for `.close` / `.write` / `.readLine`, `exists?` / `directory?` for `.exists` / `.isDirectory`, `getenv` / `exit` for `System/getenv` / `System/exit`. `file` answers a protoClojure file handle, not a `java.io.File` (`str` gives its path; `file-seq` answers such handles); readers and writers are UTF-8 only, with no InputStream / Reader stack | (perm while there are no namespaces) |
 | D29 | `line-seq` is eager: it reads the reader to its end and answers a list (nil when empty), because there are no lazy sequences yet (JVM Clojure: a lazy seq read as it is consumed). On an endless stream, such as a socket that never closes, use `read-line` in a loop | v0.2 (lazy seqs) |
 | D30 | Sockets are protoClojure's own functions (`tcp-connect`, `tcp-listen`, `tcp-accept`, `socket-read-line`, `socket-write`, `socket-close`, `udp-socket`, `udp-send`, `udp-receive`, `server-port`): Clojure has only Java interop (`java.net.Socket`) | (perm) |
 | D31 | The Ring request `:body` is a string (nil when empty), not an InputStream, and a response `:body` may be a string, nil, a list or vector of strings or a file, not an InputStream; `run-server` answers a server handle (http-kit answers a stop fn), serves one request per connection (`connection: close`, no keep-alive), each on its own thread, and a server still running when the script ends is stopped (the JVM keeps running while a server thread lives) | v0.x |
 | D32 | `sh` does not support `:in-enc` / `:out-enc` (output is always decoded as UTF-8). (`:dir` and `:env` no longer deviate: since protoIO 0.2.1 the spawn call sets them itself, with no `/bin/sh` or `env -i` in between, on every platform; the program is searched in protoclj's own `PATH`, as the JVM searches it) | v0.x |
 | D33 | I/O exceptions carry an ex-data map (`{:type :file-not-found :errno 2}`), so their toString and the uncaught-error report end with it, and their messages are protoIO's (`cannot read x: No such file or directory`, JVM: `x (No such file or directory)`) | (perm) |
+| D34 | A `catch` naming no built-in class names a type looked up at run time, when an exception reaches the clause (a var, a local, or a module member `alias/Type`), and is matched by the thrown value's prototype chain; JVM Clojure resolves the class at compile time. So `(try 1 (catch NoSuchException e 2))` compiles and answers 1, and the error `Unable to resolve classname: NoSuchException` is a `RuntimeException` raised when an exception reaches the clause (JVM Clojure: a compile error). A type that resolves to a value that is not a prototype object raises `IllegalArgumentException`. A module's error (a foreign value) is caught by `Exception`, `Throwable` and `Object`, by its own types, and by no other built-in class | (perm: the platform is late-binding) |
 
 ## Known issues
 
@@ -615,10 +631,17 @@ See `LANGUAGE.md` for the full discussion. Summary:
   the symbol up before building the permanent copy). Map keys no longer go
   through `createSymbol`, so this no longer affects string keys.
 
+- **Errors in atom watches are discarded.** A watch function that throws
+  (any thrown value: a Clojure exception, a protoCore error, a module's
+  error) is skipped and the next watch runs; JVM Clojure propagates the
+  exception to the `swap!` / `reset!` caller. Unchanged by the move to
+  protoCore's unified exceptions.
+
 - **Errors on actor threads are silent.** An actor message whose handler
   throws (a `StackOverflowError` included) sets the actor's value to `nil`
   and delivers `nil` to the promise `send` returned; the exception is not
-  reported. Exceptions did not change this: a handler can `try` / `catch`
+  reported. Neither exceptions nor protoCore's unified exceptions changed
+  this (a `ProtoException` escaping a handler is caught the same way): a handler can `try` / `catch`
   its own exceptions and keep its state (`26-exceptions/try-inside-actor`),
   but an escaping one is still swallowed. How a failed message should
   surface (JVM Clojure's agents keep the failed state and rethrow on the

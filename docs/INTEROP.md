@@ -4,7 +4,7 @@
 > has Python, JavaScript, and Smalltalk, all through one resolver. This
 > document explains how that works and where the seams are.
 
-> **Planned — not yet implemented.** The UMD providers (`py/`, `js/`,
+> **Planned — not yet implemented** (except `import-module`, §0). The UMD providers (`py/`, `js/`,
 > `pst/`, `clj/`), `ns` / `:require` and the conversion functions are not
 > available in protoClojure 0.0.1; this document describes the intended
 > design (see the UMD providers milestone in `ROADMAP.md`). What already
@@ -13,6 +13,43 @@
 > trailing keyword/value pairs) for functions defined in protoClojure.
 
 ---
+
+## 0. What works today: `import-module`
+
+`(import-module "logical/path")` loads a module through protoCore's Unified
+Module Discovery (`ProtoSpace::getImportModule`) with the space's
+resolution chain, and answers the module object; a module that no entry of
+the chain resolves raises `FileNotFoundException: Could not locate module
+... on the resolution chain`. A qualified symbol whose prefix is a local or
+a var holding such a module reads and calls its members, resolved at run
+time:
+
+```clojure
+(def geometry (import-module "example/geometry"))
+
+geometry/NegativeRadius            ; the member's value: an error prototype
+(geometry/circleArea 2)            ; 12.566370614359172
+(try (geometry/circleArea -1)      ; a module error, caught by its type
+     (catch geometry/GeometryError e (ex-message e)))
+```
+
+- `alias/member` reads the attribute `member` of the value of `alias`
+  (its prototype chain included); a missing member raises
+  `RuntimeException: No such member: member (an object)`.
+- `(alias/member args...)` calls it. A protoCore method (a C++ module's
+  export) receives the module as its receiver (`self`), as a module
+  expects; any other value is called as a Clojure function. Arguments are
+  positional. A C++ exception that is not a `proto::ProtoException`
+  escaping the call becomes a `RuntimeException` carrying its `what()`.
+- `(catch alias/Type e ...)` catches the module's errors by type
+  (`LANGUAGE.md` §14, `DESIGN.md` §4.1).
+
+The ordinary `protoclj` uses protoCore's default resolution chain. The
+test build `protoclj_geometry` links protoCore's example geometry module
+(`protoCore/examples/exceptions/`) and puts its provider,
+`provider:example_geometry`, first in the chain; it runs
+`tests/modules/geometry-exceptions.clj`. The `ns` / `:require` forms and
+the language-prefixed providers below are still planned.
 
 ## 1. The hybrid module system at a glance
 

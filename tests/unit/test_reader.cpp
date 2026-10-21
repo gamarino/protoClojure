@@ -176,7 +176,8 @@ TEST_F(ReaderFixture, IntegerBeyondLongRangeReadsExactly) {
     ASSERT_NE(big, nullptr);
     ASSERT_TRUE(big->isInteger(ctx));
     EXPECT_EQ(big->asIntegerString(ctx)->toStdString(ctx), "12345678901234567890");
-    EXPECT_THROW(big->asLong(ctx), std::overflow_error);
+    // protoCore 3.0 raises its Overflow error as a proto::ProtoException.
+    EXPECT_THROW(big->asLong(ctx), proto::ProtoException);
     const proto::ProtoObject* negative = r.readOne();
     ASSERT_NE(negative, nullptr);
     EXPECT_EQ(negative->asIntegerString(ctx)->toStdString(ctx), "-12345678901234567890");

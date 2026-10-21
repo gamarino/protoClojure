@@ -266,21 +266,32 @@ The user-facing rules are in `LANGUAGE.md` §14; the code is
 `src/compiler/Compiler.cpp` and the handler loop of
 `ExecutionEngine::executeFrame`.
 
-**Representation.** An exception is an immutable protoCore object whose
-prototype is one process-wide exception marker (created at start-up and
-kept alive as a hidden attribute of the globals namespace). It has four
-attributes: `__ex_class__`, the class as a SmallInteger id into a built-in
-table; `__ex_message__`, a string or nil; `__ex_data__`, the data map of an
-`ex-info`, or nil; `__ex_cause__`, an exception or nil. Keeping the class
-as an integer makes a `catch` test an integer compare and a walk of at most
-five parent links, with no string work.
+The runtime follows protoCore's unified exception model (protoCore
+`docs/EXCEPTIONS.md`): every language-level throw is a C++ `throw` of a
+`proto::ProtoException` carrying the thrown value, every handler catches
+that base type and selects by the value's prototype chain, and protoCore's
+own errors arrive through an error factory as the language's classes.
 
-**Classes.** protoClojure has no Java classes (D2), so a `catch` names one
-of a fixed set of classes that mirror the Java ones a Clojure programmer
+**Representation.** Each built-in exception class is a protoCore
+prototype object, created at start-up and kept alive as a hidden
+attribute of the globals namespace. Its parent is its superclass
+(`ArithmeticException` → `RuntimeException` → `Exception` → `Throwable`),
+and it carries `__ex_class__`, its id in the built-in table as a
+SmallInteger, and `name`, its simple name (the attribute other languages
+and modules read). An exception is an immutable child of its class with
+three attributes: `__ex_message__`, a string or nil; `__ex_data__`, the
+data map of an `ex-info`, or nil; `__ex_cause__`, the cause or nil. The
+class id is inherited from the class, so the test of a built-in class
+stays an integer walk of at most five parent links, and any other type is
+tested with protoCore's `isInstanceOf` over the same chain.
+
+**Classes.** protoClojure has no Java classes (D2), so the built-in
+classes a `catch` names mirror the Java ones a Clojure programmer
 catches. The simple name and the qualified Java name are both accepted
 (`ArithmeticException`, `java.lang.ArithmeticException`,
-`clojure.lang.ExceptionInfo`); an unknown name is the compile error
-`Unable to resolve classname: Foo`.
+`clojure.lang.ExceptionInfo`). `Object` (`java.lang.Object`) is accepted
+too and, like `Throwable`, catches every thrown value. A name that is no
+built-in class is a type resolved at run time (below).
 
 ```
 Throwable
@@ -314,12 +325,53 @@ via `InterruptedIOException`) and `StackOverflowError` directly under
 `Error` (Java: via `VirtualMachineError`). The I/O classes exist before
 any I/O primitive does, so that the I/O layer can raise them.
 
+**Foreign and module error types.** A module written in C++ or in
+another language raises a `ProtoException` whose value is an instance of
+its own error prototype (protoCore's example geometry module raises a
+child of its `NegativeRadius`, itself a child of `GeometryError`). A
+Clojure program reaches the module with `import-module` and names the
+module's types as members of it:
+
+```clojure
+(def geometry (import-module "example/geometry"))
+(try (geometry/circleArea -1)
+     (catch geometry/NegativeRadius e (ex-message e)))
+```
+
+A `catch` that names no built-in class compiles to a run-time lookup of
+the type: a local, a var (`(catch NR e ...)` after `(def NR
+geometry/NegativeRadius)`), or member `b` of the value of `a` for `a/b`.
+**Timing:** the type is looked up when an exception reaches the clause,
+after the clauses before it did not match, and on every such arrival;
+JVM Clojure resolves the class at compile time. A `try` whose body
+completes, or whose exception an earlier clause handles, never looks the
+type up. The lookup never fails silently: a name that resolves to nothing
+raises `RuntimeException: Unable to resolve classname: X`, and a value
+that is not a prototype object (a number, a string, a collection, an
+atom, nil) raises `IllegalArgumentException: catch: X is an integer, not
+an exception type`; either error replaces the exception being matched.
+The clause matches when the type is on the thrown value's prototype
+chain.
+
+Which built-in classes catch a foreign value: `Throwable` and `Object`
+catch every value; `Exception` catches every value that is not a Clojure
+`Error` (a module's error is treated as a library's exception, which JVM
+Clojure would also catch with `Exception`); the other built-in classes
+catch only their own instances. `throw` accepts a Clojure exception or a
+foreign object (any protoCore object that is no Clojure value), so a
+caught module error can be rethrown; any other value raises
+`ClassCastException` as before. `ex-message` answers a foreign object's
+`message` attribute when it is a string; `ex-data` and `ex-cause` answer
+nil for it.
+
 **Bytecode.** A frame keeps a stack of active handlers, each a code
 position and an operand-stack depth. `TRY_BEGIN` pushes one, `TRY_END`
-pops it on the normal path, `THROW` raises the value on top of the stack,
-and `EXC_MATCH <class>` tests the class of an exception, superclasses
-included. `(try body (catch C1 e h1) (catch C2 e h2) (finally f))`
-compiles to
+pops it on the normal path, `THROW` raises the value on top of the stack
+(`throw`), `RETHROW` raises it unchanged whatever it is (a value no clause
+matched, the end of a finally handler), `EXC_MATCH <class>` tests a value
+against a built-in class, and `EXC_MATCH_TYPE` tests it against a type
+pushed at run time (`RESOLVE_CLASS <name>`, or a local, or `GET_MEMBER`).
+`(try body (catch C1 e h1) (catch C2 e h2) (finally f))` compiles to
 
 ```
     TRY_BEGIN Lfinally          ; only with a finally clause
@@ -330,8 +382,8 @@ compiles to
 Lcatch:                         ; stack: the exception
     STORE_LOCAL ex
     PUSH_LOCAL ex; EXC_MATCH C1; JUMP_IF_FALSE L2; <h1>; JUMP Ldone
-L2: PUSH_LOCAL ex; EXC_MATCH C2; JUMP_IF_FALSE L3; <h2>; JUMP Ldone
-L3: PUSH_LOCAL ex; THROW        ; no clause matched: rethrow the same object
+L2: PUSH_LOCAL ex; RESOLVE_CLASS m/T; EXC_MATCH_TYPE; JUMP_IF_FALSE L3; <h2>; JUMP Ldone
+L3: PUSH_LOCAL ex; RETHROW      ; no clause matched: rethrow the same value
 Ldone:
     TRY_END                     ; the finally handler
     <f>; POP                    ; normal path
@@ -339,9 +391,15 @@ Ldone:
 Lfinally:                       ; stack: the exception
     STORE_LOCAL fx
     <f>; POP
-    PUSH_LOCAL fx; THROW
+    PUSH_LOCAL fx; RETHROW
 Lend:
 ```
+
+(here C1 is a built-in class and C2 the module member `m/T`). The rethrow
+throws a new `ProtoException` carrying the same value; a runtime subclass
+of `ProtoException` raised by another language loses its extra state
+across a Clojure `try` that does not handle it (protoClojure's own
+subclass, `ClojureThrow`, has none).
 
 The finally handler encloses the catch clauses too, so `finally` runs
 after a handled exception and when a catch clause throws; its forms are
@@ -367,26 +425,41 @@ region at all: with the region in every frame `fib.clj` ran +3.5 % cycles,
 and with the split the benchmarks are at parity with the VM before
 exceptions (`perf stat -r 5`, fib / tak / sum-loop).
 
-**GC safety.** A `throw` raises a `ClojureThrow`, a `std::runtime_error`
-whose `what()` is the exception's toString, so every existing
-`catch (const std::exception&)` (the script driver, the REPL) reports it
-unchanged. While it unwinds, the frames it leaves are destroyed and hand
-their young generations to the collector, and those may be the only thing
-keeping the exception, its message and its data alive. So a
-`ClojureThrow` pins its object in a protoCore `ProtoRootSet` from its
-construction until its last copy is destroyed; the frame that catches it
-pushes it into a slot first. The pin is proven by the unit test
-`ExceptionsFixture.InFlightExceptionSurvivesCollections`, which fails
-when it is disabled.
+**GC safety.** While an exception unwinds, the frames it leaves are
+destroyed and hand their young generations to the collector, and those
+may be the only thing keeping the exception, its message and its data
+alive. protoCore pins a `ProtoException`'s value in a root set of its
+space from its construction until its last copy is destroyed; the frame
+that catches it pushes the value into a slot first. protoClojure no
+longer keeps a pin of its own. The unit test
+`ExceptionsFixture.InFlightExceptionSurvivesCollections` checks it.
 
-**Errors raised by C++.** Primitives, the VM and the stack guard raise
-`std::runtime_error`s whose message starts with a class name
-(`ArithmeticException: Divide by zero`, `StackOverflowError: ...`). When
-one reaches a handler, `exceptionFromError` makes it an exception of that
-class, with the text after `": "` as its message; a message that names no
-known class becomes a `RuntimeException` carrying the whole text (D26). New
-C++ code raises classed exceptions directly, with an optional data map and
-cause:
+**protoCore's errors.** protoCore raises its own errors as
+`ProtoException`s whose value the space's error factory builds.
+`initExceptions` installs a factory once, at start-up, that builds the
+Clojure exception the error would be had Clojure code raised it, reaching
+the class prototypes through the globals namespace:
+
+| protoCore `ProtoErrorKind` | Clojure class | Message |
+| -------------------------- | ------------- | ------- |
+| `DivisionByZero` | `ArithmeticException` | `Divide by zero` (JVM Clojure's) |
+| `Overflow` | `ArithmeticException` | protoCore's |
+| `TypeMismatch` | `ClassCastException` | protoCore's |
+| `ArityMismatch` | `ArityException` | protoCore's |
+| `InvalidArgument`, from `Integer::fromString` (a malformed literal) | `NumberFormatException` | protoCore's |
+| `InvalidArgument`, any other (a base outside 2..36, a negative shift) | `IllegalArgumentException` | protoCore's |
+
+The parse case is told apart by protoCore's message (it names
+`fromString`); both classes are `IllegalArgumentException`s. Clojure's `/`
+on integers leaves the zero divisor to protoCore, so `(/ 1 0)` is the
+factory's `ArithmeticException`.
+
+**Errors raised by C++.** Primitives and the VM raise classed exceptions
+as `ProtoException`s: directly with `throwClassed`, which takes an
+optional data map and cause, or through `throwError`, which reads the
+class from a message that starts with a class name (`ArithmeticException:
+Divide by zero`) and otherwise raises a `RuntimeException` carrying the
+whole text (D26).
 
 ```cpp
 [[noreturn]] void throwClassed(proto::ProtoContext* ctx, const char* className,
@@ -395,13 +468,33 @@ cause:
                                const proto::ProtoObject* cause = nullptr);
 ```
 
-**Threads.** A future's or a `pmap` element's worker records the
-exception object on the future (still inside its `catch`, while the pin
+A C++ exception that is not a `ProtoException` (`std::exception`) is a
+module defect, not a language value. A module member called as
+`(m/f ...)` that throws one raises a `RuntimeException` carrying its
+`what()` at that call; elsewhere (a `StackOverflowError` from the stack
+guard, a few internal errors) the handler loop makes the same translation
+(`exceptionFromError`, which also reads a class-name prefix).
+
+**Top level.** The script driver reports an uncaught value on standard
+error as `<file>: runtime error: <text>` and exits with status 1, where
+the text is a Clojure exception's toString (`ExceptionInfo: boom {:a
+1}`), or a foreign error's `name` and `message` attributes
+(`NegativeRadius: circleArea: the radius -1.000000 is negative`), or the
+value's printed form; a `std::exception` reports its `what()`, and any
+other C++ exception `unknown C++ exception`. The REPL reports the same
+text after `error:` and reads the next form. An HTTP handler's uncaught
+exception is reported the same way and answered with a 500.
+
+**Threads.** A future's or a `pmap` element's worker records the thrown
+value on the future (still inside its `catch`, while protoCore's pin
 holds); `deref` then raises an `ExecutionException` whose cause is that
-object and whose message is the cause's toString, as JVM Clojure does. An
-exception escaping an actor's message handler is caught by the worker,
-and the actor's state becomes `nil` (STATUS.md, Known issues); a handler
-that catches its own exceptions keeps its state.
+value and whose message is the cause's text, as JVM Clojure does. A
+foreign error is recorded and raised the same way. An exception escaping
+an actor's message handler is caught by the worker, and the actor's state
+becomes `nil` (STATUS.md, Known issues); a handler that catches its own
+exceptions keeps its state. An exception raised by an atom's watch
+function is discarded (STATUS.md, Known issues). Both apply to every
+thrown value, a `ProtoException` included.
 
 ### 4.2 Input and output
 

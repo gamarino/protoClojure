@@ -112,7 +112,7 @@ const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
         case K::BigInteger: return materialiseBigInteger(ctx, c);
         case K::Symbol: break;  // a global name, never a value
     }
-    throw std::runtime_error("VM: PUSH_CONST of a global name: " + c.sval);
+    throwError(ctx, "VM: PUSH_CONST of a global name: " + c.sval);
 }
 
 // A keyword or quoted symbol `k` called as `(k coll)` / `(k coll not-found)`,
@@ -137,7 +137,7 @@ const proto::ProtoObject* callLookup(proto::ProtoContext* ctx,
                 namedSpelling(ctx, named, callable)->toStdString(ctx);
             what = (spelling[0] == ':' ? "keyword " : "symbol ") + spelling;
         }
-        throw std::runtime_error(
+        throwError(ctx, 
             "VM: " + what + " called as a function expects 1 or 2 arguments, got " +
             std::to_string(argc));
     }
@@ -191,15 +191,115 @@ void pushTryHandler(std::vector<TryHandler>& handlers, const Instr* target,
 }
 
 // THROW: raises `v` (rooted by the caller) as an exception; a value that is
-// not an exception raises a ClassCastException, as JVM Clojure's `throw` of a
-// non-Throwable does. Cold and out of line, to keep the dispatch loop small.
+// neither a Clojure exception nor a foreign object raises a
+// ClassCastException, as JVM Clojure's `throw` of a non-Throwable does. Cold
+// and out of line, to keep the dispatch loop small.
 [[noreturn, gnu::cold, gnu::noinline]]
 void throwValue(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    if (!isException(ctx, v)) {
+    if (!isThrowable(ctx, v)) {
         throwClassed(ctx, "ClassCastException",
             std::string("throw expects an exception, got ") + valueTypeName(ctx, v));
     }
     throwException(ctx, v);
+}
+
+// RETHROW: raises `v` (rooted by the caller) unchanged, whatever it is: a
+// value a module raised need not be one `throw` would accept.
+[[noreturn, gnu::cold, gnu::noinline]]
+void rethrowValue(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    throw proto::ProtoException(ctx, v);
+}
+
+// The prefix and the member of a qualified name `a/b`.
+void splitQualified(const std::string& name, std::string& prefix, std::string& member) {
+    const std::size_t slash = name.find('/');
+    prefix = name.substr(0, slash);
+    member = name.substr(slash + 1);
+}
+
+// Whether `obj` has an attribute `key`, its prototype chain included. A
+// read answers PROTO_NONE both for a missing attribute and for one bound to
+// nil, so a PROTO_NONE read is confirmed by a presence probe.
+bool readMember(proto::ProtoContext* ctx, const proto::ProtoObject* obj,
+                const proto::ProtoString* key, const proto::ProtoObject*& out) {
+    if (!obj || obj == PROTO_NONE ||
+        (reinterpret_cast<std::uintptr_t>(obj) & 0x3F) != 0)
+        return false;
+    out = obj->getAttribute(ctx, key);
+    if (out && out != PROTO_NONE) return true;
+    if (obj->hasAttribute(ctx, key) == PROTO_TRUE) { out = PROTO_NONE; return true; }
+    return false;
+}
+
+// GET_MEMBER: attribute `key` of `obj`, as `a/b` reads it.
+[[gnu::noinline]]
+const proto::ProtoObject* getMember(proto::ProtoContext* ctx, const proto::ProtoObject* obj,
+                                    const proto::ProtoString* key, const std::string& name) {
+    const proto::ProtoObject* v = nullptr;
+    if (!readMember(ctx, obj, key, v))
+        throwClassed(ctx, "RuntimeException",
+            "No such member: " + name + " (" + valueTypeName(ctx, obj) + ")");
+    return v;
+}
+
+// RESOLVE_CLASS: the type a catch clause names, resolved when an exception
+// reaches the clause: the global `X`, or member `b` of the global `a`.
+[[gnu::noinline, gnu::cold]]
+const proto::ProtoObject* resolveCatchType(proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* globals,
+                                           const std::string& name) {
+    const proto::ProtoObject* v = nullptr;
+    bool found = false;
+    if (name.find('/') != std::string::npos && name.size() > 2) {
+        std::string prefix, member;
+        splitQualified(name, prefix, member);
+        const proto::ProtoObject* owner = globals->getOwnAttributeDirect(
+            ctx, proto::ProtoString::createSymbol(ctx, prefix.c_str()));
+        found = owner && readMember(ctx, owner,
+            proto::ProtoString::createSymbol(ctx, member.c_str()), v);
+    } else {
+        v = globals->getOwnAttributeDirect(ctx, proto::ProtoString::createSymbol(ctx, name.c_str()));
+        found = v != nullptr;
+    }
+    if (!found) throwClassed(ctx, "RuntimeException", "Unable to resolve classname: " + name);
+    return v;
+}
+
+// EXC_MATCH_TYPE: whether the catch of `type` (resolved at run time) handles
+// the thrown `v`. A type that is not a prototype object (a number, a string,
+// a Clojure collection, nil) is an error, not a silent non-match.
+[[gnu::noinline, gnu::cold]]
+bool matchCatchType(proto::ProtoContext* ctx, const proto::ProtoObject* v,
+                    const proto::ProtoObject* type, const std::string& name) {
+    if (!isForeignObject(ctx, type) && !isException(ctx, type))
+        throwClassed(ctx, "IllegalArgumentException",
+            "catch: " + name + " is " + valueTypeName(ctx, type) +
+            ", not an exception type");
+    return valueIsInstanceOf(ctx, v, type);
+}
+
+// CALL_MEMBER: `(a/b args...)`. A protoCore method (a module's export) is
+// called with the receiver as `self`, the way a module expects; any other
+// member value is called as a Clojure fn. `args` are the frame's stack
+// slots, which the collector traces. A C++ exception that is not a
+// ProtoException (a module defect) becomes a RuntimeException carrying its
+// what() here, at the native-call boundary.
+[[gnu::noinline]]
+const proto::ProtoObject* callMember(proto::ProtoContext* ctx, ExecutionEngine* engine,
+                                     const proto::ProtoObject* receiver,
+                                     const proto::ProtoString* key, const std::string& name,
+                                     const proto::ProtoObject* const* args, unsigned int argc) {
+    const proto::ProtoObject* member = getMember(ctx, receiver, key, name);
+    if (!member->isMethod(ctx))
+        return engine->invoke(ctx, member, args, argc);
+    proto::ProtoContext callScope(ctx->space, ctx);
+    const proto::ProtoArguments positional(args, argc);
+    // A ProtoException is no std::exception: it passes through untouched.
+    try {
+        return member->asMethod(&callScope)(&callScope, receiver, nullptr, &positional, nullptr);
+    } catch (const std::exception& e) {
+        throwClassed(ctx, "RuntimeException", e.what());
+    }
 }
 
 } // namespace
@@ -296,7 +396,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
                         const proto::ProtoObject* const* args,
                         unsigned int argc) {
     const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throw std::runtime_error("VM: invoke() called outside a run()");
+    if (!cc) throwError(ctx, "VM: invoke() called outside a run()");
 
     // Session 12 — single getPrototype probe picks the path. Single-
     // arity wrappers cost ONE getAttribute (bytecode); the captures
@@ -316,7 +416,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
             const proto::ProtoList* aritiesList = aritiesObj->asList(ctx);
             int k = pickArity(ctx, aritiesList, argc);
             if (k < 0)
-                throw std::runtime_error(
+                throwError(ctx, 
                     "VM: invoke: no matching arity for argc=" + std::to_string(argc));
             const proto::ProtoList* spec =
                 aritiesList->getAt(ctx, k)->asList(ctx);
@@ -327,7 +427,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
             const proto::ProtoObject* ptrObj =
                 callable->getOwnAttributeDirect(ctx, cc->bytecodeKey);
             if (!ptrObj || !ptrObj->isInteger(ctx))
-                throw std::runtime_error("VM: invoke: malformed fn-wrapper");
+                throwError(ctx, "VM: invoke: malformed fn-wrapper");
             subMod = reinterpret_cast<const BytecodeModule*>(ptrObj->asLong(ctx));
             // C optimisation — only fetch captures when the body needs them.
             if (subMod->captureCount() > 0) {
@@ -348,22 +448,22 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
                 kwArgsMap = args[posArgc - 1];
                 posArgc -= 1;
             } else if (static_cast<int>(posArgc) != fixed) {
-                throw std::runtime_error(
+                throwError(ctx, 
                     "VM: invoke: kw-based fn expects " + std::to_string(fixed) +
                     " positionals (+ optional trailing map), got " +
                     std::to_string(argc));
             }
         } else {
             if (!variadic && fixed != static_cast<int>(posArgc))
-                throw std::runtime_error("VM: invoke: fn arity mismatch");
+                throwError(ctx, "VM: invoke: fn arity mismatch");
             if (variadic && static_cast<int>(posArgc) < fixed)
-                throw std::runtime_error("VM: invoke: variadic underflow");
+                throwError(ctx, "VM: invoke: variadic underflow");
         }
         const proto::ProtoObject* callArgs[kMaxBoundParameters];
         unsigned int passArgc = posArgc;
         if (variadic) passArgc = static_cast<unsigned int>(fixed) + 1;
         if (passArgc > kMaxBoundParameters)
-            throw std::runtime_error(
+            throwError(ctx, 
                 "VM: a call may bind at most 17 parameters "
                 "(a variadic fn binds its rest arguments as one)");
         for (int i = 0; i < fixed; ++i) callArgs[i] = args[i];
@@ -384,7 +484,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
         if (kwBased) {
             kwCount = static_cast<unsigned int>(subMod->kwKeys().size());
             if (kwCount > 16)
-                throw std::runtime_error("VM: a function may declare at most 16 :keys parameters");
+                throwError(ctx, "VM: a function may declare at most 16 :keys parameters");
             extractKwVals(ctx, subMod, kwArgsMap, kwVals);
         }
 
@@ -407,7 +507,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
     callScope.setAutomaticLocal(0, callable);
     for (unsigned int i = 0; i < argc; ++i) callScope.setAutomaticLocal(i + 1, args[i]);
     proto::ProtoMethod fn = callable->asMethod(&callScope);
-    if (!fn) throw std::runtime_error("VM: invoke: value is not callable");
+    if (!fn) throwError(ctx, "VM: invoke: value is not callable");
     const proto::ProtoObject* self = callable->asMethodSelf(&callScope);
     const proto::ProtoArguments positional(callScope.getAutomaticLocals() + 1, argc);
     return fn(&callScope, self, nullptr, &positional, nullptr);
@@ -534,12 +634,12 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
     const auto& capSpecs = mod.captureSpecs();
     if (!capSpecs.empty()) {
         if (!captures || captures == PROTO_NONE) {
-            throw std::runtime_error(
+            throwError(&frame, 
                 "VM: fn expects captures but none were provided");
         }
         const proto::ProtoList* clist = captures->asList(&frame);
         if (!clist || clist->getSize(&frame) != capSpecs.size()) {
-            throw std::runtime_error(
+            throwError(&frame, 
                 "VM: captures list size mismatch with body captureSpecs");
         }
         for (std::size_t i = 0; i < capSpecs.size(); ++i) {
@@ -575,7 +675,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
     };
     auto popVal = [&]() -> const proto::ProtoObject* {
         if (sp == 0) {
-            throw std::runtime_error("VM: operand-stack underflow");
+            throwError(&frame, "VM: operand-stack underflow");
         }
         --sp;
         return frame.getAutomaticLocal(stackBase + sp);
@@ -606,7 +706,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 const proto::ProtoList* aritiesList = aritiesObj->asList(&frame);
                 int k = pickArity(&frame, aritiesList, argc);
                 if (k < 0)
-                    throw std::runtime_error(
+                    throwError(&frame, 
                         "VM: no matching arity for argc=" + std::to_string(argc));
                 const proto::ProtoList* spec =
                     aritiesList->getAt(&frame, k)->asList(&frame);
@@ -621,7 +721,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 const proto::ProtoObject* ptrObj =
                     callable->getOwnAttributeDirect(&frame, env.bytecodeKey);
                 if (!ptrObj || !ptrObj->isInteger(&frame))
-                    throw std::runtime_error("VM: malformed fn-wrapper");
+                    throwError(&frame, "VM: malformed fn-wrapper");
                 subMod = reinterpret_cast<const BytecodeModule*>(
                     ptrObj->asLong(&frame));
                 if (subMod->captureCount() > 0) {
@@ -641,20 +741,20 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                         stackBase + sp - 1);
                     posArgc -= 1;
                 } else if (static_cast<int>(posArgc) != fixed) {
-                    throw std::runtime_error(
+                    throwError(&frame, 
                         "VM: kw-based fn expects " + std::to_string(fixed) +
                         " positionals (+ optional trailing map), got " +
                         std::to_string(argc));
                 }
             } else {
                 if (!variadic && fixed != static_cast<int>(posArgc)) {
-                    throw std::runtime_error(
+                    throwError(&frame, 
                         "VM: fn arity mismatch (expected " +
                         std::to_string(fixed) +
                         ", got " + std::to_string(argc) + ")");
                 }
                 if (variadic && static_cast<int>(posArgc) < fixed) {
-                    throw std::runtime_error(
+                    throwError(&frame, 
                         "VM: variadic fn needs at least " +
                         std::to_string(fixed) + " args, got " +
                         std::to_string(argc));
@@ -664,7 +764,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
             unsigned int passArgc = posArgc;
             if (variadic) passArgc = static_cast<unsigned int>(fixed) + 1;
             if (passArgc > kMaxBoundParameters)
-                throw std::runtime_error(
+                throwError(&frame, 
                     "VM: a call may bind at most 17 parameters "
                     "(a variadic fn binds its rest arguments as one)");
             for (int i = 0; i < fixed; ++i) {
@@ -694,7 +794,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
             if (kwBased) {
                 kwCount = static_cast<unsigned int>(subMod->kwKeys().size());
                 if (kwCount > 16)
-                    throw std::runtime_error("VM: a function may declare at most 16 :keys parameters");
+                    throwError(&frame, "VM: a function may declare at most 16 :keys parameters");
                 extractKwVals(&frame, subMod, kwArgsMap, kwVals);
             }
 
@@ -736,7 +836,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
         proto::ProtoContext callScope(frame.space, &frame);
         proto::ProtoMethod fn = callable->asMethod(&callScope);
         if (!fn)
-            throw std::runtime_error("VM: value is not callable in CALL");
+            throwError(&frame, "VM: value is not callable in CALL");
         const proto::ProtoObject* self = callable->asMethodSelf(&callScope);
         const proto::ProtoArguments positional(
             frame.getAutomaticLocals() + stackBase + sp - argc, argc);
@@ -771,17 +871,17 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
 
             case Op::PUSH_CONST: {
                 if (operand >= mod.constCount())
-                    throw std::runtime_error("VM: PUSH_CONST out-of-range");
+                    throwError(&frame, "VM: PUSH_CONST out-of-range");
                 pushVal(materialise(&frame, mod.constAt(operand)));
                 break;
             }
 
             case Op::PUSH_VAR: {
                 if (operand >= mod.constCount())
-                    throw std::runtime_error("VM: PUSH_VAR out-of-range");
+                    throwError(&frame, "VM: PUSH_VAR out-of-range");
                 const auto& c = mod.constAt(operand);
                 if (c.kind != BytecodeModule::ConstKind::Symbol)
-                    throw std::runtime_error("VM: PUSH_VAR const is not a symbol");
+                    throwError(&frame, "VM: PUSH_VAR const is not a symbol");
                 const auto* key = reinterpret_cast<const proto::ProtoString*>(c.named);
                 // Every global is an own attribute of the globals object
                 // (STORE_GLOBAL, installPrimitives), so one own read answers
@@ -790,7 +890,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 const proto::ProtoObject* v =
                     env.globals->getOwnAttributeDirect(&frame, key);
                 if (!v) [[unlikely]] {
-                    throw std::runtime_error(
+                    throwError(&frame, 
                         "VM: unable to resolve symbol: " + c.sval);
                 }
                 pushVal(v);
@@ -804,14 +904,14 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
 
             case Op::STORE_LOCAL: {
                 if (sp == 0)
-                    throw std::runtime_error("VM: STORE_LOCAL with empty stack");
+                    throwError(&frame, "VM: STORE_LOCAL with empty stack");
                 frame.setAutomaticLocal(locBase + operand, popVal());
                 break;
             }
 
             case Op::MAKE_FN: {
                 if (operand >= mod.blockCount())
-                    throw std::runtime_error("VM: MAKE_FN out-of-range");
+                    throwError(&frame, "VM: MAKE_FN out-of-range");
                 const BytecodeModule& subMod = mod.block(operand);
 
                 // Session 6 — pop captureCount values from the stack and
@@ -821,7 +921,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 // enclosing scope, one per capture, in capture-spec order.
                 int nCaps = subMod.captureCount();
                 if (sp < static_cast<unsigned int>(nCaps)) {
-                    throw std::runtime_error("VM: MAKE_FN underflow on captures");
+                    throwError(&frame, "VM: MAKE_FN underflow on captures");
                 }
                 const proto::ProtoObject* capsList =
                     frame.newList()->asObject(&frame);
@@ -858,7 +958,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
             case Op::CALL: {
                 unsigned int argc = operand;
                 if (sp < argc + 1u)
-                    throw std::runtime_error("VM: CALL with insufficient stack");
+                    throwError(&frame, "VM: CALL with insufficient stack");
                 dispatchCall(argc);
                 break;
             }
@@ -868,13 +968,13 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 // elements onto the stack as positional args, then dispatch
                 // with argc = list size. Reuses the same dispatch as CALL.
                 if (sp < 2)
-                    throw std::runtime_error("VM: CALL_APPLY underflow");
+                    throwError(&frame, "VM: CALL_APPLY underflow");
                 const proto::ProtoObject* listObj = popVal();
                 if (!listObj)
-                    throw std::runtime_error("VM: CALL_APPLY: nil args list");
+                    throwError(&frame, "VM: CALL_APPLY: nil args list");
                 const proto::ProtoList* argsList = listObj->asList(&frame);
                 if (!argsList)
-                    throw std::runtime_error("VM: CALL_APPLY: not a list");
+                    throwError(&frame, "VM: CALL_APPLY: not a list");
                 proto::proto_ulong ln = argsList->getSize(&frame);
                 reserveStack(ln);
                 for (proto::proto_ulong i = 0; i < ln; ++i) {
@@ -903,7 +1003,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 // so keyword values in positional parameters work.
                 unsigned int argc = operand;
                 if (sp < argc + 1u)
-                    throw std::runtime_error("VM: CALL_KW with insufficient stack");
+                    throwError(&frame, "VM: CALL_KW with insufficient stack");
                 const proto::ProtoObject* callable = peekAt(argc);
                 const BytecodeModule* kwMod = nullptr;
                 if (callable->getPrototype(&frame) == env.fnSingleProto) {
@@ -923,7 +1023,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 const unsigned int fixed =
                     static_cast<unsigned int>(kwMod->arity());
                 if (argc < fixed || (argc - fixed) % 2 != 0) {
-                    throw std::runtime_error(
+                    throwError(&frame, 
                         "VM: keyword-argument fn expects " +
                         std::to_string(fixed) +
                         " positional arguments followed by key/value pairs, got " +
@@ -943,7 +1043,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
             }
 
             case Op::POP:
-                if (sp == 0) throw std::runtime_error("VM: POP on empty stack");
+                if (sp == 0) throwError(&frame, "VM: POP on empty stack");
                 --sp;
                 break;
 
@@ -953,12 +1053,12 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
 
             case Op::STORE_GLOBAL: {
                 if (operand >= mod.constCount())
-                    throw std::runtime_error("VM: STORE_GLOBAL out-of-range");
+                    throwError(&frame, "VM: STORE_GLOBAL out-of-range");
                 const auto& c = mod.constAt(operand);
                 if (c.kind != BytecodeModule::ConstKind::Symbol)
-                    throw std::runtime_error("VM: STORE_GLOBAL key not a symbol");
+                    throwError(&frame, "VM: STORE_GLOBAL key not a symbol");
                 if (sp == 0)
-                    throw std::runtime_error("VM: STORE_GLOBAL with empty stack");
+                    throwError(&frame, "VM: STORE_GLOBAL with empty stack");
                 const auto* key = reinterpret_cast<const proto::ProtoString*>(c.named);
                 const proto::ProtoObject* val =
                     frame.getAutomaticLocal(stackBase + sp - 1);
@@ -1000,14 +1100,14 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
             }
 
             case Op::DUP: {
-                if (sp == 0) throw std::runtime_error("VM: DUP on empty stack");
+                if (sp == 0) throwError(&frame, "VM: DUP on empty stack");
                 pushVal(frame.getAutomaticLocal(stackBase + sp - 1));
                 break;
             }
 
             case Op::MAKE_FN_MULTI: {
                 if (operand >= mod.arityGroupCount())
-                    throw std::runtime_error("VM: MAKE_FN_MULTI out-of-range");
+                    throwError(&frame, "VM: MAKE_FN_MULTI out-of-range");
                 const auto& group = mod.arityGroup(operand);
                 // Tally captures across all arities and slice the stack
                 // back into per-arity lists.
@@ -1017,7 +1117,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                         mod.block(bi).captureCount());
                 }
                 if (sp < totalCaps)
-                    throw std::runtime_error("VM: MAKE_FN_MULTI underflow");
+                    throwError(&frame, "VM: MAKE_FN_MULTI underflow");
 
                 // Build the __arities__ list of 4-tuples
                 //   (arity, bc-ptr, variadic?, captures-list)
@@ -1086,7 +1186,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
             case Op::GT:
             case Op::GE:
             case Op::EQ: {
-                if (sp < 2) throw std::runtime_error("VM: binop underflow");
+                if (sp < 2) throwError(&frame, "VM: binop underflow");
                 const proto::ProtoObject* a =
                     frame.getAutomaticLocal(stackBase + sp - 2);
                 const proto::ProtoObject* b =
@@ -1193,33 +1293,68 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 if constexpr (kHandlers) {
                     pushTryHandler(handlers, ip + operand, sp);
                 } else {
-                    throw std::runtime_error("VM: TRY_BEGIN in a frame without handlers");
+                    throwError(&frame, "VM: TRY_BEGIN in a frame without handlers");
                 }
                 break;
 
             case Op::TRY_END:
                 if (handlers.empty())
-                    throw std::runtime_error("VM: TRY_END without a handler");
+                    throwError(&frame, "VM: TRY_END without a handler");
                 handlers.pop_back();
                 break;
 
             case Op::THROW:
-                // The value stays in its slot, rooted, until the ClojureThrow
-                // has pinned it.
-                if (sp == 0) throw std::runtime_error("VM: THROW on empty stack");
+                // The value stays in its slot, rooted, until the
+                // ProtoException has pinned it.
+                if (sp == 0) throwError(&frame, "VM: THROW on empty stack");
                 throwValue(&frame, peekAt(0));
+
+            case Op::RETHROW:
+                if (sp == 0) throwError(&frame, "VM: RETHROW on empty stack");
+                rethrowValue(&frame, peekAt(0));
 
             case Op::EXC_MATCH: {
                 const proto::ProtoObject* v = popVal();
-                const bool match = isException(&frame, v) &&
-                    exceptionClassIsA(exceptionClassOf(&frame, v),
-                                      static_cast<int>(operand));
+                pushVal(exceptionMatches(&frame, v, static_cast<int>(operand))
+                        ? PROTO_TRUE : PROTO_FALSE);
+                break;
+            }
+
+            case Op::EXC_MATCH_TYPE: {
+                // Both stay in their slots, rooted, during the test.
+                const bool match = matchCatchType(&frame, peekAt(1), peekAt(0),
+                                                  mod.constAt(operand).sval);
+                sp -= 2;
                 pushVal(match ? PROTO_TRUE : PROTO_FALSE);
                 break;
             }
 
+            case Op::RESOLVE_CLASS:
+                pushVal(resolveCatchType(&frame, env.globals, mod.constAt(operand).sval));
+                break;
+
+            case Op::GET_MEMBER: {
+                const auto& c = mod.constAt(operand);
+                const proto::ProtoObject* v = getMember(&frame, peekAt(0),
+                    reinterpret_cast<const proto::ProtoString*>(c.named), c.sval);
+                --sp;
+                pushVal(v);
+                break;
+            }
+
+            case Op::CALL_MEMBER: {
+                // The data word: a NOP carrying the member's symbol index.
+                const auto& c = mod.constAt(*ip++ >> kOperandShift);
+                const proto::ProtoObject* result = callMember(&frame, env.engine,
+                    peekAt(operand), reinterpret_cast<const proto::ProtoString*>(c.named),
+                    c.sval, frame.getAutomaticLocals() + stackBase + sp - operand, operand);
+                sp -= (operand + 1);
+                pushVal(result);
+                break;
+            }
+
             default:
-                throw std::runtime_error("VM: unknown opcode");
+                throwError(&frame, "VM: unknown opcode");
         }
     }
     return (sp == 0) ? PROTO_NONE : frame.getAutomaticLocal(stackBase + sp - 1);
@@ -1240,8 +1375,8 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
         // the catch below. With no active handler it leaves the frame.
         // Otherwise the innermost handler takes it: the operand stack is cut
         // back to the handler's depth, the exception value is pushed (which
-        // roots it in this frame; a ClojureThrow pins it until then,
-        // Exceptions.h) and the loop resumes at the handler code.
+        // roots it in this frame; protoCore pins a ProtoException's value
+        // until then) and the loop resumes at the handler code.
         //
         // With no handler the exception is re-thrown AFTER the catch clause
         // has completed (std::rethrow_exception), never with `throw;` inside
@@ -1254,7 +1389,22 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
             std::exception_ptr passOn;
             try {
                 return anchor(dispatchLoop());
+            } catch (const proto::ProtoException& thrown) {
+                // Every language's exception: the handler code selects by
+                // the value's prototype chain (EXC_MATCH, EXC_MATCH_TYPE)
+                // and rethrows what no clause handles (RETHROW).
+                if (handlers.empty()) {
+                    passOn = std::current_exception();
+                } else {
+                    const TryHandler h = handlers.back();
+                    handlers.pop_back();
+                    sp = h.sp;
+                    pushVal(thrown.value());
+                    ip = h.target;
+                }
             } catch (const std::exception& error) {
+                // A foreign C++ exception (a module defect) or a
+                // StackOverflowError: a classed exception from its what().
                 if (handlers.empty()) {
                     passOn = std::current_exception();
                 } else {

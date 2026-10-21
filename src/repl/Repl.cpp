@@ -7,6 +7,7 @@
 #include "compiler/Compiler.h"
 #include "runtime/ActorScheduler.h"
 #include "runtime/BytecodeModule.h"
+#include "runtime/Exceptions.h"
 #include "runtime/ExecutionEngine.h"
 #include "runtime/IO.h"
 #include "runtime/Named.h"
@@ -365,8 +366,15 @@ struct Session {
                 valueKey, watchesKey,
                 thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
                 actorStateKey, mailboxKey, named);
+        } catch (const proto::ProtoException& e) {
+            // An uncaught Clojure exception, protoCore error or module error.
+            std::fprintf(stderr, "error: %s\n", describeThrown(ctx, e.value()).c_str());
+            return false;
         } catch (const std::exception& e) {
             std::fprintf(stderr, "error: %s\n", e.what());
+            return false;
+        } catch (...) {
+            std::fprintf(stderr, "error: unknown C++ exception\n");
             return false;
         }
         *out = result;
@@ -450,9 +458,17 @@ void cmdLoad(Session& s, const std::string& path) {
                 s.valueKey, s.watchesKey,
                 s.thunkKey, s.ccBlobKey, s.threadKey, s.resultKey, s.doneKey,
                 s.actorStateKey, s.mailboxKey, s.named);
+        } catch (const proto::ProtoException& e) {
+            std::fprintf(stderr, "%s: runtime error: %s\n",
+                         path.c_str(), describeThrown(&formsScope, e.value()).c_str());
+            return;
         } catch (const std::exception& e) {
             std::fprintf(stderr, "%s: runtime error: %s\n",
                          path.c_str(), e.what());
+            return;
+        } catch (...) {
+            std::fprintf(stderr, "%s: runtime error: unknown C++ exception\n",
+                         path.c_str());
             return;
         }
     }
