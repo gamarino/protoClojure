@@ -39,17 +39,17 @@ jobs:
         include:
           - name: macOS (Apple clang, arm64)
             os: macos-14
-            # protoCore 3.0.0 (feature/args-calling-convention)
-            protocore_ref: cf52f9f5056919bb07326afc7159d5b3d78c03a3
+            # protoCore 3.0.0 (tag v3.0.0)
+            protocore_ref: ce00a4a26b6583ea8a58e776eee2ea91c743469e
           - name: Windows (MSVC, x64)
             os: windows-2022
-            # protoCore 3.0.0 (feature/args-calling-convention)
-            protocore_ref: cf52f9f5056919bb07326afc7159d5b3d78c03a3
+            # protoCore 3.0.0 (tag v3.0.0)
+            protocore_ref: ce00a4a26b6583ea8a58e776eee2ea91c743469e
           - name: Windows (MSVC, x64), protoCore 3.0.0 minimum
             os: windows-2022
             # THE FLOOR JOB, the only one: protoCore 3.0.0,
             # PROTOCORE_MIN_VERSION in CMakeLists.txt
-            protocore_ref: cf52f9f5056919bb07326afc7159d5b3d78c03a3
+            protocore_ref: ce00a4a26b6583ea8a58e776eee2ea91c743469e
     defaults:
       run:
         shell: bash

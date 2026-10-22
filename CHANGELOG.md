@@ -9,6 +9,10 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-10-22
+
+**Requires protoCore 3.0.0** (SOVERSION 4), the declared minimum for a build from source; the `.deb` depends on `protocore (>= 3.0.0)`. CI pins protoCore tag `v3.0.0` on every job.
+
 ### Changed — protoCore 3.0.0: the unified exception model, 2026-10-21
 
 - **Every throw is a `proto::ProtoException`.** `ClojureThrow` now derives

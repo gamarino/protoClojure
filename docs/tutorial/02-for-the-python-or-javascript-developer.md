@@ -257,7 +257,7 @@ get the result:
 
 ```
 $ protoclj
-protoClojure 0.0.2
+protoClojure 0.0.3
 REPL — :help for commands, :quit or Ctrl-D to exit
 user=> (+ 1 2)
 3
