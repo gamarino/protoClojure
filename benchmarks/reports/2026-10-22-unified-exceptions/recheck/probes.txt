@@ -1,0 +1,8 @@
+startup after 64319727 18 | CHECK 0
+startup before 59469607 18 | CHECK 0
+throw_catch after 4418744146 1403 | CHECK 200000
+throw_catch before 5151007828 1673 | CHECK 200000
+zerodiv after 5164607777 1737 | CHECK 200000
+zerodiv before 4730777674 1561 | CHECK 200000
+throw_across5 after 9307337884 2982 | CHECK 100000
+throw_across5 before 9235290574 2971 | CHECK 100000

@@ -1,0 +1,35 @@
+All 6 bench.sh runs: 5 workloads each, every result matched bb: True
+| Workload | result | bb | BEFORE | AFTER | A/B | BEFORE rounds | AFTER rounds | AFTER/bb |
+|---|---|---:|---:|---:|---:|---|---|---:|
+| `fib` | 832040 | 592 | 546 | 490 | 0.897 | 567/546/503 | 490/485/507 | 0.83x |
+| `tak` | 7 | 38 | 53 | 50 | 0.943 | 53/53/47 | 50/52/50 | 1.32x |
+| `sum-loop` | 500000500000 | 220 | 97 | 91 | 0.938 | 97/107/85 | 91/113/91 | 0.41x |
+| `reduce-list` | 49995000 | 24 | 39 | 38 | 0.974 | 38/41/39 | 38/38/35 | 1.55x |
+| `sum-squares` | 332833500 | 22 | 30 | 32 | 1.067 | 38/30/30 | 33/32/32 | 1.42x |
+
+geomean A/B (5): 0.962; BEFORE/bb 1.04x; AFTER/bb 1.00x
+
+| Probe | iters | before | after | bb | after/before |
+|---|---:|---:|---:|---:|---:|
+| `empty_loop` | 2,000,000 | 379 | 383 | 477 | 1.01x |
+| `try_no_throw` | 2,000,000 | 404 | 401 | 1,894 | 0.99x |
+| `throw_catch` | 200,000 | 26,085 | 22,759 | 42,910 | 0.87x |
+| `throw_across5` | 100,000 | 94,812 | 96,867 | 74,670 | 1.02x |
+| `zerodiv` | 200,000 | 23,135 | 25,407 | 10,736 | 1.10x |
+startup cycles: before 61,331,893, after 57,693,348, bb 26,658,492
+
+empty_loop before cycles=818756939.0 task_ms=311.0 check='CHECK 2000000'
+empty_loop after cycles=824369546.0 task_ms=309.0 check='CHECK 2000000'
+empty_loop bb cycles=981268127.0 task_ms=371.0 check='CHECK 2000000'
+try_no_throw before cycles=869932800.0 task_ms=292.0 check='CHECK 2000000'
+try_no_throw after cycles=859138281.0 task_ms=286.0 check='CHECK 2000000'
+try_no_throw bb cycles=3815285103.0 task_ms=1393.0 check='CHECK 2000000'
+throw_catch before cycles=5278279146.0 task_ms=1939.0 check='CHECK 200000'
+throw_catch after cycles=4609438522.0 task_ms=1724.0 check='CHECK 200000'
+throw_catch bb cycles=8608727956.0 task_ms=3289.0 check='CHECK 200000'
+throw_across5 before cycles=9542549833.0 task_ms=3540.0 check='CHECK 100000'
+throw_across5 after cycles=9744416885.0 task_ms=3569.0 check='CHECK 100000'
+throw_across5 bb cycles=7493680377.0 task_ms=2877.0 check='CHECK 100000'
+zerodiv before cycles=4688362955.0 task_ms=1551.0 check='CHECK 200000'
+zerodiv after cycles=5139150851.0 task_ms=1705.0 check='CHECK 200000'
+zerodiv bb cycles=2173910492.0 task_ms=782.0 check='CHECK 200000'

@@ -123,6 +123,22 @@ Measured on 2026-06-14, the move from a per-actor `std::mutex` + `std::deque` to
 
 ## Performance — what is measured
 
+**protoCore's unified exception model (measured 2026-10-22).**
+- Branch `feature/protocore-3-calling-convention` at `bef23b0`, against
+  `4c5d3aa` (protoCore `cf52f9f5`). Both Release builds, interleaved, three rounds. The machine had 2-4 busy CPUs, so only the ratios count, not the milliseconds.
+
+| | AFTER / BEFORE |
+|---|---:|
+| `bench.sh` geomean | 0.962 (`fib` −10 %, rounds do not overlap; AFTER / Babashka 1.00x) |
+| `try` that does not throw | 0.99 |
+| `throw` and `catch`, same function | **0.87** (confirmed in a reversed pass: 0.86) |
+| throw caught 5 frames up | 1.02 |
+| `(/ 1 0)` caught | **1.10** (confirmed: 1.09), about +2,200 cycles; likely the error factory building the `ArithmeticException`, not isolated |
+
+- No JVM Clojure was available. Babashka is the comparable, at 42,910
+  cycles for a same-function catch and 10,736 for a caught `(/ 1 0)`.
+- Raw results: [`benchmarks/reports/2026-10-22-unified-exceptions/`](benchmarks/reports/2026-10-22-unified-exceptions/).
+
 **protoCore 2.14.8 and the call path (measured 2026-10-20).**
 `benchmarks/bench.sh` against Babashka 1.4.192, three rounds, each run behind
 a quiet gate (1.0-2.4 busy CPUs) and on a fresh copy of protoCore 2.14.8;

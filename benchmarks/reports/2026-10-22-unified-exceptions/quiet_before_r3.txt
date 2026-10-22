@@ -1,0 +1,3 @@
+  waiting: busy=[] cpus=4.69 load=4.51
+  waiting: busy=[] cpus=4.92 load=3.97
+(4.115234375, ['98.0 code', '16.0 pycharm', 'busy_cpus=3.64'])

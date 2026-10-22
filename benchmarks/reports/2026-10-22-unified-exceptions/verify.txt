@@ -1,0 +1,33 @@
+bb fib.clj last=832040
+before fib.clj rc=0 last=832040
+after fib.clj rc=0 last=832040
+bb tak.clj last=7
+before tak.clj rc=0 last=7
+after tak.clj rc=0 last=7
+bb sum-loop.clj last=500000500000
+before sum-loop.clj rc=0 last=500000500000
+after sum-loop.clj rc=0 last=500000500000
+bb reduce-list.clj last=49995000
+before reduce-list.clj rc=0 last=49995000
+after reduce-list.clj rc=0 last=49995000
+bb sum-squares.clj last=332833500
+before sum-squares.clj rc=0 last=332833500
+after sum-squares.clj rc=0 last=332833500
+bb empty_loop.clj last=CHECK 2000000
+before empty_loop.clj rc=0 last=CHECK 2000000
+after empty_loop.clj rc=0 last=CHECK 2000000
+bb startup.clj last=CHECK 0
+before startup.clj rc=0 last=CHECK 0
+after startup.clj rc=0 last=CHECK 0
+bb throw_across5.clj last=CHECK 100000
+before throw_across5.clj rc=0 last=CHECK 100000
+after throw_across5.clj rc=0 last=CHECK 100000
+bb throw_catch.clj last=CHECK 200000
+before throw_catch.clj rc=0 last=CHECK 200000
+after throw_catch.clj rc=0 last=CHECK 200000
+bb try_no_throw.clj last=CHECK 2000000
+before try_no_throw.clj rc=0 last=CHECK 2000000
+after try_no_throw.clj rc=0 last=CHECK 2000000
+bb zerodiv.clj last=CHECK 200000
+before zerodiv.clj rc=0 last=CHECK 200000
+after zerodiv.clj rc=0 last=CHECK 200000

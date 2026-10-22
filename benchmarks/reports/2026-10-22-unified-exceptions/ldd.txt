@@ -1,0 +1,90 @@
+== verify_before
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_before/libprotoCore.so.4 (0x000073041f716000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x000073041f5ea000)
+== verify_after
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_after/libprotoCore.so.4 (0x00007527760c2000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x0000752775f96000)
+== verify_before
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_before/libprotoCore.so.4 (0x0000760a6eaa5000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x0000760a6e979000)
+== verify_after
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_after/libprotoCore.so.4 (0x000077894733e000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x0000778947212000)
+== verify_before
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_before/libprotoCore.so.4 (0x0000764769424000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x00007647692f8000)
+== verify_after
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_after/libprotoCore.so.4 (0x00007657e76e6000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x00007657e75ba000)
+== verify_before
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_before/libprotoCore.so.4 (0x000072906590a000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x00007290657de000)
+== verify_after
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_after/libprotoCore.so.4 (0x00007b4f9cc61000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x00007b4f9cb35000)
+== verify_before
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_before/libprotoCore.so.4 (0x00007a7cbe794000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x00007a7cbe668000)
+== verify_after
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_after/libprotoCore.so.4 (0x0000779a7e197000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x0000779a7e06b000)
+== verify_before
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_before/libprotoCore.so.4 (0x000070ddd6a04000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x000070ddd68d8000)
+== verify_after
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_after/libprotoCore.so.4 (0x00007203ebc08000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x00007203ebadc000)
+== verify_before
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_before/libprotoCore.so.4 (0x00007d9abb0ba000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x00007d9abaf8e000)
+== verify_after
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_after/libprotoCore.so.4 (0x000074415230e000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x00007441521e2000)
+== verify_before
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_before/libprotoCore.so.4 (0x00007756828ee000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x00007756827c2000)
+== verify_after
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_after/libprotoCore.so.4 (0x000072f8c016e000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x000072f8c0042000)
+== verify_before
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_before/libprotoCore.so.4 (0x00007a4f70271000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x00007a4f70145000)
+== verify_after
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_after/libprotoCore.so.4 (0x00007e7cd7438000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x00007e7cd730c000)
+== verify_before
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_before/libprotoCore.so.4 (0x0000789602e9c000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x0000789602d70000)
+== verify_after
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_after/libprotoCore.so.4 (0x0000749fe23c5000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x0000749fe2299000)
+== verify_before
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_before/libprotoCore.so.4 (0x00007584e1e2c000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x00007584e1d00000)
+== verify_after
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/verify_after/libprotoCore.so.4 (0x0000729d10b8e000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x0000729d10a62000)
+== after_r1
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/after_r1/libprotoCore.so.4 (0x00007a043bc4b000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x00007a043bb1f000)
+== before_r1
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/before_r1/libprotoCore.so.4 (0x0000720e660d3000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x0000720e65fa7000)
+== before_r2
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/before_r2/libprotoCore.so.4 (0x00007d1a1dfbc000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x00007d1a1de90000)
+== after_r2
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/after_r2/libprotoCore.so.4 (0x000073fc591fe000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x000073fc590d2000)
+== after_r3
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/after_r3/libprotoCore.so.4 (0x000077009e039000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x000077009df0d000)
+== before_r3
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/before_r3/libprotoCore.so.4 (0x0000713581963000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x0000713581837000)
+== probes_before
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/probes_before/libprotoCore.so.4 (0x00007d1adcc51000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x00007d1adcb25000)
+== probes_after
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/meas_1022/clj_out/libs/probes_after/libprotoCore.so.4 (0x00007eaa433e3000)
+	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x00007eaa432b7000)
