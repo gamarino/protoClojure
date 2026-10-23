@@ -41,6 +41,47 @@ runs the script through each interpreter 3 times and reports the
 minimum wall-clock (cold-start + execution). No JVM warmup phase.
 Result strings are compared across runtimes for correctness.
 
+## Scripting vocabulary: stage 6 (`e5a48c5`) against stage 10 (`71d34d2`), 2026-10-23
+
+Whether Part B stages 7-10 (destructuring, sets, regular expressions,
+`format`, `for`, the larger `core.clj`) changed run-time speed or start-up.
+Script, workloads and raw output:
+[`reports/2026-10-23-scripting/`](reports/2026-10-23-scripting/). Clean
+worktree builds of both commits, each on its own fresh copy of the same
+`libprotoCore.so.4` (checked with `ldd`), behind the quiet gate
+(`QUIET_CORES=4.0`; 1.3-2.3 busy CPUs at the gates), order alternated.
+
+`bench.sh`, best-of-3 per round, median of 3 rounds (ms, start-up included):
+
+| workload | stage 6 | stage 10 |
+|---|---|---|
+| fib | 348 | 354 |
+| tak | 37 | 38 |
+| sum-loop | 69 | 69 |
+| reduce-list | 30 | 31 |
+| sum-squares | 25 | 27 |
+
+Every result matched Babashka's; the differences are inside the rounds'
+spread (fib 343-366 on stage 10, 347-353 on stage 6).
+
+Interleaved loops, 5 runs each, median wall time: `macro-loop.clj` 1.49 s
+(stage 6) and 1.51 s (stage 10), inside the spread (1.48-1.55 s).
+`map-loop.clj` (2,000,000 rounds of keyword `get`, keyword-as-fn, map-as-fn
+and `assoc`): **1.02 s against 1.09 s, +7 %** (user time 0.87 s against
+0.95 s), outside the spread. An A/B build without the set test in
+`keyIsIdentity` (MapOps.cpp: every object key is now asked whether it is a
+set, one `getPrototype` per keyword key) ran at 0.88 s of user time against
+0.915 s for stage 10 and 0.85 s for stage 6, on four interleaved runs: the
+set test explains about half of it; the rest is not explained and may be
+the library placement effect seen before. Not fixed: telling a set from a
+keyword needs the prototype read, and the alternatives (a separate key
+semantics for keys known to be keywords) are left for a follow-up.
+
+Start-up, an empty file, `perf stat -r 20`, two interleaved passes: stage 6
+16.5 / 15.5 ms and 60.7 M / 58.3 M cycles, stage 10 15.9 / 17.0 ms and
+60.6 M / 60.6 M cycles. The larger `core.clj` (`into`, `range`, the `doseq`
+and `for` helpers) costs about 1 M cycles (0.3 ms), inside the spread.
+
 ## Macros branch: `main` (`8b7938a`) against stage 6 (`e5a48c5`), 2026-10-23
 
 Whether the macro work (`defmacro`, the embedded `core.clj`, `when` /

@@ -592,6 +592,23 @@ Work in progress on branch `feature/macros` (DESIGN.md §10, ROADMAP.md).
       `when`, `when-not`, `cond`, `with-open` and `future` moved there from
       the C++ compiler, `and` and `or` stayed (M20-M22)
 
+### Scripting vocabulary (macros brief, Part B)
+
+On branch `feature/macros` (DESIGN.md §10.2, ROADMAP.md).
+
+- [x] Stage 7: destructuring in `let`, `loop`, `fn`, `defn`, `defmacro`
+      and the binding macros (M23)
+- [x] Stage 8: sets, `clojure.set`'s `union` / `intersection` /
+      `difference` / `subset?` / `superset?`, `into` (M24)
+- [x] Stage 9: regular expressions on `std::regex` ECMAScript (M25, D45);
+      `clojure.string/x` and `clojure.set/x` name the built-ins (M26)
+- [x] Stage 10: `format`, `printf`, `for` and `doseq` with `:let` /
+      `:when` / `:while`, a finite `range`, `apply` with leading arguments
+      (M27, D46, D47)
+- [ ] Stage 11: lazy sequences (closes D29 and D46)
+- [ ] Stage 12: JSON and EDN
+- [ ] Stage 13: showcase against Babashka
+
 ### Bootstrap
 
 - [x] A `core.clj` evaluated at startup (`src/core/core.clj`, embedded in

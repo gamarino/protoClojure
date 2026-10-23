@@ -1,0 +1,4 @@
+s6:
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/clj-macros/s10/out/libs/s6/libprotoCore.so.4 (0x00007844a75fe000)
+s10:
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/clj-macros/s10/out/libs/s10/libprotoCore.so.4 (0x00007c156f8b8000)
