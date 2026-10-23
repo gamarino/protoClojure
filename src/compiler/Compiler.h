@@ -177,11 +177,6 @@ private:
     void compileQualifiedPrefix(proto::ProtoContext* ctx, const std::string& name,
                                 BytecodeModule& out);
 
-    // Compiles `(with-open [name init ...] body*)` by rewriting it into
-    // `let` + `try` / `finally` forms.
-    void compileWithOpen(proto::ProtoContext* ctx, const proto::ProtoList* lst,
-                         BytecodeModule& out, const CompilerMarkers& markers);
-
     std::vector<Scope> scopes_;
 
     // The bindings a `let` or `loop` introduces in the current scope, undone
@@ -245,7 +240,7 @@ private:
 
     // Compiles `form` as the body of a zero-argument fn called on the spot,
     // `((fn [] form))`: how a top-level form that needs local slots (`let`,
-    // `loop`, `try`, `with-open`) runs, since the top level has none.
+    // `loop`, `try`) runs, since the top level has none.
     void compileAsThunk(proto::ProtoContext* ctx, const proto::ProtoObject* form,
                         BytecodeModule& out, const CompilerMarkers& markers);
 

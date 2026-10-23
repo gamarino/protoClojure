@@ -266,6 +266,12 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
         protoClojure::clearActiveCallContext();
     };
 
+    // The part of clojure.core written in Clojure, before the program.
+    if (!protoClojure::loadCore(ctx)) {
+        shutdownWorkers();
+        return 1;
+    }
+
     for (;;) {
         proto::ProtoContext formScope(ctx->space, ctx);
         formScope.resizeAutomaticLocals(1);

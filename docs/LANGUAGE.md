@@ -61,7 +61,8 @@ tell at a glance which parts of the surface are runnable today. The
 | Multi-arity `defn` | Implemented |
 | Variadic `& rest` | Implemented |
 | `if`, `do`, `quote`, `apply` | Implemented (`quote` of any datum; `apply` over a list, a vector or nil) |
-| `when`, `when-not`, `cond`, `and`, `or` | Implemented |
+| `when`, `when-not`, `cond`, `and`, `or` | Implemented (`and` / `or` in the compiler, the rest in `core.clj`) |
+| `clojure.core` macros: `if-let`, `when-let`, `if-some`, `when-some`, `->`, `->>`, `as->`, `some->`, `some->>`, `cond->`, `cond->>`, `doto`, `if-not`, `doseq`, `dotimes`, `while`, `case`, `condp`, `comment` | Implemented in `core.clj` (§6.2) |
 | `throw`, `try`, `catch`, `finally`, `ex-info`, `ex-data`, `ex-message`, `ex-cause` | Implemented (§14) |
 | Input and output: `slurp`, `spit`, `read-line`, `reader` / `writer` / `with-open`, `line-seq`, `file-seq`, `sh`, `getenv`, `exit`, HTTP client and Ring server, TCP / UDP / TLS sockets | Implemented, in the global namespace (§18) |
 | Closures with N-level lexical capture | Implemented |
@@ -377,9 +378,10 @@ user-facing forms `let`, `loop`, `fn`, `defn`, `if-let`, `when`, `cond`,
 etc., are macros built on these specials.
 
 The C++ compiler handles `def`, `if`, `do`, `quote`, `fn`, `defn`,
-`defmacro`, `let`, `loop`, `recur`, `when`, `when-not`, `cond`, `and`, `or`,
-`apply`, `future`, `with-open`, `try` and `throw` directly; the `*` forms
-and `var` are not implemented.
+`defmacro`, `let`, `loop`, `recur`, `and`, `or`, `apply`, `try` and
+`throw` directly; `when`, `when-not`, `cond`, `with-open`, `future` and the
+other `clojure.core` macros are macros written in Clojure (`core.clj`,
+§6.2). The `*` forms and `var` are not implemented.
 
 ### 3.4 Truthiness
 
@@ -739,8 +741,9 @@ be redefined as macros.
 
 `macroexpand-1` expands a form once, `macroexpand` until it is no longer a
 macro call; both return any other form unchanged, special forms and the
-forms the compiler implements in C++ (`when`, `cond`, `and`, `or`, ...)
-included (D41). `eval` compiles and runs a form as a top-level form.
+forms the compiler implements in C++ (`and`, `or`, `fn`, `let`, `loop`,
+`defn`) included (D41); the `clojure.core` macros of §6.2 expand as in
+Clojure. `eval` compiles and runs a form as a top-level form.
 
 **Errors.** A macro that raises fails the compilation of the calling form,
 naming the macro: `script.clj:4:1: compile error: Syntax error
@@ -765,6 +768,35 @@ code; `~'it` deliberately captures a name (an anaphoric macro):
   ([x & next] `(let [or# ~x] (if or# or# (my-or ~@next)))))
 (let [or :mine] (my-or false or))   ;; => :mine, the caller's local
 ```
+
+### 6.2 The `clojure.core` macros (`core.clj`)
+
+`core.clj`, part of the binary and loaded before the program (and before
+the REPL's first prompt, in about 3 ms), defines the `clojure.core` macros
+in Clojure, with Clojure's definitions and expansions:
+
+| Macros | Notes |
+|---|---|
+| `when` `when-not` `if-not` `cond` `comment` `while` | `cond` with an odd number of forms is an expansion error |
+| `if-let` `when-let` `if-some` `when-some` | the binding vector holds one symbol and a test (no destructuring yet) |
+| `->` `->>` `as->` `some->` `some->>` `cond->` `cond->>` `doto` | |
+| `dotimes` `doseq` | `doseq` nests several bindings; no `:let` / `:when` / `:while` yet |
+| `case` `condp` | `case` constants are not evaluated, a list groups alternatives; no match and no default raises `IllegalArgumentException: No matching clause: x` (D44) |
+| `with-open` `future` | |
+
+```clojure
+(defn total [items] (->> items (map :n) (reduce +)))
+(when-let [t (total [{:n 1} {:n 3}])]
+  (println "total" t))                     ;; prints total 4
+(case (count "ab") 1 :one 2 :two :many)    ;; => :two
+(macroexpand '(when a b))                  ;; => (if a (do b))
+```
+
+It also defines the functions `identity`, `some?`, `true?`, `false?`,
+`zero?`, `pos?`, `neg?`, `nnext`, `ffirst`, `nthnext` and `butlast`. A
+program may redefine any of these names; its later forms then use its own
+definition, while code from `core.clj` keeps calling `clojure.core/x`. Names
+starting with `__` are internal. `letfn` is not available yet.
 
 ---
 

@@ -125,7 +125,8 @@ Work in progress on branch `feature/macros`, in six stages
 4. [x] `defmacro`, expansion, `macroexpand-1`, `macroexpand`, `eval`.
 5. [x] Syntax-quote with qualified symbols and auto-gensyms, `gensym`,
    `symbol`, `concat`, `seq`, `list*`.
-6. [ ] `clojure.core` macros in a bootstrap `core.clj`.
+6. [x] `clojure.core` macros in a bootstrap `core.clj` (embedded in the
+   binary; `and` / `or` stay in C++).
 
 - A minimal `core.clj` shipped with the runtime; `protoclj` evaluates it
   before any user code.

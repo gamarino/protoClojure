@@ -1,6 +1,6 @@
 # 11. Macros
 
-> **Mostly implemented (branch `feature/macros`).** `defmacro`, `macroexpand-1`, `macroexpand`, `eval`, quote `'` and syntax-quote `` ` `` with `~` and `~@` work today, in files and at the REPL. Syntax-quote qualifies symbols and turns `foo#` into a generated symbol, as in Clojure, with two namespaces only, `user` and `clojure.core` (STATUS.md D42). The `clojure.core` macros (`->>`, `when-let`, ...) are not loaded yet. The snippets marked *runs today* run now (each is a test under `tests/conformance/30-macros/`); the rest of the chapter describes the intended design.
+> **Implemented (branch `feature/macros`).** `defmacro`, `macroexpand-1`, `macroexpand`, `eval`, quote `'` and syntax-quote `` ` `` with `~` and `~@` work today, in files and at the REPL. Syntax-quote qualifies symbols and turns `foo#` into a generated symbol, as in Clojure, with two namespaces only, `user` and `clojure.core` (STATUS.md D42). The `clojure.core` macros (`->>`, `when-let`, `doseq`, `case`, ...) are written in Clojure in `core.clj`, which protoclj loads at start-up (LANGUAGE.md §6.2). The snippets marked *runs today* run now (each is a test under `tests/conformance/30-macros/` to `32-core-macros/`); the others illustrate Clojure itself and use functions protoClojure does not have yet (`range`, `#(...)`, Java interop).
 
 A macro is a function that takes code as input and returns code as
 output, at compile time. The compiler calls it, takes whatever it
@@ -248,8 +248,17 @@ Clojure libraries can have such concise, declarative-looking APIs.
 
 ### 11.4.3 Threading and pipelines
 
-The threading macros (`->`, `->>`, `as->`) we have been using are
-themselves macros:
+The threading macros (`->`, `->>`, `as->`) are themselves macros. In
+protoClojure (*runs today*):
+
+```clojure
+(macroexpand '(->> [1 2 3 4] (filter even?) (map inc) (reduce +)))
+;; => (reduce + (map inc (filter even? [1 2 3 4])))
+(->> [1 2 3 4] (filter even?) (map inc) (reduce +))   ;; => 8
+```
+
+The same in JVM Clojure, with `range` and an anonymous-function literal,
+neither of which protoClojure has yet:
 
 ```clojure
 (macroexpand '(->> (range 10)
@@ -322,10 +331,13 @@ The bootstrap order is delicate:
 3. **v0.2+:** user macros work — they go through the same path as
    the core macros.
 
-Where protoClojure stands: steps 1 and 3 are done (the compiler calls the
-macro through the same engine that runs your program, and user macros work,
-in files and at the REPL); step 2, the `clojure.core` macros in a bootstrap
-`core.clj`, is the next stage.
+Where protoClojure stands: all three steps are done. The compiler calls a
+macro through the same engine that runs your program; the `clojure.core`
+macros (`when`, `cond`, `if-let`, `->`, `doseq`, `case`, ...) live in
+`src/core/core.clj`, embedded in the binary and loaded before your
+program; and your macros go through the same path. `and`, `or`, `fn`,
+`let`, `loop` and `defn` stay in the C++ compiler (`and` and `or` measured
+5-8 % faster there).
 
 This is invisible to the user; you write `(when test body)` from day
 one without caring about which side it lives on. But it is one of

@@ -120,6 +120,8 @@ add_test(NAME cli/quoted-data-survive-gc
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/quoted-data-survive-gc.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/repl-macros
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/repl-macros.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/core-embedded
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/core-embedded.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/macro-expansion-survives-gc
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/macro-expansion-survives-gc.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/file-form-by-form

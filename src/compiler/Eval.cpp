@@ -2,6 +2,9 @@
 
 #include "Compiler.h"
 
+#include "reader/Reader.h"
+#include "reader/SourceInfo.h"
+
 #include "runtime/BytecodeModule.h"
 #include "runtime/Exceptions.h"
 #include "runtime/ExecutionEngine.h"
@@ -12,6 +15,7 @@
 #include "protoCore.h"
 
 #include <cstdint>
+#include <cstdio>
 #include <mutex>
 #include <unordered_set>
 #include <vector>
@@ -69,6 +73,48 @@ void releaseRetainedModules() {
 
 void installEval() { setEvalHook(&evalHookEntry); }
 
+bool loadCore(proto::ProtoContext* ctx) {
+    static const char kSource[] = {
+#include "core_clj.inc"
+        0};
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) {
+        std::fprintf(stderr, "core.clj: no evaluator is running\n");
+        return false;
+    }
+    setCoreNamespaceActive(true);
+    struct Reset { ~Reset() { setCoreNamespaceActive(false); } } reset;
+    Reader reader(ctx, std::string(kSource, sizeof kSource - 1), cc->named);
+    reader.setSymbolResolver(&qualifySyntaxQuoteSymbol);
+    for (;;) {
+        proto::ProtoContext formScope(ctx->space, ctx);
+        formScope.resizeAutomaticLocals(1);
+        SourceInfo sourceInfo;
+        reader.setSourceInfo(&sourceInfo);
+        try {
+            const proto::ProtoObject* form = reader.readOne(&formScope);
+            reader.setSourceInfo(nullptr);
+            if (!form) return true;
+            formScope.setAutomaticLocal(0, form);
+            evalTopLevel(&formScope, formScope.getAutomaticLocal(0), &sourceInfo);
+        } catch (const ReaderError& e) {
+            std::fprintf(stderr, "core.clj:%d:%d: read error: %s\n", e.line, e.column, e.what());
+            return false;
+        } catch (const CompileError& e) {
+            std::fprintf(stderr, "core.clj:%d:%d: compile error: %s\n",
+                         reader.formLine(), reader.formColumn(), e.what());
+            return false;
+        } catch (const proto::ProtoException& e) {
+            std::fprintf(stderr, "core.clj: runtime error: %s\n",
+                         describeThrown(&formScope, e.value()).c_str());
+            return false;
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "core.clj: runtime error: %s\n", e.what());
+            return false;
+        }
+    }
+}
+
 std::string qualifySyntaxQuoteSymbol(proto::ProtoContext* ctx, const std::string& name) {
     // Clojure's special forms (Compiler.specials) are never qualified.
     static const std::unordered_set<std::string> kSpecials = {
@@ -78,14 +124,15 @@ std::string qualifySyntaxQuoteSymbol(proto::ProtoContext* ctx, const std::string
     // The forms protoClojure's compiler implements itself, which are
     // clojure.core macros in JVM Clojure.
     static const std::unordered_set<std::string> kCompilerForms = {
-        "let", "loop", "fn", "defn", "defmacro", "when", "when-not", "cond",
-        "and", "or", "future", "with-open", "apply"};
+        "let", "loop", "fn", "defn", "defmacro", "and", "or", "apply"};
     if (kSpecials.count(name)) return name;
     if (name == "/") return "clojure.core//";
     if (name.find('/') != std::string::npos) return name;
     if (name.find('.') != std::string::npos) return name;
     if (exceptionClassId(name) >= 0 || name == "Object") return name;
     if (kCompilerForms.count(name)) return "clojure.core/" + name;
+    // core.clj's own templates: its namespace is clojure.core.
+    if (coreNamespaceActive()) return "clojure.core/" + name;
     const ActiveCallContext* cc = activeCallContext();
     if (!cc || !cc->globals) return name;
     const std::string core = "clojure.core/" + name;

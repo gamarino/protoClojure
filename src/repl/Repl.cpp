@@ -298,7 +298,12 @@ struct Session {
             actorStateKey, mailboxKey, named};
         setActiveCallContext(sessionCc);
         installEval();
+        // The part of clojure.core written in Clojure, before the first
+        // input. A failure is printed and makes runRepl exit with status 1.
+        coreLoaded = loadCore(ctx);
     }
+
+    bool coreLoaded = false;
 
     // Read, compile and run every form in `src`, one at a time, as Clojure's
     // REPL does: a form is compiled only after the one before it has run,
@@ -493,6 +498,13 @@ int runRepl(proto::ProtoContext* ctx) {
     std::puts("REPL — :help for commands, :quit or Ctrl-D to exit");
 
     Session session(ctx);
+    if (!session.coreLoaded) {
+        shutdownIO(session.ctx);
+        shutdownFutures(session.ctx);
+        ActorScheduler::instance().shutdown(session.ctx);
+        releaseRetainedModules();
+        return 1;
+    }
 
     const char* primary      = "user=> ";
     const char* continuation = "  #_=> ";

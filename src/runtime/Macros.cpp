@@ -23,6 +23,7 @@ bool isListValue(const proto::ProtoObject* v) {
 }
 
 std::atomic<EvalHook> gEvalHook{nullptr};
+std::atomic<bool> gCoreNamespace{false};
 
 } // namespace
 
@@ -117,6 +118,9 @@ const proto::ProtoObject* macroexpandOnce(proto::ProtoContext* ctx,
     if (!macro) return form;
     return expandMacroCall(ctx, cc, macro, spelling, form, PROTO_NONE);
 }
+
+bool coreNamespaceActive() { return gCoreNamespace.load(std::memory_order_relaxed); }
+void setCoreNamespaceActive(bool active) { gCoreNamespace.store(active, std::memory_order_relaxed); }
 
 void setEvalHook(EvalHook hook) { gEvalHook.store(hook); }
 EvalHook evalHook() { return gEvalHook.load(); }

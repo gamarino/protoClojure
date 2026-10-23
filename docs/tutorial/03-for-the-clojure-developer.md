@@ -24,11 +24,13 @@ under a `Dnn` id.
 >   and the reader macros `'`, `` ` ``, `~`, `~@` (syntax-quote qualifies
 >   symbols as `clojure.core/x` or `user/x`, the only two namespaces, and
 >   auto-gensyms `x#`); `defmacro` with `&form` and `&env`, `gensym`,
->   `macroexpand-1`, `macroexpand` and `eval` (chapter 11). Other reader
->   macros, sets, most collection functions, lazy sequences, the
->   higher-order combinators, the `clojure.core` macros (the threading
->   macros, `when-let`, `doseq`, ...), namespaces, vars and `binding`,
->   volatiles and delays are not implemented yet. Exceptions are implemented: `try` / `catch` /
+>   `macroexpand-1`, `macroexpand` and `eval` (chapter 11); the
+>   `clojure.core` macros (`when-let`, `if-let`, the threading macros,
+>   `doto`, `doseq`, `dotimes`, `case`, `condp`, ...) from `core.clj`, with
+>   symbol-only bindings and no `letfn`. Other reader macros, sets, most
+>   collection functions, lazy sequences, the higher-order combinators,
+>   destructuring, namespaces, vars and `binding`, volatiles and delays are
+>   not implemented yet. Exceptions are implemented: `try` / `catch` /
 >   `finally`, `throw`, `ex-info`, `ex-data`, `ex-message`, `ex-cause`
 >   (§3.3.6 lists the differences).
 > - §3.2 to §3.4: `defprotocol`, `extend-type`, `extend-protocol` and

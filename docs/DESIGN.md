@@ -742,9 +742,10 @@ without it the language fails the *respect* test.
 
 Status: stage 1 (the reader yields runtime values), stage 2 (quote and
 syntax-quote), stage 3 (scripts compiled and run form by form), stage 4
-(`defmacro`, expansion, `macroexpand-1`, `macroexpand`, `eval`) and stage 5
-(qualified symbols and auto-gensyms in syntax-quote) are built; the
-`clojure.core` macros follow (ROADMAP.md, "Macros"). The plan below is the original one; §10.1 records the decisions
+(`defmacro`, expansion, `macroexpand-1`, `macroexpand`, `eval`), stage 5
+(qualified symbols and auto-gensyms in syntax-quote) and stage 6 (the
+`clojure.core` macros in a bootstrap `core.clj`) are built (ROADMAP.md,
+"Macros"). The plan below is the original one; §10.1 records the decisions
 taken while building it.
 
 Macros are functions that take and return reader output (data). The
@@ -1041,6 +1042,64 @@ rejected with Clojure's messages (`Can't use qualified name as parameter:
 user/x`, `Can't let qualified name: user/v`): it is what a template that
 forgot `#` produces. Cost: the globals table holds each built-in twice
 (about 140 extra entries); a lookup is hashed, so no call path changed.
+
+**M20. `core.clj`: embedded, loaded at start-up, in `clojure.core`**
+(*agent, pending review*). `src/core/core.clj` holds the part of
+`clojure.core` written in Clojure. The build embeds its bytes in the binary
+(`cmake/EmbedFile.cmake` generates `core_clj.inc`, included by
+`src/compiler/Eval.cpp`), so the deb, the tarball and the build tree run the
+same core and nothing is looked up at run time (`cli/core-embedded` runs a
+copy of the binary from an empty directory). Every driver calls `loadCore`
+after installing the primitives and its call context, before the program's
+first form; a failure prints `core.clj:line:col: ...` and exits with status
+1. While it loads, the current namespace is `clojure.core`
+(`coreNamespaceActive`): a `def`, `defn` or `defmacro` also stores under
+`clojure.core/x` (M19), and syntax-quote qualifies every unqualified name
+as `clojure.core/x`. Internal helpers are named `__x`, there being no
+private vars. Alternatives: (a) install it beside the binary
+(`/usr/share/protoclj/core.clj`), rejected because the binary would then
+depend on a path and a build tree would need the same layout; (b)
+precompile it to bytecode at build time, not needed: loading it costs
+about 3 ms of CPU (measured below and in the CHANGELOG), under the 10 ms
+budget.
+
+**M21. What moved to `core.clj`, what stayed in C++, measured** (*agent,
+pending review*). Moved: `when`, `when-not` and `cond` (their expansions
+compile to the same instructions the C++ forms emitted; the compiler now
+folds an `if` whose test is a literal, so `cond`'s `:else` clause costs
+nothing at run time, as it did not before either), and `with-open` and
+`future` (pure rewrites, now visible to `macroexpand`). Their C++ code is
+deleted. Their error messages now come from the macros:
+`Syntax error macroexpanding with-open: IllegalArgumentException:
+with-open requires an even number of forms in binding vector`, and `cond`
+no longer accepts the bare symbol `else` as a default (Clojure does not;
+`:else` works). Stayed in C++: `and` and `or`, because as Clojure's macros
+they bind a local per operand (`(let [and# x] (if and# (and ...) and#))`),
+which costs a store and two loads where the C++ forms use `DUP`: measured
+on a 20,000,000-iteration loop whose body is a three-operand `and`, the
+macro version took 2.24-2.33 s against 2.13-2.15 s (+5-8 %), two
+interleaved runs each; and `fn`, `let`, `loop`, `defn`, `defmacro`,
+`apply`, the forms Clojure builds on `fn*`, `let*` and `loop*`. Those
+remain unchanged by `macroexpand` (D41).
+
+**M22. The `clojure.core` macros as built** (*agent, pending review*).
+`core.clj` defines `when`, `when-not`, `if-not`, `cond`, `comment`, `while`,
+`if-let`, `when-let`, `if-some`, `when-some`, `->`, `->>`, `as->`,
+`some->`, `some->>`, `cond->`, `cond->>`, `doto`, `dotimes`, `doseq`,
+`case`, `condp`, `with-open` and `future`, following clojure.core's
+definitions, and the functions `identity`, `some?`, `true?`, `false?`,
+`zero?`, `pos?`, `neg?`, `nnext`, `ffirst`, `nthnext`, `butlast`
+(`even?` and `odd?` are new C++ built-ins). Binding macros check their
+binding vector at expansion time and raise `IllegalArgumentException` with
+Clojure's messages. Differences: binding forms are symbols only until
+destructuring lands (Part B, stage 7); `doseq` has no `:let`, `:when` or
+`:while` yet (stage 10); `case` tests its constants one after the other
+with `=` instead of a constant-time hash dispatch, so it costs O(n) in the
+number of clauses (D44), and its constants are compared with protoClojure's
+`=` (numbers across types, D15); `letfn` is not provided, because mutually
+recursive local functions need a `letfn*` that binds names before the
+functions exist, and closures here capture locals by value when they are
+created (with D18, no fn can name itself).
 
 ## 11. The standard library
 

@@ -235,11 +235,27 @@ target_link_libraries(protoclj_runtime PUBLIC ${PROTOCORE_LIBRARY} protoclj_supp
 target_compile_options(protoclj_runtime PRIVATE ${PROTOCLJ_WARNINGS})
 
 # --- protoClojure compiler library ---
+# core.clj, the part of clojure.core written in Clojure, is embedded in the
+# binary (src/compiler/Eval.cpp, loadCore), so protoclj needs no file beside
+# it: the deb, the tarball and the build tree all run the same core.
+set(PROTOCLJ_CORE_CLJ "${CMAKE_CURRENT_SOURCE_DIR}/src/core/core.clj")
+set(PROTOCLJ_CORE_INC "${CMAKE_CURRENT_BINARY_DIR}/generated/core_clj.inc")
+add_custom_command(
+    OUTPUT "${PROTOCLJ_CORE_INC}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    COMMAND ${CMAKE_COMMAND} -DINPUT=${PROTOCLJ_CORE_CLJ} -DOUTPUT=${PROTOCLJ_CORE_INC}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedFile.cmake"
+    DEPENDS "${PROTOCLJ_CORE_CLJ}" "${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedFile.cmake"
+    COMMENT "Embedding src/core/core.clj"
+    VERBATIM)
+
 add_library(protoclj_compiler STATIC
     src/compiler/Compiler.cpp
     src/compiler/Eval.cpp
+    "${PROTOCLJ_CORE_INC}"
 )
-target_link_libraries(protoclj_compiler PUBLIC protoclj_runtime)
+target_include_directories(protoclj_compiler PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
+target_link_libraries(protoclj_compiler PUBLIC protoclj_runtime protoclj_reader)
 target_compile_options(protoclj_compiler PRIVATE ${PROTOCLJ_WARNINGS})
 
 # --- protoClojure REPL library ---

@@ -9,6 +9,37 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — macros, stage 6: the `clojure.core` macros in `core.clj`
+
+- **`core.clj`** (`src/core/core.clj`, DESIGN.md §10.1, M20): the part of
+  `clojure.core` written in Clojure, embedded in the binary at build time
+  (`cmake/EmbedFile.cmake`) and loaded by every driver before the program,
+  in the namespace `clojure.core`. It costs about 3 ms of CPU at start-up.
+- **Macros** (M22): `when`, `when-not`, `if-not`, `cond`, `comment`,
+  `while`, `if-let`, `when-let`, `if-some`, `when-some`, `->`, `->>`,
+  `as->`, `some->`, `some->>`, `cond->`, `cond->>`, `doto`, `dotimes`,
+  `doseq`, `case`, `condp`, `with-open`, `future`, with Clojure's
+  expansions and binding-vector checks. **Functions**: `identity`, `some?`,
+  `true?`, `false?`, `zero?`, `pos?`, `neg?`, `nnext`, `ffirst`, `nthnext`,
+  `butlast`; and the C++ built-ins `even?` and `odd?`.
+- New deviation D44 (`case` tests its constants in order).
+
+### Changed — macros, stage 6
+
+- **`when`, `when-not`, `cond`, `with-open` and `future` moved from the C++
+  compiler to `core.clj`** (M21): `macroexpand` now shows their expansions.
+  They compile to the same instructions as before; the compiler now folds
+  an `if` whose test is a literal (`cond`'s `:else`). Their errors come from
+  the macros (`Syntax error macroexpanding with-open:
+  IllegalArgumentException: with-open requires an even number of forms in
+  binding vector`), and `cond` no longer accepts the bare symbol `else` as
+  its default (Clojure does not; `:else` works). `and` and `or` stay in C++:
+  as macros they measured 5-8 % slower on a loop.
+- New tests: 21 fixtures in `tests/conformance/32-core-macros/` (every
+  macro, `case` without a match, expansion errors, a program's own `when`),
+  and the CLI check `cli/core-embedded` (a copy of the binary in an empty
+  directory has the core macros, in a file and at the REPL).
+
 ### Added — macros, stage 5: hygienic syntax-quote
 
 - **Syntax-quote qualifies symbols** as Clojure's reader does (DESIGN.md

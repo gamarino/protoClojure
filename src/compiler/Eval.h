@@ -69,6 +69,15 @@ void releaseRetainedModules();
 // Reads the globals of the installed call context.
 std::string qualifySyntaxQuoteSymbol(proto::ProtoContext* ctx, const std::string& name);
 
+// Loads core.clj, the part of clojure.core written in Clojure
+// (src/core/core.clj, embedded in the binary at build time), form by form
+// through evalTopLevel, with the current namespace set to clojure.core
+// (Macros.h, coreNamespaceActive). Every driver calls it once, after the
+// primitives are installed and the call context is in place, before the
+// program's first form. On an error it prints `core.clj:line:col: ...` to
+// standard error and returns false; the driver then exits with status 1.
+bool loadCore(proto::ProtoContext* ctx);
+
 // Installs the `eval` built-in's entry point (Macros.h): `(eval form)` is
 // evalTopLevel, with a compile error raised as a RuntimeException.
 void installEval();

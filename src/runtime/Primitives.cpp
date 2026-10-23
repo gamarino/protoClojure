@@ -2875,6 +2875,47 @@ const proto::ProtoObject* prim_list_star(proto::ProtoContext* ctx,
     return out.finish();
 }
 
+// (even? n) / (odd? n) — integers only, of any size, as in Clojure.
+bool integerIsEven(proto::ProtoContext* ctx, const proto::ProtoArguments* args, const char* name) {
+    if (!args || args->getSize(ctx) != 1) arityError(ctx, args, name);
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (!v || !v->isInteger(ctx))
+        throwClassed(ctx, "IllegalArgumentException",
+                     "Argument must be an integer: " + printedValue(ctx, v));
+    const proto::ProtoObject* r = v->modulo(ctx, ctx->fromLong(2));
+    return r->isInteger(ctx) && r->asLong(ctx) == 0;
+}
+
+const proto::ProtoObject* prim_even_p(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject*,
+                                      const proto::ParentLink*,
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
+    return integerIsEven(ctx, args, "even?") ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_odd_p(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject*,
+                                     const proto::ParentLink*,
+                                     const proto::ProtoArguments* args,
+                                     const proto::ProtoKeywordArguments*) {
+    return integerIsEven(ctx, args, "odd?") ? PROTO_FALSE : PROTO_TRUE;
+}
+
+// (__raise-illegal-argument message) — raises IllegalArgumentException with
+// `message`. The core.clj macros use it where Clojure's throw an
+// IllegalArgumentException (a binding vector of the wrong shape, a `case`
+// with no matching clause); there is no Java constructor to call.
+const proto::ProtoObject* prim_raise_illegal_argument(proto::ProtoContext* ctx,
+                                                      const proto::ProtoObject*,
+                                                      const proto::ParentLink*,
+                                                      const proto::ProtoArguments* args,
+                                                      const proto::ProtoKeywordArguments*) {
+    std::string message;
+    if (args && args->getSize(ctx) > 0) appendStr(ctx, message, args->getAt(ctx, 0));
+    throwClassed(ctx, "IllegalArgumentException", message);
+}
+
 // Sequence helpers macros reach for --------------------------------------
 
 // (second coll) — (first (next coll)).
@@ -3184,6 +3225,11 @@ constexpr PrimitiveEntry kPrimitives[] = {
     {"keyword", &prim_keyword},
     {"name",    &prim_name},
     {"list*",   &prim_list_star},
+
+    // Numbers, and the helper the core.clj macros raise errors with.
+    {"even?",   &prim_even_p},
+    {"odd?",    &prim_odd_p},
+    {"__raise-illegal-argument", &prim_raise_illegal_argument},
 };
 
 // A linear scan of the entries; printing a function is not a hot path.

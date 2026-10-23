@@ -61,6 +61,13 @@ bool globalKeyForSymbol(const std::string& spelling, std::string& key);
 void defineBuiltin(proto::ProtoContext* ctx, proto::ProtoObject* globals,
                    const char* name, const proto::ProtoObject* value);
 
+// True while core.clj loads (Eval.h, loadCore): the current namespace is
+// then clojure.core, so a definition is installed under both `x` and
+// `clojure.core/x` and syntax-quote qualifies unknown names as
+// `clojure.core/x`. Set only on the evaluator thread at start-up.
+bool coreNamespaceActive();
+void setCoreNamespaceActive(bool active);
+
 // The macro the global `key` holds, or nullptr when it holds none.
 const proto::ProtoObject* globalMacro(proto::ProtoContext* ctx,
                                       const ActiveCallContext& cc,

@@ -69,6 +69,15 @@ bool stripCoreQualifier(std::string& name) {
     return true;
 }
 
+// Stores the value on top of the stack in the global `key`, leaving it
+// there (STORE_GLOBAL does). While core.clj loads it is also stored under
+// `clojure.core/key`, the built-in's own key (Macros.h).
+void emitStoreGlobal(proto::ProtoContext* ctx, const std::string& key, BytecodeModule& out) {
+    out.emit(Op::STORE_GLOBAL, out.addSymbol(ctx, key));
+    if (coreNamespaceActive())
+        out.emit(Op::STORE_GLOBAL, out.addSymbol(ctx, "clojure.core/" + key));
+}
+
 // True for `user/x`: a symbol syntax-quote qualified with the program's
 // namespace (there is only `user`, D28); it names the global x.
 bool isUserQualified(const std::string& name) {
@@ -82,7 +91,7 @@ bool isStringForm(const proto::ProtoObject* form) {
 }
 
 // The symbol `name` as a form, for the forms the compiler builds itself
-// (the with-open rewrite, the fn wrapper of a top-level try).
+// (the fn wrapper of a top-level form, defmacro's hidden parameters).
 const proto::ProtoObject* symbolForm(proto::ProtoContext* ctx, const NamedLayout& named,
                                      const char* name) {
     return internNamed(ctx, named, name);
@@ -428,94 +437,11 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     return body;
 }
 
-void Compiler::compileWithOpen(proto::ProtoContext* ctx, const proto::ProtoList* lst,
-                               BytecodeModule& out, const CompilerMarkers& markers) {
-    // Clojure's with-open is a macro:
-    //
-    //   (with-open [a ia, b ib] body)
-    //   => (let [a ia] (try (with-open [b ib] body) (finally (.close a))))
-    //
-    // protoClojure has no macros yet, so the compiler performs the same
-    // rewrite, closing through `__with_open_close__` (IO.cpp), the `close`
-    // primitive under a name a program cannot shadow. The binding vector is
-    // rebuilt as a plain list, which `let` accepts as well.
-    auto sym = [&](const char* name) {
-        return symbolForm(ctx, markers.named, name);
-    };
-    const proto::proto_ulong n = lst->getSize(ctx);
-    const proto::ProtoObject* bindings = n >= 2 ? lst->getAt(ctx, 1) : nullptr;
-    const proto::ProtoList* bvec = nullptr;
-    if (bindings && isVector(bindings)) {
-        bvec = vectorItems(ctx, bindings);
-    } else if (bindings && isList(bindings)) {
-        bvec = bindings->asList(ctx);
-    } else {
-        throw CompileError("with-open requires a vector for its binding");
-    }
-    const proto::proto_ulong bn = bvec->getSize(ctx);
-    if (bn % 2 != 0) {
-        throw CompileError("with-open requires an even number of forms in binding vector");
-    }
-    for (proto::proto_ulong i = 0; i < bn; i += 2) {
-        if (!isNameForm(ctx, markers.named, bvec->getAt(ctx, static_cast<int>(i)))) {
-            throw CompileError("with-open only allows Symbols in bindings");
-        }
-    }
-
-    // `let` needs local slots, and a top-level form has none: compile a
-    // top-level with-open as the body of a zero-argument fn called on the
-    // spot, as a top-level try is.
-    if (scopes_.empty()) {
-        compileAsThunk(ctx, lst->asObject(ctx), out, markers);
-        return;
-    }
-
-    if (bn == 0) {
-        // (with-open [] body...) is (do body...).
-        const proto::ProtoList* doForm = ctx->newList()->appendLast(ctx, sym("do"));
-        for (proto::proto_ulong i = 2; i < n; ++i) {
-            doForm = doForm->appendLast(ctx, lst->getAt(ctx, static_cast<int>(i)));
-        }
-        compileForm(ctx, doForm->asObject(ctx), out, markers);
-        return;
-    }
-
-    const proto::ProtoObject* name = bvec->getAt(ctx, 0);
-    const proto::ProtoList* restBindings = ctx->newList();
-    for (proto::proto_ulong i = 2; i < bn; ++i) {
-        restBindings = restBindings->appendLast(ctx, bvec->getAt(ctx, static_cast<int>(i)));
-    }
-    const proto::ProtoList* inner = ctx->newList()
-        ->appendLast(ctx, sym("with-open"))
-        ->appendLast(ctx, restBindings->asObject(ctx));
-    for (proto::proto_ulong i = 2; i < n; ++i) {
-        inner = inner->appendLast(ctx, lst->getAt(ctx, static_cast<int>(i)));
-    }
-    const proto::ProtoList* closeCall = ctx->newList()
-        ->appendLast(ctx, sym("__with_open_close__"))
-        ->appendLast(ctx, name);
-    const proto::ProtoList* finallyForm = ctx->newList()
-        ->appendLast(ctx, sym("finally"))
-        ->appendLast(ctx, closeCall->asObject(ctx));
-    const proto::ProtoList* tryForm = ctx->newList()
-        ->appendLast(ctx, sym("try"))
-        ->appendLast(ctx, inner->asObject(ctx))
-        ->appendLast(ctx, finallyForm->asObject(ctx));
-    const proto::ProtoList* letBindings = ctx->newList()
-        ->appendLast(ctx, name)
-        ->appendLast(ctx, bvec->getAt(ctx, 1));
-    const proto::ProtoList* letForm = ctx->newList()
-        ->appendLast(ctx, sym("let"))
-        ->appendLast(ctx, letBindings->asObject(ctx))
-        ->appendLast(ctx, tryForm->asObject(ctx));
-    compileForm(ctx, letForm->asObject(ctx), out, markers);
-}
-
 void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
                           BytecodeModule& out, const CompilerMarkers& markers) {
     // A try needs local slots (the caught exception), and a top-level form
     // has none: compile a top-level try as the body of a zero-argument fn
-    // called on the spot, `((fn [] (try ...)))`, as `future` does for its
+    // called on the spot, `((fn [] (try ...)))`, as the `future` macro does for its
     // body.
     if (scopes_.empty()) {
         compileAsThunk(ctx, lst->asObject(ctx), out, markers);
@@ -942,7 +868,7 @@ void Compiler::compileDefmacro(proto::ProtoContext* ctx, const proto::ProtoList*
     out.emit(Op::PUSH_VAR, out.addSymbol(&scope, "__macro__"));
     compileForm(&scope, scope.getAutomaticLocal(0), out, markers);
     out.emit(Op::CALL, 1);
-    out.emit(Op::STORE_GLOBAL, out.addSymbol(&scope, key));
+    emitStoreGlobal(&scope, key, out);
 }
 
 void Compiler::compileForm(proto::ProtoContext* ctx,
@@ -1028,7 +954,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 throw CompileError("def: name must be a symbol");
             }
             compileForm(ctx, exprForm, out, markers);
-            out.emit(Op::STORE_GLOBAL, out.addSymbol(ctx, key));
+            emitStoreGlobal(ctx, key, out);
             return;
         }
 
@@ -1038,7 +964,20 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (n != 3 && n != 4) {
                 throw CompileError("if: expects (if test then) or (if test then else)");
             }
-            compileForm(ctx, lst->getAt(ctx, 1), out, markers);  // test
+            // A literal test decides the branch at compile time: `cond`'s
+            // `:else` clause expands to (if :else expr ...), which then
+            // costs nothing at run time, as the C++ cond's did.
+            const proto::ProtoObject* test = lst->getAt(ctx, 1);
+            const bool literalTrue = test == PROTO_TRUE || isKeywordForm(ctx, markers.named, test) ||
+                                     isStringForm(test) || test->isInteger(ctx) || test->isFloat(ctx);
+            const bool literalFalse = test == PROTO_NONE || test == PROTO_FALSE;
+            if (literalTrue) { compileForm(ctx, lst->getAt(ctx, 2), out, markers); return; }
+            if (literalFalse) {
+                if (n == 4) compileForm(ctx, lst->getAt(ctx, 3), out, markers);
+                else out.emit(Op::PUSH_NIL, 0);
+                return;
+            }
+            compileForm(ctx, test, out, markers);  // test
             std::size_t jifAt = out.emit(Op::JUMP_IF_FALSE, 0);
 
             compileForm(ctx, lst->getAt(ctx, 2), out, markers);  // then
@@ -1063,74 +1002,6 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 afterElse - (jmpAt + 1);
             out.patchOperand(jmpAt,
                 pastOffsetInstr);
-            return;
-        }
-
-        // (when test body...) → desugar to (if test (do body...) nil).
-        if (headName == "when" || headName == "when-not") {
-            if (n < 2) throw CompileError("when/when-not: expects test + body");
-            bool negate = (headName == "when-not");
-            compileForm(ctx, lst->getAt(ctx, 1), out, markers);   // test
-            std::size_t jifAt = out.emit(
-                negate ? Op::JUMP_IF_TRUE : Op::JUMP_IF_FALSE, 0);
-            if (n == 2) {
-                out.emit(Op::PUSH_NIL, 0);
-            } else {
-                for (proto::proto_ulong i = 2; i < n; ++i) {
-                    compileForm(ctx, lst->getAt(ctx, (int)i), out, markers);
-                    if (i + 1 < n) out.emit(Op::POP, 0);
-                }
-            }
-            std::size_t jmpAt = out.emit(Op::JUMP, 0);
-            std::size_t elseStart = out.pos();
-            std::size_t elseOffset =
-                elseStart - (jifAt + 1);
-            out.patchOperand(jifAt, elseOffset);
-            out.emit(Op::PUSH_NIL, 0);
-            std::size_t after = out.pos();
-            std::size_t jOff = after - (jmpAt + 1);
-            out.patchOperand(jmpAt, jOff);
-            return;
-        }
-
-        // (cond test1 expr1 test2 expr2 ... [:else expr])
-        //   Compiles to a chain of JUMP_IF_FALSE-skipping each pair.
-        //   `:else` is a literal symbol that compiles to true (any truthy
-        //   value works). If no clause matches and no :else is given,
-        //   yields nil.
-        if (headName == "cond") {
-            proto::proto_ulong pn = n - 1;
-            if (pn % 2 != 0) {
-                throw CompileError("cond: clauses must come in pairs");
-            }
-            std::vector<std::size_t> endPatches;
-            for (proto::proto_ulong i = 1; i < n; i += 2) {
-                const proto::ProtoObject* test = lst->getAt(ctx, (int)i);
-                const proto::ProtoObject* expr = lst->getAt(ctx, (int)(i + 1));
-                bool isElse = isNameForm(ctx, markers.named, test) &&
-                              (nameOf(ctx, markers.named, test) == ":else" ||
-                               nameOf(ctx, markers.named, test) == "else");
-                std::size_t skipAt = 0;
-                if (!isElse) {
-                    compileForm(ctx, test, out, markers);
-                    skipAt = out.emit(Op::JUMP_IF_FALSE, 0);
-                }
-                compileForm(ctx, expr, out, markers);
-                endPatches.push_back(out.emit(Op::JUMP, 0));
-                if (!isElse) {
-                    std::size_t after = out.pos();
-                    std::size_t off =
-                        after - (skipAt + 1);
-                    out.patchOperand(skipAt, off);
-                }
-            }
-            // Fall-through (no clause matched) yields nil.
-            out.emit(Op::PUSH_NIL, 0);
-            std::size_t end = out.pos();
-            for (std::size_t at : endPatches) {
-                std::size_t off = end - (at + 1);
-                out.patchOperand(at, off);
-            }
             return;
         }
 
@@ -1336,7 +1207,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (headName == "defn") {
                 std::string key;
                 globalKeyForSymbol(nameOf(ctx, markers.named, nameForm), key);
-                out.emit(Op::STORE_GLOBAL, out.addSymbol(ctx, key));
+                emitStoreGlobal(ctx, key, out);
             }
             return;
         }
@@ -1443,47 +1314,6 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             }
 
             scopes_.back().recurStack.pop_back();
-            return;
-        }
-
-        // Session 17 — (future body...) is sugar for
-        // (make-future (fn [] body...)). The thunk is a zero-arity
-        // closure that captures the surrounding lexical scope, so the
-        // body sees the same locals the future was spawned under.
-        if (headName == "future") {
-            // Build a synthetic `fn [] body...` form by reusing
-            // compileFnBody-style emission. The cheapest path is to
-            // construct the call directly: emit PUSH_VAR make-future +
-            // an inline fn body that wraps the user code.
-            //
-            // We re-route through the (fn [] body...) compilation by
-            // building a small helper: emit a Fn whose body is the
-            // remaining `(future ...)` forms.
-            std::size_t hmIdx = out.addSymbol(ctx, "make-future");
-            out.emit(Op::PUSH_VAR, hmIdx);
-
-            // Compile an inline (fn [] body...). compileArity expects
-            // a params ProtoList; we pass an empty new ProtoList for
-            // the params and reuse the `lst` itself as the arity form,
-            // with bodyStartIdx=1 (skip the `future` head).
-            const proto::ProtoList* emptyParams = ctx->newList();
-            std::unique_ptr<BytecodeModule> body =
-                compileArity(ctx, emptyParams, lst, /*bodyStartIdx=*/1,
-                             markers);
-            std::size_t blockIdx = out.addBlock(std::move(body));
-            const auto& caps = out.block(blockIdx).captureSpecs();
-            for (const auto& c : caps) {
-                out.emit(Op::PUSH_LOCAL,
-                    c.parentSlot);
-            }
-            out.emit(Op::MAKE_FN, blockIdx);
-            out.emit(Op::CALL, 1);
-            return;
-        }
-
-        // (with-open [name init ...] body*)
-        if (headName == "with-open") {
-            compileWithOpen(ctx, lst, out, markers);
             return;
         }
 

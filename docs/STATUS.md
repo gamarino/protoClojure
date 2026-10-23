@@ -292,7 +292,7 @@ first and its result built after.
       and `IllegalArgumentException`, with ex-data
       `{:type :file-not-found :errno 2}` and the like
 
-### Primitives installed at startup (103, plus 36 I/O)
+### Primitives installed at startup (106, plus 36 I/O, plus core.clj)
 
 - [x] Arithmetic and comparison: `+ - * / inc dec < <= > >= = not=`
 - [x] Output: `println str` — one printer (`printTo` in
@@ -314,6 +314,7 @@ first and its result built after.
       to a map) and the printers `pr-str prn pr print` (readable or not, as
       Clojure's)
 - [x] Symbols: `gensym symbol keyword name list*`
+- [x] `even? odd?` (integers of any size)
 - [x] Macros: `macroexpand-1 macroexpand eval`, and `__macro__`, the
       internal built-in `defmacro` compiles to (DESIGN.md §10.1, M10)
 - [x] Higher-order: `map filter reduce pmap`
@@ -462,8 +463,10 @@ work since macros stage 4.)
       vector or nil works)
 - [ ] `let*` / `fn*` raw forms
 - [ ] `var` form
-- [ ] `case`, `if-let`, `when-let`
-- [ ] Threading: `->` `->>` `as->` `some->` `some->>`
+- [ ] `letfn` (needs a `letfn*` form; DESIGN.md §10.1, M22)
+- [ ] Destructuring in the binding forms of `when-let`, `if-let`, `doseq`
+      (symbols only; Part B, stage 7)
+- [ ] `doseq` modifiers `:let`, `:when`, `:while` (Part B, stage 10)
 
 ### Data structures (not yet)
 
@@ -537,7 +540,6 @@ for the rationale.
 ### Core library extensions (not yet)
 
 - [ ] `quot rem mod`
-- [ ] More predicates: `true? false? zero? pos? neg? even? odd?`
 - [ ] More collection: `into mapcat interleave interpose` (`next conj
       second last seq concat` exist)
 - [ ] Map operations: `update merge select-keys get-in update-in assoc-in`
@@ -555,7 +557,7 @@ for the rationale.
 - [ ] `protoclj -e <expr>`
 - [ ] nREPL server (CIDER / Calva / Conjure compatible) — planned for v0.1
 
-### Macros (not yet)
+### Macros
 
 Work in progress on branch `feature/macros` (DESIGN.md §10, ROADMAP.md).
 
@@ -575,11 +577,19 @@ Work in progress on branch `feature/macros` (DESIGN.md §10, ROADMAP.md).
       `&` and class names unqualified), `foo#` auto-gensyms, `gensym`,
       `symbol`, `keyword`, `name`, `list*`; `user/x` and `clojure.core/x`
       resolve to globals, never to locals (M17-M19)
-- [ ] `clojure.core` macros defined in protoClojure
+- [x] Stage 6: `core.clj`, embedded in the binary and loaded at start-up
+      (about 3 ms of CPU), defines `when when-not if-not cond comment while
+      if-let when-let if-some when-some -> ->> as-> some-> some->> cond->
+      cond->> doto dotimes doseq case condp with-open future` and `identity
+      some? true? false? zero? pos? neg? nnext ffirst nthnext butlast`;
+      `when`, `when-not`, `cond`, `with-open` and `future` moved there from
+      the C++ compiler, `and` and `or` stayed (M20-M22)
 
-### Bootstrap (not yet)
+### Bootstrap
 
-- [ ] A `core.clj` evaluated at startup — replaces the "everything is a C++ primitive" pattern
+- [x] A `core.clj` evaluated at startup (`src/core/core.clj`, embedded in
+      the binary); the primitives stay in C++, new library code can be
+      written in Clojure there
 
 ---
 
@@ -627,9 +637,10 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D38 | A macro's `&env` maps each local's symbol to the symbol itself (JVM Clojure: to the compiler's `LocalBinding` object); it is nil at the top level, as in Clojure | (perm) |
 | D39 | A macro called with the wrong number of arguments reports the count as written, `Wrong number of args (2) passed to macro: one` (JVM Clojure counts the hidden `&form` and `&env` too, `Wrong number of args (4) passed to: user/one`) | (perm) |
 | D40 | A form `eval` cannot compile raises `RuntimeException` `Syntax error compiling: ...` (JVM Clojure: `clojure.lang.Compiler$CompilerException`, a `RuntimeException` subclass) | (perm) |
-| D41 | `when`, `when-not`, `cond`, `and`, `or`, `with-open` and `future` are still compiled by the C++ compiler, so `macroexpand` returns them unchanged (JVM Clojure expands them) | stage 6 |
+| D41 | `and`, `or`, `fn`, `let`, `loop`, `defn`, `defmacro` and `apply` are compiled by the C++ compiler, so `macroexpand` returns them unchanged (JVM Clojure expands `and`, `or`, `fn`, `let`, `loop` and `defn` into `let*`, `fn*`, ...). `and` and `or` stay in C++ for speed (DESIGN.md §10.1, M21) | (perm) |
 | D42 | There are two namespaces only, `user` (the program: every file, the REPL, `eval`) and `clojure.core` (the built-ins and, from stage 6, `core.clj`), and no `ns` form (D28). Syntax-quote qualifies a name the program has not defined and no built-in has as `user/x`; `user/x` names the global `x` and `clojure.core/x` the built-in, and neither is ever resolved to a local. A built-in exception class name in a template stays a simple name (`Exception`; JVM Clojure writes `java.lang.Exception`). `user/x` cannot name a module alias called `user` | (perm until namespaces) |
 | D43 | Symbols are interned and never collected, generated ones included: a program that calls `gensym` or `symbol` on fresh names without end grows by one symbol per name (JVM Clojure collects unreferenced symbols) | (perm) |
+| D44 | `case` tests its constants in order with `=` (O(n) in the number of clauses; JVM Clojure dispatches on a hash in constant time), so numbers of different types match (D15); the result is otherwise Clojure's, including `IllegalArgumentException: No matching clause: x` | (perm) |
 | D34 | A `catch` naming no built-in class names a type looked up at run time, when an exception reaches the clause (a var, a local, or a module member `alias/Type`), and is matched by the thrown value's prototype chain; JVM Clojure resolves the class at compile time. So `(try 1 (catch NoSuchException e 2))` compiles and answers 1, and the error `Unable to resolve classname: NoSuchException` is a `RuntimeException` raised when an exception reaches the clause (JVM Clojure: a compile error). A type that resolves to a value that is not a prototype object raises `IllegalArgumentException`. A module's error (a foreign value) is caught by `Exception`, `Throwable` and `Object`, by its own types, and by no other built-in class | (perm: the platform is late-binding) |
 
 ## Known issues
