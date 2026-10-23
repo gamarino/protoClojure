@@ -56,6 +56,7 @@ tell at a glance which parts of the surface are runnable today. The
 | Lists `(...)` | Implemented |
 | Vectors `[...]` | Implemented (a `ProtoList` in a one-entry sparse-list box, distinct from list) |
 | Maps `{...}` | Implemented (`hash-map`, `assoc`, `dissoc`, `get`, `contains?`, `keys`, `vals`; `count` and `empty?` accept maps) |
+| `format`, `printf`, `for`, a finite `range` | Implemented (`format` follows Java's `String.format`, D47; `for` and `range` are eager, D46) |
 | Regular expressions `#"..."`, `re-pattern`, `re-find`, `re-matches`, `re-seq`, `re-matcher`, `re-groups`; `replace`, `replace-first` and `split` with a pattern | Implemented on `std::regex` ECMAScript, with Java's inline flags translated (§2.10, D45) |
 | Sets `#{...}` | Implemented (`hash-set`, `set`, `set?`, `conj`, `disj`, `contains?`, `get`, a set as a function; `union`, `intersection`, `difference`, `subset?`, `superset?` as globals; §4.4) |
 | `def`, `defn`, `fn`, `let`, `loop`, `recur` | Implemented (`let` and `loop` also at the top level; docstrings accepted) |
@@ -221,6 +222,25 @@ readably, so the strings nested in a collection keep their quotes.
 `(join "," ["a" nil "b"])` is `"a,,b"`. `println` uses the plain mode at
 every depth (`(println "a" ["b"])` prints `a [b]`) and prints `nil` as
 `nil`; the REPL uses the readable mode.
+
+`(format fmt & args)` builds a string as Java's `String.format`, which
+Clojure's `format` calls, and `(printf fmt & args)` prints it without a
+newline:
+
+```clojure
+(format "%s has %d items" "cart" 3)      ;; => "cart has 3 items"
+(format "%-6s|%6.2f|%05d|%x" "ab" 3.14159 42 255)  ;; => "ab    |  3.14|00042|ff"
+(format "%,d" 1234567)                   ;; => "1,234,567"
+(printf "%s=%d%n" "x" 1)                 ;; prints x=1 and a newline
+```
+
+The conversions are `%s` (a value as `str` renders it, `nil` as `null`),
+`%d %x %o` (integers of any size), `%f %e %g` (floats; `%f` and `%e` round
+half up, as Java), `%b`, `%c`, `%n` and `%%`, with argument indexes
+(`%2$s`, `%<s`), the flags `- 0 + , ( #` and space, a width and a
+precision. A conversion that does not fit its argument raises
+`IllegalArgumentException: IllegalFormatConversionException: d != a float`,
+as Java raises it; D47 lists what differs.
 
 A reference type renders as a tag: `(str (atom 1))` is `"#<atom 1>"`,
 likewise `#<future ...>`, `#<promise ...>`, `#<actor ...>` and `#<fn>`;
@@ -896,7 +916,7 @@ in Clojure, with Clojure's definitions and expansions:
 | `when` `when-not` `if-not` `cond` `comment` `while` | `cond` with an odd number of forms is an expansion error |
 | `if-let` `when-let` `if-some` `when-some` | the binding vector holds one binding form (a symbol or a destructuring form, §5.4) and a test |
 | `->` `->>` `as->` `some->` `some->>` `cond->` `cond->>` `doto` | |
-| `dotimes` `doseq` | `doseq` nests several bindings, each a binding form (§5.4); no `:let` / `:when` / `:while` yet |
+| `dotimes` `doseq` `for` | nested bindings, each a binding form (§5.4), with the modifiers `:let [...]`, `:when test` and `:while test`; `for` answers a list, built eagerly for now (D46) |
 | `case` `condp` | `case` constants are not evaluated, a list groups alternatives; no match and no default raises `IllegalArgumentException: No matching clause: x` (D44) |
 | `with-open` `future` | |
 
@@ -908,8 +928,23 @@ in Clojure, with Clojure's definitions and expansions:
 (macroexpand '(when a b))                  ;; => (if a (do b))
 ```
 
+`for` is the list comprehension: each binding takes the elements of its
+collection, the rightmost fastest, and `:let`, `:when` and `:while` filter
+and stop as in Clojure (`:while` stops the binding just before it):
+
+```clojure
+(for [x (range 10) :when (odd? x) :let [y (* x x)] :while (< y 30)] y)  ;; => (1 9 25)
+(for [x [1 2] y [:a :b]] [x y])     ;; => ([1 :a] [1 :b] [2 :a] [2 :b])
+(doseq [[k v] {:a 1} :when v] (println k v))  ;; prints :a 1
+```
+
+Until lazy sequences land, `for` and `range` answer lists built eagerly
+(D46): `(range)` with no end is an error, and a `for` over a huge
+collection builds its whole result.
+
 It also defines the functions `identity`, `some?`, `true?`, `false?`,
-`zero?`, `pos?`, `neg?`, `nnext`, `ffirst`, `nthnext` and `butlast`. A
+`zero?`, `pos?`, `neg?`, `nnext`, `ffirst`, `nthnext`, `butlast`, `into`
+and `range`. A
 program may redefine any of these names; its later forms then use its own
 definition, while code from `core.clj` keeps calling `clojure.core/x`. Names
 starting with `__` are internal. `letfn` is not available yet.

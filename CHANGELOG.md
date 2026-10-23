@@ -9,6 +9,27 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — scripting vocabulary, stage 10: `format`, `printf`, `for`, `doseq` modifiers
+
+- **`format`** and **`printf`** (DESIGN.md §10.2, M27; D47): Java's
+  `String.format` conversions `%s %d %x %o %f %e %g %b %c %n %%` with
+  argument indexes, flags, width and precision; `%f` / `%e` round half up
+  as Java; errors carry Java's exception names.
+- **`for`** with `:let`, `:when` and `:while`, and the same modifiers for
+  **`doseq`** (in `core.clj`). `for` answers a list built eagerly through one
+  hook, `__for-step`, which stage 11 makes lazy (D46).
+- A finite, eager **`range`** (`core.clj`); `(range)` with no end is an
+  error until lazy sequences exist.
+- **`apply` with leading arguments**, `(apply f x y coll)`.
+
+### Changed — stage 10
+
+- `09-higher-order/apply-variadic-error` became `apply-leading-args` (the
+  form now works) and `apply-arity-error`.
+- New tests: 17 fixtures in `tests/conformance/36-format-for/`, the CLI check
+  `cli/for-format-survive-gc`, and `for` / `format` / `printf` / `doseq`
+  lines in `cli/repl-scripting`.
+
 ### Added — scripting vocabulary, stage 9: regular expressions
 
 - **Regular expressions** (DESIGN.md §10.2, M25; D45): the `#"..."` literal,

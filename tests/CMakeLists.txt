@@ -130,6 +130,8 @@ add_test(NAME cli/sets-survive-gc
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/sets-survive-gc.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/regex-survives-gc
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/regex-survives-gc.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/for-format-survive-gc
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/for-format-survive-gc.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/repl-scripting
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/repl-scripting.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/file-form-by-form

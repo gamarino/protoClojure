@@ -23,6 +23,10 @@ out=$(printf '%s\n' \
     '(re-find #"(\w+)@(\w+)" "joe@host")' \
     '(clojure.string/split "a, b,c" #",\s*")' \
     '#"(ab" :after-bad-pattern' \
+    "(for [x (range 4) :when (odd? x)] (* 10 x))" \
+    '(format "%05.1f|%-3s|%x" 2.25 "a" 255)' \
+    '(printf "n=%d%n" 7)' \
+    "(doseq [[k v] [[:a 1]] :let [w (inc v)]] (println k w))" \
     | timeout 90s "$PROTOCLJ" 2>"$err_file")
 rc=$?
 if [[ $rc -ne 0 ]]; then
@@ -58,4 +62,8 @@ expect_err 'Duplicate key: :dup'
 expect 'user=> ["joe@host" "joe" "host"]'
 expect 'user=> ["a" "b" "c"]'
 expect_err 'PatternSyntaxException'
+expect 'user=> (10 30)'
+expect 'user=> "002.3|a  |ff"'
+expect 'n=7'
+expect ':a 2'
 echo OK

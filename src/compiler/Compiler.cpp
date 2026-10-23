@@ -1713,12 +1713,19 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // v0.7.x supports only the two-arg shape; the JVM-Clojure variadic
         // form `(apply f x y coll)` lands once multi-arity arrives.
         if (headName == "apply") {
-            if (n != 3) {
-                throw CompileError(
-                    "apply: only the two-argument form (apply f coll) is supported");
+            if (n < 3) {
+                throw CompileError("apply: expects (apply f args* coll)");
             }
             compileForm(ctx, lst->getAt(ctx, 1), out, markers);
-            compileForm(ctx, lst->getAt(ctx, 2), out, markers);
+            if (n == 3) {
+                compileForm(ctx, lst->getAt(ctx, 2), out, markers);
+            } else {
+                // (apply f x y coll): the arguments spread are (list* x y coll).
+                out.emit(Op::PUSH_VAR, out.addSymbol(ctx, "clojure.core/list*"));
+                for (proto::proto_ulong i = 2; i < n; ++i)
+                    compileForm(ctx, lst->getAt(ctx, static_cast<int>(i)), out, markers);
+                out.emit(Op::CALL, n - 2);
+            }
             out.emit(Op::CALL_APPLY, 0);
             return;
         }

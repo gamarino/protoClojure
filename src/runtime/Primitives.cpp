@@ -3632,6 +3632,292 @@ const proto::ProtoObject* prim_pr(proto::ProtoContext* ctx,
     return PROTO_NONE;
 }
 
+// format / printf ---------------------------------------------------------
+//
+// Java's java.util.Formatter, which Clojure's format calls, for the
+// conversions a script uses: %s %S %d %x %X %o %f %e %E %g %G %b %B %c %n %%,
+// with an argument index (`%2$s`, `%<s`), the flags `-` `0` `+` ` ` `,` `#`
+// `(`, a width and a precision. A conversion that does not fit its argument
+// raises IllegalArgumentException with Java's exception name
+// (`IllegalFormatConversionException: d != a float`), as JVM Clojure does.
+
+[[noreturn]] void throwFormat(proto::ProtoContext* ctx, const std::string& what) {
+    throwClassed(ctx, "IllegalArgumentException", what);
+}
+
+// Inserts Java's `,` grouping into the integer digits of `digits` (which may
+// start with a sign and contain a decimal point).
+std::string groupThousands(const std::string& digits) {
+    std::size_t start = (!digits.empty() && (digits[0] == '-' || digits[0] == '+')) ? 1 : 0;
+    std::size_t end = digits.find('.');
+    if (end == std::string::npos) end = digits.size();
+    std::string intPart = digits.substr(start, end - start);
+    std::string grouped;
+    const std::size_t n = intPart.size();
+    for (std::size_t i = 0; i < n; ++i) {
+        grouped += intPart[i];
+        if (i + 1 < n && (n - i - 1) % 3 == 0) grouped += ',';
+    }
+    return digits.substr(0, start) + grouped + digits.substr(end);
+}
+
+// Pads `body` to `width`: left-justified with `-`, with zeros after the sign
+// with `0`, else with spaces on the left.
+std::string padField(std::string body, long width, bool left, bool zero) {
+    if (width < 0 || static_cast<long>(body.size()) >= width) return body;
+    const std::size_t fill = static_cast<std::size_t>(width) - body.size();
+    if (left) return body + std::string(fill, ' ');
+    if (zero) {
+        std::size_t at = (!body.empty() && (body[0] == '-' || body[0] == '+' || body[0] == ' ' || body[0] == '(')) ? 1 : 0;
+        if (body.compare(at, 2, "0x") == 0 || body.compare(at, 2, "0X") == 0) at += 2;
+        return body.substr(0, at) + std::string(fill, '0') + body.substr(at);
+    }
+    return std::string(fill, ' ') + body;
+}
+
+// `m` (finite, non-negative) with `prec` fractional digits ('f') or in
+// scientific notation with `prec` mantissa digits ('e'), rounded half up as
+// Java's Formatter rounds (RoundingMode.HALF_UP), where C's printf rounds an
+// exact tie to even: (format "%.1f" 2.25) is "2.3" in Java and "2.2" in C.
+// glibc prints exact decimal digits, so 25 extra digits decide the tie.
+std::string fixedHalfUp(double m, int prec, char conv) {
+    const int extra = 25;
+    const char* cfmt = conv == 'f' ? "%.*f" : "%.*e";
+    std::string text(static_cast<std::size_t>(std::snprintf(nullptr, 0, cfmt, prec + extra, m)) + 1, '\0');
+    std::snprintf(text.data(), text.size(), cfmt, prec + extra, m);
+    text.pop_back();
+    std::string exponent;
+    if (conv == 'e') {
+        const std::size_t e = text.find('e');
+        exponent = text.substr(e);
+        text = text.substr(0, e);
+    }
+    const std::size_t point = text.find('.');
+    std::string digits = text.substr(0, point) + text.substr(point + 1);
+    const std::size_t intLen = point;
+    const std::size_t keep = intLen + static_cast<std::size_t>(prec);
+    const bool up = digits[keep] >= '5';
+    digits.resize(keep);
+    std::size_t newIntLen = intLen;
+    if (up) {
+        std::size_t i = keep;
+        while (i > 0) {
+            --i;
+            if (digits[i] == '9') { digits[i] = '0'; continue; }
+            ++digits[i];
+            break;
+        }
+        if (digits.empty() || (i == 0 && digits[0] == '0')) {
+            digits.insert(digits.begin(), '1');
+            ++newIntLen;
+        }
+    }
+    if (conv == 'e' && newIntLen > intLen) {
+        // 9.99e+00 rounded up is 10.0e+00: renormalise to 1.00e+01.
+        digits.pop_back();
+        newIntLen = intLen;
+        int ex = std::stoi(exponent.substr(1)) + 1;
+        char eb[16];
+        std::snprintf(eb, sizeof eb, "e%c%02d", ex < 0 ? '-' : '+', ex < 0 ? -ex : ex);
+        exponent = eb;
+    }
+    std::string out = digits.substr(0, newIntLen);
+    if (prec > 0) out += "." + digits.substr(newIntLen);
+    return out + exponent;
+}
+
+std::string formatValue(proto::ProtoContext* ctx, const std::string& flags, long width,
+                        long precision, char conv, const proto::ProtoObject* arg) {
+    const bool left = flags.find('-') != std::string::npos;
+    const bool zero = flags.find('0') != std::string::npos;
+    const bool plus = flags.find('+') != std::string::npos;
+    const bool space = flags.find(' ') != std::string::npos;
+    const bool group = flags.find(',') != std::string::npos;
+    const bool alt = flags.find('#') != std::string::npos;
+    const bool paren = flags.find('(') != std::string::npos;
+    const char lower = static_cast<char>(std::tolower(static_cast<unsigned char>(conv)));
+    const bool upper = conv != lower;
+    auto upcase = [](std::string t) {
+        for (char& c : t) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        return t;
+    };
+    auto typeName = [&]() -> std::string {
+        return valueTypeName(ctx, arg);
+    };
+    std::string body;
+    switch (lower) {
+        case 's': {
+            if (!arg || arg == PROTO_NONE) body = "null";
+            else appendStr(ctx, body, arg);
+            if (precision >= 0 && static_cast<long>(body.size()) > precision)
+                body.resize(static_cast<std::size_t>(precision));
+            if (upper) body = upcase(body);
+            return padField(body, width, left, false);
+        }
+        case 'b': {
+            body = (!arg || arg == PROTO_NONE || arg == PROTO_FALSE) ? "false" : "true";
+            if (upper) body = upcase(body);
+            return padField(body, width, left, false);
+        }
+        case 'c': {
+            if (isStringLike(arg)) body = asProtoString(arg)->toStdString(ctx);
+            else if (arg && arg->isInteger(ctx)) {
+                const long long cp = arg->asLong(ctx);
+                // The code point, UTF-8 encoded.
+                if (cp < 0x80) body += static_cast<char>(cp);
+                else if (cp < 0x800) { body += static_cast<char>(0xC0 | (cp >> 6)); body += static_cast<char>(0x80 | (cp & 0x3F)); }
+                else if (cp < 0x10000) { body += static_cast<char>(0xE0 | (cp >> 12)); body += static_cast<char>(0x80 | ((cp >> 6) & 0x3F)); body += static_cast<char>(0x80 | (cp & 0x3F)); }
+                else { body += static_cast<char>(0xF0 | (cp >> 18)); body += static_cast<char>(0x80 | ((cp >> 12) & 0x3F)); body += static_cast<char>(0x80 | ((cp >> 6) & 0x3F)); body += static_cast<char>(0x80 | (cp & 0x3F)); }
+            } else if (!arg || arg == PROTO_NONE) body = "null";
+            else throwFormat(ctx, std::string("IllegalFormatConversionException: c != ") + typeName());
+            if (upper) body = upcase(body);
+            return padField(body, width, left, false);
+        }
+        case 'd': case 'x': case 'o': {
+            if (!arg || arg == PROTO_NONE) return padField("null", width, left, false);
+            if (!arg->isInteger(ctx))
+                throwFormat(ctx, std::string("IllegalFormatConversionException: ") + conv + " != " + typeName());
+            bool negative = false;
+            std::string digits;
+            const int base = lower == 'd' ? 10 : lower == 'x' ? 16 : 8;
+            bool small = true;
+            long long v = 0;
+            try { v = arg->asLong(ctx); } catch (const proto::ProtoException&) { small = false; }
+            if (small && base != 10) {
+                // A long prints in two's complement, as Java's %x of a Long.
+                char buf[32];
+                std::snprintf(buf, sizeof buf, base == 16 ? "%llx" : "%llo",
+                              static_cast<unsigned long long>(v));
+                digits = buf;
+            } else if (small) {
+                negative = v < 0;
+                digits = std::to_string(v);
+                if (negative) digits.erase(0, 1);
+            } else {
+                digits = arg->asIntegerString(ctx, base)->toStdString(ctx);
+                if (!digits.empty() && digits[0] == '-') { negative = true; digits.erase(0, 1); }
+            }
+            if (lower == 'd' && group) digits = groupThousands(digits);
+            if (alt && lower == 'x') digits = "0x" + digits;
+            if (alt && lower == 'o') digits = "0" + digits;
+            if (negative) body = paren ? "(" + digits + ")" : "-" + digits;
+            else body = (plus ? "+" : space ? " " : "") + digits;
+            if (upper) body = upcase(body);
+            return padField(body, width, left, zero);
+        }
+        case 'f': case 'e': case 'g': {
+            if (!arg || arg == PROTO_NONE) return padField("null", width, left, false);
+            if (!arg->isFloat(ctx))
+                throwFormat(ctx, std::string("IllegalFormatConversionException: ") + conv + " != " + typeName());
+            const double d = arg->asDouble(ctx);
+            if (std::isnan(d) || std::isinf(d)) {
+                body = std::isnan(d) ? "NaN" : (d > 0 ? (plus ? "+Infinity" : "Infinity") : (paren ? "(Infinity)" : "-Infinity"));
+                return padField(body, width, left, false);
+            }
+            const int prec = precision >= 0 ? static_cast<int>(precision) : 6;
+            std::string digits;
+            if (lower == 'g') {
+                char buf[512];
+                std::snprintf(buf, sizeof buf, "%#.*g", prec == 0 ? 1 : prec, std::fabs(d));
+                digits = buf;
+            } else {
+                digits = fixedHalfUp(std::fabs(d), prec, lower);
+            }
+            if (lower == 'f' && group) digits = groupThousands(digits);
+            const bool negative = std::signbit(d);
+            if (negative) body = paren ? "(" + digits + ")" : "-" + digits;
+            else body = (plus ? "+" : space ? " " : "") + digits;
+            if (upper) body = upcase(body);
+            return padField(body, width, left, zero);
+        }
+        default:
+            throwFormat(ctx, std::string("UnknownFormatConversionException: Conversion = '") + conv + "'");
+    }
+}
+
+std::string formatString(proto::ProtoContext* ctx, const std::string& fmt,
+                         const proto::ProtoArguments* args, proto::proto_ulong first) {
+    const proto::proto_ulong argc = args ? args->getSize(ctx) : 0;
+    std::string out;
+    proto::proto_ulong next = first;   // the next ordinary argument
+    long last = -1;                    // the argument `%<` reuses
+    for (std::size_t i = 0; i < fmt.size(); ++i) {
+        if (fmt[i] != '%') { out += fmt[i]; continue; }
+        std::size_t j = i + 1;
+        // %[index$][flags][width][.precision]conversion
+        long index = -1;
+        bool previous = false;
+        std::size_t k = j;
+        while (k < fmt.size() && std::isdigit(static_cast<unsigned char>(fmt[k]))) ++k;
+        if (k < fmt.size() && fmt[k] == '$' && k > j) {
+            index = std::stol(fmt.substr(j, k - j));
+            j = k + 1;
+        } else if (j < fmt.size() && fmt[j] == '<') {
+            previous = true;
+            ++j;
+        }
+        std::string flags;
+        while (j < fmt.size() && std::string("-#+ 0,(").find(fmt[j]) != std::string::npos) flags += fmt[j++];
+        long width = -1, precision = -1;
+        if (j < fmt.size() && std::isdigit(static_cast<unsigned char>(fmt[j]))) {
+            std::size_t w = j;
+            while (j < fmt.size() && std::isdigit(static_cast<unsigned char>(fmt[j]))) ++j;
+            width = std::stol(fmt.substr(w, j - w));
+        }
+        if (j < fmt.size() && fmt[j] == '.') {
+            std::size_t p = ++j;
+            while (j < fmt.size() && std::isdigit(static_cast<unsigned char>(fmt[j]))) ++j;
+            if (j == p) throwFormat(ctx, "IllegalFormatPrecisionException: missing precision");
+            precision = std::stol(fmt.substr(p, j - p));
+        }
+        if (j >= fmt.size()) throwFormat(ctx, "UnknownFormatConversionException: Conversion = '%'");
+        const char conv = fmt[j];
+        i = j;
+        if (conv == '%') { out += padField("%", width, flags.find('-') != std::string::npos, false); continue; }
+        if (conv == 'n') { out += '\n'; continue; }
+        proto::proto_ulong at;
+        if (previous) {
+            if (last < 0) throwFormat(ctx, "MissingFormatArgumentException: Format specifier '%<" + std::string(1, conv) + "'");
+            at = static_cast<proto::proto_ulong>(last);
+        } else if (index > 0) {
+            at = first + static_cast<proto::proto_ulong>(index - 1);
+        } else {
+            at = next++;
+        }
+        if (at >= argc)
+            throwFormat(ctx, std::string("MissingFormatArgumentException: Format specifier '%") + conv + "'");
+        last = static_cast<long>(at);
+        out += formatValue(ctx, flags, width, precision, conv, args->getAt(ctx, static_cast<int>(at)));
+    }
+    return out;
+}
+
+// (format fmt & args) — the string Java's String.format builds.
+const proto::ProtoObject* prim_format(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject*,
+                                      const proto::ParentLink*,
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) < 1) throwError(ctx, "format: expects (format fmt & args)");
+    const std::string fmt = stringArgOf(ctx, args, 0, "format");
+    return reinterpret_cast<const proto::ProtoObject*>(
+        proto::ProtoString::fromStdString(ctx, formatString(ctx, fmt, args, 1)));
+}
+
+// (printf fmt & args) — prints (format fmt args...), with no newline.
+const proto::ProtoObject* prim_printf(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject*,
+                                      const proto::ParentLink*,
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) < 1) throwError(ctx, "printf: expects (printf fmt & args)");
+    const std::string fmt = stringArgOf(ctx, args, 0, "printf");
+    const std::string text = formatString(ctx, fmt, args, 1);
+    std::fwrite(text.data(), 1, text.size(), stdout);
+    std::fflush(stdout);
+    return PROTO_NONE;
+}
+
 // (print x ...) — the arguments as println prints them, without the newline.
 const proto::ProtoObject* prim_print(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
@@ -3831,6 +4117,10 @@ constexpr PrimitiveEntry kPrimitives[] = {
     {"re-groups",     &prim_re_groups},
     {"replace-first", &prim_replace_first},
     {"identical?",    &prim_identical_p},
+
+    // format / printf.
+    {"format",        &prim_format},
+    {"printf",        &prim_printf},
 
     // Destructuring (compiler/Compiler.h, destructure).
     {"__destructure-map", &prim_destructure_map},

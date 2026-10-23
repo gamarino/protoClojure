@@ -28,7 +28,9 @@ under a `Dnn` id.
 >   `clojure.core` macros (`when-let`, `if-let`, the threading macros,
 >   `doto`, `doseq`, `dotimes`, `case`, `condp`, ...) from `core.clj`, with
 >   no `letfn`; destructuring in `let`, `loop`, parameter vectors and the
->   binding macros; sets `#{...}` with `clojure.set`'s `union`,
+>   binding macros; `for` and `doseq` with `:let` / `:when` / `:while`
+>   (`for` and `range` are eager until lazy sequences land); `format` and
+>   `printf`; sets `#{...}` with `clojure.set`'s `union`,
 >   `intersection` and `difference` as globals. Other reader macros, most
 >   collection functions, lazy sequences, the higher-order combinators,
 >   namespaces, vars and `binding`, volatiles and delays are

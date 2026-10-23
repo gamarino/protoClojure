@@ -1200,6 +1200,30 @@ them. Alternative: wait for namespaces; rejected because the full names are
 common in scripts and cost nothing to accept. The `str/` alias of
 `(:require [clojure.string :as str])` still needs `ns` (stage 13 notes).
 
+**M27. `for` and `doseq` in `core.clj`; `for` is eager behind one hook;
+`format` in C++** (*agent, pending review*). `doseq` with `:let`, `:when`
+and `:while` expands, per binding, into a `loop` over `(seq coll)` whose
+body wraps the inner code in the modifiers in order (`:when` false steps
+to the next element, `:while` false ends the loop without the `recur`), as
+clojure.core's `doseq` does without its chunked-seq path. `for` expands
+into one `(clojure.core/__for-step coll (fn [binding] ...))` per binding;
+the innermost body is `(list expr)`, `:when` false is `()` and `:while`
+false is the marker `__for-stop`, which makes `__for-step` stop iterating
+that binding. `__for-step` is today an eager walk that concatenates the
+inner results into a list (D46), so stage 11 changes only that function
+into a lazy walk to make `for` lazy; the expansion stays. Alternatives: (a)
+Clojure's own `for`, built on `lazy-seq` and chunked seqs, not possible
+before stage 11; (b) `for` as a `doseq` that conjoins onto an accumulator,
+rejected because it would have to be rewritten for laziness. A finite,
+eager `range` (in `core.clj`) came with it, since `for` without `range` is
+not how Clojure programmers write it; `(range)` with no end is an error
+until stage 11. `format` and `printf` are C++ (`formatString` in
+`Primitives.cpp`), implementing the conversions of Java's `Formatter` a
+script uses, with Java's half-up rounding for `%f` and `%e` (C's printf
+rounds an exact tie to even), `%s` rendering a value as `str` does and nil
+as `null`, as Clojure's format does; the differences are D47. `(apply f x y
+coll)` now compiles as `(apply f (list* x y coll))`.
+
 ## 11. The standard library
 
 Two phases:

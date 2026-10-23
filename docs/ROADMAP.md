@@ -134,7 +134,8 @@ Part B of the macros brief, the scripting vocabulary, on the same branch:
    binding macros (DESIGN.md §10.2, M23).
 8. [x] Sets and `clojure.set` (DESIGN.md §10.2, M24).
 9. [x] Regular expressions (DESIGN.md §10.2, M25, M26; D45).
-10. [ ] `format` / `printf`, `doseq` modifiers, `for`.
+10. [x] `format` / `printf`, `doseq` modifiers, `for` (eager until stage
+    11), a finite `range` (DESIGN.md §10.2, M27; D46, D47).
 11. [ ] Lazy sequences.
 12. [ ] JSON and EDN.
 13. [ ] Showcase against Babashka.

@@ -91,6 +91,10 @@ The design specifications written during development are archived under
 - [x] Booleans + nil — `true`, `false`, `nil`, read as the values
 - [x] Lists `(...)`
 - [x] Vectors `[...]`
+- [x] `format` and `printf` (Java's `String.format` conversions, D47);
+      `for` with `:let` / `:when` / `:while` and `doseq` with the same
+      modifiers (DESIGN.md §10.2, M27); a finite, eager `range`; `apply`
+      with leading arguments, `(apply f x y coll)`
 - [x] Regular expressions `#"..."` (compiled when read; DESIGN.md §10.2,
       M25), `re-pattern`, `re-find`, `re-matches`, `re-seq`, `re-matcher`,
       `re-groups`, and `replace`, `replace-first`, `split` with a pattern,
@@ -470,12 +474,9 @@ raises a read, compile or runtime error.
 (`let` and `loop` at the top level and docstrings in `defn` / `defmacro`
 work since macros stage 4.)
 
-- [ ] `(apply f x y coll)` with leading arguments (`apply` over a list, a
-      vector or nil works)
 - [ ] `let*` / `fn*` raw forms
 - [ ] `var` form
 - [ ] `letfn` (needs a `letfn*` form; DESIGN.md §10.1, M22)
-- [ ] `doseq` modifiers `:let`, `:when`, `:while` (Part B, stage 10)
 
 ### Data structures (not yet)
 
@@ -553,8 +554,7 @@ for the rationale.
 - [ ] Map operations: `update merge select-keys get-in update-in assoc-in`
 - [ ] More higher-order: `comp partial juxt`
 - [ ] More predicates: `every? some not-any? not-every?`
-- [ ] Range / sequence: `range iterate repeat cycle take drop take-while drop-while partition partition-all`
-- [ ] `format` (printf-style)
+- [ ] Range / sequence: `iterate repeat cycle take drop take-while drop-while partition partition-all`, and `(range)` with no end (a finite `range` exists, eager: D46)
 - [ ] `frequencies group-by sort sort-by`
 
 ### REPL and command line (not yet)
@@ -649,6 +649,8 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D43 | Symbols are interned and never collected, generated ones included: a program that calls `gensym` or `symbol` on fresh names without end grows by one symbol per name (JVM Clojure collects unreferenced symbols) | (perm) |
 | D44 | `case` tests its constants in order with `=` (O(n) in the number of clauses; JVM Clojure dispatches on a hash in constant time), so numbers of different types match (D15); the result is otherwise Clojure's, including `IllegalArgumentException: No matching clause: x` | (perm) |
 | D45 | Regular expressions run on the C++ standard library's `std::regex`, ECMAScript grammar, over the UTF-8 bytes of the string (JVM Clojure: `java.util.regex` over UTF-16). Translated from Java: the leading inline flags `(?i)` `(?m)` `(?s)` (`(?u)` `(?U)` accepted, no effect), named groups `(?<n>X)` (numbered; `\k<n>` is not supported), `\Q...\E`, `\A` / `\z` / `\Z` outside multiline mode. Not supported, a `PatternSyntaxException`: lookbehind `(?<=` `(?<!`, possessive quantifiers `*+`, atomic groups `(?>`, `\p{...}` / `\P{...}` classes, class intersection `[a&&b]`, flags in mid-pattern, `(?x)` comments, `(?d)`. Different: `.`, `\w`, `\s` and character classes see bytes, so a multi-byte UTF-8 character is several (D17); `$` in non-multiline mode matches only at the very end (Java also before a final line terminator); case folding is ASCII; the captures of a group repeated by `*` that matched empty may differ (`(a*)*b`). Every distinct pattern source is compiled once and kept for the process (like interned symbols, D43). A pattern with back-references backtracks on the native stack, so a match that could exhaust it raises `StackOverflowError` beforehand (about 32 KB of subject); others are not limited. No `Matcher` interop beyond `re-matcher` / `re-find` / `re-groups` | (perm: engine) |
+| D46 | `for`, `range` and `re-seq` answer lists built eagerly, and `(range)` with no end is an error (JVM Clojure: lazy seqs). Until lazy sequences land (Part B, stage 11) a `for` over an infinite or huge sequence cannot stop early except through `:while` | stage 11 |
+| D47 | `format` / `printf` implement Java's `String.format` conversions `%s %S %d %x %X %o %f %e %E %g %G %b %B %c %C %n %%` with argument indexes, flags, width and precision, but not `%h`, `%a`, the date/time `%t` conversions, nor locale-specific output. Errors are `IllegalArgumentException`s whose message starts with Java's exception name and names a protoClojure type (`IllegalFormatConversionException: d != a float`; Java: `d != java.lang.Double`). `%g` rounds an exact tie to even (Java: half up; `%f` and `%e` round half up, as Java). Widths count bytes, so a multi-byte UTF-8 character counts as several (D17) | (perm) |
 | D34 | A `catch` naming no built-in class names a type looked up at run time, when an exception reaches the clause (a var, a local, or a module member `alias/Type`), and is matched by the thrown value's prototype chain; JVM Clojure resolves the class at compile time. So `(try 1 (catch NoSuchException e 2))` compiles and answers 1, and the error `Unable to resolve classname: NoSuchException` is a `RuntimeException` raised when an exception reaches the clause (JVM Clojure: a compile error). A type that resolves to a value that is not a prototype object raises `IllegalArgumentException`. A module's error (a foreign value) is caught by `Exception`, `Throwable` and `Object`, by its own types, and by no other built-in class | (perm: the platform is late-binding) |
 
 ## Known issues

@@ -230,23 +230,121 @@
            ~@body
            (recur (+ ~i 1)))))))
 
+(defn __check-seq-bindings [macro bindings]
+  (when-not (vector? bindings)
+    (__raise-illegal-argument (str macro " requires a vector for its binding")))
+  (when (odd? (count bindings))
+    (__raise-illegal-argument (str macro " requires an even number of forms in binding vector"))))
+
+(defn __binding-groups
+  "Splits a doseq / for binding vector into groups [binding coll mod ...],
+  where each mod is a [:let v], [:when t] or [:while t] pair that follows
+  the binding, in order."
+  [macro bindings]
+  (when (keyword? (first bindings))
+    (__raise-illegal-argument (str macro " binding must start with a binding form, not " (first bindings))))
+  (loop [bs (seq bindings) groups [] cur nil]
+    (if bs
+      (let [b (first bs) v (second bs) more (nnext bs)]
+        (if (keyword? b)
+          (if (contains? #{:let :when :while} b)
+            (recur more groups (conj cur [b v]))
+            (__raise-illegal-argument (str "Invalid '" macro "' keyword " b)))
+          (recur more (if cur (conj groups cur) groups) [b v])))
+      (if cur (conj groups cur) groups))))
+
+(defn __doseq-wrap
+  "Wraps the inner code of one doseq binding in its modifiers: the loop
+  steps with `step` after the inner code and when :when fails, and stops
+  when :while fails (no step)."
+  [mods inner step]
+  (if (seq mods)
+    (let [[k v] (first mods)]
+      (if (= k :let) (list 'let v (__doseq-wrap (next mods) inner step))
+        (if (= k :when) (list 'if v (__doseq-wrap (next mods) inner step) step)
+          (list 'if v (__doseq-wrap (next mods) inner step) nil))))
+    (list 'do inner step)))
+
+(defn __doseq-step
+  "The code of a doseq over binding groups: one loop over each seq."
+  [groups body]
+  (if (seq groups)
+    (let [[b coll & mods] (first groups)
+          s (gensym "seq_")]
+      (list 'loop [s (list 'clojure.core/seq coll)]
+            (list 'if s
+                  (list 'let [b (list 'clojure.core/first s)]
+                        (__doseq-wrap mods (__doseq-step (next groups) body)
+                                      (list 'recur (list 'clojure.core/next s))))
+                  nil)))
+    (cons 'do body)))
+
 (defmacro doseq
   "Repeatedly executes body (presumably for side effects) with bindings,
-  nested left to right, bound to each element of their sequences. Returns
-  nil."
+  nested left to right, bound to each element of their sequences. Supports
+  the modifiers :let [binding-form expr ...], :when test and :while test.
+  Returns nil."
   [bindings & body]
-  (when-not (vector? bindings)
-    (__raise-illegal-argument "doseq requires a vector for its binding"))
-  (when (odd? (count bindings))
-    (__raise-illegal-argument "doseq requires an even number of forms in binding vector"))
-  (if (seq bindings)
-    (let [more (nnext bindings)]
-      `(loop [s# (seq ~(second bindings))]
-         (when s#
-           (let [~(first bindings) (first s#)]
-             ~(if more `(doseq ~(vec more) ~@body) `(do ~@body)))
-           (recur (next s#)))))
-    `(do ~@body nil)))
+  (__check-seq-bindings "doseq" bindings)
+  (list 'do (__doseq-step (__binding-groups "doseq" bindings) body) nil))
+
+;; for builds its result through __for-step, one call per binding: today an
+;; eager walk that concatenates the inner results into a list; with lazy
+;; sequences (stage 11) only __for-step changes, to a lazy-seq walk that
+;; stops at the same __for-stop marker.
+
+(def __for-stop (gensym "for-stop__"))
+
+(defn __for-step [coll f]
+  (loop [s (seq coll) acc []]
+    (if s
+      (let [r (f (first s))]
+        (if (identical? r __for-stop) (or (seq acc) ()) (recur (next s) (into acc r))))
+      (or (seq acc) ()))))
+
+(defn __for-wrap
+  "Wraps the inner code of one for binding in its modifiers: :when fails
+  into no element, :while fails into the stop marker."
+  [mods inner]
+  (if (seq mods)
+    (let [[k v] (first mods)]
+      (if (= k :let) (list 'let v (__for-wrap (next mods) inner))
+        (if (= k :when) (list 'if v (__for-wrap (next mods) inner) ())
+          (list 'if v (__for-wrap (next mods) inner) 'clojure.core/__for-stop))))
+    inner))
+
+(defn __for-emit [groups body]
+  (if (seq groups)
+    (let [[b coll & mods] (first groups)]
+      (list 'clojure.core/__for-step coll
+            (list 'fn [b] (__for-wrap mods (__for-emit (next groups) body)))))
+    (list 'clojure.core/list body)))
+
+(defmacro for
+  "List comprehension. Takes a vector of one or more binding-form /
+  collection-expr pairs, each followed by zero or more modifiers, and yields
+  a sequence of evaluations of expr. Collections are iterated in a nested
+  fashion, rightmost fastest. Supported modifiers are :let [binding-form
+  expr ...], :while test, :when test. The sequence is built eagerly until
+  lazy sequences exist."
+  [seq-exprs body-expr]
+  (__check-seq-bindings "for" seq-exprs)
+  (__for-emit (__binding-groups "for" seq-exprs) body-expr))
+
+(defn range
+  "Returns a list of nums from start (inclusive, default 0) to end
+  (exclusive), by step (default 1). Eager and finite until lazy sequences
+  exist: (range) with no end is an error."
+  ([] (__raise-illegal-argument "(range) with no end needs lazy sequences, which are not implemented yet"))
+  ([end] (range 0 end 1))
+  ([start end] (range start end 1))
+  ([start end step]
+   (when (= step 0)
+     (__raise-illegal-argument "(range start end 0) is infinite; lazy sequences are not implemented yet"))
+   (loop [i start acc []]
+     (if (if (> step 0) (< i end) (> i end))
+       (recur (+ i step) (conj acc i))
+       (or (seq acc) ())))))
 
 ;; ---- Dispatch ------------------------------------------------------------
 
