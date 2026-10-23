@@ -3,6 +3,7 @@
 #include "runtime/ListBuilder.h"
 #include "runtime/MapOps.h"
 #include "runtime/SetOps.h"
+#include "runtime/Regex.h"
 #include "runtime/StackGuard.h"
 #include "runtime/VectorOps.h"
 
@@ -206,6 +207,17 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
             }
             return m;
         }
+
+        case TokenKind::Regex:
+            // `#"..."` is a pattern value, compiled when it is read, as in
+            // Clojure (runtime/Regex.h); a pattern the engine rejects is a
+            // read error.
+            try {
+                return makePattern(parent, tok.text);
+            } catch (const PatternSyntaxError& e) {
+                throw ReaderError(std::string("PatternSyntaxException: ") + e.what(),
+                                  tok.line, tok.column);
+            }
 
         case TokenKind::HashLBrace: {
             // `#{a b}` is a set, the value `(hash-set ..)` builds at run time

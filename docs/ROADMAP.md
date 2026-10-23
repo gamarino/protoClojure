@@ -72,7 +72,7 @@ follow-ups below.
   opcodes and a per-frame handler stack; `recur` across a `try` is a
   compile error, as in JVM Clojure.
 - `ex-info`, `ex-data`, `ex-message`, `ex-cause`.
-- A built-in class hierarchy of 23 classes mirroring the Java ones
+- A built-in class hierarchy of 23 classes (24 since `PatternSyntaxException`) mirroring the Java ones
   (`Exception`, `RuntimeException`, `ExceptionInfo`, `ArithmeticException`,
   `IOException` and its `java.io` / `java.net` subclasses,
   `ExecutionException`, `StackOverflowError`, …).
@@ -133,7 +133,7 @@ Part B of the macros brief, the scripting vocabulary, on the same branch:
 7. [x] Destructuring in `let`, `loop`, `fn`, `defn`, `defmacro` and the
    binding macros (DESIGN.md §10.2, M23).
 8. [x] Sets and `clojure.set` (DESIGN.md §10.2, M24).
-9. [ ] Regular expressions.
+9. [x] Regular expressions (DESIGN.md §10.2, M25, M26; D45).
 10. [ ] `format` / `printf`, `doseq` modifiers, `for`.
 11. [ ] Lazy sequences.
 12. [ ] JSON and EDN.

@@ -56,6 +56,7 @@ tell at a glance which parts of the surface are runnable today. The
 | Lists `(...)` | Implemented |
 | Vectors `[...]` | Implemented (a `ProtoList` in a one-entry sparse-list box, distinct from list) |
 | Maps `{...}` | Implemented (`hash-map`, `assoc`, `dissoc`, `get`, `contains?`, `keys`, `vals`; `count` and `empty?` accept maps) |
+| Regular expressions `#"..."`, `re-pattern`, `re-find`, `re-matches`, `re-seq`, `re-matcher`, `re-groups`; `replace`, `replace-first` and `split` with a pattern | Implemented on `std::regex` ECMAScript, with Java's inline flags translated (§2.10, D45) |
 | Sets `#{...}` | Implemented (`hash-set`, `set`, `set?`, `conj`, `disj`, `contains?`, `get`, a set as a function; `union`, `intersection`, `difference`, `subset?`, `superset?` as globals; §4.4) |
 | `def`, `defn`, `fn`, `let`, `loop`, `recur` | Implemented (`let` and `loop` also at the top level; docstrings accepted) |
 | Multi-arity `defn` | Implemented |
@@ -322,6 +323,53 @@ truthy).
 
 `#inst "..."` and `#uuid "..."` are reserved. v0.1 reads them as the
 tagged forms but does not yet ship `inst?` / `uuid?` predicates.
+
+### 2.10 Regular expressions
+
+`#"pattern"` is a regular-expression literal, compiled when it is read, as
+in Clojure. Its characters are taken as written: a backslash stays with the
+character after it, so `#"\d+"` needs no doubled backslash and `#"\""`
+matches a quote. A pattern prints as `#"..."` (and `str` gives its source);
+patterns compare by identity.
+
+```clojure
+(re-find #"\d+" "abc 123 def")              ;; => "123"
+(re-find #"(\w+)@(\w+)" "mail joe@host")     ;; => ["joe@host" "joe" "host"]
+(re-matches #"\d+" "123a")                   ;; => nil (the whole string must match)
+(re-seq #"\d+" "1 22 333")                   ;; => ("1" "22" "333")
+(clojure.string/split "a, b,c" #",\s*")      ;; => ["a" "b" "c"]
+(clojure.string/replace "john smith" #"(\w+) (\w+)" "$2, $1")  ;; => "smith, john"
+(clojure.string/replace "a1b2" #"\d" (fn [d] (str "<" d ">")))  ;; => "a<1>b<2>"
+```
+
+- `re-pattern` compiles a string; `re-find` answers the first match,
+  `re-matches` a match of the whole string, `re-seq` every match (a list,
+  built eagerly, until lazy sequences land), `nil` when there is none. A
+  match is the matched string when the pattern has no groups, else a vector
+  of the match and its groups (`nil` for a group that took no part).
+- `re-matcher` makes a matcher: each `(re-find m)` answers the next match
+  and `(re-groups m)` the groups of the last one (`IllegalStateException:
+  No match found` before the first).
+- `replace` and `replace-first` take a pattern with a string replacement
+  (`$1` is group 1, `\$` a dollar) or a function of the match; `split`
+  takes a pattern and an optional limit and answers a vector, dropping
+  trailing empty strings as Java's `String.split` does. A string separator
+  still works with `split` (a protoClojure extension, answering a list).
+- `clojure.string/split`, `clojure.string/replace` and the other
+  `clojure.string` and `clojure.set` functions can be written with their
+  namespace, with no `require` (there are no namespaces yet, D28).
+- The engine is the C++ standard library's `std::regex` in its ECMAScript
+  grammar, matching the UTF-8 bytes of the string. Java's leading inline
+  flags `(?i)`, `(?m)` and `(?s)`, named groups `(?<name>...)` (numbered),
+  `\Q...\E` and `\A` / `\z` are translated; lookbehind, possessive
+  quantifiers, atomic groups, `\p{...}` classes and flags in mid-pattern are
+  a `PatternSyntaxException` (an `IllegalArgumentException`), at read time
+  for a literal. The full list of differences is D45 in `STATUS.md`.
+- A long subject is safe: a pattern without back-references runs on the
+  engine's breadth-first executor, whose stack use does not grow with the
+  subject; a pattern with back-references backtracks on the native stack,
+  and a match that could exhaust it raises `StackOverflowError` before it
+  starts (about 32 KB of subject on the 32 MiB thread stack).
 
 ---
 
@@ -1186,7 +1234,8 @@ Throwable
 ├── Exception
 │   ├── RuntimeException
 │   │   ├── ExceptionInfo            ArithmeticException   ClassCastException
-│   │   ├── IllegalArgumentException ─ ArityException, NumberFormatException
+│   │   ├── IllegalArgumentException ─ ArityException, NumberFormatException,
+│   │   │                              PatternSyntaxException
 │   │   ├── IllegalStateException    NullPointerException  UnsupportedOperationException
 │   │   └── IndexOutOfBoundsException ─ StringIndexOutOfBoundsException
 │   ├── IOException ─ FileNotFoundException, SocketException ─ ConnectException,

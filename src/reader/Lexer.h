@@ -64,6 +64,7 @@ private:
     Token lexSymbolOrPunct();
     // `##Inf`, `##-Inf`, `##NaN`; the current character is the first `#`.
     Token lexSymbolicValue();
+    Token lexRegex();
 
     // A `-` is the start of a negative literal only when the previous token
     // does not end an operand (matches the D1 rule from protoST's lexer).

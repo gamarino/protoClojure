@@ -9,6 +9,32 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — scripting vocabulary, stage 9: regular expressions
+
+- **Regular expressions** (DESIGN.md §10.2, M25; D45): the `#"..."` literal,
+  compiled when read; `re-pattern`, `re-find` (also on a matcher),
+  `re-matches`, `re-seq`, `re-matcher`, `re-groups`; `replace` and the new
+  `replace-first` with a pattern and a string (`$1`) or fn replacement;
+  `split` with a pattern and an optional limit, answering a vector. On
+  `std::regex` ECMAScript, with Java's leading `(?i)` `(?m)` `(?s)`, named
+  groups, `\Q...\E` and `\A` / `\z` translated. Patterns without
+  back-references run on libstdc++'s breadth-first executor, so a long
+  subject cannot overflow the native stack; one with back-references raises
+  `StackOverflowError` before a match that could.
+- New exception class `PatternSyntaxException` (under
+  `IllegalArgumentException`).
+- `clojure.string/x` and `clojure.set/x` name the built-ins, with no
+  `require` (M26).
+- `identical?`.
+
+### Changed — stage 9
+
+- `#"x"` used to be the read error `reserved-for-later token: #"`.
+- New tests: 16 fixtures in `tests/conformance/35-regex/`, unit tests
+  `Regex.*` (5) and `Lexer.HashQuoteIsARegexLiteral`, the CLI check
+  `cli/regex-survives-gc`, regex lines in `cli/repl-scripting`;
+  `cli/shebang-scripts` now provokes its read error with `#"("`.
+
 ### Added — scripting vocabulary, stage 8: sets
 
 - **Sets** (DESIGN.md §10.2, M24): the `#{...}` literal (a repeated element

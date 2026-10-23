@@ -70,6 +70,7 @@ const char* tokenKindName(TokenKind k) {
         case TokenKind::RBrace:         return "RBrace";
         case TokenKind::HashLBrace:     return "HashLBrace";
         case TokenKind::HashLParen:     return "HashLParen";
+        case TokenKind::Regex:          return "Regex";
         case TokenKind::Quote:          return "Quote";
         case TokenKind::Backtick:       return "Backtick";
         case TokenKind::Tilde:          return "Tilde";
@@ -369,6 +370,34 @@ Token Lexer::lexString() {
     return t;
 }
 
+// `#"..."`: a regular expression literal. As in Clojure's reader, the
+// characters are taken as they are written: a backslash and the character
+// after it are both kept (so `#"\d"` is the pattern `\d` and `#"\""` the
+// pattern `\"`), and only an unescaped `"` ends the literal.
+Token Lexer::lexRegex() {
+    int startLine = line_, startCol = column_;
+    advance();  // #
+    advance();  // "
+    std::string out;
+    while (!eof() && current() != '"') {
+        if (current() == '\\') {
+            out += current();
+            advance();
+            if (eof()) break;
+        }
+        out += current();
+        advance();
+    }
+    if (eof()) return makeError("unterminated regular expression literal", startLine, startCol);
+    advance();  // closing "
+    Token t;
+    t.kind = TokenKind::Regex;
+    t.text = std::move(out);
+    t.line = startLine;
+    t.column = startCol;
+    return t;
+}
+
 // Anything not handled above and not single-punct is read as a symbol.
 // Clojure symbols accept letters, digits, and the punctuation set
 // `* + ! - _ ' ? < > = . / :`. The first char cannot be a bare digit
@@ -491,7 +520,8 @@ Token Lexer::lexSymbolOrPunct() {
             advance(); advance();
             return t;
         }
-        if (la == '(' || la == '_' || la == '\'' || la == '"') {
+        if (la == '"') return lexRegex();
+        if (la == '(' || la == '_' || la == '\'' ) {
             std::string s = std::string("#") + la;
             advance(); advance();
             return reserved(s);

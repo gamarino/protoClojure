@@ -364,3 +364,14 @@ TEST(Lexer, HashBraceOpensASet) {
     EXPECT_EQ(toks[1].kind, TokenKind::Integer);
     EXPECT_EQ(toks[2].kind, TokenKind::RBrace);
 }
+
+// `#"..."` is a regular-expression literal whose backslashes are kept.
+TEST(Lexer, HashQuoteIsARegexLiteral) {
+    auto toks = tokenise(R"(#"a\d\"b" x)");
+    ASSERT_GE(toks.size(), 2u);
+    EXPECT_EQ(toks[0].kind, TokenKind::Regex);
+    EXPECT_EQ(toks[0].text, R"(a\d\"b)");
+    EXPECT_EQ(toks[1].kind, TokenKind::Symbol);
+    auto open = tokenise(R"(#"abc)");
+    EXPECT_EQ(open.back().kind, TokenKind::Error);
+}

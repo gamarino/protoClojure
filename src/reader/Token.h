@@ -33,6 +33,7 @@ enum class TokenKind : uint8_t {
     RBrace,          // reserved — }
     HashLBrace,      // reserved — #{
     HashLParen,      // reserved — #(
+    Regex,           // #"..." — text is the pattern source, backslashes kept
 
     Quote,           // '   (reader macro for `(quote ...)`)
     Backtick,        // `   (syntax-quote)

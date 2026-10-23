@@ -205,6 +205,7 @@ add_library(protoclj_support STATIC
     src/runtime/ListBuilder.cpp
     src/runtime/MapOps.cpp
     src/runtime/Named.cpp
+    src/runtime/Regex.cpp
     src/runtime/SetOps.cpp
     src/runtime/StackGuard.cpp
     src/runtime/VectorOps.cpp

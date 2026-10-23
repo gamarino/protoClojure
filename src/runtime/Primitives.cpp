@@ -7,6 +7,7 @@
 #include "MapOps.h"
 #include "Macros.h"
 #include "SetOps.h"
+#include "Regex.h"
 #include "VectorOps.h"
 #include "StackGuard.h"
 
@@ -258,6 +259,14 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
         else          out += bytes;
         return;
     }
+    // A pattern, `#"src"` readably and its source otherwise, as Clojure
+    // prints a java.util.regex.Pattern (Regex.h).
+    if (isPattern(ctx, v)) {
+        if (readable) { out += "#\""; out += patternSource(ctx, v); out += '"'; }
+        else          out += patternSource(ctx, v);
+        return;
+    }
+    if (isMatcher(ctx, v)) { out += "#<matcher>"; return; }
     // A set, `#{a b}`, in its unspecified walk order (SetOps.h).
     if (isSet(ctx, v)) {
         out += "#{";
@@ -375,6 +384,8 @@ void appendStr(proto::ProtoContext* ctx, std::string& out,
     }
     // A file renders as its path, as JVM Clojure's `str` renders a File.
     if (appendIOFilePath(ctx, out, v)) return;
+    // A pattern renders as its source, as Pattern.toString does.
+    if (isPattern(ctx, v)) { out += patternSource(ctx, v); return; }
     printTo(ctx, out, v, /*readable=*/true);
 }
 
@@ -1480,6 +1491,307 @@ const proto::ProtoObject* prim_index_of(proto::ProtoContext* ctx,
     return ctx->fromLong(static_cast<long long>(found));
 }
 
+// (identical? x y) — the same object (pointer equality), as in Clojure.
+const proto::ProtoObject* prim_identical_p(proto::ProtoContext* ctx,
+                                           const proto::ProtoObject*,
+                                           const proto::ParentLink*,
+                                           const proto::ProtoArguments* args,
+                                           const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 2) throwError(ctx, "identical?: expects 2 args");
+    return args->getAt(ctx, 0) == args->getAt(ctx, 1) ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// Regular expressions (Regex.h) ---------------------------------------------
+
+// Argument `i` as a compiled pattern; `who` names the function in the error.
+const CompiledPattern* patternArg(proto::ProtoContext* ctx, const proto::ProtoArguments* args,
+                                  proto::proto_ulong i, const char* who) {
+    const proto::ProtoObject* v = args->getAt(ctx, static_cast<int>(i));
+    if (isPattern(ctx, v)) return patternOf(ctx, v);
+    throwClassed(ctx, "ClassCastException", std::string(who) + " expects a pattern, got " +
+                                            valueTypeName(ctx, v));
+}
+
+std::string stringArgOf(proto::ProtoContext* ctx, const proto::ProtoArguments* args,
+                        proto::proto_ulong i, const char* who) {
+    const proto::ProtoObject* v = args->getAt(ctx, static_cast<int>(i));
+    if (isStringLike(v)) return asProtoString(v)->toStdString(ctx);
+    throwClassed(ctx, "ClassCastException", std::string(who) + " expects a string, got " +
+                                            valueTypeName(ctx, v));
+}
+
+// What re-find and re-matches answer for a match: the matched string when
+// the pattern has no groups, else the vector [whole g1 g2 ...] with nil for
+// a group that did not participate, as in Clojure.
+const proto::ProtoObject* matchValue(proto::ProtoContext* ctx, const std::smatch& m,
+                                     unsigned groups) {
+    if (groups == 0)
+        return reinterpret_cast<const proto::ProtoObject*>(
+            proto::ProtoString::fromStdString(ctx, m.str(0)));
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    scope.setAutomaticLocal(0, scope.newList()->asObject(&scope));
+    for (unsigned g = 0; g <= groups; ++g) {
+        const proto::ProtoObject* part = m[g].matched
+            ? reinterpret_cast<const proto::ProtoObject*>(proto::ProtoString::fromStdString(&scope, m.str(g)))
+            : PROTO_NONE;
+        scope.setAutomaticLocal(0, scope.getAutomaticLocal(0)->asList(&scope)
+            ->appendLast(&scope, part)->asObject(&scope));
+    }
+    return newVector(&scope, scope.getAutomaticLocal(0)->asList(&scope));
+}
+
+// (re-pattern s) — the pattern of a string; a pattern is itself.
+const proto::ProtoObject* prim_re_pattern(proto::ProtoContext* ctx,
+                                          const proto::ProtoObject*,
+                                          const proto::ParentLink*,
+                                          const proto::ProtoArguments* args,
+                                          const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 1) throwError(ctx, "re-pattern: expects 1 arg");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (isPattern(ctx, v)) return v;
+    const std::string src = stringArgOf(ctx, args, 0, "re-pattern");
+    try {
+        return makePattern(ctx, src);
+    } catch (const PatternSyntaxError& e) {
+        throwClassed(ctx, "PatternSyntaxException", e.what());
+    }
+}
+
+// Matcher attributes (re-matcher, re-find on a matcher, re-groups).
+const proto::ProtoString* mPatternKey(proto::ProtoContext* c) { return proto::ProtoString::createSymbol(c, "__m_pattern__"); }
+const proto::ProtoString* mSubjectKey(proto::ProtoContext* c) { return proto::ProtoString::createSymbol(c, "__m_subject__"); }
+const proto::ProtoString* mPosKey(proto::ProtoContext* c)     { return proto::ProtoString::createSymbol(c, "__m_pos__"); }
+const proto::ProtoString* mGroupsKey(proto::ProtoContext* c)  { return proto::ProtoString::createSymbol(c, "__m_groups__"); }
+
+// (re-matcher re s) — a matcher over `s`: each (re-find m) answers the next
+// match, and (re-groups m) the groups of the last one.
+const proto::ProtoObject* prim_re_matcher(proto::ProtoContext* ctx,
+                                          const proto::ProtoObject*,
+                                          const proto::ParentLink*,
+                                          const proto::ProtoArguments* args,
+                                          const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 2) throwError(ctx, "re-matcher: expects (re-matcher re s)");
+    patternArg(ctx, args, 0, "re-matcher");
+    stringArgOf(ctx, args, 1, "re-matcher");
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    scope.setAutomaticLocal(0, matcherPrototype()->newChild(&scope, /*isMutable=*/true));
+    proto::ProtoObject* m = const_cast<proto::ProtoObject*>(scope.getAutomaticLocal(0));
+    m->setAttribute(&scope, mPatternKey(&scope), args->getAt(&scope, 0));
+    m->setAttribute(&scope, mSubjectKey(&scope), args->getAt(&scope, 1));
+    m->setAttribute(&scope, mPosKey(&scope), scope.fromLong(0));
+    return scope.getAutomaticLocal(0);
+}
+
+// The next match of matcher `mv`, as re-find answers it, or nil; records the
+// groups for re-groups and moves the position past the match (one byte
+// further after an empty match, so a find always makes progress).
+const proto::ProtoObject* matcherFind(proto::ProtoContext* ctx, const proto::ProtoObject* mv) {
+    proto::ProtoObject* m = const_cast<proto::ProtoObject*>(mv);
+    const CompiledPattern* cp = patternOf(ctx, m->getOwnAttributeDirect(ctx, mPatternKey(ctx)));
+    const std::string subject = asProtoString(m->getOwnAttributeDirect(ctx, mSubjectKey(ctx)))->toStdString(ctx);
+    const long long pos = m->getOwnAttributeDirect(ctx, mPosKey(ctx))->asLong(ctx);
+    if (pos > static_cast<long long>(subject.size())) return PROTO_NONE;
+    std::smatch match;
+    auto flags = pos > 0 ? std::regex_constants::match_prev_avail : std::regex_constants::match_default;
+    guardRecursiveMatch(cp, subject.size() - static_cast<std::size_t>(pos));
+    if (!std::regex_search(subject.begin() + pos, subject.end(), match, cp->regex, flags)) {
+        m->setAttribute(ctx, mPosKey(ctx), ctx->fromLong(static_cast<long long>(subject.size()) + 1));
+        return PROTO_NONE;
+    }
+    const long long start = pos + match.position(0);
+    long long next = start + match.length(0);
+    if (match.length(0) == 0) ++next;
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    scope.setAutomaticLocal(0, matchValue(&scope, match, cp->groups));
+    m->setAttribute(&scope, mGroupsKey(&scope), scope.getAutomaticLocal(0));
+    m->setAttribute(&scope, mPosKey(&scope), scope.fromLong(next));
+    return scope.getAutomaticLocal(0);
+}
+
+// (re-find re s) — the first match in `s`, or nil; (re-find m) — the next
+// match of a matcher.
+const proto::ProtoObject* prim_re_find(proto::ProtoContext* ctx,
+                                       const proto::ProtoObject*,
+                                       const proto::ParentLink*,
+                                       const proto::ProtoArguments* args,
+                                       const proto::ProtoKeywordArguments*) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    if (n == 1) {
+        const proto::ProtoObject* m = args->getAt(ctx, 0);
+        if (!isMatcher(ctx, m))
+            throwClassed(ctx, "ClassCastException", std::string("re-find expects a matcher, got ") +
+                                                    valueTypeName(ctx, m));
+        return matcherFind(ctx, m);
+    }
+    if (n != 2) throwError(ctx, "re-find: expects (re-find re s) or (re-find matcher)");
+    const CompiledPattern* cp = patternArg(ctx, args, 0, "re-find");
+    const std::string subject = stringArgOf(ctx, args, 1, "re-find");
+    std::smatch match;
+    guardRecursiveMatch(cp, subject.size());
+    if (!std::regex_search(subject, match, cp->regex)) return PROTO_NONE;
+    return matchValue(ctx, match, cp->groups);
+}
+
+// (re-matches re s) — the match of the whole of `s`, or nil.
+const proto::ProtoObject* prim_re_matches(proto::ProtoContext* ctx,
+                                          const proto::ProtoObject*,
+                                          const proto::ParentLink*,
+                                          const proto::ProtoArguments* args,
+                                          const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 2) throwError(ctx, "re-matches: expects (re-matches re s)");
+    const CompiledPattern* cp = patternArg(ctx, args, 0, "re-matches");
+    const std::string subject = stringArgOf(ctx, args, 1, "re-matches");
+    std::smatch match;
+    guardRecursiveMatch(cp, subject.size());
+    if (!std::regex_match(subject, match, cp->regex)) return PROTO_NONE;
+    return matchValue(ctx, match, cp->groups);
+}
+
+// (re-seq re s) — every successive match of `re` in `s`, or nil when there is
+// none. Clojure answers a lazy seq; here it is a list, built eagerly.
+const proto::ProtoObject* prim_re_seq(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject*,
+                                      const proto::ParentLink*,
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 2) throwError(ctx, "re-seq: expects (re-seq re s)");
+    const CompiledPattern* cp = patternArg(ctx, args, 0, "re-seq");
+    const std::string subject = stringArgOf(ctx, args, 1, "re-seq");
+    guardRecursiveMatch(cp, subject.size());
+    ListBuilder out(ctx);
+    for (std::sregex_iterator it(subject.begin(), subject.end(), cp->regex), end; it != end; ++it)
+        out.push(matchValue(out.context(), *it, cp->groups));
+    if (out.size() == 0) return PROTO_NONE;
+    return out.finish();
+}
+
+// (re-groups m) — the groups of the matcher's last successful find.
+const proto::ProtoObject* prim_re_groups(proto::ProtoContext* ctx,
+                                         const proto::ProtoObject*,
+                                         const proto::ParentLink*,
+                                         const proto::ProtoArguments* args,
+                                         const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 1) throwError(ctx, "re-groups: expects 1 arg");
+    const proto::ProtoObject* m = args->getAt(ctx, 0);
+    if (!isMatcher(ctx, m))
+        throwClassed(ctx, "ClassCastException", std::string("re-groups expects a matcher, got ") +
+                                                valueTypeName(ctx, m));
+    const proto::ProtoObject* g = m->getOwnAttributeDirect(ctx, mGroupsKey(ctx));
+    if (!g) throwClassed(ctx, "IllegalStateException", "No match found");
+    return g;
+}
+
+// The replacement text for one match: a fn of the match (re-find's value)
+// whose result is rendered by str, or a string where `$n` is group n (the
+// longest number that names a group, as Java reads it) and `\x` is x.
+void appendReplacement(proto::ProtoContext* ctx, std::string& out, const std::smatch& m,
+                       unsigned groups, const proto::ProtoObject* repl) {
+    if (!isStringLike(repl)) {
+        const ActiveCallContext* cc = activeCallContext();
+        if (!cc) throwError(ctx, "replace: no active VM context");
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(1);
+        scope.setAutomaticLocal(0, matchValue(&scope, m, groups));
+        const proto::ProtoObject* one[1] = {scope.getAutomaticLocal(0)};
+        appendStr(&scope, out, cc->engine->invoke(&scope, repl, one, 1));
+        return;
+    }
+    const std::string r = asProtoString(repl)->toStdString(ctx);
+    for (std::size_t i = 0; i < r.size(); ++i) {
+        const char c = r[i];
+        if (c == '\\' && i + 1 < r.size()) { out += r[++i]; continue; }
+        if (c != '$') { out += c; continue; }
+        if (i + 1 >= r.size() || !std::isdigit(static_cast<unsigned char>(r[i + 1])))
+            throwClassed(ctx, "IllegalArgumentException", "Illegal group reference in replacement: " + r);
+        unsigned g = static_cast<unsigned>(r[++i] - '0');
+        while (i + 1 < r.size() && std::isdigit(static_cast<unsigned char>(r[i + 1]))) {
+            const unsigned next = g * 10 + static_cast<unsigned>(r[i + 1] - '0');
+            if (next > groups) break;
+            g = next;
+            ++i;
+        }
+        if (g > groups)
+            throwClassed(ctx, "IndexOutOfBoundsException", "No group " + std::to_string(g));
+        if (m[g].matched) out += m.str(g);
+    }
+}
+
+// `s` with the matches of `cp` replaced (all, or the first only).
+const proto::ProtoObject* replaceWithPattern(proto::ProtoContext* ctx, const std::string& s,
+                                             const CompiledPattern* cp,
+                                             const proto::ProtoObject* repl, bool firstOnly) {
+    guardRecursiveMatch(cp, s.size());
+    std::string out;
+    out.reserve(s.size());
+    auto last = s.begin();
+    for (std::sregex_iterator it(s.begin(), s.end(), cp->regex), end; it != end; ++it) {
+        const std::smatch& m = *it;
+        out.append(last, m[0].first);
+        appendReplacement(ctx, out, m, cp->groups, repl);
+        last = m[0].second;
+        if (firstOnly) break;
+    }
+    out.append(last, s.end());
+    return reinterpret_cast<const proto::ProtoObject*>(proto::ProtoString::fromStdString(ctx, out));
+}
+
+// (replace-first s match replacement) — replace with only the first match
+// replaced: a string match, or a pattern with a string or fn replacement.
+const proto::ProtoObject* prim_replace_first(proto::ProtoContext* ctx,
+                                             const proto::ProtoObject*,
+                                             const proto::ParentLink*,
+                                             const proto::ProtoArguments* args,
+                                             const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 3)
+        throwError(ctx, "replace-first: expects (replace-first s match replacement)");
+    const std::string s = stringArgOf(ctx, args, 0, "replace-first");
+    const proto::ProtoObject* mv = args->getAt(ctx, 1);
+    if (isPattern(ctx, mv))
+        return replaceWithPattern(ctx, s, patternOf(ctx, mv), args->getAt(ctx, 2), true);
+    const std::string m = stringArgOf(ctx, args, 1, "replace-first");
+    const std::string r = stringArgOf(ctx, args, 2, "replace-first");
+    const std::size_t at = s.find(m);
+    if (at == std::string::npos) return args->getAt(ctx, 0);
+    return reinterpret_cast<const proto::ProtoObject*>(proto::ProtoString::fromStdString(
+        ctx, s.substr(0, at) + r + s.substr(at + m.size())));
+}
+
+// (split s re) / (split s re limit) with a pattern, as Java's String.split
+// and Clojure's clojure.string/split: a vector of the pieces; a match of
+// zero width at the start makes no leading empty piece; with no limit (or 0)
+// trailing empty pieces are dropped, with a positive limit at most `limit`
+// pieces are made (the last holds the rest), with a negative one all are kept.
+const proto::ProtoObject* splitWithPattern(proto::ProtoContext* ctx, const std::string& s,
+                                           const CompiledPattern* cp, long long limit) {
+    guardRecursiveMatch(cp, s.size());
+    std::vector<std::string> pieces;
+    std::size_t from = 0;
+    for (std::sregex_iterator it(s.begin(), s.end(), cp->regex), end; it != end; ++it) {
+        if (limit > 0 && static_cast<long long>(pieces.size()) == limit - 1) break;
+        const std::size_t at = static_cast<std::size_t>(it->position(0));
+        const std::size_t len = static_cast<std::size_t>(it->length(0));
+        if (at == 0 && len == 0) continue;           // no leading empty piece
+        if (len == 0 && at >= s.size()) break;      // the empty match at the end
+        pieces.push_back(s.substr(from, at - from));
+        from = at + len;
+    }
+    pieces.push_back(s.substr(from));
+    if (limit == 0)
+        while (pieces.size() > 1 && pieces.back().empty()) pieces.pop_back();
+    if (limit == 0 && pieces.size() == 1 && pieces[0].empty() && !s.empty()) pieces.clear();
+    ListBuilder out(ctx);
+    for (const std::string& p : pieces)
+        out.push(reinterpret_cast<const proto::ProtoObject*>(
+            proto::ProtoString::fromStdString(out.context(), p)));
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    scope.setAutomaticLocal(0, out.finish());
+    return newVector(&scope, scope.getAutomaticLocal(0)->asList(&scope));
+}
+
 const proto::ProtoObject* prim_replace(proto::ProtoContext* ctx,
                                        const proto::ProtoObject*,
                                        const proto::ParentLink*,
@@ -1490,6 +1802,10 @@ const proto::ProtoObject* prim_replace(proto::ProtoContext* ctx,
     const proto::ProtoObject* sv = args->getAt(ctx, 0);
     const proto::ProtoObject* mv = args->getAt(ctx, 1);
     const proto::ProtoObject* rv = args->getAt(ctx, 2);
+    // A pattern match, with a string replacement ($1 is group 1) or a fn of
+    // the match, as clojure.string/replace.
+    if (isPattern(ctx, mv) && isStringLike(sv))
+        return replaceWithPattern(ctx, asProtoString(sv)->toStdString(ctx), patternOf(ctx, mv), rv, false);
     if (!isStringLike(sv) || !isStringLike(mv) || !isStringLike(rv))
         throwError(ctx, "replace: all three args must be strings");
     std::string s = asProtoString(sv)->toStdString(ctx);
@@ -1553,10 +1869,17 @@ const proto::ProtoObject* prim_split(proto::ProtoContext* ctx,
                                      const proto::ParentLink*,
                                      const proto::ProtoArguments* args,
                                      const proto::ProtoKeywordArguments*) {
-    if (!args || args->getSize(ctx) != 2)
-        throwError(ctx, "split: expects (split s delim)");
+    const proto::proto_ulong ac = args ? args->getSize(ctx) : 0;
+    if (ac != 2 && ac != 3)
+        throwError(ctx, "split: expects (split s re) or (split s re limit)");
     const proto::ProtoObject* sv = args->getAt(ctx, 0);
     const proto::ProtoObject* dv = args->getAt(ctx, 1);
+    if (isPattern(ctx, dv)) {
+        const std::string subject = stringArgOf(ctx, args, 0, "split");
+        return splitWithPattern(ctx, subject, patternOf(ctx, dv),
+                                ac == 3 ? indexArg(ctx, args, 2, "split") : 0);
+    }
+    if (ac != 2) throwError(ctx, "split: a limit needs a pattern");
     if (!isStringLike(sv) || !isStringLike(dv))
         throwError(ctx, "split: both args must be strings");
     std::string s = asProtoString(sv)->toStdString(ctx);
@@ -3499,6 +3822,16 @@ constexpr PrimitiveEntry kPrimitives[] = {
     {"subset?",      &prim_subset_p},
     {"superset?",    &prim_superset_p},
 
+    // Regular expressions (Regex.h).
+    {"re-pattern",    &prim_re_pattern},
+    {"re-matcher",    &prim_re_matcher},
+    {"re-find",       &prim_re_find},
+    {"re-matches",    &prim_re_matches},
+    {"re-seq",        &prim_re_seq},
+    {"re-groups",     &prim_re_groups},
+    {"replace-first", &prim_replace_first},
+    {"identical?",    &prim_identical_p},
+
     // Destructuring (compiler/Compiler.h, destructure).
     {"__destructure-map", &prim_destructure_map},
 };
@@ -3594,6 +3927,8 @@ const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v)
     if (isVector(v))                        return "a vector";
     if (isMap(v))                           return "a map";
     if (isSet(ctx, v))                      return "a set";
+    if (isPattern(ctx, v))                  return "a pattern";
+    if (isMatcher(ctx, v))                  return "a matcher";
     if (v->isMethod(ctx))                   return "a fn";
     if (isException(ctx, v))                return "an exception";
     if (const char* io = ioHandleTypeName(ctx, v)) return io;
@@ -3764,6 +4099,9 @@ void installPrimitives(proto::ProtoContext* ctx,
                        proto::ProtoObject* globals) {
     // The exception marker and the in-flight root set (Exceptions.h).
     initExceptions(ctx, globals);
+    // The pattern and matcher prototypes (Regex.h), likewise.
+    globals->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__regex_prototypes__"),
+                          initRegex(ctx));
     // The set prototype (SetOps.h), reachable from the globals, which every
     // entry point roots.
     globals->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__set_prototype__"),

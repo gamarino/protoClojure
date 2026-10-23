@@ -91,6 +91,11 @@ The design specifications written during development are archived under
 - [x] Booleans + nil — `true`, `false`, `nil`, read as the values
 - [x] Lists `(...)`
 - [x] Vectors `[...]`
+- [x] Regular expressions `#"..."` (compiled when read; DESIGN.md §10.2,
+      M25), `re-pattern`, `re-find`, `re-matches`, `re-seq`, `re-matcher`,
+      `re-groups`, and `replace`, `replace-first`, `split` with a pattern,
+      on `std::regex` ECMAScript (D45); `clojure.string/x` and
+      `clojure.set/x` name the built-ins (M26)
 - [x] Sets `#{...}` — a repeated element is a read error, `Duplicate key: :a`;
       a set of constants is built once, at compile time (DESIGN.md §10.2, M24)
 - [x] Maps `{...}` — a repeated key is a read error, `Duplicate key: :a`
@@ -455,7 +460,7 @@ raises a read, compile or runtime error.
 - [ ] Var-quote `#'`
 - [ ] Discard `#_`
 - [ ] Metadata `^{...}` plus shorthands `^kw` `^Type`
-- [ ] Reader literals `#inst` `#uuid`, regex `#"..."`
+- [ ] Reader literals `#inst` `#uuid`
 - [ ] Ratio literal `1/3`
 - [ ] Character literal `\a`
 - [ ] Namespace-qualified symbols / keywords `foo/bar`, `:ns/kw`
@@ -549,7 +554,6 @@ for the rationale.
 - [ ] More higher-order: `comp partial juxt`
 - [ ] More predicates: `every? some not-any? not-every?`
 - [ ] Range / sequence: `range iterate repeat cycle take drop take-while drop-while partition partition-all`
-- [ ] Regex: `re-pattern re-find re-seq re-matches`
 - [ ] `format` (printf-style)
 - [ ] `frequencies group-by sort sort-by`
 
@@ -627,7 +631,7 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D24 | Map and set iteration and print order is unspecified for every size and can change between runs of the same program (JVM Clojure keeps insertion order for array maps of up to 8 entries; its hash sets have a fixed hash order) | (perm) |
 | D25 | `count` of a map or a set is O(n), not O(1) (JVM Clojure: O(1)). Two keys whose hashes collide in their low 54 bits share one slot of the underlying `ProtoMap`, so the slot count is a lower bound on the number of entries, not the number itself; `count` therefore walks the entries. `empty?` stays O(1), because a slot always holds at least one entry | (perm) |
 | D26 | A runtime error whose message names no class is a `RuntimeException` carrying the whole message: most arity and argument-type errors raised by primitives (`(inc 1 2)`: `inc: expects 1 arg`, where JVM Clojure raises `ArityException`; `(upper-case 1)`: `upper-case: arg must be a string`, where it raises `ClassCastException`), and an unresolved global, which is caught at run time as a `RuntimeException` where JVM Clojure reports it at compile time. The class-naming errors (`ArithmeticException`, `ClassCastException` for arithmetic on non-numbers, `IndexOutOfBoundsException`, `StringIndexOutOfBoundsException`, `UnsupportedOperationException`, `StackOverflowError`) have JVM Clojure's classes | v0.x |
-| D27 | Exceptions are not Java objects: there are no stack traces, no user-defined exception classes, no `class` / `instance?` and no `.getMessage`-style interop; `catch` names one of 23 built-in classes, `Object`, or a type held by a var or a module member (D34, `DESIGN.md` §4.1). An exception prints on one line as `#error {:type C, :message "m", :data {...}, :cause #error {...}}` (JVM Clojure: a multi-line `#error` map with `:via`, `:trace` and a root-cause `:cause` string), and its toString and the uncaught-error report use the simple class name, `ArithmeticException: Divide by zero` (JVM Clojure: `java.lang.ArithmeticException: Divide by zero`). `throw` of a value that is neither an exception nor a foreign (module) object raises `ClassCastException: throw expects an exception, got an integer` | (perm) |
+| D27 | Exceptions are not Java objects: there are no stack traces, no user-defined exception classes, no `class` / `instance?` and no `.getMessage`-style interop; `catch` names one of 24 built-in classes, `Object`, or a type held by a var or a module member (D34, `DESIGN.md` §4.1). An exception prints on one line as `#error {:type C, :message "m", :data {...}, :cause #error {...}}` (JVM Clojure: a multi-line `#error` map with `:via`, `:trace` and a root-cause `:cause` string), and its toString and the uncaught-error report use the simple class name, `ArithmeticException: Divide by zero` (JVM Clojure: `java.lang.ArithmeticException: Divide by zero`). `throw` of a value that is neither an exception nor a foreign (module) object raises `ClassCastException: throw expects an exception, got an integer` | (perm) |
 | D28 | The I/O functions are globals, not in `clojure.java.io`, `clojure.java.shell` or babashka's `babashka.http-client` (there are no namespaces yet), and so are `clojure.set`'s `union`, `intersection`, `difference`, `subset?` and `superset?`, and small functions stand in for Java interop: `close` / `write` / `(read-line r)` for `.close` / `.write` / `.readLine`, `exists?` / `directory?` for `.exists` / `.isDirectory`, `getenv` / `exit` for `System/getenv` / `System/exit`. `file` answers a protoClojure file handle, not a `java.io.File` (`str` gives its path; `file-seq` answers such handles); readers and writers are UTF-8 only, with no InputStream / Reader stack | (perm while there are no namespaces) |
 | D29 | `line-seq` is eager: it reads the reader to its end and answers a list (nil when empty), because there are no lazy sequences yet (JVM Clojure: a lazy seq read as it is consumed). On an endless stream, such as a socket that never closes, use `read-line` in a loop | v0.2 (lazy seqs) |
 | D30 | Sockets are protoClojure's own functions (`tcp-connect`, `tcp-listen`, `tcp-accept`, `socket-read-line`, `socket-write`, `socket-close`, `udp-socket`, `udp-send`, `udp-receive`, `server-port`): Clojure has only Java interop (`java.net.Socket`) | (perm) |
@@ -644,6 +648,7 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D42 | There are two namespaces only, `user` (the program: every file, the REPL, `eval`) and `clojure.core` (the built-ins and, from stage 6, `core.clj`), and no `ns` form (D28). Syntax-quote qualifies a name the program has not defined and no built-in has as `user/x`; `user/x` names the global `x` and `clojure.core/x` the built-in, and neither is ever resolved to a local. A built-in exception class name in a template stays a simple name (`Exception`; JVM Clojure writes `java.lang.Exception`). `user/x` cannot name a module alias called `user` | (perm until namespaces) |
 | D43 | Symbols are interned and never collected, generated ones included: a program that calls `gensym` or `symbol` on fresh names without end grows by one symbol per name (JVM Clojure collects unreferenced symbols) | (perm) |
 | D44 | `case` tests its constants in order with `=` (O(n) in the number of clauses; JVM Clojure dispatches on a hash in constant time), so numbers of different types match (D15); the result is otherwise Clojure's, including `IllegalArgumentException: No matching clause: x` | (perm) |
+| D45 | Regular expressions run on the C++ standard library's `std::regex`, ECMAScript grammar, over the UTF-8 bytes of the string (JVM Clojure: `java.util.regex` over UTF-16). Translated from Java: the leading inline flags `(?i)` `(?m)` `(?s)` (`(?u)` `(?U)` accepted, no effect), named groups `(?<n>X)` (numbered; `\k<n>` is not supported), `\Q...\E`, `\A` / `\z` / `\Z` outside multiline mode. Not supported, a `PatternSyntaxException`: lookbehind `(?<=` `(?<!`, possessive quantifiers `*+`, atomic groups `(?>`, `\p{...}` / `\P{...}` classes, class intersection `[a&&b]`, flags in mid-pattern, `(?x)` comments, `(?d)`. Different: `.`, `\w`, `\s` and character classes see bytes, so a multi-byte UTF-8 character is several (D17); `$` in non-multiline mode matches only at the very end (Java also before a final line terminator); case folding is ASCII; the captures of a group repeated by `*` that matched empty may differ (`(a*)*b`). Every distinct pattern source is compiled once and kept for the process (like interned symbols, D43). A pattern with back-references backtracks on the native stack, so a match that could exhaust it raises `StackOverflowError` beforehand (about 32 KB of subject); others are not limited. No `Matcher` interop beyond `re-matcher` / `re-find` / `re-groups` | (perm: engine) |
 | D34 | A `catch` naming no built-in class names a type looked up at run time, when an exception reaches the clause (a var, a local, or a module member `alias/Type`), and is matched by the thrown value's prototype chain; JVM Clojure resolves the class at compile time. So `(try 1 (catch NoSuchException e 2))` compiles and answers 1, and the error `Unable to resolve classname: NoSuchException` is a `RuntimeException` raised when an exception reaches the clause (JVM Clojure: a compile error). A type that resolves to a value that is not a prototype object raises `IllegalArgumentException`. A module's error (a foreign value) is caught by `Exception`, `Throwable` and `Object`, by its own types, and by no other built-in class | (perm: the platform is late-binding) |
 
 ## Known issues

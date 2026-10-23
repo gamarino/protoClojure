@@ -20,7 +20,7 @@ fail() { echo "FAIL: $1"; shift; for f in "$@"; do echo "--- $f:"; sed 's/^/  /'
 printf '#!/usr/bin/env protoclj\n(println (+ 3 4))\n' >"$work/ok.clj"
 out=$(timeout 90s "$PROTOCLJ" "$work/ok.clj" 2>"$work/err") || fail "plain run" "$work/err"
 [[ "$out" == "7" ]] || fail "plain run printed '$out'" "$work/err"
-printf '#!/usr/bin/env protoclj\n(println 1)\n(println #"x")\n' >"$work/bad.clj"
+printf '#!/usr/bin/env protoclj\n(println 1)\n(println #"(")\n' >"$work/bad.clj"
 timeout 90s "$PROTOCLJ" "$work/bad.clj" >/dev/null 2>"$work/err"
 grep -qF "bad.clj:3:" "$work/err" || fail "read error does not name line 3" "$work/err"
 

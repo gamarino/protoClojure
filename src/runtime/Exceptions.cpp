@@ -48,6 +48,7 @@ constexpr ExceptionClass kExceptionClasses[] = {
     /* 20 */ {"UnknownHostException",            "java.net",              15},
     /* 21 */ {"ExecutionException",              "java.util.concurrent",   1},
     /* 22 */ {"StackOverflowError",              "java.lang",              2},
+    /* 23 */ {"PatternSyntaxException",          "java.util.regex",        7},
 };
 constexpr int kExceptionClassCount =
     static_cast<int>(sizeof(kExceptionClasses) / sizeof(kExceptionClasses[0]));

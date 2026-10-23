@@ -10,6 +10,7 @@ add_executable(protoclj_unit_tests
     test_mapops.cpp
     test_value_lifetime.cpp
     test_reader.cpp
+    test_regex.cpp
     test_rethrow.cpp
     test_stackguard.cpp
     test_values.cpp

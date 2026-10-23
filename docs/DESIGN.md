@@ -1161,6 +1161,45 @@ functions are globals (D28). Also in this stage, as a prerequisite of
 `first`, `rest`, `map`, `filter`, `reduce`, `count` and the other sequence
 functions accept maps, sets and strings, as `seq` already did.
 
+**M25. Regular expressions on `std::regex` ECMAScript, Java's syntax
+translated where it has an equivalent** (*agent, pending review*).
+`src/runtime/Regex.h`. The engines considered, as the brief allows: (a)
+`std::regex` ECMAScript, chosen: no dependency, on every platform the CI
+builds; (b) PCRE2, the closest dialect to Java's (lookbehind, possessive
+quantifiers, `\p{...}`, UTF-8), excluded because it is not a dependency of
+protoClojure or of any runtime of the ecosystem (it is installed on the
+development machine only); (c) QuickJS's `libregexp`, which protoJS
+vendors, rejected because it does not build with MSVC, which the Windows CI
+uses, and it would mean vendoring three C files. A pattern is translated
+before compilation (leading `(?ims)` flags, `(?s)` by rewriting `.` as
+`[\s\S]`, named groups numbered, `\Q...\E`, `\A` / `\z`), and what the
+engine rejects is a `PatternSyntaxException`, a new built-in class under
+`IllegalArgumentException`; the literal `#"..."` is compiled by the reader
+(M1), so a bad literal is a read error, as in Clojure, and the compiler pins
+it as a datum (M5). Compiled patterns are cached by source for the process
+and never freed: the value holds an external pointer to its cache entry, so
+a match needs no lock and no lookup. libstdc++'s default (backtracking)
+executor recurses once per subject character and crashed protoclj with
+SIGSEGV past about 40,000 bytes for `(a|b)*` (measured: 840 bytes of stack
+per byte); every pattern without back-references is therefore compiled with
+libstdc++'s `__polynomial` option, its breadth-first executor, measured to
+match 5,000,000 bytes on an 8 MiB stack with the same results as the
+backtracking one except the captures of empty iterations (`(a*)*b`), and a
+pattern with back-references (or any pattern on another standard library)
+is refused with `StackOverflowError` before a match that could exhaust the
+stack. `re-seq` is eager until stage 11. The differences against Java are
+D45.
+
+**M26. `clojure.string/x` and `clojure.set/x` name the built-ins** (*agent,
+pending review*). Without namespaces (D28) the string and set functions are
+globals; the compiler reads `clojure.string/split`, `clojure.set/union` and
+the other names those namespaces have and protoClojure provides as
+`clojure.core/x`, the built-in's own key (M19), so Clojure code that spells
+them out runs with no `require`, and a local named `split` does not capture
+them. Alternative: wait for namespaces; rejected because the full names are
+common in scripts and cost nothing to accept. The `str/` alias of
+`(:require [clojure.string :as str])` still needs `ns` (stage 13 notes).
+
 ## 11. The standard library
 
 Two phases:

@@ -4,6 +4,7 @@
 #include "runtime/Macros.h"
 #include "runtime/MapOps.h"
 #include "runtime/SetOps.h"
+#include "runtime/Regex.h"
 #include "runtime/Primitives.h"
 #include "runtime/StackGuard.h"
 #include "runtime/VectorOps.h"
@@ -68,6 +69,28 @@ bool stripCoreQualifier(std::string& name) {
     if (name.size() <= kCore.size() || name.compare(0, kCore.size(), kCore) != 0) return false;
     name.erase(0, kCore.size());
     return true;
+}
+
+// Rewrites `clojure.string/x` and `clojure.set/x`, for an `x` protoClojure
+// provides, as `clojure.core/x`: without namespaces (D28) those functions are
+// built-ins, and this lets a program name them as Clojure code does, with
+// no `require` (DESIGN.md §10.2, M26). Returns true when it rewrote `name`.
+bool aliasLibraryNamespace(std::string& name) {
+    static const char* const kString[] = {
+        "blank?", "ends-with?", "includes?", "index-of", "join", "lower-case", "replace",
+        "replace-first", "reverse", "split", "starts-with?", "trim", "triml", "trimr",
+        "upper-case"};
+    static const char* const kSet[] = {"union", "intersection", "difference", "subset?", "superset?"};
+    auto tryPrefix = [&](const std::string& prefix, const char* const* names, std::size_t count) {
+        if (name.compare(0, prefix.size(), prefix) != 0) return false;
+        const std::string bare = name.substr(prefix.size());
+        for (std::size_t i = 0; i < count; ++i) {
+            if (bare == names[i]) { name = "clojure.core/" + bare; return true; }
+        }
+        return false;
+    };
+    return tryPrefix("clojure.string/", kString, sizeof kString / sizeof *kString) ||
+           tryPrefix("clojure.set/", kSet, sizeof kSet / sizeof *kSet);
 }
 
 // Stores the value on top of the stack in the global `key`, leaving it
@@ -1207,6 +1230,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // callable is itself an expression) is always a regular call and
         // is compiled below via compileForm on the head.
         std::string headName = isNameForm(ctx, markers.named, head) ? nameOf(ctx, markers.named, head) : std::string{};
+        aliasLibraryNamespace(headName);
         // `clojure.core/x` names the built-in x (what syntax-quote and the
         // reader macros produce): dispatched as x, never shadowed by a local.
         const bool coreQualified = stripCoreQualifier(headName);
@@ -1898,6 +1922,13 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         return;
     }
 
+    // `#"..."` pattern literal: the pattern the reader compiled, pinned by
+    // the module as a datum (M5), so a literal in a loop is one object.
+    if (isPattern(ctx, form)) {
+        out.emit(Op::PUSH_CONST, out.addDatum(ctx, form));
+        return;
+    }
+
     // String literal — a protoCore string, pushed from the const pool.
     if (isStringForm(form)) {
         std::size_t idx = out.addString(
@@ -1910,6 +1941,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
     // global lookup, in that order.
     if (isNameForm(ctx, markers.named, form)) {
         std::string name = nameOf(ctx, markers.named, form);
+        aliasLibraryNamespace(name);
         if (!name.empty() && name[0] == ':') {
             // The keyword is the interned value the reader yielded;
             // PUSH_CONST pushes the pointer (Named.h).

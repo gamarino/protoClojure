@@ -36,7 +36,7 @@ under a `Dnn` id.
 >   `finally`, `throw`, `ex-info`, `ex-data`, `ex-message`, `ex-cause`
 >   (§3.3.6 lists the differences).
 > - §3.2 to §3.4: `defprotocol`, `extend-type`, `extend-protocol` and
->   `reify`; the `#"..."` regex literal and regex support; character
+>   `reify`; character
 >   literals such as `\a`, `char` and
 >   `char?`; reader-literal registration; and the UMD interop with the
 >   `clj->py` family of conversion functions are not implemented yet.
@@ -112,7 +112,9 @@ The substitute, when applicable:
 - For `java.time` / `java.util.Date` → either the Python `datetime`
   module or a future protoClojure-native time library.
 - For `java.util.regex` → protoClojure regex is backed by the host
-  C++ `std::regex` for v0.1. `#"..."` reader literal works.
+  C++ `std::regex` (ECMAScript). The `#"..."` literal, `re-find`,
+  `re-matches`, `re-seq`, `re-matcher`, `re-groups`, and `replace` /
+  `split` with a pattern work.
 
 ### 3.2.2 STM and refs — D6 (v0.2)
 
@@ -207,10 +209,18 @@ observations:
 
 ### 3.3.4 Regex
 
-Backed by C++ `std::regex` (ECMAScript syntax). Most patterns will
-work; some Java-specific regex features (named groups by some
-syntaxes, certain POSIX classes) may differ. If you find a
-divergence, file a `STATUS.md` deviation.
+Backed by C++ `std::regex` (ECMAScript syntax) over the UTF-8 bytes of
+the string. Most patterns work as written. Java's leading inline flags
+`(?i)`, `(?m)`, `(?s)`, named groups (as numbered groups), `\Q...\E` and
+`\A` / `\z` are translated; lookbehind, possessive quantifiers, atomic
+groups and `\p{...}` classes are a `PatternSyntaxException`. `.`, `\w` and
+character classes see bytes, not characters. The full list is D45 in
+`STATUS.md`.
+
+```clojure
+(re-find #"(?i)(\w+)@(\w+)" "Mail: JOE@host")  ;; => ["JOE@host" "JOE" "host"]
+(clojure.string/split "a1b22c" #"\d+")        ;; => ["a" "b" "c"]
+```
 
 ### 3.3.5 The reader and `read-string` strictness — D13
 

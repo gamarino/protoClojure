@@ -20,6 +20,9 @@ out=$(printf '%s\n' \
     "(= #{1 2} (into #{} [2 1 1]))" \
     "#{:a" ":b}" \
     "#{:dup :dup} :after-dup" \
+    '(re-find #"(\w+)@(\w+)" "joe@host")' \
+    '(clojure.string/split "a, b,c" #",\s*")' \
+    '#"(ab" :after-bad-pattern' \
     | timeout 90s "$PROTOCLJ" 2>"$err_file")
 rc=$?
 if [[ $rc -ne 0 ]]; then
@@ -52,4 +55,7 @@ if ! grep -qE '#\{(:a :b|:b :a)\}' <<<"$out"; then
     echo "FAIL: expected a two-line set #{:a :b} in the output"; sed 's/^/  /' <<<"$out"; exit 1
 fi
 expect_err 'Duplicate key: :dup'
+expect 'user=> ["joe@host" "joe" "host"]'
+expect 'user=> ["a" "b" "c"]'
+expect_err 'PatternSyntaxException'
 echo OK
