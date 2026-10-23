@@ -114,6 +114,10 @@ add_test(NAME cli/repl-literals
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/repl-literals.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/reader-values-under-heap-limit
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/reader-values-under-heap-limit.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/repl-quote
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/repl-quote.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/quoted-data-survive-gc
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/quoted-data-survive-gc.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/deeply-nested-source
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/deeply-nested-source.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/uncaught-exception

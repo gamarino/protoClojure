@@ -1,6 +1,6 @@
 # 11. Macros
 
-> **Planned — not yet implemented.** Macros (`defmacro`, the quote reader macro `'`, quasiquote `` ` `` with `~` and `~@`, and gensyms) are not available in protoClojure 0.0.1; this chapter describes the intended design.
+> **Partly implemented (branch `feature/macros`).** Quote `'` and syntax-quote `` ` `` with `~` and `~@` work today; syntax-quote does not yet qualify symbols with their namespace or turn `foo#` into a generated symbol (STATUS.md D35). `defmacro`, `macroexpand` and `macroexpand-1` are not available yet. The snippets marked *runs today* run now; the rest of the chapter describes the intended design.
 
 A macro is a function that takes code as input and returns code as
 output, at compile time. The compiler calls it, takes whatever it
@@ -30,6 +30,16 @@ The reader took the text `(+ 1 2)` and produced a *data structure*: a
 list whose elements are the symbol `+`, the number `1`, the number
 `2`. The evaluator then walked that data structure and treated it as a
 call.
+
+Because the quoted form is an ordinary list, the sequence functions take it
+apart (*runs today*):
+
+```clojure
+(def form '(* 6 7))
+(first form)   ;; => *
+(rest form)    ;; => (6 7)
+(count form)   ;; => 3
+```
 
 The quote `'` says "stop, give me the data structure, do not
 evaluate". A macro is a function the compiler calls *before
@@ -105,6 +115,20 @@ The pieces:
 
 The same `my-when` reads as "an `if` of `~test`, followed by a `do`
 of the body items". That is the shape the output has.
+
+A template is an ordinary expression, so you can try one before writing any
+macro (*runs today*):
+
+```clojure
+(def test-form '(> x 0))
+(def body '((println "pos") :pos))
+`(if ~test-form (do ~@body) nil)
+;; => (if (> x 0) (do (println "pos") :pos) nil)
+```
+
+The reader expands the template when it reads it, as Clojure's does:
+`` '`(f ~x ~@xs) `` shows the code it became,
+`(clojure.core/seq (clojure.core/concat (clojure.core/list (quote f)) (clojure.core/list x) xs))`.
 
 Quasiquote is the cleanest macro-writing tool. Reach for `list`,
 `cons`, `concat` only when the template gets too dynamic to

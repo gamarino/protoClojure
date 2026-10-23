@@ -52,8 +52,10 @@ A few things to know up front:
 
 - **Multi-line forms work.** Open a `(`, `[`, or `{` and keep typing —
   the prompt changes to `  #_=>` and the REPL keeps reading until the
-  delimiters balance. A blank line at the continuation prompt forces
-  evaluation (useful escape hatch if you got the count wrong).
+  delimiters balance. A line that ends in a reader macro (`'`, `` ` ``,
+  `~`, `~@`, `@`) waits the same way for the form it applies to. A blank
+  line at the continuation prompt forces evaluation (useful escape hatch
+  if you got the count wrong).
 - **History.** Arrow keys recall earlier lines. The history is
   persisted across sessions in `~/.protoclj_history`.
 - **Error recovery.** A parse / compile / runtime error is printed and

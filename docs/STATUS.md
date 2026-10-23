@@ -94,7 +94,16 @@ The design specifications written during development are archived under
 - [x] Maps `{...}` — a repeated key is a read error, `Duplicate key: :a`
       (decision M2); the key and value forms are evaluated in source order
       (decision M3)
-- [x] `@form` — read as `(deref form)`
+- [x] `@form` — read as `(clojure.core/deref form)`
+- [x] Quote `'form` — read as `(quote form)`
+- [x] Syntax-quote `` `form ``, unquote `~`, unquote-splicing `~@`,
+      expanded at read time as Clojure's reader expands them
+      (`(clojure.core/seq (clojure.core/concat ...))`); symbols are not yet
+      qualified and `foo#` is not yet an auto-gensym (D35). `~@` outside a
+      list is the read error `splice (~@) not in list`; `~` or `~@` outside a
+      syntax-quote is a compile error (D36)
+- [x] `clojure.core/x` names the built-in `x` and is never shadowed by a
+      local (D37)
 - [x] Line comments `;`; commas as whitespace
 - [x] `#!` line comments, as in Clojure (anywhere, to end of line), so a
       script starting with `#!/usr/bin/env protoclj` runs as a command
@@ -281,7 +290,7 @@ first and its result built after.
       and `IllegalArgumentException`, with ex-data
       `{:type :file-not-found :errno 2}` and the like
 
-### Primitives installed at startup (81, plus 36 I/O)
+### Primitives installed at startup (85, plus 36 I/O)
 
 - [x] Arithmetic and comparison: `+ - * / inc dec < <= > >= = not=`
 - [x] Output: `println str` — one printer (`printTo` in
@@ -295,8 +304,11 @@ first and its result built after.
       `#<fn>` and a built-in function as `#<fn NAME>` (`(str println)` is
       `"#<fn println>"`)
 - [x] Lists and vectors: `list vector vec nth first rest cons count empty? reverse`
+- [x] Sequences: `seq` (nil for an empty collection; a map's entries as
+      `[k v]` vectors; a string's characters) and `concat`, both answering
+      lists, eagerly (D29's reason: no lazy seqs yet)
 - [x] Higher-order: `map filter reduce pmap`
-- [x] Predicates: `nil? not vector? list? map? string?`
+- [x] Predicates: `nil? not vector? list? map? string? symbol? keyword?`
 - [x] Maps: `hash-map assoc dissoc get contains? keys vals`; `count` and
       `empty?` also accept maps
 - [x] Strings: `subs upper-case lower-case starts-with? ends-with?
@@ -421,9 +433,7 @@ raises a read, compile or runtime error.
 
 ### Reader (not yet)
 
-- [ ] Quote `'form` (the `(quote atom)` special form works)
 - [ ] Sets `#{...}`
-- [ ] Quasiquote `` ` ``, unquote `~`, splice `~@`
 - [ ] Anonymous-fn shorthand `#(...)`
 - [ ] Var-quote `#'`
 - [ ] Discard `#_`
@@ -438,8 +448,8 @@ raises a read, compile or runtime error.
 - [ ] `let` and `loop` at the top level of a file (only inside function bodies today)
 - [ ] Vector and map destructuring in `let` and in parameter vectors (only `& {:keys ...}` works)
 - [ ] Docstrings in `defn`
-- [ ] `(apply f x y coll)` with leading arguments; `apply` over a vector
-- [ ] List quoting `(quote (1 2 3))`
+- [ ] `(apply f x y coll)` with leading arguments (`apply` over a list, a
+      vector or nil works)
 - [ ] `let*` / `fn*` raw forms
 - [ ] `var` form
 - [ ] `case`, `if-let`, `when-let`
@@ -541,6 +551,8 @@ Work in progress on branch `feature/macros` (DESIGN.md §10, ROADMAP.md).
 
 - [x] Stage 1: the reader yields runtime values and the compiler consumes
       them (DESIGN.md §10.1, M1-M4)
+- [x] Stage 2: `quote` of any datum; the reader macros `'`, `` ` ``, `~`,
+      `~@` (M5-M8)
 - [ ] Compile-time evaluation pipeline (the bootstrap)
 - [ ] `clojure.core` macros defined in protoClojure
 - [ ] User-defined macros (`defmacro`)
@@ -589,6 +601,9 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D31 | The Ring request `:body` is a string (nil when empty), not an InputStream, and a response `:body` may be a string, nil, a list or vector of strings or a file, not an InputStream; `run-server` answers a server handle (http-kit answers a stop fn), serves one request per connection (`connection: close`, no keep-alive), each on its own thread, and a server still running when the script ends is stopped (the JVM keeps running while a server thread lives) | v0.x |
 | D32 | `sh` does not support `:in-enc` / `:out-enc` (output is always decoded as UTF-8). (`:dir` and `:env` no longer deviate: since protoIO 0.2.1 the spawn call sets them itself, with no `/bin/sh` or `env -i` in between, on every platform; the program is searched in protoclj's own `PATH`, as the JVM searches it) | v0.x |
 | D33 | I/O exceptions carry an ex-data map (`{:type :file-not-found :errno 2}`), so their toString and the uncaught-error report end with it, and their messages are protoIO's (`cannot read x: No such file or directory`, JVM: `x (No such file or directory)`) | (perm) |
+| D35 | Syntax-quote does not qualify symbols yet: `` `(f x) `` reads as `(clojure.core/seq (clojure.core/concat (clojure.core/list (quote f)) (clojure.core/list (quote x))))` where JVM Clojure writes `user/f` and `user/x`, and `foo#` is not an auto-gensym. Macros stage 5 brings both | stage 5 |
+| D36 | `~x` or `~@x` outside a syntax-quote is a compile error, `unquote (~) used outside a syntax-quote` (JVM Clojure compiles it as a call of the unbound var `clojure.core/unquote` and fails at run time with `Attempting to call unbound fn`) | (perm) |
+| D37 | There are no namespaces (D28): `clojure.core/x` names the global `x`, which a local never shadows but a `def` of `x` replaces, so redefining a built-in such as `seq` with `def` also changes what a syntax-quote expansion calls (JVM Clojure: `clojure.core/seq` stays the core function) | stage 5 |
 | D34 | A `catch` naming no built-in class names a type looked up at run time, when an exception reaches the clause (a var, a local, or a module member `alias/Type`), and is matched by the thrown value's prototype chain; JVM Clojure resolves the class at compile time. So `(try 1 (catch NoSuchException e 2))` compiles and answers 1, and the error `Unable to resolve classname: NoSuchException` is a `RuntimeException` raised when an exception reaches the clause (JVM Clojure: a compile error). A type that resolves to a value that is not a prototype object raises `IllegalArgumentException`. A module's error (a foreign value) is caught by `Exception`, `Throwable` and `Object`, by its own types, and by no other built-in class | (perm: the platform is late-binding) |
 
 ## Known issues

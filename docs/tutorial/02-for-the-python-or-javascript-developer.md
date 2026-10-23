@@ -1,7 +1,7 @@
 # 2. For the Python or JavaScript Developer
 
 > **Implementation status.** Some forms in this chapter are not
-> available in protoClojure 0.0.1: the quote reader macro `'`, set
+> available yet: set
 > literals `#{...}`, the `#(...)` shorthand, `conj`, `dissoc`, `update`,
 > `even?`, `pos?`, `mapv`, `sort`, the threading macros `->` / `->>`, and
 > editor integration through nREPL. `let` works only inside function

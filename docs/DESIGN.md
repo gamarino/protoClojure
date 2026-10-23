@@ -158,9 +158,10 @@ A standard Clojure reader, in C++. The lexer produces tokens for:
   `#'` (var quote), `#_` (discard).
 - Metadata `^{...}` and the shorthand `^kw` / `^Type`.
 
-In 0.0.1 the lexer and reader implement symbols, keywords, numbers,
-strings, booleans, nil, lists, vectors, maps and `@` (read as
-`(deref form)`); the quote, quasiquote, `#` reader macros, characters
+The lexer and reader implement symbols, keywords, numbers, strings,
+booleans, nil, lists, vectors, maps, `@` (read as
+`(clojure.core/deref form)`), quote `'`, syntax-quote `` ` `` with `~` and
+`~@` (expanded at read time, decision M6); the `#` reader macros, characters
 and metadata are rejected with a "reserved-for-later token" error.
 
 Every reader output is a runtime value: the reader yields exactly what a
@@ -737,8 +738,8 @@ without it the language fails the *respect* test.
 
 ## 10. Macros (in progress)
 
-Status: stage 1 (the reader yields runtime values) is built; quote, file
-form-by-form execution, `defmacro`, syntax-quote and the `clojure.core`
+Status: stage 1 (the reader yields runtime values) and stage 2 (quote and
+syntax-quote) are built; file form-by-form execution, `defmacro`, syntax-quote and the `clojure.core`
 macros follow (ROADMAP.md, "Macros"). The plan below is the original one;
 §10.1 records the decisions taken while building it.
 
@@ -823,6 +824,60 @@ second map representation, against M1.
 review*), as Clojure's reader does. Before, they were symbols the compiler
 recognised by name. Consequence: `(quote nil)` is now `nil`, as in Clojure,
 where it was the symbol `nil`.
+
+**M5. A quoted collection is a pinned constant** (*agent, pending
+review*). `(quote form)` of a list, vector or map compiles to a `Datum`
+constant holding the very value the reader yielded (or a macro built);
+`PUSH_CONST` pushes it, so every evaluation answers the same immutable
+object, at the cost of one pointer read, as in Clojure. The module pins its
+data in a `ProtoRootSet` of its own, created on the first datum and
+destroyed with the module (`src/runtime/BytecodeModule.h`), so a module that
+holds data must die before its `ProtoSpace`; every driver already orders it
+so. Alternative: compile a quoted collection into the calls that build it
+(`(list (quote a) ...)`), which needs no rooting and matches how string
+constants are rebuilt on every execution; rejected because it allocates on
+every evaluation of a quoted constant (a quoted table inside a loop) and
+because the calls would resolve `list` / `vector` / `hash-map` at run time,
+where a program can redefine them. Quoted symbols and keywords stay `Named`
+constants (interned, never collected); quoted strings and numbers are
+literals.
+
+**M6. Syntax-quote is expanded by the reader** (*agent, pending review*),
+as Clojure's `LispReader` does: `` `(f ~x ~@ys) `` reads as
+`(clojure.core/seq (clojure.core/concat (clojure.core/list (quote f))
+(clojure.core/list x) ys))`, a vector template is applied to
+`clojure.core/vector` and a map template to `clojure.core/hash-map`; a
+nested syntax-quote is expanded first and its expansion quoted as data.
+This gives Clojure's `macroexpand` output and needs nothing from the
+compiler. Alternative: a `syntax-quote` special form the compiler expands
+into bytecode; rejected because `'`\`form` and `macroexpand` would then show
+a form no Clojure programmer recognises. Symbols are not qualified and
+`foo#` is not an auto-gensym until stage 5 (D35). `~`, `~@` and `@` read as
+`clojure.core/unquote`, `clojure.core/unquote-splicing` and
+`clojure.core/deref`, as in Clojure. `seq` and `concat`, which the expansion
+calls, were planned for stage 5 and were added here; both answer lists,
+eagerly (there are no lazy seqs). `apply` now spreads a vector or `nil`,
+which a vector template needs (`` `[] `` is `(apply vector (seq (concat)))`).
+
+**M7. `clojure.core/x` names the built-in `x`** (*agent, pending review*).
+Without namespaces (D28) the built-ins are the runtime's globals, so the
+compiler resolves `clojure.core/x` as the global `x`, never as a local, and
+dispatches `clojure.core/if` and the other special forms as the unqualified
+form. That keeps a syntax-quote expansion correct inside
+`(let [list 1] ...)`. Limit: a `def` of a built-in's name replaces what
+`clojure.core/x` calls (D37); stage 5 may give the built-ins a table of
+their own. Behaviour change against 0.0.3: `@x` now calls the built-in
+`deref` even where a local is named `deref`, as in Clojure.
+
+**M8. `~` and `~@` outside a syntax-quote are compile errors** (*agent,
+pending review*): `unquote (~) used outside a syntax-quote (`)`. JVM
+Clojure compiles them as calls of the unbound var `clojure.core/unquote`
+and fails only at run time, with `Attempting to call unbound fn`; the brief
+asks for a clear message, and the earlier report costs nothing (D36). `~@`
+directly under a syntax-quote, `` `~@x ``, is the read error
+`splice (~@) not in list`, Clojure's. At the REPL, a line that ends in a
+reader macro (`'`, `` ` ``, `~`, `~@`, `@`) is incomplete: the REPL waits
+for the form on the next line, as Clojure's REPL does.
 
 ## 11. The standard library
 

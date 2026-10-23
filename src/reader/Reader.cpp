@@ -114,40 +114,28 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
             return readList(parent, TokenKind::RParen,
                             tok.line, tok.column);
 
-        case TokenKind::At: {
-            // Session 16 — `@expr` desugars to `(deref expr)` at read
-            // time. Build a fresh list with two elements: the symbol
-            // `deref` and the next form read. The list is rooted
-            // immediately into a child scope so an allocation in the
-            // recursive readOne cannot reclaim it before it's wired
-            // into a parent slot by the caller.
-            proto::ProtoContext wrapScope(parent->space, parent);
-            wrapScope.resizeAutomaticLocals(2);
-            constexpr unsigned int kSlotList = 0;
-            constexpr unsigned int kSlotForm = 1;
-            // (deref ...)
-            const proto::ProtoObject* derefSym =
-                internNamed(&wrapScope, named_, "deref");
-            const proto::ProtoObject* lst =
-                wrapScope.newList()->asObject(&wrapScope);
-            lst = lst->asList(&wrapScope)
-                ->appendLast(&wrapScope, derefSym)
-                ->asObject(&wrapScope);
-            wrapScope.setAutomaticLocal(kSlotList, lst);
-            // Read the next form (could be a symbol, list, vector, ...).
-            Token next = lexer_.next();
-            if (next.kind == TokenKind::EndOfFile) {
-                throw ReaderError("`@` must be followed by a form",
-                                  tok.line, tok.column);
-            }
-            wrapScope.setAutomaticLocal(kSlotForm,
-                readFromToken(&wrapScope, next));
-            lst = wrapScope.getAutomaticLocal(kSlotList);
-            lst = lst->asList(&wrapScope)
-                ->appendLast(&wrapScope,
-                    wrapScope.getAutomaticLocal(kSlotForm))
-                ->asObject(&wrapScope);
-            return lst;
+        // The reader macros that stand for a two-element list: `@x` is
+        // `(clojure.core/deref x)`, `'x` is `(quote x)`, `~x` is
+        // `(clojure.core/unquote x)` and `~@x` is
+        // `(clojure.core/unquote-splicing x)`, as Clojure's reader spells
+        // them. `quote` is a special form and stays unqualified.
+        case TokenKind::At:
+            return readWrapped(parent, tok, "clojure.core/deref");
+        case TokenKind::Quote:
+            return readWrapped(parent, tok, "quote");
+        case TokenKind::Tilde:
+            return readWrapped(parent, tok, "clojure.core/unquote");
+        case TokenKind::TildeAt:
+            return readWrapped(parent, tok, "clojure.core/unquote-splicing");
+
+        case TokenKind::Backtick: {
+            // `` `form ``: syntax-quote, expanded here, at read time, into
+            // the forms that build `form`, as Clojure's reader does
+            // (syntaxQuote below).
+            proto::ProtoContext scope(parent->space, parent);
+            scope.resizeAutomaticLocals(1);
+            scope.setAutomaticLocal(0, readNextForm(&scope, tok));
+            return syntaxQuote(&scope, scope.getAutomaticLocal(0), tok);
         }
 
         case TokenKind::LBracket: {
@@ -220,6 +208,194 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
                 tokenKindName(tok.kind),
                 tok.line, tok.column);
     }
+}
+
+const proto::ProtoObject* Reader::readNextForm(proto::ProtoContext* parent,
+                                               const Token& macroTok) {
+    Token next = lexer_.next();
+    if (next.kind == TokenKind::EndOfFile) {
+        throw ReaderError("EOF while reading: " + macroTok.text +
+                          " must be followed by a form",
+                          macroTok.line, macroTok.column);
+    }
+    return readFromToken(parent, next);
+}
+
+const proto::ProtoObject* Reader::readWrapped(proto::ProtoContext* parent,
+                                              const Token& macroTok,
+                                              const char* head) {
+    // The form is rooted in a slot of a child scope while the list is
+    // built; the head symbol is an interned (never collected) value.
+    proto::ProtoContext scope(parent->space, parent);
+    scope.resizeAutomaticLocals(1);
+    scope.setAutomaticLocal(0, readNextForm(&scope, macroTok));
+    return scope.newList()
+        ->appendLast(&scope, internNamed(&scope, named_, head))
+        ->appendLast(&scope, scope.getAutomaticLocal(0))
+        ->asObject(&scope);
+}
+
+namespace {
+
+constexpr proto::proto_ulong kTagMask      = 0x3F;
+constexpr proto::proto_ulong kTagList      = 2;   // POINTER_TAG_LIST
+constexpr proto::proto_ulong kTagListSmall = 25;  // POINTER_TAG_LIST_SMALL
+
+bool isListValue(const proto::ProtoObject* v) {
+    const proto::proto_ulong tag = reinterpret_cast<proto::proto_ulong>(v) & kTagMask;
+    return v != nullptr && (tag == kTagList || tag == kTagListSmall);
+}
+
+} // namespace
+
+// Syntax-quote, as Clojure's reader expands it (LispReader.syntaxQuote):
+//
+//   `sym          (quote sym)
+//   `:k `"s" `1   the value itself (keywords, strings, numbers, nil and
+//                 booleans evaluate to themselves)
+//   `~x           x
+//   `~@x          a read error: a splice must be inside a list
+//   `(a ~b ~@c)   (clojure.core/seq (clojure.core/concat
+//                    (clojure.core/list (quote a)) (clojure.core/list b) c))
+//   `()           (clojure.core/list)
+//   `[a ~b]       (clojure.core/apply clojure.core/vector
+//                    (clojure.core/seq (clojure.core/concat ...)))
+//   `{k ~v}       (clojure.core/apply clojure.core/hash-map
+//                    (clojure.core/seq (clojure.core/concat ...))),
+//                 the entries in source order
+//
+// A nested syntax-quote has already been expanded when the outer one sees
+// it, so its result is quoted as data, as in Clojure. Symbols are not
+// qualified yet (macros stage 5, docs/STATUS.md D35).
+//
+// `form` must be rooted by the caller; the result is unrooted.
+const proto::ProtoObject* Reader::syntaxQuote(proto::ProtoContext* parent,
+                                              const proto::ProtoObject* form,
+                                              const Token& tok) {
+    checkNativeStack(StackUse::Source);
+    auto sym = [&](proto::ProtoContext* c, const char* name) {
+        return internNamed(c, named_, name);
+    };
+    if (form == PROTO_NONE || form == PROTO_TRUE || form == PROTO_FALSE ||
+        proto::ProtoObject::isStringTagFast(form) ||
+        form->isInteger(parent) || form->isFloat(parent)) {
+        return form;
+    }
+    if (isNamed(parent, named_, form)) {
+        const std::string spelling = namedSpelling(parent, named_, form)->toStdString(parent);
+        if (!spelling.empty() && spelling[0] == ':') return form;  // a keyword
+        return parent->newList()
+            ->appendLast(parent, sym(parent, "quote"))
+            ->appendLast(parent, form)
+            ->asObject(parent);
+    }
+
+    // The items to splice together: a list's elements, a vector's, or a
+    // map's keys and values in source order. Each is reachable from `form`.
+    std::vector<const proto::ProtoObject*> items;
+    const char* builder = nullptr;  // vector / hash-map: applied to the seq
+    if (isListValue(form)) {
+        const proto::ProtoList* lst = form->asList(parent);
+        const proto::proto_ulong n = lst->getSize(parent);
+        if (n > 0) {
+            const proto::ProtoObject* head = lst->getAt(parent, 0);
+            if (head == sym(parent, "clojure.core/unquote")) {
+                if (n != 2) throw ReaderError("unquote (~) takes exactly one form", tok.line, tok.column);
+                return lst->getAt(parent, 1);
+            }
+            if (head == sym(parent, "clojure.core/unquote-splicing")) {
+                throw ReaderError("splice (~@) not in list", tok.line, tok.column);
+            }
+        } else {
+            return parent->newList()
+                ->appendLast(parent, sym(parent, "clojure.core/list"))
+                ->asObject(parent);
+        }
+        for (proto::proto_ulong i = 0; i < n; ++i) items.push_back(lst->getAt(parent, static_cast<int>(i)));
+    } else if (isVector(form)) {
+        builder = "clojure.core/vector";
+        const proto::ProtoList* lst = vectorItems(parent, form);
+        const proto::proto_ulong n = lst->getSize(parent);
+        for (proto::proto_ulong i = 0; i < n; ++i) items.push_back(lst->getAt(parent, static_cast<int>(i)));
+    } else if (isMap(form)) {
+        builder = "clojure.core/hash-map";
+        const std::vector<const proto::ProtoObject*>* order = nullptr;
+        if (info_) {
+            auto it = info_->mapKeyOrder.find(form);
+            if (it != info_->mapKeyOrder.end()) order = &it->second;
+        }
+        if (order) {
+            for (const proto::ProtoObject* k : *order) {
+                bool found = false;
+                items.push_back(k);
+                items.push_back(mapGet(parent, form, k, &found));
+            }
+        } else {
+            mapForEach(parent, form, &items,
+                [](proto::ProtoContext*, void* self, const proto::ProtoObject* k,
+                   const proto::ProtoObject* v) {
+                    auto* out = static_cast<std::vector<const proto::ProtoObject*>*>(self);
+                    out->push_back(k);
+                    out->push_back(v);
+                });
+        }
+    } else {
+        // Anything else the reader does not yield; quoted as data.
+        return parent->newList()
+            ->appendLast(parent, sym(parent, "quote"))
+            ->appendLast(parent, form)
+            ->asObject(parent);
+    }
+
+    // (clojure.core/concat piece...), each piece built in a slot of its own
+    // scope chained to the builder's context, then parked by push.
+    const proto::ProtoObject* unquote = sym(parent, "clojure.core/unquote");
+    const proto::ProtoObject* splice = sym(parent, "clojure.core/unquote-splicing");
+    const proto::ProtoObject* listSym = sym(parent, "clojure.core/list");
+    proto::ProtoContext outer(parent->space, parent);
+    outer.resizeAutomaticLocals(1);
+    {
+        ListBuilder concat(&outer);
+        concat.push(sym(concat.context(), "clojure.core/concat"));
+        for (const proto::ProtoObject* item : items) {
+            if (isListValue(item)) {
+                const proto::ProtoList* il = item->asList(concat.context());
+                if (il->getSize(concat.context()) == 2 && il->getAt(concat.context(), 0) == splice) {
+                    concat.push(il->getAt(concat.context(), 1));
+                    continue;
+                }
+                if (il->getSize(concat.context()) == 2 && il->getAt(concat.context(), 0) == unquote) {
+                    proto::ProtoContext pieceScope(concat.context()->space, concat.context());
+                    concat.push(pieceScope.newList()
+                        ->appendLast(&pieceScope, listSym)
+                        ->appendLast(&pieceScope, il->getAt(&pieceScope, 1))
+                        ->asObject(&pieceScope));
+                    continue;
+                }
+            }
+            proto::ProtoContext pieceScope(concat.context()->space, concat.context());
+            pieceScope.resizeAutomaticLocals(1);
+            pieceScope.setAutomaticLocal(0, syntaxQuote(&pieceScope, item, tok));
+            concat.push(pieceScope.newList()
+                ->appendLast(&pieceScope, listSym)
+                ->appendLast(&pieceScope, pieceScope.getAutomaticLocal(0))
+                ->asObject(&pieceScope));
+        }
+        outer.setAutomaticLocal(0, concat.finish());
+    }
+    // (clojure.core/seq (concat ...)), applied to the builder for a vector
+    // or a map.
+    const proto::ProtoObject* seqForm = outer.newList()
+        ->appendLast(&outer, sym(&outer, "clojure.core/seq"))
+        ->appendLast(&outer, outer.getAutomaticLocal(0))
+        ->asObject(&outer);
+    if (!builder) return seqForm;
+    outer.setAutomaticLocal(0, seqForm);
+    return outer.newList()
+        ->appendLast(&outer, sym(&outer, "clojure.core/apply"))
+        ->appendLast(&outer, sym(&outer, builder))
+        ->appendLast(&outer, outer.getAutomaticLocal(0))
+        ->asObject(&outer);
 }
 
 const proto::ProtoObject*

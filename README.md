@@ -65,7 +65,17 @@ Multi-arity, variadic, the higher-order pipeline:
 (println (my-reduce + 100 (list 1 2 3)))   ;; => 106
 ```
 
-The 291 conformance fixtures under `tests/conformance/` are the executable reference for what the language accepts today.
+Code is data: a quoted form is an ordinary list, and a syntax-quote template builds one (`defmacro` is the next step, in progress):
+
+```clojure
+(def form '(+ 1 2 3))
+(println (first form) (rest form))   ;; => + (1 2 3)
+
+(def xs [1 2])
+(println `(max ~@xs 10))             ;; => (max 1 2 10)
+```
+
+The 436 conformance fixtures under `tests/conformance/` are the executable reference for what the language accepts today (this README's examples among them: `tests/conformance/28-quote/readme-code-is-data.clj`).
 
 ## Concurrency — atoms, futures, actors
 
@@ -264,24 +274,25 @@ protoClojure runs scripts and an interactive REPL. Version 0.0.3, a preview tag 
 | CPack packaging | Configured; TGZ and DEB verified on Linux |
 | Exceptions: `try` / `catch` / `finally`, `throw`, `ex-info` | Implemented |
 | Input and output: files, `with-open`, `sh`, `getenv`, HTTP client and Ring server, TCP / UDP / TLS sockets (on protoIO) | Implemented |
-| Macros (`defmacro`, quote, syntax-quote, `clojure.core` macros) | In progress on branch `feature/macros`: stage 1 of 6 done, the reader yields runtime values |
-| Quote reader macro, sets, lazy sequences | Planned |
+| Quote `'` and syntax-quote `` ` `` / `~` / `~@` | Implemented (no namespace qualification or `foo#` gensyms yet) |
+| Macros (`defmacro`, `macroexpand`, `clojure.core` macros) | In progress on branch `feature/macros`: stages 1-2 of 6 done |
+| Sets, lazy sequences | Planned |
 | Namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **556 test cases: 413 conformance fixtures, 120 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics, value lifetime, the vector representation, value equality and hashing, native stack guard, double printer, exception values, rethrow) **and 23 CLI checks** (`--help`, three checks of the adaptive heap controller -- on by default, off with `PROTOCORE_ADAPTIVE_HEAP=0`, peak RSS bounded under a small budget --, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, the reader's values under a heap limit, the garbage a `loop` makes under a heap limit, joins that park for the collector, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, literals in the REPL, deeply nested source, an uncaught exception, exceptions under a heap limit, `read-line` in pipelines, `*command-line-args*`, exit statuses, `sh` with `:dir` and `:env` and no shell on `PATH`, `localhost` requests to a server started without a host, an HTTP server under a heap limit, and scripts run as commands through a `#!` line). All 556 pass locally on Linux against protoCore 3.0.0 (2026-10-23, branch `feature/macros`). The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **585 test cases: 436 conformance fixtures, 124 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics, value lifetime, the vector representation, value equality and hashing, native stack guard, double printer, exception values, rethrow) **and 25 CLI checks** (`--help`, three checks of the adaptive heap controller -- on by default, off with `PROTOCORE_ADAPTIVE_HEAP=0`, peak RSS bounded under a small budget --, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, the reader's values under a heap limit, the garbage a `loop` makes under a heap limit, joins that park for the collector, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, literals and quote in the REPL, quoted data under a heap limit, deeply nested source, an uncaught exception, exceptions under a heap limit, `read-line` in pipelines, `*command-line-args*`, exit statuses, `sh` with `:dir` and `:env` and no shell on `PATH`, `localhost` requests to a server started without a host, an HTTP server under a heap limit, and scripts run as commands through a `#!` line). All 585 pass locally on Linux against protoCore 3.0.0 (2026-10-23, branch `feature/macros`). The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 
-- Reader: integers of any size (`12345678901234567890`, `42N`), floats (`3.14`, `1e6`), strings, symbols, keywords (`:foo`), `true` / `false` / `nil`, lists `(...)`, vectors `[...]`, maps `{...}` (a repeated key is a read error, as in Clojure), `@form` as `(deref form)`, line comments (`;`), commas as whitespace. The reader yields the values the program manipulates at run time — a symbol value, a string, a vector, a map — which is the base for quote and macros ([DESIGN.md §10](docs/DESIGN.md)).
-- Special forms: `def`, `defn` and `fn` (single- and multi-arity, variadic, named-argument destructuring), `let`, `loop`, `recur` (in `loop` and as the implicit function-body target), `if`, `do`, `quote` (of symbols, keywords and other atoms), `apply`, `when`, `when-not`, `cond`, `and`, `or`, `future`, `try` / `catch` / `finally`, `throw`.
+- Reader: integers of any size (`12345678901234567890`, `42N`), floats (`3.14`, `1e6`), strings, symbols, keywords (`:foo`), `true` / `false` / `nil`, lists `(...)`, vectors `[...]`, maps `{...}` (a repeated key is a read error, as in Clojure), `@form` as `(clojure.core/deref form)`, quote `'form`, syntax-quote `` `form `` with `~` and `~@` (expanded when read, as in Clojure; symbols are not yet namespace-qualified, D35), line comments (`;`), commas as whitespace. The reader yields the values the program manipulates at run time — a symbol value, a string, a vector, a map — which is the base for quote and macros ([DESIGN.md §10](docs/DESIGN.md)).
+- Special forms: `def`, `defn` and `fn` (single- and multi-arity, variadic, named-argument destructuring), `let`, `loop`, `recur` (in `loop` and as the implicit function-body target), `if`, `do`, `quote` (of any datum: a quoted list is a list value), `apply` (over a list, a vector or nil), `when`, `when-not`, `cond`, `and`, `or`, `future`, `try` / `catch` / `finally`, `throw`.
 - Closures: full N-level capture, including chained closures across `(fn ... (fn ... (fn ...)))`.
-- Primitives (80 registered at startup):
+- Primitives (85 registered at startup):
   - arithmetic and comparison: `+ - * / inc dec < <= > >= = not=` (`=` compares maps, vectors and lists by value; a vector and a list with equal elements are `=`)
   - output: `println str`
-  - lists and vectors: `list vector vec nth first rest cons count empty? reverse`. A vector is a protoCore `ProtoList` of its elements in a one-entry `ProtoSparseList` box, which is what carries its type; `nth` is O(log n), `vector` / `vec` are O(1), and a vector is collected like any other value (it used to be an interned `ProtoTuple`, which protoCore never frees — decision R2)
+  - lists and vectors: `list vector vec nth first rest cons count empty? reverse`, and `seq concat` (eager, answering lists). A vector is a protoCore `ProtoList` of its elements in a one-entry `ProtoSparseList` box, which is what carries its type; `nth` is O(log n), `vector` / `vec` are O(1), and a vector is collected like any other value (it used to be an interned `ProtoTuple`, which protoCore never frees — decision R2)
   - higher-order: `map filter reduce pmap`
-  - predicates: `nil? not vector? list? map? string?`
+  - predicates: `nil? not vector? list? map? string? symbol? keyword?`
   - maps: `hash-map assoc dissoc get contains? keys vals`, and `count` / `empty?` on maps. A map is an immutable protoCore `ProtoMap` driven through protoCore's shared hashed-collection helper: keys match by value (a map or vector key is found with an equal map, vector or list, a string key with an equal string built at run time), numbers of different types are different keys, iteration order is unspecified, keys are ordinary garbage, and `count` is O(n) ([LANGUAGE.md §4.3](docs/LANGUAGE.md))
   - strings: `subs upper-case lower-case starts-with? ends-with? includes? index-of replace join split trim triml trimr blank?`
   - atoms and watches: `atom atom? deref reset! swap! compare-and-set! add-watch remove-watch`
@@ -302,7 +313,7 @@ What is **not yet** implemented:
 
 - **Clojure-style `agent`** with its send/await semantics (the in-tree `actor` is the protoCore-native variant — different surface, see [docs/tutorial/13-actors.md](docs/tutorial/13-actors.md)).
 - **`delay` / `force`** and `volatile!` / `vreset!` / `vswap!`.
-- **The quote reader macro `'`, macros, sets, lazy sequences** and most of `clojure.core` beyond the primitives above.
+- **Macros (`defmacro`), sets, lazy sequences** and most of `clojure.core` beyond the primitives above.
 - **The UMD module system**: `ns`, `(:require [py/numpy :as np])` and the foreign-dispatch protocol layer.
 - **An nREPL server** for CIDER / Calva / Conjure. It is planned for v0.1; the local interactive REPL on libreadline ships today (see [docs/tutorial/10-repl.md](docs/tutorial/10-repl.md)).
 - **A `core.clj`** evaluated at startup, so that library functions are composed in Clojure instead of installed as C++ primitives.
@@ -323,7 +334,7 @@ cmake --build build_release
 ./build_release/protoclj script.clj a b      # run a .clj file; *command-line-args* is ("a" "b")
 ./build_release/protoclj --version           # version
 
-ctest --test-dir build_release -j1           # 556 cases: 413 fixtures + 120 unit tests + 23 CLI checks
+ctest --test-dir build_release -j1           # 585 cases: 436 fixtures + 124 unit tests + 25 CLI checks
 ./benchmarks/bench.sh                        # benchmark against Babashka
 ./benchmarks/actor-bench.sh                  # actor throughput, varied worker counts
 ```

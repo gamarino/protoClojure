@@ -5,9 +5,9 @@
 > `reverse`), lists (`list`, `cons`, `first`, `rest`) and maps (`{...}`,
 > `hash-map`, `get`, `assoc`, `dissoc`, `contains?`, `keys`, `vals`,
 > `count`, `empty?`). Not available
-> yet: sets, the quote reader macro `'`, `conj`, `pop`, `peek`, `last`,
+> yet: sets, `conj`, `pop`, `peek`, `last`,
 > `assoc` on vectors, `update`, `merge`, `select-keys`,
-> `zipmap`, the `get-in` / `assoc-in` / `update-in` family, `seq`,
+> `zipmap`, the `get-in` / `assoc-in` / `update-in` family,
 > `into`, vectors as functions, `==`,
 > `identical?`, `hash`, and the sequence and regex functions used in
 > §4.11. See
@@ -326,9 +326,8 @@ defines a cross-type equivalence:
 > nested collections (`(= {:a [{:b 1 :c 2}]} {:a [{:c 2 :b 1}]})` and
 > `(= [1 [2]] (list 1 (list 2)))` are `true`), and so does `not=`. Maps
 > whose keys differ only in numeric type are not `=`: `(= {1 :a} {1.0 :a})`
-> is `false`, because `1` and `1.0` are different keys (§4.4). Write the list
-> with `(list 1 2 3)`: the `'` reader macro, sets and `seq` are not
-> implemented.
+> is `false`, because `1` and `1.0` are different keys (§4.4). Sets are not
+> implemented yet.
 
 `==` is the *numeric* equality across number types, with no cross-type
 equivalence for collections:

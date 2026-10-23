@@ -51,7 +51,8 @@ tell at a glance which parts of the surface are runnable today. The
 | Strings | Implemented (literals, `str`, `println`) |
 | Strings — `clojure.string`-shaped ops (`split`, `join`, `upper-case`, …) | Implemented, in the global namespace |
 | Symbols, keywords, booleans, nil literals | Implemented |
-| Reader macros `'`, `` ` ``, `~`, `~@`, `#(...)`, `#'`, `#_`, `^` | Planned (only `@` today; `(quote atom)` works as a special form) |
+| Reader macros `'`, `` ` ``, `~`, `~@` | Implemented (syntax-quote does not yet qualify symbols or auto-gensym, D35) |
+| Reader macros `#(...)`, `#'`, `#_`, `^` | Planned |
 | Lists `(...)` | Implemented |
 | Vectors `[...]` | Implemented (a `ProtoList` in a one-entry sparse-list box, distinct from list) |
 | Maps `{...}` | Implemented (`hash-map`, `assoc`, `dissoc`, `get`, `contains?`, `keys`, `vals`; `count` and `empty?` accept maps) |
@@ -59,7 +60,7 @@ tell at a glance which parts of the surface are runnable today. The
 | `def`, `defn`, `fn`, `let`, `loop`, `recur` | Implemented (`let` and `loop` inside function bodies only) |
 | Multi-arity `defn` | Implemented |
 | Variadic `& rest` | Implemented |
-| `if`, `do`, `quote`, `apply` | Implemented (`quote` of atoms only; `apply` over a list) |
+| `if`, `do`, `quote`, `apply` | Implemented (`quote` of any datum; `apply` over a list, a vector or nil) |
 | `when`, `when-not`, `cond`, `and`, `or` | Implemented |
 | `throw`, `try`, `catch`, `finally`, `ex-info`, `ex-data`, `ex-message`, `ex-cause` | Implemented (§14) |
 | Input and output: `slurp`, `spit`, `read-line`, `reader` / `writer` / `with-open`, `line-seq`, `file-seq`, `sh`, `getenv`, `exit`, HTTP client and Ring server, TCP / UDP / TLS sockets | Implemented, in the global namespace (§18) |
@@ -281,9 +282,20 @@ truthy).
 
 ### 2.8 Reader macros
 
-- `'form` → `(quote form)`
-- `` `form `` → quasiquote (syntax-quote) — recursive auto-resolves
-  symbols against the current namespace; `~x` unquotes, `~@x` splices.
+- `'form` → `(quote form)` (implemented).
+- `` `form `` → syntax-quote (implemented): a template. `~x` unquotes
+  (inserts the value of `x`), `~@x` splices (inserts the elements of the
+  sequence `x`). It is expanded when it is read, as in Clojure, into the
+  code that builds the form:
+  `` `(f ~x ~@ys) `` reads as
+  `(clojure.core/seq (clojure.core/concat (clojure.core/list (quote f)) (clojure.core/list x) ys))`,
+  a vector template is applied to `clojure.core/vector` and a map template
+  to `clojure.core/hash-map`; keywords, strings, numbers, `nil` and
+  booleans stay themselves. Not yet: Clojure also qualifies each symbol with
+  its namespace (`user/f`) and turns `foo#` into a generated symbol (D35).
+  `~@` outside a list is a read error; `~` or `~@` outside a syntax-quote is
+  a compile error (D36).
+- `~x` → `(clojure.core/unquote x)`, `~@x` → `(clojure.core/unquote-splicing x)`.
 - `#(...)` → anonymous function: `#(+ 1 %)` is `(fn [%] (+ 1 %))`.
   Args are `%`, `%1`..`%9`, `%&` (rest).
 - `#{...}` → set literal (already covered).
@@ -293,7 +305,7 @@ truthy).
 - `#!` → a comment to end of line (implemented; §2.1).
 - `^{:a 1} form` → attach metadata to `form`. `^kw` is `{:tag kw}`;
   `^Type` is `{:tag Type}`.
-- `@form` → `(deref form)` (implemented).
+- `@form` → `(clojure.core/deref form)` (implemented).
 
 ### 2.9 Reader literals
 
@@ -1129,6 +1141,14 @@ escapes on strings at every depth, `:keyword` for keywords), not
 `print-str`: `"a"` echoes as `"a"` and `["a"]` as `["a"]` (§2.3). `*1` `*2`
 `*3` hold the last three results (implemented); `*e` will hold the last
 exception (planned).
+
+Input is read form by form: a line with an unclosed `(`, `[`, `{` or string,
+or one that ends in a reader macro (`'`, `` ` ``, `~`, `~@`, `@`), continues
+at the `#_=>` prompt until the form is complete; a blank line there forces
+evaluation. Each form is read, compiled and run before the next is read, so
+a definition is in effect for every later form (implemented). A line that
+starts with `:` at the primary prompt is a REPL command (`:help`), not a
+keyword.
 
 ---
 

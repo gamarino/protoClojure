@@ -9,6 +9,43 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — macros, stage 2: quote and syntax-quote
+
+- **`quote` takes any datum** (DESIGN.md §10.1, M5): `'(+ 1 2)` is a list
+  value that `first`, `rest`, `count` and `nth` take apart, `'[a {:k b}]` a
+  vector holding a map, and a quoted symbol a symbol value (`symbol?`). A
+  quoted collection is the very value the reader yielded, pinned by the
+  compiled module (a `Datum` constant in a `ProtoRootSet` of the module's
+  own), so every evaluation answers the same object.
+- **The reader macros `'`, `` ` ``, `~` and `~@`** (M6). Syntax-quote is
+  expanded at read time as Clojure's reader expands it:
+  `` `(f ~x ~@ys) `` reads as `(clojure.core/seq (clojure.core/concat
+  (clojure.core/list (quote f)) (clojure.core/list x) ys))`; vector and map
+  templates apply `clojure.core/vector` and `clojure.core/hash-map`.
+  Symbols are not namespace-qualified and `foo#` is not an auto-gensym yet
+  (D35, macros stage 5).
+- **`clojure.core/x` names the built-in `x`**, never a local (M7, D37), so
+  an expansion is not captured by `(let [list ...] ...)`. `@x` now reads as
+  `(clojure.core/deref x)`, as in Clojure, so it calls the built-in even
+  where a local is named `deref`.
+- `~` or `~@` outside a syntax-quote is the compile error `unquote (~) used
+  outside a syntax-quote` (M8, D36); `` `~@x `` is the read error
+  `splice (~@) not in list`; a reader macro at the end of input is
+  `EOF while reading: ' must be followed by a form`.
+- New built-ins: `seq` and `concat` (eager, answering lists; the expansion
+  needs them), `symbol?`, `keyword?`. `apply` spreads a vector or `nil` as
+  well as a list.
+- The REPL waits for more input when a line ends in a reader macro (`'`,
+  `` ` ``, `~`, `~@`, `@`), as Clojure's REPL does.
+- New tests (29): 23 conformance fixtures in `tests/conformance/28-quote/`
+  (among them the tutorial and README snippets that now run), 4 reader and
+  lexer unit tests (quote / unquote / splice lists, the syntax-quote
+  expansions, nested syntax-quote, read errors, the new tokens), and the CLI
+  checks `cli/repl-quote` and `cli/quoted-data-survive-gc` (file and REPL
+  mode under a 1,000,000-cell heap). The latter cannot fail yet: both
+  drivers still keep every read form alive (stage 3 changes the file
+  driver).
+
 ### Changed — macros, stage 1: the reader yields runtime values
 
 - **The reader produces the values the runtime manipulates** (DESIGN.md

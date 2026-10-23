@@ -19,8 +19,9 @@ under a `Dnn` id.
 > - §3.1: implemented are vectors, lists and maps with `assoc` / `get`;
 >   truthiness; `defn` with multi-arity and variadic parameters (no
 >   docstrings or attribute maps); `let`, `loop`, `recur`; closures;
->   atoms with watches; promises; `println`. Reader macros other than
->   `@`, sets, most collection functions, lazy sequences, the
+>   atoms with watches; promises; `println`; `quote` of any datum and the
+>   reader macros `'`, `` ` ``, `~`, `~@` (syntax-quote does not yet
+>   qualify symbols or auto-gensym). Other reader macros, sets, most collection functions, lazy sequences, the
 >   higher-order combinators, the threading macros, namespaces, vars and
 >   `binding`, volatiles, delays and the `pr`-family printers are not
 >   implemented yet. Exceptions are implemented: `try` / `catch` /

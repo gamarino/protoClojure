@@ -120,6 +120,25 @@ std::size_t BytecodeModule::addNamed(const std::string& spelling,
                      Const{ConstKind::Named, 0, 0.0, spelling, value});
 }
 
+std::size_t BytecodeModule::addDatum(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject* value) {
+    const auto it = datumIndex_.find(value);
+    if (it != datumIndex_.end()) return it->second;
+    if (!datumRoots_) {
+        datumSpace_ = ctx->space;
+        datumRoots_ = datumSpace_->createRootSet("protoclj-quoted-data");
+    }
+    datumRoots_->add(value);
+    const std::size_t idx = consts_.size();
+    consts_.push_back(Const{ConstKind::Datum, 0, 0.0, {}, value});
+    datumIndex_.emplace(value, idx);
+    return idx;
+}
+
+BytecodeModule::~BytecodeModule() {
+    if (datumRoots_) datumSpace_->destroyRootSet(datumRoots_);
+}
+
 std::size_t BytecodeModule::emit(Op op, std::size_t operand) {
     const std::uint32_t checked = checkedOperand(op, operand);
     code_.push_back((checked << kOperandShift) | static_cast<Instr>(op));

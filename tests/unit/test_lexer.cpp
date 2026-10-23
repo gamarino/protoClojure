@@ -321,3 +321,23 @@ TEST(Lexer, SymbolicValueNeedsASymbol) {
     ASSERT_EQ(nothing.back().kind, TokenKind::Error);
     EXPECT_EQ(nothing.back().text, "Invalid token: ##");
 }
+
+TEST(Lexer, QuotingReaderMacros) {
+    // `'`, `` ` ``, `~` and `~@` are tokens of their own; a `'` inside a
+    // symbol is part of it, and `-1` after a quote is a negative literal.
+    auto toks = tokenise("'a `b ~c ~@d x' '-1 ^m");
+    ASSERT_GE(toks.size(), 12u);
+    EXPECT_EQ(toks[0].kind, TokenKind::Quote);
+    EXPECT_EQ(toks[1].kind, TokenKind::Symbol);
+    EXPECT_EQ(toks[2].kind, TokenKind::Backtick);
+    EXPECT_EQ(toks[4].kind, TokenKind::Tilde);
+    EXPECT_EQ(toks[6].kind, TokenKind::TildeAt);
+    EXPECT_EQ(toks[6].text, "~@");
+    EXPECT_EQ(toks[8].kind, TokenKind::Symbol);
+    EXPECT_EQ(toks[8].text, "x'");
+    EXPECT_EQ(toks[9].kind, TokenKind::Quote);
+    EXPECT_EQ(toks[10].kind, TokenKind::Integer);
+    EXPECT_EQ(toks[10].intValue, -1);
+    // Metadata is still reserved.
+    EXPECT_EQ(toks[11].kind, TokenKind::Error);
+}

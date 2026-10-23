@@ -145,7 +145,7 @@ TEST_F(ReaderFixture, DerefIsAListOfTheDerefSymbol) {
     Reader r(ctx, "@a", markers);
     const proto::ProtoList* lst = r.readOne()->asList(ctx);
     ASSERT_EQ(lst->getSize(ctx), 2u);
-    EXPECT_TRUE(isSymbolNamed(lst->getAt(ctx, 0), "deref"));
+    EXPECT_TRUE(isSymbolNamed(lst->getAt(ctx, 0), "clojure.core/deref"));
     EXPECT_TRUE(isSymbolNamed(lst->getAt(ctx, 1), "a"));
 }
 
@@ -260,4 +260,88 @@ TEST_F(ReaderFixture, MapLiteralKeysAreRecordedInSourceOrder) {
     EXPECT_TRUE(isSymbolNamed(it->second[1], ":a"));
     EXPECT_TRUE(isSymbolNamed(it->second[2], ":m"));
     EXPECT_EQ(info.mapKeyOrder.size(), 2u);  // the nested map too
+}
+
+namespace {
+
+// The form printed back as source, for checking reader expansions: lists in
+// parentheses, vectors in brackets, named values by spelling, strings in
+// quotes, integers in decimal, nil / true / false by name.
+std::string show(proto::ProtoContext* ctx, const NamedLayout& named,
+                 const proto::ProtoObject* f) {
+    if (f == PROTO_NONE) return "nil";
+    if (f == PROTO_TRUE) return "true";
+    if (f == PROTO_FALSE) return "false";
+    if (protoClojure::isNamed(ctx, named, f))
+        return protoClojure::namedSpelling(ctx, named, f)->toStdString(ctx);
+    if (proto::ProtoObject::isStringTagFast(f))
+        return "\"" + reinterpret_cast<const proto::ProtoString*>(f)->toStdString(ctx) + "\"";
+    if (f->isInteger(ctx)) return std::to_string(f->asLong(ctx));
+    const bool vec = protoClojure::isVector(f);
+    const proto::ProtoList* l = vec ? protoClojure::vectorItems(ctx, f) : f->asList(ctx);
+    std::string out = vec ? "[" : "(";
+    for (proto::proto_ulong i = 0; i < l->getSize(ctx); ++i) {
+        if (i) out += " ";
+        out += show(ctx, named, l->getAt(ctx, static_cast<int>(i)));
+    }
+    return out + (vec ? "]" : ")");
+}
+
+} // namespace
+
+TEST_F(ReaderFixture, QuoteUnquoteAndSpliceAreTwoElementLists) {
+    Reader r(ctx, "'x '(1 [a]) ~y ~@z foo'", markers);
+    EXPECT_EQ(show(ctx, markers, r.readOne()), "(quote x)");
+    EXPECT_EQ(show(ctx, markers, r.readOne()), "(quote (1 [a]))");
+    EXPECT_EQ(show(ctx, markers, r.readOne()), "(clojure.core/unquote y)");
+    EXPECT_EQ(show(ctx, markers, r.readOne()), "(clojure.core/unquote-splicing z)");
+    // A `'` inside a symbol is part of it.
+    EXPECT_TRUE(isSymbolNamed(r.readOne(), "foo'"));
+}
+
+TEST_F(ReaderFixture, SyntaxQuoteExpandsAsClojuresReader) {
+    Reader r(ctx, "`a `:k `\"s\" `5 `nil `~x `(f ~x ~@ys) `() `[a ~b] `(a `(b ~c))", markers);
+    EXPECT_EQ(show(ctx, markers, r.readOne()), "(quote a)");
+    EXPECT_EQ(show(ctx, markers, r.readOne()), ":k");
+    EXPECT_EQ(show(ctx, markers, r.readOne()), "\"s\"");
+    EXPECT_EQ(show(ctx, markers, r.readOne()), "5");
+    EXPECT_EQ(show(ctx, markers, r.readOne()), "nil");
+    EXPECT_EQ(show(ctx, markers, r.readOne()), "x");
+    EXPECT_EQ(show(ctx, markers, r.readOne()),
+              "(clojure.core/seq (clojure.core/concat (clojure.core/list (quote f)) "
+              "(clojure.core/list x) ys))");
+    EXPECT_EQ(show(ctx, markers, r.readOne()), "(clojure.core/list)");
+    EXPECT_EQ(show(ctx, markers, r.readOne()),
+              "(clojure.core/apply clojure.core/vector (clojure.core/seq (clojure.core/concat "
+              "(clojure.core/list (quote a)) (clojure.core/list b))))");
+    // The inner syntax-quote is expanded first; the outer one quotes the
+    // expansion as data, so the inner `~c` stays unevaluated: `(quote c)`.
+    EXPECT_EQ(show(ctx, markers, r.readOne()),
+              "(clojure.core/seq (clojure.core/concat (clojure.core/list (quote a)) "
+              "(clojure.core/list (clojure.core/seq (clojure.core/concat "
+              "(clojure.core/list (quote clojure.core/seq)) (clojure.core/list "
+              "(clojure.core/seq (clojure.core/concat (clojure.core/list (quote clojure.core/concat)) "
+              "(clojure.core/list (clojure.core/seq (clojure.core/concat "
+              "(clojure.core/list (quote clojure.core/list)) (clojure.core/list "
+              "(clojure.core/seq (clojure.core/concat (clojure.core/list (quote quote)) "
+              "(clojure.core/list (quote b)))))))) (clojure.core/list (clojure.core/seq "
+              "(clojure.core/concat (clojure.core/list (quote clojure.core/list)) "
+              "(clojure.core/list (quote c)))))))))))))");
+}
+
+TEST_F(ReaderFixture, SyntaxQuoteErrors) {
+    {
+        Reader r(ctx, "`~@x", markers);
+        try { r.readOne(); FAIL() << "a top-level splice must be a read error"; }
+        catch (const ReaderError& e) { EXPECT_STREQ(e.what(), "splice (~@) not in list"); }
+    }
+    {
+        Reader r(ctx, "(a ')", markers);
+        EXPECT_THROW(r.readOne(), ReaderError);
+    }
+    {
+        Reader r(ctx, "`", markers);
+        try { r.readOne(); FAIL() << "a syntax-quote at the end of input must be a read error"; }
+        catch (const ReaderError& e) { EXPECT_STREQ(e.what(), "EOF while reading: ` must be followed by a form"); }
+    }
 }

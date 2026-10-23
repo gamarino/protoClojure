@@ -28,6 +28,15 @@
  * through the runtime's rooted intern table for the lifetime of the
  * ProtoSpace, so the GC needs no reference from here. A module therefore
  * runs only in the ProtoSpace it was compiled against.
+ *
+ * Quoted data (Const::named of a Datum constant) is the other kind: a quoted
+ * list, vector or map, `'(a b)`, is the very value the reader yielded, and
+ * PUSH_CONST pushes it, so every evaluation answers the same immutable
+ * object, as in Clojure. A module that holds data pins them in a
+ * ProtoRootSet of its own, created on the first addDatum and destroyed with
+ * the module; a module with data must therefore be destroyed before its
+ * ProtoSpace (every driver does: modules are locals of the run, or owned by
+ * the REPL session, both inside the space's lifetime).
  */
 #pragma once
 #include "Opcodes.h"
@@ -42,6 +51,8 @@
 namespace proto {
 class ProtoObject;
 class ProtoContext;
+class ProtoRootSet;
+class ProtoSpace;
 }
 
 namespace protoClojure {
@@ -60,6 +71,8 @@ public:
                      // decimal digits in `sval`; PUSH_CONST rebuilds the
                      // LargeInteger on each execution (a module holds no
                      // unrooted heap values)
+        Datum,     // a quoted list, vector or map, held in `named` and
+                   // pinned in the module's root set (see the P4 note)
     };
 
     struct Const {
@@ -85,6 +98,14 @@ public:
     // De-duplicated by spelling: interning maps a spelling to one value.
     std::size_t addNamed(const std::string& spelling,
                          const proto::ProtoObject* value);
+    // A quoted datum: `value` is pinned for the life of this module, and
+    // PUSH_CONST pushes it. De-duplicated by identity.
+    std::size_t addDatum(proto::ProtoContext* ctx, const proto::ProtoObject* value);
+
+    BytecodeModule() = default;
+    ~BytecodeModule();
+    BytecodeModule(const BytecodeModule&) = delete;
+    BytecodeModule& operator=(const BytecodeModule&) = delete;
 
     // Emit one instruction word. Returns its position, which patchOperand
     // uses to back-patch a forward jump once the target is known. Throws
@@ -206,6 +227,10 @@ private:
     std::unordered_map<std::string, std::size_t>   stringIndex_;
     std::unordered_map<std::string, std::size_t>   symbolIndex_;
     std::unordered_map<std::string, std::size_t>   namedIndex_;
+    std::unordered_map<const proto::ProtoObject*, std::size_t> datumIndex_;
+    // The root set pinning this module's data; null until the first one.
+    proto::ProtoSpace*                           datumSpace_ = nullptr;
+    proto::ProtoRootSet*                         datumRoots_ = nullptr;
     std::vector<std::unique_ptr<BytecodeModule>> blocks_;
     std::vector<ArityGroup>                      arityGroups_;
     std::vector<CaptureSpec>                     captureSpecs_;

@@ -76,11 +76,26 @@ namespace {
 // reader report it). String continuation → still typing.
 enum class Balance { Incomplete, Balanced, Error };
 
+// True when `c` ends a token, so a following `'` starts a quote rather
+// than continuing a symbol (`foo'` is a symbol).
+bool endsBeforeMacro(char c) {
+    return std::isspace(static_cast<unsigned char>(c)) || c == ',' || c == '(' ||
+           c == '[' || c == '{' || c == '\'' || c == '`' || c == '~' || c == '@';
+}
+
 Balance scanBalance(const std::string& src) {
     long paren = 0, bracket = 0, brace = 0;
     bool inStr = false;
+    // A reader macro (`'`, `` ` ``, `~`, `~@`, `@`) as the last thing typed
+    // still needs its form: the input is incomplete, as in Clojure's REPL.
+    bool pendingMacro = false;
     for (std::size_t i = 0; i < src.size(); ++i) {
         char c = src[i];
+        if (!inStr && !std::isspace(static_cast<unsigned char>(c)) && c != ',' && c != ';' &&
+            !(c == '#' && i + 1 < src.size() && src[i + 1] == '!')) {
+            pendingMacro = (c == '`' || c == '~' || c == '@' ||
+                            (c == '\'' && (i == 0 || endsBeforeMacro(src[i - 1]))));
+        }
         if (inStr) {
             if (c == '\\' && i + 1 < src.size()) { ++i; continue; }
             if (c == '"') inStr = false;
@@ -110,6 +125,7 @@ Balance scanBalance(const std::string& src) {
     }
     if (inStr)                                       return Balance::Incomplete;
     if (paren > 0 || bracket > 0 || brace > 0)       return Balance::Incomplete;
+    if (pendingMacro)                                return Balance::Incomplete;
     return Balance::Balanced;
 }
 

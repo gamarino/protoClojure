@@ -450,7 +450,31 @@ Token Lexer::lexSymbolOrPunct() {
         return makeError("reserved-for-later token: " + name, startLine, startCol);
     };
 
-    if (c == '\'' || c == '`' || c == '~' || c == '^') {
+    // The quoting reader macros: `'form`, `` `form ``, `~form`, `~@form`.
+    // A `'` inside a symbol (`foo'`) is a symbol character; only a leading
+    // one is the quote.
+    if (c == '\'' || c == '`' || c == '~') {
+        Token t;
+        t.line = startLine;
+        t.column = startCol;
+        advance();
+        if (c == '\'') {
+            t.kind = TokenKind::Quote;
+            t.text = "'";
+        } else if (c == '`') {
+            t.kind = TokenKind::Backtick;
+            t.text = "`";
+        } else if (!eof() && current() == '@') {
+            advance();
+            t.kind = TokenKind::TildeAt;
+            t.text = "~@";
+        } else {
+            t.kind = TokenKind::Tilde;
+            t.text = "~";
+        }
+        return t;
+    }
+    if (c == '^') {
         std::string s(1, c);
         advance();
         return reserved(s);

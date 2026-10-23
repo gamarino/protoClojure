@@ -55,6 +55,18 @@ std::string nameOf(proto::ProtoContext* ctx, const NamedLayout& named,
     return namedSpelling(ctx, named, form)->toStdString(ctx);
 }
 
+// Strips a leading `clojure.core/` from `name` and returns true when there
+// was one. Without namespaces (D28) the built-ins are the globals the
+// runtime installs, so `clojure.core/x` names the global x; unlike a bare
+// `x` it is never resolved to a local. Syntax-quote and the reader macros
+// `@`, `~` and `~@` produce such names, as Clojure's reader does.
+bool stripCoreQualifier(std::string& name) {
+    static const std::string kCore = "clojure.core/";
+    if (name.size() <= kCore.size() || name.compare(0, kCore.size(), kCore) != 0) return false;
+    name.erase(0, kCore.size());
+    return true;
+}
+
 // True iff the form is a string literal: a protoCore string. Symbols and
 // keywords are named values, never strings.
 bool isStringForm(const proto::ProtoObject* form) {
@@ -802,6 +814,9 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // callable is itself an expression) is always a regular call and
         // is compiled below via compileForm on the head.
         std::string headName = isNameForm(ctx, markers.named, head) ? nameOf(ctx, markers.named, head) : std::string{};
+        // `clojure.core/x` names the built-in x (what syntax-quote and the
+        // reader macros produce): dispatched as x, never shadowed by a local.
+        const bool coreQualified = stripCoreQualifier(headName);
 
         // ---- Special forms -------------------------------------------------
 
@@ -985,38 +1000,35 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // support quoting atoms (numbers, strings, symbols). Quoting a list
         // requires materialising the data structure at runtime, which is a
         // later-session feature.
+        // (quote form) — the form itself, unevaluated, as the value. A
+        // symbol or keyword is its interned value (Named.h); a string,
+        // number, nil or boolean the literal; a list, vector or map the very
+        // value the reader yielded (or the macro built), pinned by the
+        // module as a Datum constant (BytecodeModule.h), so every
+        // evaluation answers the same immutable object, as in Clojure.
         if (headName == "quote") {
             if (n != 2) throw CompileError("quote: expects (quote form)");
             const proto::ProtoObject* q = lst->getAt(ctx, 1);
-            if (isList(q)) {
-                throw CompileError("quote: quoting a list is not supported yet");
-            }
-            // Atom: emit as a PUSH_CONST. Symbol is the interesting case —
-            // we add it to the const pool as Symbol kind so PUSH_CONST
-            // materialises an interned symbol, not a string.
-            if (isStringForm(q)) {
-                std::size_t idx = out.addString(
-                    reinterpret_cast<const proto::ProtoString*>(q)->toStdString(ctx));
-                out.emit(Op::PUSH_CONST, idx);
-                return;
-            }
-            if (q == PROTO_NONE || q == PROTO_TRUE || q == PROTO_FALSE) {
-                compileForm(ctx, q, out, markers);
-                return;
-            }
             if (isNameForm(ctx, markers.named, q)) {
-                // A quoted symbol or keyword: the interned value the reader
-                // yielded (Named.h).
                 std::size_t idx = out.addNamed(nameOf(ctx, markers.named, q), q);
                 out.emit(Op::PUSH_CONST, idx);
                 return;
             }
-            if (q->isInteger(ctx)) {
-                std::size_t idx = addIntegerConst(ctx, q, out);
-                out.emit(Op::PUSH_CONST, idx);
+            if (q == PROTO_NONE || q == PROTO_TRUE || q == PROTO_FALSE ||
+                isStringForm(q) || q->isInteger(ctx) || q->isFloat(ctx)) {
+                compileForm(ctx, q, out, markers);  // the literal itself
                 return;
             }
-            throw CompileError("quote: only symbols, keywords, strings and integers can be quoted");
+            out.emit(Op::PUSH_CONST, out.addDatum(ctx, q));
+            return;
+        }
+
+        // `~x` and `~@x` outside a syntax-quote: the reader yields
+        // (clojure.core/unquote x), which only a syntax-quote consumes.
+        if (coreQualified && (headName == "unquote" || headName == "unquote-splicing")) {
+            throw CompileError(headName == "unquote"
+                ? "unquote (~) used outside a syntax-quote (`)"
+                : "unquote-splicing (~@) used outside a syntax-quote (`)");
         }
 
         // (fn ...) / (defn name ...) — single OR multi-arity. Multi-arity
@@ -1354,7 +1366,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             // Shadow check — if `+` (or whichever) is bound locally, we
             // are calling the local binding, not the global primitive;
             // fall back to the general PUSH_VAR + CALL path.
-            int shadowSlot = (binOp != Op::NOP) ? resolveLocal(headName) : -1;
+            int shadowSlot = (binOp != Op::NOP && !coreQualified) ? resolveLocal(headName) : -1;
             proto::proto_ulong argc = n - 1;
 
             if (binOp != Op::NOP && shadowSlot < 0 && argc >= 2) {
@@ -1382,7 +1394,9 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             // General path — emit callable, then args, then CALL. A keyword
             // in call position is a value, not a global name: `(:a m)`
             // pushes the keyword and the VM calls it as a map lookup.
-            if (headName[0] == ':') {
+            if (coreQualified) {
+                out.emit(Op::PUSH_VAR, out.addSymbol(ctx, headName));
+            } else if (headName[0] == ':') {
                 compileForm(ctx, head, out, markers);
             } else if (int slot = resolveLocal(headName); slot >= 0) {
                 out.emit(Op::PUSH_LOCAL, slot);
@@ -1476,6 +1490,11 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             // PUSH_CONST pushes the pointer (Named.h).
             std::size_t idx = out.addNamed(name, form);
             out.emit(Op::PUSH_CONST, idx);
+            return;
+        }
+        if (stripCoreQualifier(name)) {
+            // `clojure.core/x`: the built-in x, never a local.
+            out.emit(Op::PUSH_VAR, out.addSymbol(ctx, name));
             return;
         }
         int slot = resolveLocal(name);

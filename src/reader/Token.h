@@ -34,10 +34,10 @@ enum class TokenKind : uint8_t {
     HashLBrace,      // reserved — #{
     HashLParen,      // reserved — #(
 
-    Quote,           // reserved — '
-    Backtick,        // reserved — `
-    Tilde,           // reserved — ~
-    TildeAt,         // reserved — ~@
+    Quote,           // '   (reader macro for `(quote ...)`)
+    Backtick,        // `   (syntax-quote)
+    Tilde,           // ~   (reader macro for `(unquote ...)`)
+    TildeAt,         // ~@  (reader macro for `(unquote-splicing ...)`)
     HashUnderscore,  // reserved — #_
     HashApostrophe,  // reserved — #'
     Caret,           // reserved — ^

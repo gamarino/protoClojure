@@ -6,6 +6,7 @@
 #include "Named.h"
 #include "Opcodes.h"
 #include "Primitives.h"
+#include "VectorOps.h"
 #include "StackGuard.h"
 
 #include "protoCore.h"
@@ -100,7 +101,9 @@ const proto::ProtoObject* materialiseBigInteger(proto::ProtoContext* ctx,
 }
 
 // The value a PUSH_CONST pushes. Keyword literals and quoted symbols are
-// Named constants holding the value the compiler interned (Named.h).
+// Named constants holding the value the compiler interned (Named.h); quoted
+// lists, vectors and maps are Datum constants holding the value the reader
+// yielded, pinned by the module.
 const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
                                        const BytecodeModule::Const& c) {
     using K = BytecodeModule::ConstKind;
@@ -109,6 +112,7 @@ const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
         case K::Double: return ctx->fromDouble(c.dval);
         case K::String: return ctx->fromUTF8String(c.sval.c_str());
         case K::Named:  return c.named;
+        case K::Datum:  return c.named;
         case K::BigInteger: return materialiseBigInteger(ctx, c);
         case K::Symbol: break;  // a global name, never a value
     }
@@ -987,10 +991,17 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 // with argc = list size. Reuses the same dispatch as CALL.
                 if (sp < 2)
                     throwError(&frame, "VM: CALL_APPLY underflow");
+                // nil spreads no arguments and a vector its elements, as in
+                // Clojure (`(apply vector (seq ()))` is `[]`).
                 const proto::ProtoObject* listObj = popVal();
-                if (!listObj)
-                    throwError(&frame, "VM: CALL_APPLY: nil args list");
-                const proto::ProtoList* argsList = listObj->asList(&frame);
+                const proto::ProtoList* argsList = nullptr;
+                if (!listObj || listObj == PROTO_NONE) {
+                    argsList = frame.newList();
+                } else if (isVector(listObj)) {
+                    argsList = vectorItems(&frame, listObj);
+                } else {
+                    argsList = listObj->asList(&frame);
+                }
                 if (!argsList)
                     throwError(&frame, "VM: CALL_APPLY: not a list");
                 proto::proto_ulong ln = argsList->getSize(&frame);

@@ -1079,6 +1079,126 @@ const proto::ProtoObject* prim_reverse(proto::ProtoContext* ctx,
     return out.finish();
 }
 
+// The elements of `v` as a seq builds them, pushed onto `out`: a list's or
+// vector's elements, a map's entries as [key value] vectors, a string's
+// characters as one-character strings (D3). nil has none. Returns false,
+// pushing nothing, for any other value. Every element is reachable from `v`,
+// which the caller roots; the entry vectors are parked by `push`.
+bool pushSeqElements(ListBuilder& out, const proto::ProtoObject* v) {
+    proto::ProtoContext* c = out.context();
+    if (!v || v == PROTO_NONE) return true;
+    if (isListTag(v) || isVector(v)) {
+        const proto::ProtoList* lst = isVector(v) ? vectorItems(c, v) : v->asList(c);
+        const proto::proto_ulong n = lst->getSize(c);
+        for (proto::proto_ulong i = 0; i < n; ++i)
+            out.push(lst->getAt(out.context(), static_cast<int>(i)));
+        return true;
+    }
+    if (isMap(v)) {
+        std::vector<const proto::ProtoObject*> kv;
+        mapForEach(c, v, &kv,
+            [](proto::ProtoContext*, void* self, const proto::ProtoObject* k,
+               const proto::ProtoObject* val) {
+                auto* acc = static_cast<std::vector<const proto::ProtoObject*>*>(self);
+                acc->push_back(k);
+                acc->push_back(val);
+            });
+        for (std::size_t i = 0; i < kv.size(); i += 2) {
+            proto::ProtoContext* ec = out.context();
+            out.push(newVector(ec, ec->newList()->appendLast(ec, kv[i])->appendLast(ec, kv[i + 1])));
+        }
+        return true;
+    }
+    if (isStringLike(v)) {
+        const std::string raw = asProtoString(v)->toStdString(c);
+        for (std::size_t i = 0; i < raw.size();) {
+            const unsigned char lead = static_cast<unsigned char>(raw[i]);
+            const std::size_t len = lead < 0x80 ? 1 : (lead >> 5) == 0x6 ? 2
+                                  : (lead >> 4) == 0xE ? 3 : (lead >> 3) == 0x1E ? 4 : 1;
+            out.push(out.context()->fromUTF8String(raw.substr(i, len).c_str()));
+            i += len;
+        }
+        return true;
+    }
+    return false;
+}
+
+// (seq coll) — the elements of a list, vector, map or string as a list, or
+// nil when there are none (pushSeqElements). Clojure answers a seq view;
+// here it is a list, which prints and walks the same.
+const proto::ProtoObject* prim_seq(proto::ProtoContext* ctx,
+                                   const proto::ProtoObject*,
+                                   const proto::ParentLink*,
+                                   const proto::ProtoArguments* args,
+                                   const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 1)
+        throwError(ctx, "seq: expects 1 arg");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (isListTag(v)) return v->asList(ctx)->getSize(ctx) == 0 ? PROTO_NONE : v;
+    if (isVector(v)) {
+        const proto::ProtoList* items = vectorItems(ctx, v);
+        return items->getSize(ctx) == 0 ? PROTO_NONE : items->asObject(ctx);
+    }
+    ListBuilder out(ctx);
+    if (!pushSeqElements(out, v))
+        throwError(ctx, "Don't know how to create ISeq from: " + printedValue(ctx, v));
+    if (out.size() == 0) return PROTO_NONE;
+    return out.finish();
+}
+
+// (concat coll ...) — one list of the elements of every argument in order
+// (each a list, vector, map, string or nil). Clojure answers a lazy seq;
+// here it is a list, built eagerly (D29's reason: no lazy seqs yet).
+const proto::ProtoObject* prim_concat(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject*,
+                                      const proto::ParentLink*,
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    ListBuilder out(ctx);
+    for (proto::proto_ulong i = 0; i < n; ++i) {
+        const proto::ProtoObject* v = args->getAt(out.context(), static_cast<int>(i));
+        if (!pushSeqElements(out, v))
+            throwError(out.context(), "Don't know how to create ISeq from: " +
+                                      printedValue(out.context(), v));
+    }
+    return out.finish();
+}
+
+// (symbol? x) / (keyword? x) — named values (Named.h) told apart by the
+// keyword's leading `:`.
+bool namedStartsWithColon(proto::ProtoContext* ctx, const ActiveCallContext* cc,
+                          const proto::ProtoObject* v, bool* isNamedValue) {
+    *isNamedValue = cc && isNamed(ctx, cc->named, v);
+    if (!*isNamedValue) return false;
+    const std::string s = namedSpelling(ctx, cc->named, v)->toStdString(ctx);
+    return !s.empty() && s[0] == ':';
+}
+
+const proto::ProtoObject* prim_symbol_p(proto::ProtoContext* ctx,
+                                        const proto::ProtoObject*,
+                                        const proto::ParentLink*,
+                                        const proto::ProtoArguments* args,
+                                        const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 1)
+        throwError(ctx, "symbol?: expects 1 arg");
+    bool named = false;
+    const bool colon = namedStartsWithColon(ctx, activeCallContext(), args->getAt(ctx, 0), &named);
+    return (named && !colon) ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_keyword_p(proto::ProtoContext* ctx,
+                                         const proto::ProtoObject*,
+                                         const proto::ParentLink*,
+                                         const proto::ProtoArguments* args,
+                                         const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 1)
+        throwError(ctx, "keyword?: expects 1 arg");
+    bool named = false;
+    const bool colon = namedStartsWithColon(ctx, activeCallContext(), args->getAt(ctx, 0), &named);
+    return (named && colon) ? PROTO_TRUE : PROTO_FALSE;
+}
+
 // Higher-order primitives --------------------------------------
 
 const proto::ProtoObject* prim_map(proto::ProtoContext* ctx,
@@ -2642,6 +2762,10 @@ constexpr PrimitiveEntry kPrimitives[] = {
     {"nil?",    &prim_nil_p},
     {"not",     &prim_not},
     {"reverse", &prim_reverse},
+    {"seq",     &prim_seq},
+    {"concat",  &prim_concat},
+    {"symbol?", &prim_symbol_p},
+    {"keyword?", &prim_keyword_p},
     {"map",     &prim_map},
     {"filter",  &prim_filter},
     {"reduce",  &prim_reduce},
@@ -2656,7 +2780,7 @@ constexpr PrimitiveEntry kPrimitives[] = {
     {"import-module", &prim_import_module},
 };
 
-// A linear scan of the 81 entries; printing a function is not a hot path.
+// A linear scan of the 85 entries; printing a function is not a hot path.
 const char* primitiveName(proto::ProtoMethod fn) {
     for (const PrimitiveEntry& p : kPrimitives) {
         if (p.fn == fn) return p.name;

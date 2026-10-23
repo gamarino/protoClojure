@@ -60,7 +60,10 @@ struct ReaderError : std::runtime_error {
 //                     error, "Duplicate key: k", as in Clojure. The keys'
 //                     source order goes to the SourceInfo, if one is given
 //                     (SourceInfo.h)
-//   @x                the list (deref x)
+//   @x                the list (clojure.core/deref x)
+//   'x                the list (quote x)
+//   ~x  ~@x           (clojure.core/unquote x), (clojure.core/unquote-splicing x)
+//   `x                the syntax-quote expansion of x (Reader.cpp)
 //
 // The only thing the reader needs from the runtime is the intern table of
 // keywords and symbols.
@@ -101,6 +104,22 @@ private:
     // so any child context it constructs is correctly chained for the GC.
     const proto::ProtoObject* readFromToken(proto::ProtoContext* parent,
                                             const Token& tok);
+
+    // The form after a reader-macro token (`'`, `@`, ...); EOF is a read
+    // error naming the macro.
+    const proto::ProtoObject* readNextForm(proto::ProtoContext* parent,
+                                           const Token& macroTok);
+
+    // `(head form)`, `form` being the next form read: what `'`, `@`, `~` and
+    // `~@` stand for.
+    const proto::ProtoObject* readWrapped(proto::ProtoContext* parent,
+                                          const Token& macroTok,
+                                          const char* head);
+
+    // The expansion of `` `form `` (syntax-quote); see Reader.cpp.
+    const proto::ProtoObject* syntaxQuote(proto::ProtoContext* parent,
+                                          const proto::ProtoObject* form,
+                                          const Token& tok);
 
     // Read the forms up to the closing token, opening bracket already
     // consumed, as a ProtoList. The caller passes `closeKind` to specify
