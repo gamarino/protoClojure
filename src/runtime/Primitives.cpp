@@ -5,6 +5,7 @@
 #include "ActorScheduler.h"
 #include "ListBuilder.h"
 #include "MapOps.h"
+#include "Macros.h"
 #include "VectorOps.h"
 #include "StackGuard.h"
 
@@ -2664,6 +2665,253 @@ const proto::ProtoObject* prim_import_module(proto::ProtoContext* ctx,
     return module;
 }
 
+// Macros (Macros.h) and eval --------------------------------------------
+// ArityException "Wrong number of args (n) passed to: name", as JVM Clojure
+// reports a built-in called with the wrong number of arguments.
+[[noreturn, gnu::cold]]
+void arityError(proto::ProtoContext* ctx, const proto::ProtoArguments* args, const char* name) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    throwClassed(ctx, "ArityException",
+                 "Wrong number of args (" + std::to_string(n) + ") passed to: " + name);
+}
+
+
+// (__macro__ f) — `f` with the macro flag set: what `defmacro` stores. A fn
+// wrapper is immutable, so setAttribute answers a new wrapper with the same
+// prototype and attributes plus the flag.
+const proto::ProtoObject* prim_make_macro(proto::ProtoContext* ctx,
+                                          const proto::ProtoObject*,
+                                          const proto::ParentLink*,
+                                          const proto::ProtoArguments* args,
+                                          const proto::ProtoKeywordArguments*) {
+    const ActiveCallContext* cc = activeCallContext();
+    const proto::ProtoObject* f = (args && args->getSize(ctx) == 1) ? args->getAt(ctx, 0) : nullptr;
+    if (!cc || !f || (f->getPrototype(ctx) != cc->fnSingleProto &&
+                      f->getPrototype(ctx) != cc->fnMultiProto))
+        throwError(ctx, "IllegalArgumentException: defmacro expects a fn");
+    return f->setAttribute(ctx, macroFlagKey(ctx), PROTO_TRUE);
+}
+
+// (macroexpand-1 form) — one step of expansion with no locals in scope; a
+// form that is not a macro call is returned unchanged.
+const proto::ProtoObject* prim_macroexpand_1(proto::ProtoContext* ctx,
+                                             const proto::ProtoObject*,
+                                             const proto::ParentLink*,
+                                             const proto::ProtoArguments* args,
+                                             const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 1) arityError(ctx, args, "macroexpand-1");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throwError(ctx, "macroexpand-1: no active VM context");
+    return macroexpandOnce(ctx, *cc, args->getAt(ctx, 0));
+}
+
+// (macroexpand form) — macroexpand-1 repeated until the form is no longer a
+// macro call. Each step's result is rooted in a slot of its own scope.
+const proto::ProtoObject* prim_macroexpand(proto::ProtoContext* ctx,
+                                           const proto::ProtoObject*,
+                                           const proto::ParentLink*,
+                                           const proto::ProtoArguments* args,
+                                           const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 1) arityError(ctx, args, "macroexpand");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throwError(ctx, "macroexpand: no active VM context");
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    scope.setAutomaticLocal(0, args->getAt(ctx, 0));
+    for (;;) {
+        checkNativeStack(StackUse::Source);
+        const proto::ProtoObject* f = scope.getAutomaticLocal(0);
+        const proto::ProtoObject* e = macroexpandOnce(&scope, *cc, f);
+        if (e == f) break;
+        scope.setAutomaticLocal(0, e);
+    }
+    scope.returnValue = scope.getAutomaticLocal(0);
+    return scope.getAutomaticLocal(0);
+}
+
+// (eval form) — compiles and runs `form` as a top-level form (Eval.h).
+const proto::ProtoObject* prim_eval(proto::ProtoContext* ctx,
+                                    const proto::ProtoObject*,
+                                    const proto::ParentLink*,
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 1) arityError(ctx, args, "eval");
+    EvalHook hook = evalHook();
+    if (!hook) throwError(ctx, "UnsupportedOperationException: eval is not available");
+    return hook(ctx, args->getAt(ctx, 0));
+}
+
+// Sequence helpers macros reach for --------------------------------------
+
+// (second coll) — (first (next coll)).
+const proto::ProtoObject* prim_second(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject*,
+                                      const proto::ParentLink*,
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 1) arityError(ctx, args, "second");
+    const proto::ProtoList* lst = asSeqOrNull(ctx, args->getAt(ctx, 0));
+    if (!lst || lst->getSize(ctx) < 2) return PROTO_NONE;
+    return lst->getAt(ctx, 1);
+}
+
+// (next coll) — the elements after the first, or nil when there are none
+// (rest answers an empty list there).
+const proto::ProtoObject* prim_next(proto::ProtoContext* ctx,
+                                    const proto::ProtoObject*,
+                                    const proto::ParentLink*,
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 1) arityError(ctx, args, "next");
+    const proto::ProtoList* lst = asSeqOrNull(ctx, args->getAt(ctx, 0));
+    if (!lst || lst->getSize(ctx) < 2) return PROTO_NONE;
+    return lst->removeFirst(ctx)->asObject(ctx);
+}
+
+// (last coll) — the last element, or nil.
+const proto::ProtoObject* prim_last(proto::ProtoContext* ctx,
+                                    const proto::ProtoObject*,
+                                    const proto::ParentLink*,
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 1) arityError(ctx, args, "last");
+    const proto::ProtoList* lst = asSeqOrNull(ctx, args->getAt(ctx, 0));
+    if (!lst || lst->getSize(ctx) == 0) return PROTO_NONE;
+    return lst->getLast(ctx);
+}
+
+// (seq? x) — true for a list, the only seq type protoClojure has (every seq
+// function answers a list).
+const proto::ProtoObject* prim_seq_p(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject*,
+                                     const proto::ParentLink*,
+                                     const proto::ProtoArguments* args,
+                                     const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 1) arityError(ctx, args, "seq?");
+    return isListTag(args->getAt(ctx, 0)) ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// (conj coll x ...) — adds each x where the collection grows: at the front
+// of a list (nil is the empty list), at the end of a vector, and, for a map,
+// the entry of a [k v] vector or every entry of a map. (conj) is [] and
+// (conj coll) is coll.
+const proto::ProtoObject* prim_conj(proto::ProtoContext* ctx,
+                                    const proto::ProtoObject*,
+                                    const proto::ParentLink*,
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    if (n == 0) return newVector(ctx, ctx->newList());
+    const proto::ProtoObject* coll = args->getAt(ctx, 0);
+    if (n == 1) return coll;
+    if (isMap(coll)) {
+        std::vector<const proto::ProtoObject*> kv;
+        for (proto::proto_ulong i = 1; i < n; ++i) {
+            const proto::ProtoObject* x = args->getAt(ctx, static_cast<int>(i));
+            if (isMap(x)) {
+                mapForEach(ctx, x, &kv,
+                    [](proto::ProtoContext*, void* self, const proto::ProtoObject* k,
+                       const proto::ProtoObject* v) {
+                        auto* acc = static_cast<std::vector<const proto::ProtoObject*>*>(self);
+                        acc->push_back(k);
+                        acc->push_back(v);
+                    });
+            } else if (isVector(x) && vectorItems(ctx, x)->getSize(ctx) == 2) {
+                kv.push_back(vectorItems(ctx, x)->getAt(ctx, 0));
+                kv.push_back(vectorItems(ctx, x)->getAt(ctx, 1));
+            } else if (x && x != PROTO_NONE) {
+                throwError(ctx, "IllegalArgumentException: Vector arg to map conj must be a pair");
+            }
+        }
+        // Every key and value is reachable from the rooted arguments.
+        return mapAssocPairs(ctx, coll, kv.data(), kv.size());
+    }
+    if (isVector(coll)) {
+        proto::ProtoContext::CriticalSection guard(ctx);
+        const proto::ProtoList* items = vectorItems(ctx, coll);
+        for (proto::proto_ulong i = 1; i < n; ++i)
+            items = items->appendLast(ctx, args->getAt(ctx, static_cast<int>(i)));
+        return newVector(ctx, items);
+    }
+    if (coll && coll != PROTO_NONE && !isListTag(coll))
+        throwError(ctx, "ClassCastException: conj expects a collection, got " +
+                        std::string(valueTypeName(ctx, coll)));
+    proto::ProtoContext::CriticalSection guard(ctx);
+    const proto::ProtoList* lst = (coll && coll != PROTO_NONE) ? coll->asList(ctx) : ctx->newList();
+    for (proto::proto_ulong i = 1; i < n; ++i)
+        lst = lst->appendFirst(ctx, args->getAt(ctx, static_cast<int>(i)));
+    return lst->asObject(ctx);
+}
+
+// (pr-str x ...) — the arguments printed readably, separated by spaces, as
+// the REPL prints a result: `(pr-str "a" :b)` is "\"a\" :b".
+const proto::ProtoObject* prim_pr_str(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject*,
+                                      const proto::ParentLink*,
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    std::string text;
+    for (proto::proto_ulong i = 0; i < n; ++i) {
+        if (i > 0) text += ' ';
+        printTo(ctx, text, args->getAt(ctx, static_cast<int>(i)), /*readable=*/true);
+    }
+    return ctx->fromUTF8String(text.c_str());
+}
+
+// (pr x ...) — the arguments printed readably, as prn does, without the
+// newline.
+const proto::ProtoObject* prim_pr(proto::ProtoContext* ctx,
+                                  const proto::ProtoObject*,
+                                  const proto::ParentLink*,
+                                  const proto::ProtoArguments* args,
+                                  const proto::ProtoKeywordArguments*) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    std::string text;
+    for (proto::proto_ulong i = 0; i < n; ++i) {
+        if (i > 0) text += ' ';
+        printTo(ctx, text, args->getAt(ctx, static_cast<int>(i)), /*readable=*/true);
+    }
+    std::fwrite(text.data(), 1, text.size(), stdout);
+    std::fflush(stdout);
+    return PROTO_NONE;
+}
+
+// (print x ...) — the arguments as println prints them, without the newline.
+const proto::ProtoObject* prim_print(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject*,
+                                     const proto::ParentLink*,
+                                     const proto::ProtoArguments* args,
+                                     const proto::ProtoKeywordArguments*) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    std::string text;
+    for (proto::proto_ulong i = 0; i < n; ++i) {
+        if (i > 0) text += ' ';
+        printTo(ctx, text, args->getAt(ctx, static_cast<int>(i)), /*readable=*/false);
+    }
+    std::fwrite(text.data(), 1, text.size(), stdout);
+    std::fflush(stdout);
+    return PROTO_NONE;
+}
+
+// (prn x ...) — pr-str of the arguments, then a newline, to standard output.
+const proto::ProtoObject* prim_prn(proto::ProtoContext* ctx,
+                                   const proto::ProtoObject*,
+                                   const proto::ParentLink*,
+                                   const proto::ProtoArguments* args,
+                                   const proto::ProtoKeywordArguments*) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    std::string line;
+    for (proto::proto_ulong i = 0; i < n; ++i) {
+        if (i > 0) line += ' ';
+        printTo(ctx, line, args->getAt(ctx, static_cast<int>(i)), /*readable=*/true);
+    }
+    line += '\n';
+    std::fwrite(line.data(), 1, line.size(), stdout);
+    std::fflush(stdout);
+    return PROTO_NONE;
+}
+
 // Every built-in function and the global name it is installed under. The
 // single source for installPrimitives and for the printer's `#<fn NAME>`.
 struct PrimitiveEntry {
@@ -2778,9 +3026,26 @@ constexpr PrimitiveEntry kPrimitives[] = {
 
     // Modules (Unified Module Discovery).
     {"import-module", &prim_import_module},
+
+    // Macros and eval (Macros.h, compiler/Eval.h).
+    {"__macro__",     &prim_make_macro},
+    {"macroexpand-1", &prim_macroexpand_1},
+    {"macroexpand",   &prim_macroexpand},
+    {"eval",          &prim_eval},
+
+    // Sequences and printing.
+    {"second",  &prim_second},
+    {"next",    &prim_next},
+    {"last",    &prim_last},
+    {"seq?",    &prim_seq_p},
+    {"conj",    &prim_conj},
+    {"pr-str",  &prim_pr_str},
+    {"prn",     &prim_prn},
+    {"print",   &prim_print},
+    {"pr",      &prim_pr},
 };
 
-// A linear scan of the 85 entries; printing a function is not a hot path.
+// A linear scan of the entries; printing a function is not a hot path.
 const char* primitiveName(proto::ProtoMethod fn) {
     for (const PrimitiveEntry& p : kPrimitives) {
         if (p.fn == fn) return p.name;

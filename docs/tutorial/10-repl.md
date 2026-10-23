@@ -58,8 +58,12 @@ A few things to know up front:
   if you got the count wrong).
 - **Several forms on one line** are evaluated in order, each result
   printed on its own line: `(def a 1) (def b (+ a 1)) b` prints `1`, `2`
-  and `2` (a `def` answers its value). An error stops the rest of that
-  input.
+  and `2` (a `def` answers its value). A compile or runtime error in one
+  of them is printed and the next form still runs, as in Clojure's REPL:
+  `(/ 1 0) :next` prints the error, then `:next`. A read error (an
+  unbalanced `)`) drops the rest of the line. Because each form runs
+  before the next is compiled, `(defmacro twice [x] (list 'do x x))
+  (twice (println "hi"))` on one line defines the macro and then uses it.
 - **History.** Arrow keys recall earlier lines. The history is
   persisted across sessions in `~/.protoclj_history`.
 - **Error recovery.** A parse / compile / runtime error is printed and

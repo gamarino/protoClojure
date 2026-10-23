@@ -48,6 +48,16 @@ public:
                                      const proto::ProtoObject* const* args,
                                      unsigned int argc);
 
+    // True when calling the user fn `callable` with `argc` positional
+    // arguments would bind them: a matching fixed arity, or a variadic arity
+    // whose fixed part `argc` covers. A value that is not a user fn (a
+    // primitive, a keyword) answers true; its own call reports a mismatch.
+    // Used by macro expansion to report a wrong argument count against the
+    // macro's name before calling it. Reads the installed call context.
+    bool acceptsArgCount(proto::ProtoContext* ctx,
+                         const proto::ProtoObject* callable,
+                         unsigned int argc) const;
+
     // Top-level entry: run `mod` from PC=0 until RETURN or end-of-bytecode,
     // with the ActiveCallContext built from the arguments installed on this
     // thread (the previous one is restored on every exit path). The

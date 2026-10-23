@@ -482,7 +482,9 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
                 "(a variadic fn binds its rest arguments as one)");
         for (int i = 0; i < fixed; ++i) callArgs[i] = args[i];
         if (variadic) {
-            const proto::ProtoObject* rest = ctx->newList()->asObject(ctx);
+            // No rest arguments binds the rest parameter to nil, as in Clojure.
+            const proto::ProtoObject* rest = static_cast<unsigned int>(fixed) < posArgc
+                ? ctx->newList()->asObject(ctx) : PROTO_NONE;
             for (unsigned int i = static_cast<unsigned int>(fixed); i < posArgc; ++i) {
                 rest = rest->asList(ctx)->appendLast(ctx, args[i])->asObject(ctx);
             }
@@ -525,6 +527,29 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
     const proto::ProtoObject* self = callable->asMethodSelf(&callScope);
     const proto::ProtoArguments positional(callScope.getAutomaticLocals() + 1, argc);
     return fn(&callScope, self, nullptr, &positional, nullptr);
+}
+
+bool ExecutionEngine::acceptsArgCount(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject* callable,
+                                      unsigned int argc) const {
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc || !callable || callable == PROTO_NONE) return true;
+    const proto::ProtoObject* proto = callable->getPrototype(ctx);
+    if (proto == cc->fnMultiProto) {
+        const proto::ProtoObject* aritiesObj =
+            callable->getOwnAttributeDirect(ctx, cc->aritiesKey);
+        return pickArity(ctx, aritiesObj->asList(ctx), argc) >= 0;
+    }
+    if (proto != cc->fnSingleProto) return true;
+    const proto::ProtoObject* ptrObj =
+        callable->getOwnAttributeDirect(ctx, cc->bytecodeKey);
+    if (!ptrObj || !ptrObj->isInteger(ctx)) return true;
+    const auto* subMod = reinterpret_cast<const BytecodeModule*>(ptrObj->asLong(ctx));
+    const int fixed = subMod->arity();
+    if (subMod->isKwBased())
+        return static_cast<int>(argc) == fixed || static_cast<int>(argc) == fixed + 1;
+    if (subMod->isVariadic()) return static_cast<int>(argc) >= fixed;
+    return static_cast<int>(argc) == fixed;
 }
 
 const proto::ProtoObject*
@@ -786,8 +811,10 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                     stackBase + sp - argc + i);
             }
             if (variadic) {
-                const proto::ProtoObject* rest =
-                    frame.newList()->asObject(&frame);
+                // No rest arguments binds the rest parameter to nil, as in
+                // Clojure.
+                const proto::ProtoObject* rest = static_cast<unsigned int>(fixed) < posArgc
+                    ? frame.newList()->asObject(&frame) : PROTO_NONE;
                 for (unsigned int i = static_cast<unsigned int>(fixed); i < posArgc; ++i) {
                     const proto::ProtoObject* v =
                         frame.getAutomaticLocal(stackBase + sp - argc + i);

@@ -1,0 +1,145 @@
+#include "Eval.h"
+
+#include "Compiler.h"
+
+#include "runtime/BytecodeModule.h"
+#include "runtime/Exceptions.h"
+#include "runtime/ExecutionEngine.h"
+#include "runtime/Macros.h"
+#include "runtime/Opcodes.h"
+#include "runtime/Primitives.h"
+
+#include "protoCore.h"
+
+#include <cstdint>
+#include <mutex>
+#include <vector>
+
+namespace protoClojure {
+
+namespace {
+
+std::mutex gModulesMutex;
+std::vector<std::unique_ptr<BytecodeModule>>& retained() {
+    static std::vector<std::unique_ptr<BytecodeModule>> modules;
+    return modules;
+}
+
+bool isListValue(const proto::ProtoObject* v) {
+    constexpr std::uintptr_t kTagMask = 0x3F, kTagList = 2, kTagListSmall = 25;
+    const std::uintptr_t tag = reinterpret_cast<std::uintptr_t>(v) & kTagMask;
+    return v != nullptr && (tag == kTagList || tag == kTagListSmall);
+}
+
+// True when `form` is `(do ...)` or `(clojure.core/do ...)`.
+bool isDoForm(proto::ProtoContext* ctx, const NamedLayout& named,
+              const proto::ProtoObject* form) {
+    if (!isListValue(form)) return false;
+    const proto::ProtoList* lst = form->asList(ctx);
+    if (lst->getSize(ctx) == 0) return false;
+    const proto::ProtoObject* head = lst->getAt(ctx, 0);
+    return head == internNamed(ctx, named, "do") ||
+           head == internNamed(ctx, named, "clojure.core/do");
+}
+
+const proto::ProtoObject* evalHookEntry(proto::ProtoContext* ctx,
+                                        const proto::ProtoObject* form) {
+    try {
+        return evalTopLevel(ctx, form, nullptr);
+    } catch (const CompileError& e) {
+        throwClassed(ctx, "RuntimeException", std::string("Syntax error compiling: ") + e.what());
+    }
+}
+
+} // namespace
+
+void retainModule(std::unique_ptr<BytecodeModule> mod) {
+    std::lock_guard<std::mutex> lock(gModulesMutex);
+    retained().push_back(std::move(mod));
+}
+
+void releaseRetainedModules() {
+    std::vector<std::unique_ptr<BytecodeModule>> doomed;
+    {
+        std::lock_guard<std::mutex> lock(gModulesMutex);
+        doomed.swap(retained());
+    }
+}
+
+void installEval() { setEvalHook(&evalHookEntry); }
+
+const proto::ProtoObject* evalTopLevel(proto::ProtoContext* ctx,
+                                       const proto::ProtoObject* form,
+                                       const SourceInfo* info) {
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc || !cc->engine) throw CompileError("eval: no evaluator is running on this thread");
+    const CompilerMarkers markers{cc->bytecodeKey, cc->arityKey, cc->capturesKey,
+                                  cc->aritiesKey, cc->named};
+
+    // Slot 0: the form, then its expansion; slot 1: the last result.
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(2);
+    scope.setAutomaticLocal(0, form);
+    {
+        Compiler expander;
+        try {
+            scope.setAutomaticLocal(0, expander.macroexpandTopLevel(&scope, form, markers));
+        } catch (const CompileError&) {
+            throw;
+        } catch (const proto::ProtoException& e) {
+            throw CompileError(describeThrown(&scope, e.value()));
+        } catch (const std::exception& e) {
+            // StackOverflowError (a macro expanding into itself) or a
+            // bytecode limit: an error of the compile phase.
+            throw CompileError(e.what());
+        }
+    }
+
+    const proto::ProtoObject* expanded = scope.getAutomaticLocal(0);
+    if (isDoForm(&scope, cc->named, expanded)) {
+        // A top-level do: each form is expanded, compiled and run before the
+        // next is compiled, as in Clojure.
+        const proto::ProtoList* forms = expanded->asList(&scope);
+        const proto::proto_ulong n = forms->getSize(&scope);
+        scope.setAutomaticLocal(1, PROTO_NONE);
+        for (proto::proto_ulong i = 1; i < n; ++i) {
+            scope.setAutomaticLocal(1, evalTopLevel(&scope, forms->getAt(&scope, static_cast<int>(i)), info));
+        }
+        scope.returnValue = scope.getAutomaticLocal(1);
+        return scope.getAutomaticLocal(1);
+    }
+
+    auto modPtr = std::make_unique<BytecodeModule>();
+    BytecodeModule& mod = *modPtr;
+    {
+        Compiler compiler;
+        compiler.setSourceInfo(info);
+        try {
+            compiler.compileForm(&scope, expanded, mod, markers);
+        } catch (const CompileError&) {
+            throw;
+        } catch (const proto::ProtoException& e) {
+            throw CompileError(describeThrown(&scope, e.value()));
+        } catch (const std::exception& e) {
+            // StackOverflowError (source nested too deeply) or a bytecode
+            // limit (BytecodeModule::emit).
+            throw CompileError(e.what());
+        }
+    }
+    mod.emit(Op::RETURN, 0);
+    // Retained before it runs: the functions it defines point into it.
+    retainModule(std::move(modPtr));
+
+    const proto::ProtoObject* result = cc->engine->run(&scope, mod, cc->globals,
+        cc->fnSingleProto, cc->fnMultiProto, cc->atomMarkerProto,
+        cc->futureMarkerProto, cc->promiseMarkerProto, cc->actorMarkerProto,
+        cc->bytecodeKey, cc->arityKey, cc->capturesKey, cc->aritiesKey,
+        cc->valueKey, cc->watchesKey,
+        cc->thunkKey, cc->ccBlobKey, cc->threadKey, cc->resultKey, cc->doneKey,
+        cc->actorStateKey, cc->mailboxKey, cc->named);
+    // Anchored in `ctx` when this scope ends (ProtoContext::returnValue).
+    scope.returnValue = result;
+    return result;
+}
+
+} // namespace protoClojure

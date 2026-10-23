@@ -57,7 +57,7 @@ tell at a glance which parts of the surface are runnable today. The
 | Vectors `[...]` | Implemented (a `ProtoList` in a one-entry sparse-list box, distinct from list) |
 | Maps `{...}` | Implemented (`hash-map`, `assoc`, `dissoc`, `get`, `contains?`, `keys`, `vals`; `count` and `empty?` accept maps) |
 | Sets `#{...}` | Planned |
-| `def`, `defn`, `fn`, `let`, `loop`, `recur` | Implemented (`let` and `loop` inside function bodies only) |
+| `def`, `defn`, `fn`, `let`, `loop`, `recur` | Implemented (`let` and `loop` also at the top level; docstrings accepted) |
 | Multi-arity `defn` | Implemented |
 | Variadic `& rest` | Implemented |
 | `if`, `do`, `quote`, `apply` | Implemented (`quote` of any datum; `apply` over a list, a vector or nil) |
@@ -71,7 +71,7 @@ tell at a glance which parts of the surface are runnable today. The
 | `future`, `promise`, `deliver`, `pmap` | Implemented |
 | Actors (`actor`, `send`, `send-h`, `send-l`) | Implemented (see tutorial chapter 13) |
 | Lazy seqs (`lazy-seq`, `range`, `iterate`) | Planned |
-| User-defined macros (`defmacro`) | Planned |
+| User-defined macros: `defmacro`, `macroexpand-1`, `macroexpand`, `eval` | Implemented (§6.1; syntax-quote hygiene and the `clojure.core` macros in progress) |
 | Local interactive REPL | Implemented |
 | nREPL server | Planned for v0.1 |
 | UMD providers (`py/`, `js/`, `pst/`, `clj/`) | Planned |
@@ -346,12 +346,16 @@ exception (`script.clj: runtime error: ...`). Forms are evaluated by case:
   aliases. An unresolved symbol throws `Unable to resolve symbol`.
 - A list `(f arg1 arg2 …)` evaluates `f`. If `f` is a special form, its
   special rule applies. If `f` is a macro, the macro is expanded and the
-  result is evaluated. Otherwise `f` is evaluated to a value (must be a
-  function), the args are evaluated left-to-right, and the function is
-  applied.
+  result is evaluated (implemented, §6.1). Otherwise `f` is evaluated to a
+  value (must be a function), the args are evaluated left-to-right, and the
+  function is applied.
 
-In 0.0.1 there are no namespaces or macros: symbols resolve through the
-lexical scope and then a single global table. A global defined with the
+A top-level form whose expansion is `(do form*)` is evaluated one form at a
+time, as in Clojure, so its first forms may define a macro its later forms
+use.
+
+There are no namespaces yet: symbols resolve through the lexical scope and
+then a single global table. A global defined with the
 value `nil` or `false` resolves to that value (`(def x nil)` then `x` is
 `nil`); only a name that was never defined raises
 `unable to resolve symbol`.
@@ -364,10 +368,10 @@ two raise an explicit "JVM-specific, not supported" error in v0.1). The
 user-facing forms `let`, `loop`, `fn`, `defn`, `if-let`, `when`, `cond`,
 etc., are macros built on these specials.
 
-In 0.0.1 the C++ compiler handles `def`, `if`, `do`, `quote`, `fn`,
-`defn`, `let`, `loop`, `recur`, `when`, `when-not`, `cond`, `and`, `or`,
-`apply`, `future`, `try` and `throw` directly; the `*` forms, `var` and
-`if-let` are not implemented.
+The C++ compiler handles `def`, `if`, `do`, `quote`, `fn`, `defn`,
+`defmacro`, `let`, `loop`, `recur`, `when`, `when-not`, `cond`, `and`, `or`,
+`apply`, `future`, `with-open`, `try` and `throw` directly; the `*` forms
+and `var` are not implemented.
 
 ### 3.4 Truthiness
 
@@ -627,7 +631,8 @@ since the `'` reader macro is not implemented. The departures are:
 
 Functions are first-class values. They close over lexical bindings.
 Variadic: `(defn f [x & more] ...)` collects all trailing args into
-`more` as a sequence. Multi-arity:
+`more` as a sequence, nil when there are none. A docstring and an attribute
+map may follow the name, as in Clojure: `(defn f "doc" {:added "1.0"} [x] x)`. Multi-arity:
 
 ```clojure
 (defn greet
@@ -694,6 +699,53 @@ writes the `*` forms directly. (See §3.3 for what 0.0.1 implements.)
 `ExceptionType` is one of the built-in exception classes — `Exception`,
 `ExceptionInfo`, `ArithmeticException`, `IOException`, … — and matches its
 subclasses too (§14).
+
+### 6.1 Macros
+
+`(defmacro name doc? attr-map? [params*] body*)`, or with several arities
+`(defmacro name ([params*] body*)+)`, defines a macro: a function the
+compiler calls when it compiles a call of `name`, on the call's arguments
+*unevaluated*, and whose result it compiles in place of the call. The
+result may itself be a macro call; it is expanded in turn. As in Clojure,
+the macro also receives `&form` (the whole call) and `&env` (the locals in
+scope: nil at the top level, a map keyed by their symbols inside a
+function, D38).
+
+```clojure
+(defmacro unless [test & body]
+  `(if ~test nil (do ~@body)))
+
+(unless false (println "runs"))            ;; prints runs
+(macroexpand-1 '(unless done? (stop)))     ;; => (if done? nil (do (stop)))
+(eval (list 'unless false 42))             ;; => 42
+```
+
+**When a macro is in effect.** Expansion happens when a form is compiled,
+and a file and the REPL compile each top-level form only after the previous
+one has run (§3.2). A macro is therefore in effect for every top-level form
+after the one that defined it. Redefining a macro changes the forms compiled
+afterwards; a function compiled before the redefinition keeps the expansion
+it got. A `def` of the same name replaces the macro with a plain value. A
+local of the same name shadows a macro, as in Clojure; special forms cannot
+be redefined as macros.
+
+`macroexpand-1` expands a form once, `macroexpand` until it is no longer a
+macro call; both return any other form unchanged, special forms and the
+forms the compiler implements in C++ (`when`, `cond`, `and`, `or`, ...)
+included (D41). `eval` compiles and runs a form as a top-level form.
+
+**Errors.** A macro that raises fails the compilation of the calling form,
+naming the macro: `script.clj:4:1: compile error: Syntax error
+macroexpanding bad: ArithmeticException: Divide by zero`. A wrong number of
+arguments is `Wrong number of args (2) passed to macro: one` (D39). A macro
+named outside call position is `Can't take value of a macro: one`. A macro
+that keeps expanding into a call of itself ends in `StackOverflowError`. A
+form `eval` cannot compile raises `RuntimeException` (D40). `~` or `~@`
+outside a syntax-quote is a compile error (D36).
+
+Syntax-quote does not yet qualify symbols or turn `foo#` into a generated
+symbol (D35); until it does, a macro that introduces a local can capture a
+caller's name.
 
 ---
 
@@ -1151,9 +1203,11 @@ Input is read form by form: a line with an unclosed `(`, `[`, `{` or string,
 or one that ends in a reader macro (`'`, `` ` ``, `~`, `~@`, `@`), continues
 at the `#_=>` prompt until the form is complete; a blank line there forces
 evaluation. Each form is read, compiled and run before the next is read, so
-a definition is in effect for every later form (implemented). A line that
-starts with `:` at the primary prompt is a REPL command (`:help`), not a
-keyword.
+a definition is in effect for every later form, a macro included
+(implemented). A compile or runtime error is printed and the REPL goes on
+with the next form of the same line, as Clojure's REPL does; a read error
+drops the rest of the line. A line that starts with `:` at the primary
+prompt is a REPL command (`:help`), not a keyword.
 
 ---
 

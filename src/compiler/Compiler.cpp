@@ -1,7 +1,9 @@
 #include "Compiler.h"
 
 #include "runtime/Exceptions.h"
+#include "runtime/Macros.h"
 #include "runtime/MapOps.h"
+#include "runtime/Primitives.h"
 #include "runtime/StackGuard.h"
 #include "runtime/VectorOps.h"
 
@@ -146,6 +148,7 @@ Compiler::compileFnBody(proto::ProtoContext* ctx,
     proto::proto_ulong n = fnForm->getSize(ctx);
     const proto::ProtoObject* head = fnForm->getAt(ctx, 0);
     std::string headName = nameOf(ctx, markers.named, head);
+    stripCoreQualifier(headName);  // `clojure.core/fn`, from a syntax-quote
     proto::proto_ulong paramsAt = 0;
     if (headName == "fn")        paramsAt = 1;
     else if (headName == "defn") paramsAt = 2;
@@ -448,14 +451,7 @@ void Compiler::compileWithOpen(proto::ProtoContext* ctx, const proto::ProtoList*
     // top-level with-open as the body of a zero-argument fn called on the
     // spot, as a top-level try is.
     if (scopes_.empty()) {
-        const proto::ProtoList* wrapper = ctx->newList()
-            ->appendLast(ctx, sym("fn"))
-            ->appendLast(ctx, lst->asObject(ctx));
-        std::unique_ptr<BytecodeModule> body =
-            compileArity(ctx, ctx->newList(), wrapper, /*bodyStartIdx=*/1, markers);
-        std::size_t blockIdx = out.addBlock(std::move(body));
-        out.emit(Op::MAKE_FN, blockIdx);
-        out.emit(Op::CALL, 0);
+        compileAsThunk(ctx, lst->asObject(ctx), out, markers);
         return;
     }
 
@@ -507,14 +503,7 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
     // called on the spot, `((fn [] (try ...)))`, as `future` does for its
     // body.
     if (scopes_.empty()) {
-        const proto::ProtoList* wrapper = ctx->newList()
-            ->appendLast(ctx, symbolForm(ctx, markers.named, "fn"))
-            ->appendLast(ctx, lst->asObject(ctx));
-        std::unique_ptr<BytecodeModule> body =
-            compileArity(ctx, ctx->newList(), wrapper, /*bodyStartIdx=*/1, markers);
-        std::size_t blockIdx = out.addBlock(std::move(body));
-        out.emit(Op::MAKE_FN, blockIdx);   // no captures at the top level
-        out.emit(Op::CALL, 0);
+        compileAsThunk(ctx, lst->asObject(ctx), out, markers);
         return;
     }
 
@@ -769,6 +758,175 @@ int Compiler::resolveLocal(const std::string& name) {
     return scopes_[top].nameToSlot[name];
 }
 
+bool Compiler::isLocalName(const std::string& name) const {
+    for (const Scope& s : scopes_) {
+        if (s.nameToSlot.count(name)) return true;
+    }
+    return false;
+}
+
+const proto::ProtoObject* Compiler::macroForHead(proto::ProtoContext* ctx,
+                                                 const proto::ProtoObject* head,
+                                                 const CompilerMarkers& markers,
+                                                 std::string& name) const {
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc || !cc->engine || !isNameForm(ctx, markers.named, head)) return nullptr;
+    name = nameOf(ctx, markers.named, head);
+    std::string key;
+    if (!globalKeyForSymbol(name, key)) return nullptr;  // a keyword
+    const bool qualified = (key != name) || stripCoreQualifier(key);
+    if (isSpecialFormName(key)) return nullptr;
+    if (!qualified && isLocalName(key)) return nullptr;  // a local shadows a macro
+    return globalMacro(ctx, *cc, key);
+}
+
+const proto::ProtoObject* Compiler::localEnv(proto::ProtoContext* ctx,
+                                             const CompilerMarkers& markers) const {
+    if (scopes_.empty()) return PROTO_NONE;
+    std::vector<const proto::ProtoObject*> kv;
+    std::unordered_map<std::string, bool> seen;
+    for (const Scope& s : scopes_) {
+        for (const auto& entry : s.nameToSlot) {
+            if (!seen.emplace(entry.first, true).second) continue;
+            // Interned symbols are never collected: the vector needs no root.
+            const proto::ProtoObject* sym = internNamed(ctx, markers.named, entry.first.c_str());
+            kv.push_back(sym);
+            kv.push_back(sym);
+        }
+    }
+    if (kv.empty()) return PROTO_NONE;
+    return mapAssocPairs(ctx, nullptr, kv.data(), kv.size());
+}
+
+void Compiler::compileMacroCall(proto::ProtoContext* ctx, const proto::ProtoObject* form,
+                                const proto::ProtoObject* macro, const std::string& name,
+                                BytecodeModule& out, const CompilerMarkers& markers) {
+    // Slot 0 roots the macro (a later `def` may replace the global while it
+    // runs), slot 1 the environment, slot 2 the expansion while it is
+    // compiled. The call form is rooted by the caller.
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(3);
+    scope.setAutomaticLocal(0, macro);
+    scope.setAutomaticLocal(1, localEnv(&scope, markers));
+    const ActiveCallContext* cc = activeCallContext();
+    try {
+        scope.setAutomaticLocal(2, expandMacroCall(&scope, *cc, scope.getAutomaticLocal(0), name,
+                                                   form, scope.getAutomaticLocal(1)));
+    } catch (const proto::ProtoException& e) {
+        throw CompileError("Syntax error macroexpanding " + name + ": " +
+                           describeThrown(&scope, e.value()));
+    }
+    compileForm(&scope, scope.getAutomaticLocal(2), out, markers);
+}
+
+const proto::ProtoObject* Compiler::macroexpandTopLevel(proto::ProtoContext* ctx,
+                                                        const proto::ProtoObject* form,
+                                                        const CompilerMarkers& markers) {
+    // Recursive, as Clojure's Compiler.macroexpand is: a macro that always
+    // expands into another call of itself ends in StackOverflowError.
+    checkNativeStack(StackUse::Source);
+    if (!isList(form)) return form;
+    const proto::ProtoList* lst = form->asList(ctx);
+    if (lst->getSize(ctx) == 0) return form;
+    std::string name;
+    const proto::ProtoObject* macro = macroForHead(ctx, lst->getAt(ctx, 0), markers, name);
+    if (!macro) return form;
+    // The expansion is anchored in `ctx` (expandMacroCall), and so is each
+    // intermediate one: they live until the caller's context ends.
+    const proto::ProtoObject* expansion = nullptr;
+    try {
+        expansion = expandMacroCall(ctx, *activeCallContext(), macro, name, form, PROTO_NONE);
+    } catch (const proto::ProtoException& e) {
+        throw CompileError("Syntax error macroexpanding " + name + ": " +
+                           describeThrown(ctx, e.value()));
+    }
+    return macroexpandTopLevel(ctx, expansion, markers);
+}
+
+void Compiler::compileAsThunk(proto::ProtoContext* ctx, const proto::ProtoObject* form,
+                              BytecodeModule& out, const CompilerMarkers& markers) {
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    scope.setAutomaticLocal(0, scope.newList()
+        ->appendLast(&scope, symbolForm(&scope, markers.named, "fn"))
+        ->appendLast(&scope, form)
+        ->asObject(&scope));
+    std::unique_ptr<BytecodeModule> body =
+        compileArity(&scope, scope.newList(), scope.getAutomaticLocal(0)->asList(&scope),
+                     /*bodyStartIdx=*/1, markers);
+    std::size_t blockIdx = out.addBlock(std::move(body));
+    out.emit(Op::MAKE_FN, blockIdx);   // no captures at the top level
+    out.emit(Op::CALL, 0);
+}
+
+void Compiler::compileDefmacro(proto::ProtoContext* ctx, const proto::ProtoList* lst,
+                               BytecodeModule& out, const CompilerMarkers& markers) {
+    const proto::proto_ulong n = lst->getSize(ctx);
+    if (n < 3) throw CompileError("defmacro: expects (defmacro name [params] body...)");
+    const proto::ProtoObject* nameForm = lst->getAt(ctx, 1);
+    std::string key;
+    if (!isNameForm(ctx, markers.named, nameForm) ||
+        !globalKeyForSymbol(nameOf(ctx, markers.named, nameForm), key)) {
+        throw CompileError("defmacro: name must be a symbol");
+    }
+    // An optional docstring and attribute map come before the arities.
+    proto::proto_ulong i = 2;
+    if (i < n && isStringForm(lst->getAt(ctx, static_cast<int>(i))) && i + 1 < n) ++i;
+    if (i < n && isMap(lst->getAt(ctx, static_cast<int>(i)))) ++i;
+    if (i >= n) throw CompileError("defmacro: missing parameter vector");
+
+    // Every arity gains the hidden parameters &form and &env in front.
+    // Slot 0 roots the fn form being built, slot 1 the arity being built.
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(2);
+    const proto::ProtoObject* amp_form = symbolForm(&scope, markers.named, "&form");
+    const proto::ProtoObject* amp_env  = symbolForm(&scope, markers.named, "&env");
+    auto withHidden = [&](const proto::ProtoObject* params) -> const proto::ProtoObject* {
+        const proto::ProtoList* items = nullptr;
+        if (isVector(params)) items = vectorItems(&scope, params);
+        else throw CompileError("defmacro: parameter list must be a vector");
+        const proto::ProtoList* full = scope.newList()
+            ->appendLast(&scope, amp_form)->appendLast(&scope, amp_env);
+        const proto::proto_ulong pn = items->getSize(&scope);
+        for (proto::proto_ulong k = 0; k < pn; ++k)
+            full = full->appendLast(&scope, items->getAt(&scope, static_cast<int>(k)));
+        return newVector(&scope, full);
+    };
+    scope.setAutomaticLocal(0, scope.newList()
+        ->appendLast(&scope, symbolForm(&scope, markers.named, "fn"))->asObject(&scope));
+    const proto::ProtoObject* first = lst->getAt(ctx, static_cast<int>(i));
+    if (isVector(first)) {
+        const proto::ProtoList* fnForm = scope.getAutomaticLocal(0)->asList(&scope)
+            ->appendLast(&scope, withHidden(first));
+        for (proto::proto_ulong k = i + 1; k < n; ++k)
+            fnForm = fnForm->appendLast(&scope, lst->getAt(&scope, static_cast<int>(k)));
+        scope.setAutomaticLocal(0, fnForm->asObject(&scope));
+    } else {
+        for (proto::proto_ulong k = i; k < n; ++k) {
+            const proto::ProtoObject* arity = lst->getAt(&scope, static_cast<int>(k));
+            if (!isList(arity) || arity->asList(&scope)->getSize(&scope) == 0) {
+                if (k + 1 == n && isMap(arity)) break;  // a trailing attribute map
+                throw CompileError("defmacro: each arity must be a list ([params] body...)");
+            }
+            const proto::ProtoList* al = arity->asList(&scope);
+            const proto::ProtoList* rebuilt = scope.newList()
+                ->appendLast(&scope, withHidden(al->getAt(&scope, 0)));
+            const proto::proto_ulong an = al->getSize(&scope);
+            for (proto::proto_ulong t = 1; t < an; ++t)
+                rebuilt = rebuilt->appendLast(&scope, al->getAt(&scope, static_cast<int>(t)));
+            scope.setAutomaticLocal(1, rebuilt->asObject(&scope));
+            scope.setAutomaticLocal(0, scope.getAutomaticLocal(0)->asList(&scope)
+                ->appendLast(&scope, scope.getAutomaticLocal(1))->asObject(&scope));
+        }
+    }
+    // (def name (__macro__ (fn ...))): __macro__ returns the fn wrapper with
+    // the macro flag set (Macros.h).
+    out.emit(Op::PUSH_VAR, out.addSymbol(&scope, "__macro__"));
+    compileForm(&scope, scope.getAutomaticLocal(0), out, markers);
+    out.emit(Op::CALL, 1);
+    out.emit(Op::STORE_GLOBAL, out.addSymbol(&scope, key));
+}
+
 void Compiler::compileForm(proto::ProtoContext* ctx,
                            const proto::ProtoObject* form,
                            BytecodeModule& out,
@@ -818,6 +976,24 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // reader macros produce): dispatched as x, never shadowed by a local.
         const bool coreQualified = stripCoreQualifier(headName);
 
+        // ---- Macro calls ---------------------------------------------------
+        // A head naming a macro (Macros.h) is expanded here, at compile time,
+        // and the expansion compiled in the call's place. The macro table is
+        // the globals as they stand now: a macro defined by a form that has
+        // already run is in effect, a later redefinition is not.
+        {
+            std::string macroName;
+            if (const proto::ProtoObject* macro = macroForHead(ctx, head, markers, macroName)) {
+                compileMacroCall(ctx, form, macro, macroName, out, markers);
+                return;
+            }
+        }
+
+        if (headName == "defmacro") {
+            compileDefmacro(ctx, lst, out, markers);
+            return;
+        }
+
         // ---- Special forms -------------------------------------------------
 
         // (def name expr) — compile expr, store in globals under `name`.
@@ -828,12 +1004,13 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (n != 3) throw CompileError("def: expects (def name expr)");
             const proto::ProtoObject* nameForm = lst->getAt(ctx, 1);
             const proto::ProtoObject* exprForm = lst->getAt(ctx, 2);
-            if (!isNameForm(ctx, markers.named, nameForm)) {
+            std::string key;
+            if (!isNameForm(ctx, markers.named, nameForm) ||
+                !globalKeyForSymbol(nameOf(ctx, markers.named, nameForm), key)) {
                 throw CompileError("def: name must be a symbol");
             }
             compileForm(ctx, exprForm, out, markers);
-            std::size_t nameIdx = out.addSymbol(ctx, nameOf(ctx, markers.named, nameForm));
-            out.emit(Op::STORE_GLOBAL, nameIdx);
+            out.emit(Op::STORE_GLOBAL, out.addSymbol(ctx, key));
             return;
         }
 
@@ -1037,6 +1214,24 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // is itself a list, the form is multi-arity. Each subsequent form
         // is then a `(params body...)` arity body.
         if (headName == "fn" || headName == "defn") {
+            // (defn name "doc"? {attrs}? ...): the docstring and the attribute
+            // map are dropped, there being no vars to hold them (D28).
+            if (headName == "defn" && n > 3) {
+                proto::proto_ulong skip = 2;
+                if (isStringForm(lst->getAt(ctx, 2))) ++skip;
+                if (skip < n - 1 && isMap(lst->getAt(ctx, static_cast<int>(skip)))) ++skip;
+                if (skip > 2) {
+                    proto::ProtoContext scope(ctx->space, ctx);
+                    scope.resizeAutomaticLocals(1);
+                    const proto::ProtoList* rebuilt = scope.newList()
+                        ->appendLast(&scope, head)->appendLast(&scope, lst->getAt(&scope, 1));
+                    for (proto::proto_ulong k = skip; k < n; ++k)
+                        rebuilt = rebuilt->appendLast(&scope, lst->getAt(&scope, static_cast<int>(k)));
+                    scope.setAutomaticLocal(0, rebuilt->asObject(&scope));
+                    compileForm(&scope, scope.getAutomaticLocal(0), out, markers);
+                    return;
+                }
+            }
             proto::proto_ulong aritiesStart = (headName == "fn") ? 1 : 2;
             if (n <= aritiesStart) {
                 throw CompileError("fn/defn: missing parameter vector");
@@ -1121,8 +1316,9 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             }
 
             if (headName == "defn") {
-                std::size_t nameIdx = out.addSymbol(ctx, nameOf(ctx, markers.named, nameForm));
-                out.emit(Op::STORE_GLOBAL, nameIdx);
+                std::string key;
+                globalKeyForSymbol(nameOf(ctx, markers.named, nameForm), key);
+                out.emit(Op::STORE_GLOBAL, out.addSymbol(ctx, key));
             }
             return;
         }
@@ -1132,9 +1328,9 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // compile the body. Bindings are visible to subsequent binding RHSes
         // (Clojure's let* semantics).
         if (headName == "let") {
-            if (scopes_.empty()) {
-                throw CompileError("let: not supported at top level yet; use it inside a fn");
-            }
+            // The top level has no local slots: a top-level let runs as the
+            // body of a fn called on the spot.
+            if (scopes_.empty()) { compileAsThunk(ctx, form, out, markers); return; }
             if (n < 2) throw CompileError("let: expects bindings vector");
             const proto::ProtoObject* bindings = lst->getAt(ctx, 1);
             const proto::ProtoList* bvec = nullptr;
@@ -1149,18 +1345,19 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (bn % 2 != 0) {
                 throw CompileError("let: bindings must come in name/value pairs");
             }
+            // The names the bindings shadow, restored once the body is
+            // compiled: a binding is in scope in the let's body only.
+            BindingRestore restore(scopes_);
             for (proto::proto_ulong i = 0; i < bn; i += 2) {
                 const proto::ProtoObject* nameForm = bvec->getAt(ctx, (int)i);
                 const proto::ProtoObject* valForm  = bvec->getAt(ctx, (int)(i + 1));
                 if (!isNameForm(ctx, markers.named, nameForm)) {
                     throw CompileError("let: binding name must be a symbol");
                 }
+                const std::string bname = nameOf(ctx, markers.named, nameForm);
+                if (isQualifiedName(bname)) throw CompileError("Can't let qualified name: " + bname);
                 compileForm(ctx, valForm, out, markers);  // push value
-                // Re-acquire scope each iteration: compileForm may have
-                // pushed nested fn scopes and reallocated scopes_.
-                Scope& scope = scopes_.back();
-                int slot = scope.nextSlot++;
-                scope.nameToSlot[nameOf(ctx, markers.named, nameForm)] = slot;
+                int slot = restore.bind(bname);
                 out.emit(Op::STORE_LOCAL, slot);
             }
             // Body — last expression's value stays on the stack as `let`'s
@@ -1180,9 +1377,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // at the start of the body. recur rebinds the loop locals and jumps
         // back.
         if (headName == "loop") {
-            if (scopes_.empty()) {
-                throw CompileError("loop: not supported at top level yet; use it inside a fn");
-            }
+            if (scopes_.empty()) { compileAsThunk(ctx, form, out, markers); return; }
             if (n < 2) throw CompileError("loop: expects bindings vector");
             const proto::ProtoObject* bindings = lst->getAt(ctx, 1);
             const proto::ProtoList* bvec = nullptr;
@@ -1198,16 +1393,17 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 throw CompileError("loop: bindings must come in name/value pairs");
             }
             std::vector<int> recurSlots;
+            BindingRestore restore(scopes_);
             for (proto::proto_ulong i = 0; i < bn; i += 2) {
                 const proto::ProtoObject* nameForm = bvec->getAt(ctx, (int)i);
                 const proto::ProtoObject* valForm  = bvec->getAt(ctx, (int)(i + 1));
                 if (!isNameForm(ctx, markers.named, nameForm)) {
                     throw CompileError("loop: binding name must be a symbol");
                 }
+                const std::string bname = nameOf(ctx, markers.named, nameForm);
+                if (isQualifiedName(bname)) throw CompileError("Can't let qualified name: " + bname);
                 compileForm(ctx, valForm, out, markers);
-                Scope& scope = scopes_.back();    // re-acquire post-recursion
-                int slot = scope.nextSlot++;
-                scope.nameToSlot[nameOf(ctx, markers.named, nameForm)] = slot;
+                int slot = restore.bind(bname);
                 out.emit(Op::STORE_LOCAL, slot);
                 recurSlots.push_back(slot);
             }
@@ -1501,6 +1697,12 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         if (slot >= 0) {
             out.emit(Op::PUSH_LOCAL, slot);
             return;
+        }
+        if (const ActiveCallContext* cc = activeCallContext()) {
+            std::string key;
+            if (globalKeyForSymbol(name, key) && globalMacro(ctx, *cc, key)) {
+                throw CompileError("Can't take value of a macro: " + name);
+            }
         }
         if (isQualifiedName(name)) {
             // `alias/member`: the member of the value of `alias` (a module

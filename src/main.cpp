@@ -10,6 +10,7 @@
 
 #include "reader/Reader.h"
 #include "compiler/Compiler.h"
+#include "compiler/Eval.h"
 #include "repl/Repl.h"
 #include "runtime/ActorScheduler.h"
 #include "runtime/BytecodeModule.h"
@@ -222,9 +223,6 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
         ctx->getAutomaticLocal(kSlotNamedTable),
         proto::ProtoString::createSymbol(ctx, "__spelling__")};
 
-    protoClojure::CompilerMarkers compilerMarkers{
-        bytecodeKey, arityKey, capturesKey, aritiesKey, namedLayout};
-
     // Read, compile and run the file one top-level form at a time, as the
     // REPL does and as Clojure's `load` does (decision M9, docs/DESIGN.md
     // §10.1): a form is compiled only after every form before it has run,
@@ -241,15 +239,30 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
     // reading stopped; a compile error names where its top-level form starts.
     std::string source = slurp(path);
     protoClojure::Reader reader(ctx, std::move(source), namedLayout);
-    std::vector<std::unique_ptr<protoClojure::BytecodeModule>> modules;
     protoClojure::ExecutionEngine eng;
 
+    // The run's call context stays installed for the whole run: macros run
+    // on it while a form is compiled, and the error report prints with it.
+    const protoClojure::ActiveCallContext runCc{&eng,
+        ctx->getAutomaticLocal(kSlotGlobals),
+        ctx->getAutomaticLocal(kSlotFnSingle), ctx->getAutomaticLocal(kSlotFnMulti),
+        ctx->getAutomaticLocal(kSlotAtomMarker), ctx->getAutomaticLocal(kSlotFutureMarker),
+        ctx->getAutomaticLocal(kSlotPromiseMarker), ctx->getAutomaticLocal(kSlotActorMarker),
+        bytecodeKey, arityKey, capturesKey, aritiesKey, valueKey, watchesKey,
+        thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
+        actorStateKey, mailboxKey, namedLayout};
+    protoClojure::setActiveCallContext(runCc);
+    protoClojure::installEval();
+
     // Stops HTTP servers and drains the future and actor workers before the
-    // run unwinds, so no worker thread outlives the ProtoSpace.
+    // run unwinds, so no worker thread outlives the ProtoSpace; then frees the
+    // modules (whose quoted data are pinned in the space) and the call context.
     auto shutdownWorkers = [&]() {
         protoClojure::shutdownIO(ctx);
         protoClojure::shutdownFutures(ctx);
         protoClojure::ActorScheduler::instance().shutdown(ctx);
+        protoClojure::releaseRetainedModules();
+        protoClojure::clearActiveCallContext();
     };
 
     for (;;) {
@@ -270,62 +283,20 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
         if (!form) break;
         formScope.setAutomaticLocal(0, form);
 
-        modules.push_back(std::make_unique<protoClojure::BytecodeModule>());
-        protoClojure::BytecodeModule& mod = *modules.back();
-        {
-            protoClojure::Compiler compiler;
-            compiler.setSourceInfo(&sourceInfo);
-            try {
-                compiler.compileForm(&formScope, formScope.getAutomaticLocal(0), mod,
-                                     compilerMarkers);
-            } catch (const std::exception& e) {
-                // A CompileError, or a limit the bytecode itself enforces
-                // (BytecodeModule::emit).
-                std::fprintf(stderr, "%s:%d:%d: compile error: %s\n", path,
-                             reader.formLine(), reader.formColumn(), e.what());
-                shutdownWorkers();
-                return 1;
-            } catch (const proto::ProtoException& e) {
-                std::fprintf(stderr, "%s:%d:%d: compile error: %s\n", path,
-                             reader.formLine(), reader.formColumn(),
-                             protoClojure::describeThrown(&formScope, e.value()).c_str());
-                shutdownWorkers();
-                return 1;
-            }
-        }
-        mod.emit(protoClojure::Op::RETURN, 0);
-
+        // Expanded, compiled into a module of its own and run (Eval.h).
         try {
-            eng.run(&formScope, mod, ctx->getAutomaticLocal(kSlotGlobals),
-                    ctx->getAutomaticLocal(kSlotFnSingle),
-                    ctx->getAutomaticLocal(kSlotFnMulti),
-                    ctx->getAutomaticLocal(kSlotAtomMarker),
-                    ctx->getAutomaticLocal(kSlotFutureMarker),
-                    ctx->getAutomaticLocal(kSlotPromiseMarker),
-                    ctx->getAutomaticLocal(kSlotActorMarker),
-                    bytecodeKey, arityKey, capturesKey, aritiesKey,
-                    valueKey, watchesKey,
-                    thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-                    actorStateKey, mailboxKey, namedLayout);
+            protoClojure::evalTopLevel(&formScope, formScope.getAutomaticLocal(0), &sourceInfo);
+        } catch (const protoClojure::CompileError& e) {
+            std::fprintf(stderr, "%s:%d:%d: compile error: %s\n", path,
+                         reader.formLine(), reader.formColumn(), e.what());
+            shutdownWorkers();
+            return 1;
         } catch (const proto::ProtoException& e) {
             // An uncaught Clojure exception, protoCore error or module error:
             // reported by its value, as JVM Clojure reports an uncaught
             // Throwable (docs/DESIGN.md §4.1).
-            // The report prints the exception's data map, and the printer
-            // needs a call context (keywords, atoms, ...); the one run
-            // installed is gone by now.
-            const protoClojure::ActiveCallContext reportCc{&eng,
-                ctx->getAutomaticLocal(kSlotGlobals),
-                ctx->getAutomaticLocal(kSlotFnSingle), ctx->getAutomaticLocal(kSlotFnMulti),
-                ctx->getAutomaticLocal(kSlotAtomMarker), ctx->getAutomaticLocal(kSlotFutureMarker),
-                ctx->getAutomaticLocal(kSlotPromiseMarker), ctx->getAutomaticLocal(kSlotActorMarker),
-                bytecodeKey, arityKey, capturesKey, aritiesKey, valueKey, watchesKey,
-                thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-                actorStateKey, mailboxKey, namedLayout};
-            protoClojure::setActiveCallContext(reportCc);
             std::fprintf(stderr, "%s: runtime error: %s\n", path,
                          protoClojure::describeThrown(&formScope, e.value()).c_str());
-            protoClojure::clearActiveCallContext();
             shutdownWorkers();
             return 1;
         } catch (const std::exception& e) {
@@ -345,9 +316,7 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
     // pointers. Same root cause for both, same fix: join first. HTTP
     // servers still running are stopped first: their handlers may use
     // futures and actors.
-    protoClojure::shutdownIO(ctx);
-    protoClojure::shutdownFutures(ctx);
-    protoClojure::ActorScheduler::instance().shutdown(ctx);
+    shutdownWorkers();
     return 0;
 }
 

@@ -17,14 +17,17 @@ under a `Dnn` id.
 > design, and protoClojure 0.0.1 implements only part of it.
 >
 > - §3.1: implemented are vectors, lists and maps with `assoc` / `get`;
->   truthiness; `defn` with multi-arity and variadic parameters (no
->   docstrings or attribute maps); `let`, `loop`, `recur`; closures;
->   atoms with watches; promises; `println`; `quote` of any datum and the
->   reader macros `'`, `` ` ``, `~`, `~@` (syntax-quote does not yet
->   qualify symbols or auto-gensym). Other reader macros, sets, most collection functions, lazy sequences, the
->   higher-order combinators, the threading macros, namespaces, vars and
->   `binding`, volatiles, delays and the `pr`-family printers are not
->   implemented yet. Exceptions are implemented: `try` / `catch` /
+>   truthiness; `defn` with multi-arity and variadic parameters,
+>   docstrings and attribute maps (dropped: there are no vars); `let`,
+>   `loop`, `recur`, also at the top level; closures; atoms with watches;
+>   promises; `println` and the `pr`-family printers; `quote` of any datum
+>   and the reader macros `'`, `` ` ``, `~`, `~@` (syntax-quote does not yet
+>   qualify symbols or auto-gensym); `defmacro` with `&form` and `&env`,
+>   `macroexpand-1`, `macroexpand` and `eval` (chapter 11). Other reader
+>   macros, sets, most collection functions, lazy sequences, the
+>   higher-order combinators, the `clojure.core` macros (the threading
+>   macros, `when-let`, `doseq`, ...), namespaces, vars and `binding`,
+>   volatiles and delays are not implemented yet. Exceptions are implemented: `try` / `catch` /
 >   `finally`, `throw`, `ex-info`, `ex-data`, `ex-message`, `ex-cause`
 >   (§3.3.6 lists the differences).
 > - §3.2 to §3.4: `defprotocol`, `extend-type`, `extend-protocol` and

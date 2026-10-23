@@ -1,6 +1,6 @@
 # 11. Macros
 
-> **Partly implemented (branch `feature/macros`).** Quote `'` and syntax-quote `` ` `` with `~` and `~@` work today; syntax-quote does not yet qualify symbols with their namespace or turn `foo#` into a generated symbol (STATUS.md D35). `defmacro`, `macroexpand` and `macroexpand-1` are not available yet. The snippets marked *runs today* run now; the rest of the chapter describes the intended design.
+> **Mostly implemented (branch `feature/macros`).** `defmacro`, `macroexpand-1`, `macroexpand`, `eval`, quote `'` and syntax-quote `` ` `` with `~` and `~@` work today, in files and at the REPL. Syntax-quote does not yet qualify symbols with their namespace or turn `foo#` into a generated symbol (STATUS.md D35), and the `clojure.core` macros (`->>`, `when-let`, ...) are not loaded yet. The snippets marked *runs today* run now (each is a test under `tests/conformance/30-macros/`); the rest of the chapter describes the intended design.
 
 A macro is a function that takes code as input and returns code as
 output, at compile time. The compiler calls it, takes whatever it
@@ -50,7 +50,7 @@ the macro rewrites the code in place.
 ## 11.2 The smallest possible macro
 
 A trivial example. JVM Clojure has `(when test body...)`, which is
-sugar for `(if test (do body...) nil)`. Watch:
+sugar for `(if test (do body...) nil)`. Watch (*runs today*):
 
 ```clojure
 (defmacro my-when [test & body]
@@ -81,7 +81,8 @@ The user wrote `my-when`; the compiler executed `if`. The
 *surface* of the language gained a new control form without
 changing the *core*.
 
-You can inspect what a macro expands to with `macroexpand-1`:
+You can inspect what a macro expands to with `macroexpand-1` (*runs
+today*):
 
 ```clojure
 (macroexpand-1 '(my-when (= 1 1) (println "hi")))
@@ -268,6 +269,24 @@ are composable, debuggable, testable, REPL-friendly, and don't trip
 you up on the levels of evaluation. Macros are powerful and
 correspondingly costly.
 
+## 11.5.1 When a macro takes effect
+
+A macro runs when the code that calls it is *compiled*. protoClojure, like
+Clojure, compiles each top-level form of a file (or each form you type at
+the REPL) only after the previous one has run, so a `defmacro` is in effect
+for everything after it (*runs today*):
+
+```clojure
+(defmacro version [] 1)
+(defn old-version [] (version))   ; expanded now: the body is the constant 1
+(defmacro version [] 2)
+(old-version)                     ;; => 1, compiled before the redefinition
+(version)                         ;; => 2
+```
+
+If a macro throws, the form that uses it does not compile, and the error
+names the macro: `compile error: Syntax error macroexpanding version: ...`.
+
 ## 11.6 The protoClojure macro bootstrap
 
 A point worth mentioning for the curious. Most of `clojure.core` is
@@ -290,6 +309,11 @@ The bootstrap order is delicate:
    back into the evaluator when it sees them.
 3. **v0.2+:** user macros work — they go through the same path as
    the core macros.
+
+Where protoClojure stands: steps 1 and 3 are done (the compiler calls the
+macro through the same engine that runs your program, and user macros work,
+in files and at the REPL); step 2, the `clojure.core` macros in a bootstrap
+`core.clj`, is the next stage.
 
 This is invisible to the user; you write `(when test body)` from day
 one without caring about which side it lives on. But it is one of

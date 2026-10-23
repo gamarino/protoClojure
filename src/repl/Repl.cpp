@@ -5,6 +5,7 @@
 
 #include "reader/Reader.h"
 #include "compiler/Compiler.h"
+#include "compiler/Eval.h"
 #include "runtime/ActorScheduler.h"
 #include "runtime/BytecodeModule.h"
 #include "runtime/Exceptions.h"
@@ -211,26 +212,14 @@ struct Session {
     const proto::ProtoString* star2Key;
     const proto::ProtoString* star3Key;
 
-    CompilerMarkers    compilerMarkers;
-    ActiveCallContext  printerCc;     // installed on TLS for replPrintValue
-                                      // so the atom/future/promise/map/actor
-                                      // branches in the printer can see the
-                                      // markers.  Engine swaps this for its
-                                      // own during `run()` and restores it.
-    ExecutionEngine    printerEngine; // a dedicated engine handle is fine —
-                                      // the printer never invokes it; it's
-                                      // just a non-null pointer to slot into
-                                      // ActiveCallContext::engine.
-
-    // BytecodeModules accumulated across the session. `defn` (and the
-    // anonymous-fn forms) emit instructions into the per-form module and
-    // store the byte buffer's address on the resulting fn wrapper as
-    // `__bytecode__`. If the module dies the wrapper's bytecode pointer
-    // dangles — calling `(my-fn)` later then dereferences freed memory
-    // (SIGSEGV reproduced on the first piped REPL session: defn worked,
-    // a call to the just-defined name crashed). Retaining every module
-    // for the whole REPL session is the same fix protoST's REPL uses.
-    std::vector<std::unique_ptr<BytecodeModule>> retainedModules;
+    ActiveCallContext  sessionCc;     // installed on TLS for the whole
+                                      // session: evalTopLevel runs forms on
+                                      // it, macros run on it while a form is
+                                      // compiled, and the printer reads its
+                                      // markers. `run()` installs an equal
+                                      // one and restores this one.
+    ExecutionEngine    engine;        // stateless; the engine every form,
+                                      // and every macro, runs on
 
     explicit Session(proto::ProtoContext* c)
         : space(*c->space), ctx(c) {
@@ -292,9 +281,6 @@ struct Session {
         globals->setAttribute(ctx, star2Key, PROTO_NONE);
         globals->setAttribute(ctx, star3Key, PROTO_NONE);
 
-        compilerMarkers = CompilerMarkers{bytecodeKey, arityKey,
-                                          capturesKey, aritiesKey, named};
-
         // Build the ActiveCallContext the printer needs. ExecutionEngine::run
         // installs its own cc for the duration of a call (then restores
         // whatever was there); installing this one once at session-start
@@ -302,23 +288,26 @@ struct Session {
         // atom / future / promise / map / actor branches in the printer
         // recognise their markers and emit `#<atom 0>` / `#<future …>`
         // instead of `#<unprintable>`.
-        printerCc = ActiveCallContext{
-            &printerEngine, globals,
+        sessionCc = ActiveCallContext{
+            &engine, globals,
             fnSingleProto, fnMultiProto, atomMarker,
             futureMarker, promiseMarker, actorMarker,
             bytecodeKey, arityKey, capturesKey, aritiesKey,
             valueKey, watchesKey,
             thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
             actorStateKey, mailboxKey, named};
-        setActiveCallContext(printerCc);
+        setActiveCallContext(sessionCc);
+        installEval();
     }
 
     // Read, compile and run every form in `src`, one at a time, as Clojure's
     // REPL does: a form is compiled only after the one before it has run,
-    // so `(defmacro m ...) (m)` on one line works once macros exist. Each
-    // result is handed to `onResult` while it is still rooted (the caller
-    // prints it and binds *1). Stops at the first error, which is printed;
-    // the rest of the input is dropped. Returns false on an error.
+    // so `(defmacro m ...) (m)` on one line works. Each result is handed to
+    // `onResult` while it is still rooted (the caller prints it and binds
+    // *1). A compile or runtime error is printed and the REPL goes on with
+    // the next form of the input, as Clojure's REPL does; a read error drops
+    // the rest of the input, the reader's position in it being unreliable.
+    // Returns false when any form failed.
     //
     // Each form lives in a context of its own, rooted in its slot while it
     // is compiled and run, and is garbage afterwards unless something it
@@ -326,11 +315,13 @@ struct Session {
     //
     // With `path` (`:load`), errors are reported as a script's are:
     // `path:line:col: read error`, `path:line:col: compile error` (where the
-    // form starts) and `path: runtime error`.
+    // form starts) and `path: runtime error`, and the first error stops the
+    // load, as it stops a script.
     bool evalSource(const std::string& src,
                     const std::function<void(const proto::ProtoObject*)>& onResult,
                     const std::string* path = nullptr) {
         Reader reader(ctx, src, named);
+        bool ok = true;
         for (;;) {
             proto::ProtoContext formScope(ctx->space, ctx);
             formScope.resizeAutomaticLocals(2);  // the form, its result
@@ -346,59 +337,45 @@ struct Session {
                 return false;
             }
             reader.setSourceInfo(nullptr);
-            if (!form) return true;  // end of the input
+            if (!form) return ok;  // end of the input
             formScope.setAutomaticLocal(0, form);
 
-            auto modPtr = std::make_unique<BytecodeModule>();
-            BytecodeModule& mod = *modPtr;
-            {
-                Compiler compiler;
-                compiler.setSourceInfo(&sourceInfo);
-                try {
-                    compiler.compileForm(&formScope, formScope.getAutomaticLocal(0), mod,
-                                         compilerMarkers);
-                } catch (const std::exception& e) {
-                    // A CompileError, or a bytecode limit (BytecodeModule::emit).
-                    if (path) std::fprintf(stderr, "%s:%d:%d: compile error: %s\n",
-                                           path->c_str(), reader.formLine(),
-                                           reader.formColumn(), e.what());
-                    else      std::fprintf(stderr, "compile error: %s\n", e.what());
-                    return false;
-                }
-            }
-            mod.emit(Op::RETURN, 0);
-            // Retain BEFORE run — the fn objects defn allocates carry a
-            // pointer into mod's byte buffer, and they have to survive past
-            // this scope.
-            retainedModules.push_back(std::move(modPtr));
-
-            // Use a separate ExecutionEngine instance per form. Cheap; keeps
-            // the engine's internal state from leaking across forms.
-            ExecutionEngine eng;
+            // Expanded, compiled into a module of its own and run (Eval.h).
             try {
-                formScope.setAutomaticLocal(1, eng.run(&formScope, mod, globals,
-                    fnSingleProto, fnMultiProto, atomMarker,
-                    futureMarker, promiseMarker, actorMarker,
-                    bytecodeKey, arityKey, capturesKey, aritiesKey,
-                    valueKey, watchesKey,
-                    thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-                    actorStateKey, mailboxKey, named));
+                formScope.setAutomaticLocal(1, evalTopLevel(&formScope,
+                    formScope.getAutomaticLocal(0), &sourceInfo));
+            } catch (const CompileError& e) {
+                std::fflush(stdout);  // results printed so far come first
+                if (path) std::fprintf(stderr, "%s:%d:%d: compile error: %s\n",
+                                       path->c_str(), reader.formLine(),
+                                       reader.formColumn(), e.what());
+                else      std::fprintf(stderr, "compile error: %s\n", e.what());
+                if (path) return false;
+                ok = false;
+                continue;
             } catch (const proto::ProtoException& e) {
                 // An uncaught Clojure exception, protoCore error or module error.
                 reportRuntimeError(path, describeThrown(&formScope, e.value()));
-                return false;
+                if (path) return false;
+                ok = false;
+                continue;
             } catch (const std::exception& e) {
                 reportRuntimeError(path, e.what());
-                return false;
+                if (path) return false;
+                ok = false;
+                continue;
             } catch (...) {
                 reportRuntimeError(path, "unknown C++ exception");
-                return false;
+                if (path) return false;
+                ok = false;
+                continue;
             }
             onResult(formScope.getAutomaticLocal(1));
         }
     }
 
     static void reportRuntimeError(const std::string* path, const std::string& what) {
+        std::fflush(stdout);  // results printed so far come first
         if (path) std::fprintf(stderr, "%s: runtime error: %s\n", path->c_str(), what.c_str());
         else      std::fprintf(stderr, "error: %s\n", what.c_str());
     }
@@ -590,6 +567,7 @@ int runRepl(proto::ProtoContext* ctx) {
     shutdownIO(session.ctx);
     shutdownFutures(session.ctx);
     ActorScheduler::instance().shutdown(session.ctx);
+    releaseRetainedModules();
     return 0;
 }
 

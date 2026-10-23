@@ -104,6 +104,18 @@ public:
     // compileForm calls it is set for.
     void setSourceInfo(const SourceInfo* info) { source_ = info; }
 
+    // Expands `form` while it is a macro call, with no locals in scope (a
+    // top-level form), and answers the result: `form` itself when its head
+    // names no macro. Each expansion is anchored in `ctx` (Macros.h), which
+    // the caller keeps alive until it has rooted the result. A macro that
+    // raises, or is called with the wrong number of arguments, is a
+    // CompileError naming it. The drivers expand a top-level form this way
+    // before compiling it so that a `do` the expansion yields is evaluated
+    // one form at a time (Eval.h).
+    const proto::ProtoObject* macroexpandTopLevel(proto::ProtoContext* ctx,
+                                                  const proto::ProtoObject* form,
+                                                  const CompilerMarkers& markers);
+
 private:
     const SourceInfo* source_ = nullptr;
 
@@ -171,6 +183,71 @@ private:
                          BytecodeModule& out, const CompilerMarkers& markers);
 
     std::vector<Scope> scopes_;
+
+    // The bindings a `let` or `loop` introduces in the current scope, undone
+    // when the form has been compiled: each name gets a fresh slot, and the
+    // slot it shadowed (or none) is restored on destruction, so a binding is
+    // visible in its own body only. Holds the scope by index: compiling the
+    // body may grow scopes_.
+    struct BindingRestore {
+        std::vector<Scope>& scopes;
+        std::size_t idx;
+        std::vector<std::pair<std::string, int>> saved;  // name, shadowed slot or -1
+        explicit BindingRestore(std::vector<Scope>& s) : scopes(s), idx(s.size() - 1) {}
+        int bind(const std::string& name) {
+            Scope& scope = scopes[idx];
+            auto it = scope.nameToSlot.find(name);
+            saved.emplace_back(name, it == scope.nameToSlot.end() ? -1 : it->second);
+            const int slot = scope.nextSlot++;
+            scope.nameToSlot[name] = slot;
+            return slot;
+        }
+        ~BindingRestore() {
+            if (idx >= scopes.size()) return;
+            auto& names = scopes[idx].nameToSlot;
+            for (auto it = saved.rbegin(); it != saved.rend(); ++it) {
+                if (it->second >= 0) names[it->first] = it->second;
+                else names.erase(it->first);
+            }
+        }
+    };
+
+    // True when `name` is bound as a local in any active scope. Unlike
+    // resolveLocal it creates no capture.
+    bool isLocalName(const std::string& name) const;
+
+    // The macro the head of a call names, or nullptr: the head is a symbol
+    // that is not a special form and not a local (`user/x` is never a
+    // local), and the global it names holds a macro (Macros.h). `name`
+    // receives the head's spelling.
+    const proto::ProtoObject* macroForHead(proto::ProtoContext* ctx,
+                                           const proto::ProtoObject* head,
+                                           const CompilerMarkers& markers,
+                                           std::string& name) const;
+
+    // `&env` for a macro called here: nil at the top level, otherwise a map
+    // from each local's symbol to itself (Clojure maps it to the compiler's
+    // LocalBinding object, which protoClojure does not have).
+    const proto::ProtoObject* localEnv(proto::ProtoContext* ctx,
+                                       const CompilerMarkers& markers) const;
+
+    // Expands the macro call `form` (head naming `macro`) and compiles the
+    // expansion in its place, recursively: an expansion that is itself a
+    // macro call is expanded again.
+    void compileMacroCall(proto::ProtoContext* ctx, const proto::ProtoObject* form,
+                          const proto::ProtoObject* macro, const std::string& name,
+                          BytecodeModule& out, const CompilerMarkers& markers);
+
+    // Compiles `(defmacro name doc? attr-map? [params] body*)` or its
+    // multi-arity form as `(def name (__macro__ (fn [&form &env params] body*)))`.
+    void compileDefmacro(proto::ProtoContext* ctx, const proto::ProtoList* lst,
+                         BytecodeModule& out, const CompilerMarkers& markers);
+
+    // Compiles `form` as the body of a zero-argument fn called on the spot,
+    // `((fn [] form))`: how a top-level form that needs local slots (`let`,
+    // `loop`, `try`, `with-open`) runs, since the top level has none.
+    void compileAsThunk(proto::ProtoContext* ctx, const proto::ProtoObject* form,
+                        BytecodeModule& out, const CompilerMarkers& markers);
 
     // Resolve `name` against the scope chain. If found in the innermost
     // scope, returns its slot directly. If found in some outer scope,

@@ -227,6 +227,7 @@ add_library(protoclj_runtime STATIC
     src/runtime/ExecutionEngine.cpp
     src/runtime/GCCensus.cpp
     src/runtime/IO.cpp
+    src/runtime/Macros.cpp
     src/runtime/Primitives.cpp
 )
 target_link_libraries(protoclj_runtime PUBLIC ${PROTOCORE_LIBRARY} protoclj_support
@@ -236,6 +237,7 @@ target_compile_options(protoclj_runtime PRIVATE ${PROTOCLJ_WARNINGS})
 # --- protoClojure compiler library ---
 add_library(protoclj_compiler STATIC
     src/compiler/Compiler.cpp
+    src/compiler/Eval.cpp
 )
 target_link_libraries(protoclj_compiler PUBLIC protoclj_runtime)
 target_compile_options(protoclj_compiler PRIVATE ${PROTOCLJ_WARNINGS})

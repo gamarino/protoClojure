@@ -741,10 +741,11 @@ without it the language fails the *respect* test.
 ## 10. Macros (in progress)
 
 Status: stage 1 (the reader yields runtime values), stage 2 (quote and
-syntax-quote) and stage 3 (scripts compiled and run form by form) are
-built; `defmacro`, syntax-quote and the `clojure.core`
-macros follow (ROADMAP.md, "Macros"). The plan below is the original one;
-§10.1 records the decisions taken while building it.
+syntax-quote), stage 3 (scripts compiled and run form by form) and stage 4
+(`defmacro`, expansion, `macroexpand-1`, `macroexpand`, `eval`) are built;
+hygienic syntax-quote and the `clojure.core` macros follow (ROADMAP.md,
+"Macros"). The plan below is the original one; §10.1 records the decisions
+taken while building it.
 
 Macros are functions that take and return reader output (data). The
 compiler expands them at compile time: when it sees a symbol that resolves
@@ -903,6 +904,103 @@ evaluates them all and prints each result. Alternative: keep reading the
 whole file first and compile each form after the previous one ran; rejected
 because it holds every form alive for the whole run, reports a read error
 before running anything, and differs from Clojure's `load`.
+
+**M10. A macro is a fn carrying a flag, kept in the globals** (*agent,
+pending review*). `(defmacro m [x] body)` compiles to
+`(def m (__macro__ (fn [&form &env x] body)))`: an ordinary user fn whose
+wrapper also carries the own attribute `__macro__`, stored in the globals
+under its name (`src/runtime/Macros.h`). The globals table is therefore the
+macro table: a later `def` of the name replaces the macro with a plain value
+and a later `defmacro` with the new macro, which is what Clojure does to the
+var. Like Clojure's macro fns, it takes the hidden `&form` and `&env` first;
+docstrings and an attribute map are accepted and dropped (D28: no vars to
+hold them), and multi-arity macros work as multi-arity fns do.
+Alternatives: (a) a separate name-to-macro table owned by the driver,
+rejected because a `def` of the name has to unmake the macro, so two tables
+would have to agree; (b) a marker object wrapping the fn, rejected because
+the flag on the fn costs nothing at call time and keeps the macro an
+ordinary fn.
+
+**M11. Expansion happens when a form is compiled; the timing rule**
+(*agent, pending review*). For a list form whose head is a symbol that is
+not a special form (`isSpecialFormName`: Clojure's special forms plus
+protoClojure's `let`, `loop` and `fn`) and not a local (a local shadows a
+macro, as in Clojure), the compiler looks the name up in the globals as they
+stand at that moment; when it holds a macro, the compiler calls it through
+the engine (`ExecutionEngine::invoke`, on the call context the driver keeps
+installed) with the call form, `&env` and the unevaluated arguments, and
+compiles the result in place of the call, expanding again while the result
+is a macro call. **The timing rule**: a macro is in effect for every form
+compiled after the form that defined it has run; since a file and the REPL
+compile each top-level form after the previous one has run (M9), that is
+every later top-level form. Redefining a macro changes the forms compiled
+afterwards; a function compiled earlier keeps the expansion it got. A macro
+defined and used inside the same top-level form is not yet defined when the
+use is compiled (except across the forms of a top-level `do`, M12), as in
+Clojure. A user macro may take the name of one of the forms the compiler
+still implements in C++ (`when`, `cond`, `with-open`, ...), and then it
+wins; it cannot take a special form's. Naming a macro outside call position
+is the compile error `Can't take value of a macro: m`, as in Clojure. The
+expansion is rooted in a slot of a scope of its own while it is compiled,
+as are the macro and the `&env` map while the macro runs
+(`Compiler::compileMacroCall`); `cli/macro-expansion-survives-gc` checks it
+under a 1,000,000-cell heap ceiling and fails when the expansion is left
+unrooted. Alternative: expand at run time, on the first call; rejected as
+not Clojure (a macro would see run-time state and expand per call site
+execution).
+
+**M12. A top-level form is expanded, then a top-level `do` is evaluated one
+form at a time** (*agent, pending review*), as Clojure's `Compiler.eval`
+does: `evalTopLevel` (`src/compiler/Eval.h`) expands a top-level form while
+its head names a macro and, when the result is `(do f*)`, evaluates each
+`f` the same way before compiling the next, so a macro may expand into
+`(do (defmacro m ...) (m))`. Every driver (file, REPL, `:load`) and `eval`
+go through it. Each module it compiles is kept until the driver ends (a
+process-wide registry, released after the worker threads are joined,
+because a module pins its quoted data in the ProtoSpace).
+
+**M13. `&form` and `&env`** (*agent, pending review*). `&form` is the call
+form as written. `&env` is nil at the top level and, inside a function, a
+map from the symbol of every local in scope to itself; Clojure maps each to
+the compiler's `LocalBinding` object, which has no counterpart here (D38).
+`(contains? &env 'x)`, `(keys &env)` and `(&env 'x)` work as in Clojure.
+
+**M14. `macroexpand-1`, `macroexpand` and `eval`** (*agent, pending
+review*). `macroexpand-1` expands a form one step when its head names a
+macro in the globals, with nil `&env`; `macroexpand` repeats it until the
+form no longer changes; both return any other form unchanged, special forms
+included. Until stage 6 the forms the compiler implements in C++ (`when`,
+`cond`, `and`, ...) are not macros to them (D41). `eval` is `evalTopLevel`
+on its argument; a form it cannot compile raises `RuntimeException`
+`Syntax error compiling: ...` (JVM Clojure: `Compiler$CompilerException`,
+D40). The runtime library reaches the compiler through a hook the compiler
+installs at start-up (`setEvalHook`), so the runtime does not link against
+the compiler.
+
+**M15. Errors raised while expanding** (*agent, pending review*). A macro
+that raises makes the calling form a compile error that names the macro
+and carries the exception, `script.clj:4:1: compile error: Syntax error
+macroexpanding bad: ArithmeticException: Divide by zero`, as Clojure's
+`Syntax error macroexpanding bad at (script.clj:4:1)`. A call with the
+wrong number of arguments is checked before the macro runs and reported as
+`Wrong number of args (2) passed to macro: one`, counting the arguments as
+written (D39). A macro that keeps expanding into a call of itself ends in
+`StackOverflowError`, a compile error. At the REPL a compile or runtime
+error no longer drops the rest of the input line: the next form runs, as in
+Clojure's REPL; a read error still drops it, the reader's position being
+unreliable after one. `:load` and scripts stop at the first error.
+
+**M16. Changes the macros needed elsewhere in the compiler** (*agent,
+pending review*). (a) `let` and `loop` bindings are now scoped to the
+form's body (they used to stay bound for the rest of the enclosing
+function, so `(let [x 1] (let [x 2] x) x)` answered 2); (b) `let` and
+`loop` work at the top level, compiled as the body of a fn called on the
+spot as a top-level `try` already was, because most macro expansions are
+`let` forms; (c) a variadic fn called with no rest arguments binds the rest
+parameter to nil instead of `()`, as in Clojure, so `(if body ...)` in a
+`[& body]` macro behaves as Clojure programmers expect; (d) `defn` accepts
+a docstring and an attribute map. (a) and (c) change the behaviour of
+existing programs (CHANGELOG).
 
 ## 11. The standard library
 

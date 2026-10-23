@@ -9,6 +9,57 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — macros, stage 4: `defmacro`, expansion, `macroexpand`, `eval`
+
+- **`defmacro`** (DESIGN.md §10.1, M10-M11): `(defmacro name doc? attr-map?
+  [params] body)` and the multi-arity form. The compiler calls the macro on
+  the unevaluated arguments, plus `&form` and `&env`, when it compiles a
+  call, and compiles the expansion in its place, recursively. A macro is in
+  effect for every top-level form compiled after the one that defined it,
+  in files and at the REPL; a redefinition changes only the forms compiled
+  afterwards. A macro is a fn carrying a flag, stored in the globals, so a
+  `def` of the name replaces it. A local shadows a macro; special forms
+  cannot be macros.
+- **`macroexpand-1`, `macroexpand` and `eval`** (M14). `eval` compiles and
+  runs a form as a top-level form; a form it cannot compile raises
+  `RuntimeException` (D40).
+- **A top-level `do` is evaluated one form at a time**, after the
+  top-level form has been expanded (M12), as in Clojure, so a macro may
+  expand into `(do (defmacro m ...) (m))`.
+- Errors (M15): a macro that raises is the compile error `Syntax error
+  macroexpanding m: <exception>`; a wrong argument count is `Wrong number
+  of args (n) passed to macro: m` (D39); `Can't take value of a macro: m`;
+  a macro that always expands into itself ends in `StackOverflowError`.
+- New built-ins: `second`, `next`, `last`, `conj`, `seq?`, `pr-str`, `prn`,
+  `pr`, `print`.
+- `defn` accepts a docstring and an attribute map (both dropped).
+- `let` and `loop` work at the top level of a file and at the REPL.
+- New deviations D38-D41 (STATUS.md).
+
+### Changed — macros, stage 4
+
+- **`let` and `loop` bindings are scoped to their body** (a bug fix that
+  changes results): a binding used to stay visible for the rest of the
+  enclosing function, so `(let [x 1] (let [x 2] x) x)` answered 2 instead
+  of 1, and a later reference to a global of the same name read the stale
+  local.
+- **A variadic fn called with no rest arguments binds the rest parameter
+  to `nil`**, as in Clojure; it used to be `()`. `(defn f [& xs] xs) (f)`
+  is now `nil`.
+- **The REPL keeps going after a compile or runtime error** in a line with
+  several forms: the next form runs, as in Clojure's REPL (stage 3 dropped
+  the rest of the line). A read error still drops it. Results printed
+  before an error now appear before the error message.
+- The drivers (script, REPL, `:load`) share one evaluator
+  (`src/compiler/Eval.h`); a script keeps its call context installed for
+  the whole run, which macros need at compile time.
+- New tests: 24 fixtures in `tests/conformance/30-macros/` (the classic
+  `unless`, a `with-` macro, a threading macro and a recursive macro among
+  them, and error cases), `02-special-forms/let-top-level.clj` (replacing
+  `let-top-level-error.clj`), the CLI checks `cli/repl-macros` and
+  `cli/macro-expansion-survives-gc` (fails when an expansion is left
+  unrooted, checked by removing the root).
+
 ### Changed — macros, stage 3: scripts run form by form
 
 - **A script is read, compiled and run one top-level form at a time**, as

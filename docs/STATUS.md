@@ -290,7 +290,7 @@ first and its result built after.
       and `IllegalArgumentException`, with ex-data
       `{:type :file-not-found :errno 2}` and the like
 
-### Primitives installed at startup (85, plus 36 I/O)
+### Primitives installed at startup (98, plus 36 I/O)
 
 - [x] Arithmetic and comparison: `+ - * / inc dec < <= > >= = not=`
 - [x] Output: `println str` — one printer (`printTo` in
@@ -307,6 +307,12 @@ first and its result built after.
 - [x] Sequences: `seq` (nil for an empty collection; a map's entries as
       `[k v]` vectors; a string's characters) and `concat`, both answering
       lists, eagerly (D29's reason: no lazy seqs yet)
+- [x] `second next last conj seq?` (`next` is nil past the last element;
+      `conj` adds at the front of a list, at the end of a vector, an entry
+      to a map) and the printers `pr-str prn pr print` (readable or not, as
+      Clojure's)
+- [x] Macros: `macroexpand-1 macroexpand eval`, and `__macro__`, the
+      internal built-in `defmacro` compiles to (DESIGN.md §10.1, M10)
 - [x] Higher-order: `map filter reduce pmap`
 - [x] Predicates: `nil? not vector? list? map? string? symbol? keyword?`
 - [x] Maps: `hash-map assoc dissoc get contains? keys vals`; `count` and
@@ -445,9 +451,10 @@ raises a read, compile or runtime error.
 
 ### Special forms (not yet)
 
-- [ ] `let` and `loop` at the top level of a file (only inside function bodies today)
+(`let` and `loop` at the top level and docstrings in `defn` / `defmacro`
+work since macros stage 4.)
+
 - [ ] Vector and map destructuring in `let` and in parameter vectors (only `& {:keys ...}` works)
-- [ ] Docstrings in `defn`
 - [ ] `(apply f x y coll)` with leading arguments (`apply` over a list, a
       vector or nil works)
 - [ ] `let*` / `fn*` raw forms
@@ -528,7 +535,8 @@ for the rationale.
 
 - [ ] `quot rem mod`
 - [ ] More predicates: `true? false? zero? pos? neg? even? odd?`
-- [ ] More collection: `next conj seq into concat mapcat interleave interpose`
+- [ ] More collection: `into mapcat interleave interpose` (`next conj
+      second last seq concat` exist)
 - [ ] Map operations: `update merge select-keys get-in update-in assoc-in`
 - [ ] More higher-order: `comp partial juxt`
 - [ ] More predicates: `every? some not-any? not-every?`
@@ -536,7 +544,6 @@ for the rationale.
 - [ ] Regex: `re-pattern re-find re-seq re-matches`
 - [ ] `format` (printf-style)
 - [ ] `frequencies group-by sort sort-by`
-- [ ] `pr-str print prn pr`
 
 ### REPL and command line (not yet)
 
@@ -556,7 +563,10 @@ Work in progress on branch `feature/macros` (DESIGN.md §10, ROADMAP.md).
 - [x] Stage 3: scripts are read, compiled and run one top-level form at a
       time, as the REPL is; a compile error names its form's line and column
       (M9)
-- [ ] Compile-time evaluation pipeline (the bootstrap)
+- [x] Stage 4: `defmacro` (docstring, attribute map, multi-arity, `&form`,
+      `&env`), compile-time expansion through the engine, recursive
+      expansion, the timing rule, `macroexpand-1`, `macroexpand`, `eval`;
+      a top-level `do` evaluated form by form (M10-M16)
 - [ ] `clojure.core` macros defined in protoClojure
 - [ ] User-defined macros (`defmacro`)
 
@@ -607,6 +617,10 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D35 | Syntax-quote does not qualify symbols yet: `` `(f x) `` reads as `(clojure.core/seq (clojure.core/concat (clojure.core/list (quote f)) (clojure.core/list (quote x))))` where JVM Clojure writes `user/f` and `user/x`, and `foo#` is not an auto-gensym. Macros stage 5 brings both | stage 5 |
 | D36 | `~x` or `~@x` outside a syntax-quote is a compile error, `unquote (~) used outside a syntax-quote` (JVM Clojure compiles it as a call of the unbound var `clojure.core/unquote` and fails at run time with `Attempting to call unbound fn`) | (perm) |
 | D37 | There are no namespaces (D28): `clojure.core/x` names the global `x`, which a local never shadows but a `def` of `x` replaces, so redefining a built-in such as `seq` with `def` also changes what a syntax-quote expansion calls (JVM Clojure: `clojure.core/seq` stays the core function) | stage 5 |
+| D38 | A macro's `&env` maps each local's symbol to the symbol itself (JVM Clojure: to the compiler's `LocalBinding` object); it is nil at the top level, as in Clojure | (perm) |
+| D39 | A macro called with the wrong number of arguments reports the count as written, `Wrong number of args (2) passed to macro: one` (JVM Clojure counts the hidden `&form` and `&env` too, `Wrong number of args (4) passed to: user/one`) | (perm) |
+| D40 | A form `eval` cannot compile raises `RuntimeException` `Syntax error compiling: ...` (JVM Clojure: `clojure.lang.Compiler$CompilerException`, a `RuntimeException` subclass) | (perm) |
+| D41 | `when`, `when-not`, `cond`, `and`, `or`, `with-open` and `future` are still compiled by the C++ compiler, so `macroexpand` returns them unchanged (JVM Clojure expands them) | stage 6 |
 | D34 | A `catch` naming no built-in class names a type looked up at run time, when an exception reaches the clause (a var, a local, or a module member `alias/Type`), and is matched by the thrown value's prototype chain; JVM Clojure resolves the class at compile time. So `(try 1 (catch NoSuchException e 2))` compiles and answers 1, and the error `Unable to resolve classname: NoSuchException` is a `RuntimeException` raised when an exception reaches the clause (JVM Clojure: a compile error). A type that resolves to a value that is not a prototype object raises `IllegalArgumentException`. A module's error (a foreign value) is caught by `Exception`, `Throwable` and `Object`, by its own types, and by no other built-in class | (perm: the platform is late-binding) |
 
 ## Known issues
