@@ -14,7 +14,8 @@ first planned release (`docs/ROADMAP.md`).
 - **`core.clj`** (`src/core/core.clj`, DESIGN.md §10.1, M20): the part of
   `clojure.core` written in Clojure, embedded in the binary at build time
   (`cmake/EmbedFile.cmake`) and loaded by every driver before the program,
-  in the namespace `clojure.core`. It costs about 3 ms of CPU at start-up.
+  in the namespace `clojure.core`. It costs about 3.4 ms of CPU (12 M cycles) at start-up
+  (benchmarks/RESULTS.md); run-time benchmarks did not move.
 - **Macros** (M22): `when`, `when-not`, `if-not`, `cond`, `comment`,
   `while`, `if-let`, `when-let`, `if-some`, `when-some`, `->`, `->>`,
   `as->`, `some->`, `some->>`, `cond->`, `cond->>`, `doto`, `dotimes`,

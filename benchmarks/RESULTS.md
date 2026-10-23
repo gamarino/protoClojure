@@ -41,6 +41,47 @@ runs the script through each interpreter 3 times and reports the
 minimum wall-clock (cold-start + execution). No JVM warmup phase.
 Result strings are compared across runtimes for correctness.
 
+## Macros branch: `main` (`8b7938a`) against stage 6 (`e5a48c5`), 2026-10-23
+
+Whether the macro work (`defmacro`, the embedded `core.clj`, `when` /
+`when-not` / `cond` / `with-open` / `future` moved to `core.clj`) changed
+run-time speed or start-up. Script and the macro-heavy workload:
+[`reports/2026-10-23-macros/`](reports/2026-10-23-macros/). Clean worktree
+builds of both commits, each on its own fresh copy of the same
+`libprotoCore.so.4` (checked with `ldd`), every run behind the quiet gate
+(`QUIET_CORES=4.0`; busy CPUs 1.8-3.1 at the gates), order alternated.
+
+`bench.sh`, wall-clock best-of-3 per round, median of 3 rounds (ms; each run
+includes start-up):
+
+| workload | main | stage 6 |
+|---|---|---|
+| fib | 379 | 379 |
+| tak | 34 | 38 |
+| sum-loop | 71 | 71 |
+| reduce-list | 29 | 32 |
+| sum-squares | 27 | 27 |
+
+Every result matched Babashka's. The 3-4 ms on the short workloads is the
+start-up below; the long ones did not move.
+
+Macro-heavy loop (`macro-loop.clj`: `cond`, `when`, `when-not` in a
+5,000,000-iteration body; C++ forms on `main`, `core.clj` macros on stage
+6; both print 19998890), 5 interleaved runs: median 1.65 s (`main`) and
+1.66 s (stage 6), inside the run-to-run spread (1.63-1.69 s).
+
+Start-up, an empty file, `perf stat -r 20`, two interleaved passes:
+
+| build | task-clock (ms) | cycles |
+|---|---|---|
+| `main` | 12.7 / 13.2 | 48.4 M / 48.1 M |
+| stage 3 (`c2a0c4a`, no `core.clj`) | 13.6 / 14.0 | 48.9 M / 46.1 M |
+| stage 6 | 17.6 / 16.7 | 60.7 M / 58.4 M |
+
+Loading `core.clj` (stage 6 against stage 3) costs about 3.4 ms of CPU and
+12 M cycles per process, under the 10 ms budget; it is not cached or
+precompiled.
+
 ## Numbers at commit `ce9819d` (after maps, strings, atoms, futures, watches, promises and parallel `pmap`)
 
 | Workload         | protoclj (ms) | bb (ms) | ratio   | Result        | Match |

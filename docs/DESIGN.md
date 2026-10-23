@@ -1060,8 +1060,8 @@ private vars. Alternatives: (a) install it beside the binary
 (`/usr/share/protoclj/core.clj`), rejected because the binary would then
 depend on a path and a build tree would need the same layout; (b)
 precompile it to bytecode at build time, not needed: loading it costs
-about 3 ms of CPU (measured below and in the CHANGELOG), under the 10 ms
-budget.
+about 3.4 ms of CPU and 12 M cycles per process (benchmarks/RESULTS.md,
+2026-10-23), under the 10 ms budget.
 
 **M21. What moved to `core.clj`, what stayed in C++, measured** (*agent,
 pending review*). Moved: `when`, `when-not` and `cond` (their expansions
