@@ -22,7 +22,9 @@ out=$(printf '%s\n' \
     "(/ 1 0) :after-error" \
     "(defmacro bad [] (/ 1 0)) (bad) :after-bad" \
     "(eval (list 'unless false 7))" \
-    "(defmacro twice [x] (list 'do x x)) (twice (println \"hi-twice\"))" | timeout 90s "$PROTOCLJ" 2>"$err_file")
+    "(defmacro twice [x] (list 'do x x)) (twice (println \"hi-twice\"))" \
+    '`(foo ~(+ 1 2) str)' \
+    "(defmacro my-or ([] nil) ([x] x) ([x & n] \`(let [or# ~x] (if or# or# (my-or ~@n))))) (let [or 9] (my-or nil or))" | timeout 90s "$PROTOCLJ" 2>"$err_file")
 rc=$?
 if [[ $rc -ne 0 ]]; then
     echo "FAIL: REPL exited $rc (expected 0)"
@@ -49,6 +51,9 @@ expect '[1 2]'
 expect ':after-error'
 expect ':after-bad'
 expect 'user=> 7'
+# Syntax-quote qualifies symbols at the REPL as in a file; my-or is hygienic.
+expect 'user=> (user/foo 3 clojure.core/str)'
+expect '9'
 # docs/tutorial/10-repl.md: a macro defined and used on one line.
 if [[ $(grep -c 'hi-twice' <<<"$out") -ne 2 ]]; then
     echo "FAIL: expected (twice (println ...)) to print twice"

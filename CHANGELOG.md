@@ -9,6 +9,35 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — macros, stage 5: hygienic syntax-quote
+
+- **Syntax-quote qualifies symbols** as Clojure's reader does (DESIGN.md
+  §10.1, M17): a built-in becomes `clojure.core/x`, any other name `user/x`
+  (the program's namespace; there are only these two, D42); special forms,
+  `&`, symbols with a namespace or a `.` and exception class names stay as
+  they are. Closes D35.
+- **`foo#` auto-gensyms** (`foo__N__auto__`, the same symbol throughout one
+  syntax-quote) and **`gensym`** (M18); the lexer reads `#` inside a symbol.
+- **`user/x` and `clojure.core/x` name globals, never locals** (M19). Every
+  built-in is also installed under `clojure.core/x`, which a `def` of `x`
+  does not replace, so an expansion keeps calling the built-in after the
+  program redefines it. Closes D37.
+- A qualified name as a parameter or a `let` / `loop` binding is a compile
+  error with Clojure's message (`Can't use qualified name as parameter:
+  user/x`, `Can't let qualified name: user/v`).
+- New built-ins: `gensym`, `symbol`, `keyword`, `name`, `list*`.
+- New deviations D42 (two namespaces) and D43 (symbols are never
+  collected).
+
+### Changed — macros, stage 5
+
+- The printed expansion of a template now shows qualified symbols:
+  `` `(f ~x) `` is `(user/f 1)` where it was `(f 1)`.
+- New tests: 17 fixtures in `tests/conformance/31-syntax-quote/` (auto-gensym,
+  `gensym`, `my-or` hygiene, built-ins not captured, `~'it` capture, error
+  cases), a lexer unit test, two new REPL checks in `cli/repl-macros`; six
+  fixtures in `28-quote/` and `cli/repl-quote` now expect qualified symbols.
+
 ### Added — macros, stage 4: `defmacro`, expansion, `macroexpand`, `eval`
 
 - **`defmacro`** (DESIGN.md §10.1, M10-M11): `(defmacro name doc? attr-map?

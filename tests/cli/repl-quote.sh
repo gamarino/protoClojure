@@ -38,7 +38,7 @@ expect() {
 }
 expect 'user=> (a "s" [1 :k])'
 expect 'user=> x'
-expect 'user=> (f 2 3 2)'
+expect 'user=> (user/f 2 3 2)'
 # The quote on its own line waited for `sym` on the continuation prompt.
 expect '#_=> sym'
 expect 'user=> true'

@@ -1,4 +1,4 @@
-;; EXPECT: (a 2 [3 4]) (a 2 3 4) [x 2 3 4] {:v 2}
+;; EXPECT: (user/a 2 [3 4]) (user/a 2 3 4) [user/x 2 3 4] {:v 2}
 ;; ~ inserts a value, ~@ splices a sequence, inside lists, vectors and maps.
 (def b 2)
 (def c [3 4])

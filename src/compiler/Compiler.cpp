@@ -69,6 +69,12 @@ bool stripCoreQualifier(std::string& name) {
     return true;
 }
 
+// True for `user/x`: a symbol syntax-quote qualified with the program's
+// namespace (there is only `user`, D28); it names the global x.
+bool isUserQualified(const std::string& name) {
+    return name.size() > 5 && name.compare(0, 5, "user/") == 0;
+}
+
 // True iff the form is a string literal: a protoCore string. Symbols and
 // keywords are named values, never strings.
 bool isStringForm(const proto::ProtoObject* form) {
@@ -296,6 +302,8 @@ Compiler::compileArity(proto::ProtoContext* ctx,
             } else if (isNameForm(ctx, markers.named, rp)) {
                 // `& rest` — variadic, session-7 shape.
                 restName   = nameOf(ctx, markers.named, rp);
+                if (isQualifiedName(restName))
+                    throw CompileError("Can't use qualified name as parameter: " + restName);
                 isVariadic = true;
             } else {
                 throw CompileError(
@@ -325,7 +333,14 @@ Compiler::compileArity(proto::ProtoContext* ctx,
                 scopes_.pop_back();
                 throw CompileError("fn/defn: parameter name must be a symbol");
             }
-            scope.nameToSlot[nameOf(ctx, markers.named, p)] = static_cast<int>(i);
+            const std::string pname = nameOf(ctx, markers.named, p);
+            if (isQualifiedName(pname)) {
+                // A syntax-quoted parameter without `#` or `~'` comes out
+                // qualified, `user/x`; Clojure rejects it the same way.
+                scopes_.pop_back();
+                throw CompileError("Can't use qualified name as parameter: " + pname);
+            }
+            scope.nameToSlot[pname] = static_cast<int>(i);
         }
         scope.nextSlot = static_cast<int>(fixedArity);
         if (isVariadic) {
@@ -685,8 +700,10 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
 // Pushes the type a catch clause names when it is not a built-in class: a
 // local, member `b` of a local `a` for `a/b`, or else a run-time lookup of
 // the global (or the global's member) by RESOLVE_CLASS.
-void Compiler::compileCatchType(proto::ProtoContext* ctx, const std::string& name,
+void Compiler::compileCatchType(proto::ProtoContext* ctx, const std::string& qualified,
                                 BytecodeModule& out) {
+    // `user/T`, from a syntax-quote, names the program's global T.
+    const std::string name = isUserQualified(qualified) ? qualified.substr(5) : qualified;
     if (int slot = resolveLocal(name); slot >= 0) {
         out.emit(Op::PUSH_LOCAL, slot);
         return;
@@ -774,8 +791,9 @@ const proto::ProtoObject* Compiler::macroForHead(proto::ProtoContext* ctx,
     name = nameOf(ctx, markers.named, head);
     std::string key;
     if (!globalKeyForSymbol(name, key)) return nullptr;  // a keyword
-    const bool qualified = (key != name) || stripCoreQualifier(key);
-    if (isSpecialFormName(key)) return nullptr;
+    std::string bare = key;
+    const bool qualified = stripCoreQualifier(bare) || key != name;
+    if (isSpecialFormName(bare)) return nullptr;
     if (!qualified && isLocalName(key)) return nullptr;  // a local shadows a macro
     return globalMacro(ctx, *cc, key);
 }
@@ -1591,7 +1609,11 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             // in call position is a value, not a global name: `(:a m)`
             // pushes the keyword and the VM calls it as a map lookup.
             if (coreQualified) {
-                out.emit(Op::PUSH_VAR, out.addSymbol(ctx, headName));
+                // The built-in, under the key a `def` does not replace.
+                out.emit(Op::PUSH_VAR, out.addSymbol(ctx, "clojure.core/" + headName));
+            } else if (isUserQualified(headName)) {
+                // `user/f`: the program's global f, never a local.
+                out.emit(Op::PUSH_VAR, out.addSymbol(ctx, headName.substr(5)));
             } else if (headName[0] == ':') {
                 compileForm(ctx, head, out, markers);
             } else if (int slot = resolveLocal(headName); slot >= 0) {
@@ -1688,9 +1710,21 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             out.emit(Op::PUSH_CONST, idx);
             return;
         }
-        if (stripCoreQualifier(name)) {
-            // `clojure.core/x`: the built-in x, never a local.
+        if (std::string bare = name; stripCoreQualifier(bare)) {
+            // `clojure.core/x`: the built-in x, never a local, under the key a
+            // `def` of x does not replace (Macros.h, defineBuiltin).
+            if (isSpecialFormName(bare) || bare == "unquote" || bare == "unquote-splicing")
+                throw CompileError("Can't take value of a special form: " + bare);
+            if (const ActiveCallContext* cc = activeCallContext(); cc && globalMacro(ctx, *cc, name))
+                throw CompileError("Can't take value of a macro: " + name);
             out.emit(Op::PUSH_VAR, out.addSymbol(ctx, name));
+            return;
+        }
+        if (isUserQualified(name)) {
+            // `user/x`: the program's global x, never a local.
+            if (const ActiveCallContext* cc = activeCallContext(); cc && globalMacro(ctx, *cc, name.substr(5)))
+                throw CompileError("Can't take value of a macro: " + name);
+            out.emit(Op::PUSH_VAR, out.addSymbol(ctx, name.substr(5)));
             return;
         }
         int slot = resolveLocal(name);

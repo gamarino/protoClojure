@@ -123,8 +123,8 @@ Work in progress on branch `feature/macros`, in six stages
 2. [x] `quote` of any datum; the reader macros `'`, `` ` ``, `~`, `~@`.
 3. [x] Files compiled and run form by form, as the REPL does.
 4. [x] `defmacro`, expansion, `macroexpand-1`, `macroexpand`, `eval`.
-5. [ ] Syntax-quote with auto-gensyms, `gensym`, `symbol`, `concat`,
-   `seq`, `list*`.
+5. [x] Syntax-quote with qualified symbols and auto-gensyms, `gensym`,
+   `symbol`, `concat`, `seq`, `list*`.
 6. [ ] `clojure.core` macros in a bootstrap `core.clj`.
 
 - A minimal `core.clj` shipped with the runtime; `protoclj` evaluates it

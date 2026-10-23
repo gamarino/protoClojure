@@ -21,8 +21,9 @@ under a `Dnn` id.
 >   docstrings and attribute maps (dropped: there are no vars); `let`,
 >   `loop`, `recur`, also at the top level; closures; atoms with watches;
 >   promises; `println` and the `pr`-family printers; `quote` of any datum
->   and the reader macros `'`, `` ` ``, `~`, `~@` (syntax-quote does not yet
->   qualify symbols or auto-gensym); `defmacro` with `&form` and `&env`,
+>   and the reader macros `'`, `` ` ``, `~`, `~@` (syntax-quote qualifies
+>   symbols as `clojure.core/x` or `user/x`, the only two namespaces, and
+>   auto-gensyms `x#`); `defmacro` with `&form` and `&env`, `gensym`,
 >   `macroexpand-1`, `macroexpand` and `eval` (chapter 11). Other reader
 >   macros, sets, most collection functions, lazy sequences, the
 >   higher-order combinators, the `clojure.core` macros (the threading

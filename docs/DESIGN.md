@@ -741,10 +741,10 @@ without it the language fails the *respect* test.
 ## 10. Macros (in progress)
 
 Status: stage 1 (the reader yields runtime values), stage 2 (quote and
-syntax-quote), stage 3 (scripts compiled and run form by form) and stage 4
-(`defmacro`, expansion, `macroexpand-1`, `macroexpand`, `eval`) are built;
-hygienic syntax-quote and the `clojure.core` macros follow (ROADMAP.md,
-"Macros"). The plan below is the original one; §10.1 records the decisions
+syntax-quote), stage 3 (scripts compiled and run form by form), stage 4
+(`defmacro`, expansion, `macroexpand-1`, `macroexpand`, `eval`) and stage 5
+(qualified symbols and auto-gensyms in syntax-quote) are built; the
+`clojure.core` macros follow (ROADMAP.md, "Macros"). The plan below is the original one; §10.1 records the decisions
 taken while building it.
 
 Macros are functions that take and return reader output (data). The
@@ -855,8 +855,8 @@ nested syntax-quote is expanded first and its expansion quoted as data.
 This gives Clojure's `macroexpand` output and needs nothing from the
 compiler. Alternative: a `syntax-quote` special form the compiler expands
 into bytecode; rejected because `'`\`form` and `macroexpand` would then show
-a form no Clojure programmer recognises. Symbols are not qualified and
-`foo#` is not an auto-gensym until stage 5 (D35). `~`, `~@` and `@` read as
+a form no Clojure programmer recognises. Stage 5 added the qualification of
+symbols and the auto-gensyms (M17, M18). `~`, `~@` and `@` read as
 `clojure.core/unquote`, `clojure.core/unquote-splicing` and
 `clojure.core/deref`, as in Clojure. `seq` and `concat`, which the expansion
 calls, were planned for stage 5 and were added here; both answer lists,
@@ -868,9 +868,8 @@ Without namespaces (D28) the built-ins are the runtime's globals, so the
 compiler resolves `clojure.core/x` as the global `x`, never as a local, and
 dispatches `clojure.core/if` and the other special forms as the unqualified
 form. That keeps a syntax-quote expansion correct inside
-`(let [list 1] ...)`. Limit: a `def` of a built-in's name replaces what
-`clojure.core/x` calls (D37); stage 5 may give the built-ins a table of
-their own. Behaviour change against 0.0.3: `@x` now calls the built-in
+`(let [list 1] ...)`. Since stage 5 `clojure.core/x` reads its own globals
+key, which a `def` of `x` does not replace (M19). Behaviour change against 0.0.3: `@x` now calls the built-in
 `deref` even where a local is named `deref`, as in Clojure.
 
 **M8. `~` and `~@` outside a syntax-quote are compile errors** (*agent,
@@ -1001,6 +1000,47 @@ parameter to nil instead of `()`, as in Clojure, so `(if body ...)` in a
 `[& body]` macro behaves as Clojure programmers expect; (d) `defn` accepts
 a docstring and an attribute map. (a) and (c) change the behaviour of
 existing programs (CHANGELOG).
+
+**M17. Syntax-quote qualifies symbols when it is read, as Clojure's reader
+does** (*agent, pending review*). The reader asks a resolver the drivers
+install (`qualifySyntaxQuoteSymbol`, `src/compiler/Eval.h`) how to spell
+each symbol of a template: Clojure's special forms and `&` stay as they
+are, and so do symbols that have a namespace or a `.` and the built-in
+exception class names (Clojure would write `java.lang.Exception`; our
+`catch` takes both, D42); a built-in -- a primitive, or a form the compiler
+implements that is a `clojure.core` macro in Clojure (`let`, `fn`, `defn`,
+`when`, `cond`, `and`, `or`, ...) -- becomes `clojure.core/x`, unless the
+program has defined `x` itself, which makes it `user/x` as Clojure's
+namespace map would; anything else becomes `user/x`. Resolution happens at
+read time, against the globals as they stand, since each top-level form is
+read after the previous one ran (M9). There are no other namespaces (D28),
+so `user` and `clojure.core` are the only qualifiers syntax-quote writes.
+Alternative: leave symbols unqualified and rename locals at expansion time
+(a hygienic expander in the Scheme style); rejected because the
+`macroexpand` output and the rules (`x#`, `~'x`, "Can't let qualified
+name") would not be Clojure's.
+
+**M18. `foo#` and `gensym`** (*agent, pending review*). Inside one
+syntax-quote, every `foo#` is the same generated symbol `foo__N__auto__`;
+each syntax-quote, nested ones included, has its own table, as in Clojure.
+`(gensym)` is `G__N` and `(gensym "p")` `pN`. N comes from one process-wide
+counter (`nextGensymId`, `src/runtime/Named.h`), shared with the reader. The
+lexer now reads `#` inside a symbol (`foo#`, as Clojure does); a `#` that
+starts a token is still the dispatch character. Generated symbols are
+interned like every symbol and never collected (D43). `symbol`, `keyword`,
+`name` and `list*` were added with them.
+
+**M19. `user/x` and `clojure.core/x` name globals, never locals**
+(*agent, pending review*). `user/x` compiles to the global `x` and
+`clojure.core/x` to the globals key `clojure.core/x`; every built-in is
+installed under both its name and that key at start-up (`defineBuiltin`,
+`src/runtime/Macros.h`), so a program's `(def seq ...)` changes `seq` but
+not `clojure.core/seq`, which closes D37. A `def` or `defn` of `user/x`
+defines `x`. A qualified name as a parameter or a `let` / `loop` binding is
+rejected with Clojure's messages (`Can't use qualified name as parameter:
+user/x`, `Can't let qualified name: user/v`): it is what a template that
+forgot `#` produces. Cost: the globals table holds each built-in twice
+(about 140 extra entries); a lookup is hashed, so no call path changed.
 
 ## 11. The standard library
 

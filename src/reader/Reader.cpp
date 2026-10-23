@@ -141,6 +141,13 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
             proto::ProtoContext scope(parent->space, parent);
             scope.resizeAutomaticLocals(1);
             scope.setAutomaticLocal(0, readNextForm(&scope, tok));
+            // Each syntax-quote has its own auto-gensym table; one nested in
+            // `form` was expanded, with its own, while `form` was read.
+            gensyms_.emplace_back();
+            struct Pop {
+                std::vector<std::unordered_map<std::string, const proto::ProtoObject*>>& g;
+                ~Pop() { g.pop_back(); }
+            } pop{gensyms_};
             return syntaxQuote(&scope, scope.getAutomaticLocal(0), tok);
         }
 
@@ -271,8 +278,13 @@ bool isListValue(const proto::ProtoObject* v) {
 //                 the entries in source order
 //
 // A nested syntax-quote has already been expanded when the outer one sees
-// it, so its result is quoted as data, as in Clojure. Symbols are not
-// qualified yet (macros stage 5, docs/STATUS.md D35).
+// it, so its result is quoted as data, as in Clojure.
+//
+// Symbols, as Clojure's reader treats them: `foo#` is the generated symbol
+// `foo__N__auto__`, the same one throughout this syntax-quote; any other
+// symbol is qualified by the resolver (setSymbolResolver): a special form,
+// `&` and an already qualified symbol stay as they are, a built-in becomes
+// `clojure.core/x` and any other name `user/x` (compiler/Eval.h).
 //
 // `form` must be rooted by the caller; the result is unrooted.
 const proto::ProtoObject* Reader::syntaxQuote(proto::ProtoContext* parent,
@@ -290,9 +302,26 @@ const proto::ProtoObject* Reader::syntaxQuote(proto::ProtoContext* parent,
     if (isNamed(parent, named_, form)) {
         const std::string spelling = namedSpelling(parent, named_, form)->toStdString(parent);
         if (!spelling.empty() && spelling[0] == ':') return form;  // a keyword
+        const proto::ProtoObject* symbol = form;
+        if (spelling.size() > 1 && spelling.back() == '#' &&
+            spelling.find('/') == std::string::npos) {
+            // `foo#`: the same generated symbol everywhere in this
+            // syntax-quote, `foo__N__auto__`.
+            auto& table = gensyms_.back();
+            auto it = table.find(spelling);
+            if (it == table.end()) {
+                const std::string fresh = spelling.substr(0, spelling.size() - 1) + "__" +
+                                          std::to_string(nextGensymId()) + "__auto__";
+                it = table.emplace(spelling, internNamed(parent, named_, fresh.c_str())).first;
+            }
+            symbol = it->second;
+        } else if (resolver_) {
+            const std::string resolved = resolver_(parent, spelling);
+            if (resolved != spelling) symbol = internNamed(parent, named_, resolved.c_str());
+        }
         return parent->newList()
             ->appendLast(parent, sym(parent, "quote"))
-            ->appendLast(parent, form)
+            ->appendLast(parent, symbol)
             ->asObject(parent);
     }
 

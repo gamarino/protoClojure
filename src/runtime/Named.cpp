@@ -2,6 +2,8 @@
 
 #include "protoCore.h"
 
+#include <atomic>
+
 namespace protoClojure {
 
 const proto::ProtoObject* internNamed(proto::ProtoContext* ctx,
@@ -43,6 +45,11 @@ const proto::ProtoString* namedSpelling(proto::ProtoContext* ctx,
                                         const proto::ProtoObject* v) {
     return reinterpret_cast<const proto::ProtoString*>(
         v->getOwnAttributeDirect(ctx, layout.spellingKey));
+}
+
+long long nextGensymId() {
+    static std::atomic<long long> counter{0};
+    return counter.fetch_add(1, std::memory_order_relaxed) + 1;
 }
 
 } // namespace protoClojure

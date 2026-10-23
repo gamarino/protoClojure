@@ -13,6 +13,7 @@
 
 #include <cstdint>
 #include <mutex>
+#include <unordered_set>
 #include <vector>
 
 namespace protoClojure {
@@ -67,6 +68,37 @@ void releaseRetainedModules() {
 }
 
 void installEval() { setEvalHook(&evalHookEntry); }
+
+std::string qualifySyntaxQuoteSymbol(proto::ProtoContext* ctx, const std::string& name) {
+    // Clojure's special forms (Compiler.specials) are never qualified.
+    static const std::unordered_set<std::string> kSpecials = {
+        "def", "loop*", "recur", "if", "case*", "let*", "letfn*", "do", "fn*",
+        "quote", "var", "import*", ".", "set!", "deftype*", "reify*", "try",
+        "throw", "monitor-enter", "monitor-exit", "catch", "finally", "new", "&"};
+    // The forms protoClojure's compiler implements itself, which are
+    // clojure.core macros in JVM Clojure.
+    static const std::unordered_set<std::string> kCompilerForms = {
+        "let", "loop", "fn", "defn", "defmacro", "when", "when-not", "cond",
+        "and", "or", "future", "with-open", "apply"};
+    if (kSpecials.count(name)) return name;
+    if (name == "/") return "clojure.core//";
+    if (name.find('/') != std::string::npos) return name;
+    if (name.find('.') != std::string::npos) return name;
+    if (exceptionClassId(name) >= 0 || name == "Object") return name;
+    if (kCompilerForms.count(name)) return "clojure.core/" + name;
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc || !cc->globals) return name;
+    const std::string core = "clojure.core/" + name;
+    const proto::ProtoString* coreKey = proto::ProtoString::createSymbol(ctx, core.c_str());
+    if (cc->globals->hasOwnAttribute(ctx, coreKey) == PROTO_TRUE) {
+        // A built-in, unless the program has defined the name itself.
+        const proto::ProtoString* userKey = proto::ProtoString::createSymbol(ctx, name.c_str());
+        if (cc->globals->hasOwnAttribute(ctx, userKey) != PROTO_TRUE ||
+            cc->globals->getAttribute(ctx, userKey) == cc->globals->getAttribute(ctx, coreKey))
+            return core;
+    }
+    return "user/" + name;
+}
 
 const proto::ProtoObject* evalTopLevel(proto::ProtoContext* ctx,
                                        const proto::ProtoObject* form,

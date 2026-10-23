@@ -48,10 +48,18 @@ bool isMacroValue(proto::ProtoContext* ctx, const ActiveCallContext& cc,
 // let* / loop* / fn*.
 bool isSpecialFormName(const std::string& name);
 
-// The globals key a symbol names when it denotes a global: `user/x` names
-// the global `x`; any other spelling is its own key. Returns false (leaving
-// `key` unspecified) for a keyword.
+// The globals key a symbol names when it denotes a global (D28: there are
+// no namespaces, only the globals): `user/x` names the global `x` (the
+// program's own), `clojure.core/x` the key `clojure.core/x`, where every
+// built-in is also installed (defineBuiltin); any other spelling is its own
+// key. Returns false (leaving `key` unspecified) for a keyword.
 bool globalKeyForSymbol(const std::string& spelling, std::string& key);
+
+// Installs `value` as the built-in `name`: under `name`, which the program
+// may redefine, and under `clojure.core/name`, which a `def` of `name` does
+// not touch, so what syntax-quote expansions call stays the built-in.
+void defineBuiltin(proto::ProtoContext* ctx, proto::ProtoObject* globals,
+                   const char* name, const proto::ProtoObject* value);
 
 // The macro the global `key` holds, or nullptr when it holds none.
 const proto::ProtoObject* globalMacro(proto::ProtoContext* ctx,

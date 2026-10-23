@@ -61,6 +61,13 @@ bool globalKeyForSymbol(const std::string& spelling, std::string& key) {
     return true;
 }
 
+void defineBuiltin(proto::ProtoContext* ctx, proto::ProtoObject* globals,
+                   const char* name, const proto::ProtoObject* value) {
+    globals->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, name), value);
+    const std::string core = std::string("clojure.core/") + name;
+    globals->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, core.c_str()), value);
+}
+
 const proto::ProtoObject* globalMacro(proto::ProtoContext* ctx,
                                       const ActiveCallContext& cc,
                                       const std::string& key) {

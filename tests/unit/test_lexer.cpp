@@ -341,3 +341,17 @@ TEST(Lexer, QuotingReaderMacros) {
     // Metadata is still reserved.
     EXPECT_EQ(toks[11].kind, TokenKind::Error);
 }
+
+// `#` continues a symbol (Clojure's auto-gensym spelling `x#`), while a `#`
+// that starts a token is still a dispatch character.
+TEST(Lexer, HashInsideSymbol) {
+    auto toks = tokenise("x# or#f `(a#)");
+    ASSERT_GE(toks.size(), 6u);
+    EXPECT_EQ(toks[0].kind, TokenKind::Symbol);
+    EXPECT_EQ(toks[0].text, "x#");
+    EXPECT_EQ(toks[1].kind, TokenKind::Symbol);
+    EXPECT_EQ(toks[1].text, "or#f");
+    EXPECT_EQ(toks[2].kind, TokenKind::Backtick);
+    EXPECT_EQ(toks[4].kind, TokenKind::Symbol);
+    EXPECT_EQ(toks[4].text, "a#");
+}

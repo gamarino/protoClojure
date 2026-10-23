@@ -51,7 +51,7 @@ tell at a glance which parts of the surface are runnable today. The
 | Strings | Implemented (literals, `str`, `println`) |
 | Strings — `clojure.string`-shaped ops (`split`, `join`, `upper-case`, …) | Implemented, in the global namespace |
 | Symbols, keywords, booleans, nil literals | Implemented |
-| Reader macros `'`, `` ` ``, `~`, `~@` | Implemented (syntax-quote does not yet qualify symbols or auto-gensym, D35) |
+| Reader macros `'`, `` ` ``, `~`, `~@` | Implemented (syntax-quote qualifies symbols and auto-gensyms `foo#`, as in Clojure) |
 | Reader macros `#(...)`, `#'`, `#_`, `^` | Planned |
 | Lists `(...)` | Implemented |
 | Vectors `[...]` | Implemented (a `ProtoList` in a one-entry sparse-list box, distinct from list) |
@@ -288,13 +288,21 @@ truthy).
   sequence `x`). It is expanded when it is read, as in Clojure, into the
   code that builds the form:
   `` `(f ~x ~@ys) `` reads as
-  `(clojure.core/seq (clojure.core/concat (clojure.core/list (quote f)) (clojure.core/list x) ys))`,
+  `(clojure.core/seq (clojure.core/concat (clojure.core/list (quote user/f)) (clojure.core/list x) ys))`,
   a vector template is applied to `clojure.core/vector` and a map template
   to `clojure.core/hash-map`; keywords, strings, numbers, `nil` and
-  booleans stay themselves. Not yet: Clojure also qualifies each symbol with
-  its namespace (`user/f`) and turns `foo#` into a generated symbol (D35).
-  `~@` outside a list is a read error; `~` or `~@` outside a syntax-quote is
-  a compile error (D36).
+  booleans stay themselves. As in Clojure, each symbol is qualified when the
+  template is read: a built-in becomes `clojure.core/x` (`` `(str x) `` is
+  `(clojure.core/str user/x)`), any other name `user/x`, the program's
+  namespace (D42); special forms (`if`, `do`, `def`, `let*`, `try`,
+  `catch`, ...), `&`, symbols that already have a namespace and exception
+  class names stay as they are. `foo#` is a generated symbol,
+  `foo__N__auto__`, the same one throughout the template; `~'foo` inserts
+  the plain symbol `foo`. `user/x` names the global `x` and
+  `clojure.core/x` the built-in `x`; neither is ever a local, so a template
+  cannot be captured by the caller's locals, and a `def` of a built-in's
+  name does not change `clojure.core/x`. `~@` outside a list is a read
+  error; `~` or `~@` outside a syntax-quote is a compile error (D36).
 - `~x` → `(clojure.core/unquote x)`, `~@x` → `(clojure.core/unquote-splicing x)`.
 - `#(...)` → anonymous function: `#(+ 1 %)` is `(fn [%] (+ 1 %))`.
   Args are `%`, `%1`..`%9`, `%&` (rest).
@@ -743,9 +751,20 @@ that keeps expanding into a call of itself ends in `StackOverflowError`. A
 form `eval` cannot compile raises `RuntimeException` (D40). `~` or `~@`
 outside a syntax-quote is a compile error (D36).
 
-Syntax-quote does not yet qualify symbols or turn `foo#` into a generated
-symbol (D35); until it does, a macro that introduces a local can capture a
-caller's name.
+**Hygiene.** Syntax-quote qualifies the symbols of a template (§2.8), so a
+macro's `str` is `clojure.core/str` and its `helper` is `user/helper`
+whatever locals the caller has, and a local the macro introduces must be an
+auto-gensym, `v#`: `` `(let [v ~x] ...) `` is the compile error `Can't let
+qualified name: user/v`, as in Clojure. `gensym` makes a fresh symbol in
+code; `~'it` deliberately captures a name (an anaphoric macro):
+
+```clojure
+(defmacro my-or
+  ([] nil)
+  ([x] x)
+  ([x & next] `(let [or# ~x] (if or# or# (my-or ~@next)))))
+(let [or :mine] (my-or false or))   ;; => :mine, the caller's local
+```
 
 ---
 

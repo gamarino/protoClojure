@@ -1,4 +1,5 @@
 #include "IO.h"
+#include "Macros.h"
 
 #include "Exceptions.h"
 #include "ExecutionEngine.h"
@@ -1643,23 +1644,20 @@ void installIO(proto::ProtoContext* ctx, proto::ProtoObject* globals) {
     g_ioMarker = marker;
     if (!g_ioRoots) g_ioRoots = ctx->space->createRootSet("protoclj-io-servers");
     for (const IOEntry& p : kIOPrimitives) {
-        globals->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, p.name),
-                              ctx->fromMethod(nullptr, p.fn));
+        defineBuiltin(ctx, globals, p.name, ctx->fromMethod(nullptr, p.fn));
     }
-    globals->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "*command-line-args*"),
-                          PROTO_NONE);
+    defineBuiltin(ctx, globals, "*command-line-args*", PROTO_NONE);
 }
 
 void setCommandLineArgs(proto::ProtoContext* ctx, proto::ProtoObject* globals,
                         const std::vector<std::string>& args) {
-    const proto::ProtoString* key = proto::ProtoString::createSymbol(ctx, "*command-line-args*");
     if (args.empty()) {
-        globals->setAttribute(ctx, key, PROTO_NONE);
+        defineBuiltin(ctx, globals, "*command-line-args*", PROTO_NONE);
         return;
     }
     const proto::ProtoList* l = ctx->newList();
     for (const std::string& a : args) l = l->appendLast(ctx, makeString(ctx, a));
-    globals->setAttribute(ctx, key, l->asObject(ctx));
+    defineBuiltin(ctx, globals, "*command-line-args*", l->asObject(ctx));
 }
 
 void shutdownIO(proto::ProtoContext* ctx) {

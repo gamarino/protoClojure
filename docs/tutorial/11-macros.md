@@ -1,6 +1,6 @@
 # 11. Macros
 
-> **Mostly implemented (branch `feature/macros`).** `defmacro`, `macroexpand-1`, `macroexpand`, `eval`, quote `'` and syntax-quote `` ` `` with `~` and `~@` work today, in files and at the REPL. Syntax-quote does not yet qualify symbols with their namespace or turn `foo#` into a generated symbol (STATUS.md D35), and the `clojure.core` macros (`->>`, `when-let`, ...) are not loaded yet. The snippets marked *runs today* run now (each is a test under `tests/conformance/30-macros/`); the rest of the chapter describes the intended design.
+> **Mostly implemented (branch `feature/macros`).** `defmacro`, `macroexpand-1`, `macroexpand`, `eval`, quote `'` and syntax-quote `` ` `` with `~` and `~@` work today, in files and at the REPL. Syntax-quote qualifies symbols and turns `foo#` into a generated symbol, as in Clojure, with two namespaces only, `user` and `clojure.core` (STATUS.md D42). The `clojure.core` macros (`->>`, `when-let`, ...) are not loaded yet. The snippets marked *runs today* run now (each is a test under `tests/conformance/30-macros/`); the rest of the chapter describes the intended design.
 
 A macro is a function that takes code as input and returns code as
 output, at compile time. The compiler calls it, takes whatever it
@@ -96,7 +96,7 @@ until the form is no longer a macro call.
 
 Building lists with `list`, `cons`, `concat` is verbose. Quasiquote
 gives you a template syntax that looks like the output, with holes
-where the input goes.
+where the input goes (*runs today*).
 
 ```clojure
 (defmacro my-when [test & body]
@@ -107,8 +107,9 @@ where the input goes.
 The pieces:
 
 - `` ` `` — quasiquote. Reads the form, mostly literally, but
-  resolves symbols against the current namespace (so `if` becomes
-  `clojure.core/if`).
+  resolves symbols against the current namespace (so `str` becomes
+  `clojure.core/str` and your own `helper` becomes `user/helper`; special
+  forms such as `if` and `do` stay as they are).
 - `~` — unquote. Splices a single value into the template.
 - `~@` — unquote-splicing. Splices a sequence's elements into the
   template (so the items of `body` become siblings, not a nested
@@ -129,7 +130,7 @@ macro (*runs today*):
 
 The reader expands the template when it reads it, as Clojure's does:
 `` '`(f ~x ~@xs) `` shows the code it became,
-`(clojure.core/seq (clojure.core/concat (clojure.core/list (quote f)) (clojure.core/list x) xs))`.
+`(clojure.core/seq (clojure.core/concat (clojure.core/list (quote user/f)) (clojure.core/list x) xs))`.
 
 Quasiquote is the cleanest macro-writing tool. Reach for `list`,
 `cons`, `concat` only when the template gets too dynamic to
@@ -137,23 +138,25 @@ express.
 
 ### 11.3.1 The auto-resolved symbols
 
-`` `if `` reads as `clojure.core/if`. That namespace resolution is
-intentional: it means the expanded code refers to the `if` the
-*macro author* intended, not whatever the *caller's* namespace
-happens to bind `if` to.
-
-The same protection applies to user names:
+`` `str `` reads as `clojure.core/str`. That namespace resolution is
+intentional: it means the expanded code refers to the `str` the
+*macro author* intended, not whatever the *caller* happens to bind
+`str` to — a local named `str` at the call site does not capture it
+(*runs today*):
 
 ```clojure
+(defmacro shout [x] `(str ~x "!"))
+(let [str 0] (shout "hi"))                ;; => "hi!"
+(macroexpand-1 '(shout "hi"))             ;; => (clojure.core/str "hi" "!")
+
 (defmacro doublet [body]
   `(do ~body ~body))
-
 (macroexpand-1 '(doublet (println "hi")))
 ;; => (do (println "hi") (println "hi"))
 ```
 
-`do` came out as `clojure.core/do`, even if the caller has shadowed
-`do` somehow. Macros are hygienic *for known names*.
+`do` is a special form, so it stays `do`; special forms cannot be
+shadowed anyway. Macros are hygienic *for known names*.
 
 ### 11.3.2 The gensym for fresh symbols
 
@@ -167,21 +170,30 @@ collide with anything the caller defined?
 
 (let [x 10]
   (bad-once (+ 1 2)))
-;; expands to (let [x (+ 1 2)] (* x x))
-;; the outer x=10 is shadowed; the user might not have wanted that
+;; compile error: Can't let qualified name: user/x
 ```
 
+The quasiquote turned `x` into `user/x`, and a qualified name cannot be a
+local, so Clojure (and protoClojure) refuse the macro instead of letting it
+shadow the caller's `x` silently.
+
 Solution: gensym. The `name#` syntax inside a quasiquote *generates a
-fresh symbol* on every expansion:
+fresh symbol* on every expansion (*runs today*):
 
 ```clojure
 (defmacro square-of [expr]
   `(let [x# ~expr]
      (* x# x#)))
 
+(square-of (+ 1 2))                  ;; => 9
 (macroexpand-1 '(square-of (+ 1 2)))
-;; => (let [x__123__auto__ (+ 1 2)] (* x__123__auto__ x__123__auto__))
+;; => (clojure.core/let [x__123__auto__ (+ 1 2)]
+;;      (clojure.core/* x__123__auto__ x__123__auto__))
 ```
+
+(The number differs from run to run.) When the name has to be built by
+code, `(gensym "x")` makes the same kind of fresh symbol, and `~'it`
+inserts a plain, deliberately capturable `it`.
 
 Every reference to `x#` inside the same backtick form resolves to
 the *same* gensym. Different `name#` instances generate different

@@ -67,4 +67,10 @@ const proto::ProtoString* namedSpelling(proto::ProtoContext* ctx,
                                         const NamedLayout& layout,
                                         const proto::ProtoObject* v);
 
+// The next number of the process-wide sequence that `gensym` and
+// syntax-quote's auto-gensyms (`foo#`) draw from, as Clojure's RT.nextID:
+// 1, 2, 3, ... across every thread, so no two generated symbols collide.
+// A generated symbol is interned like every symbol and is never collected.
+long long nextGensymId();
+
 } // namespace protoClojure

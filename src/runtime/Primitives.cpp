@@ -2741,6 +2741,140 @@ const proto::ProtoObject* prim_eval(proto::ProtoContext* ctx,
     return hook(ctx, args->getAt(ctx, 0));
 }
 
+// Symbols ------------------------------------------------------------------
+
+// The spelling of a symbol or keyword `v` (with a keyword's `:`), or of a
+// string; false for any other value.
+bool spellingOf(proto::ProtoContext* ctx, const ActiveCallContext* cc,
+                const proto::ProtoObject* v, std::string& out) {
+    if (cc && isNamed(ctx, cc->named, v)) {
+        out = namedSpelling(ctx, cc->named, v)->toStdString(ctx);
+        return true;
+    }
+    if (v && proto::ProtoObject::isStringTagFast(v)) {
+        out = reinterpret_cast<const proto::ProtoString*>(v)->toStdString(ctx);
+        return true;
+    }
+    return false;
+}
+
+// (gensym) / (gensym prefix) — a fresh symbol, `G__N` or `prefixN`, N from
+// the process-wide sequence (Named.h), as in Clojure.
+const proto::ProtoObject* prim_gensym(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject*,
+                                      const proto::ParentLink*,
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    if (n > 1) arityError(ctx, args, "gensym");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throwError(ctx, "gensym: no active VM context");
+    std::string prefix = "G__";
+    if (n == 1 && !spellingOf(ctx, cc, args->getAt(ctx, 0), prefix))
+        throwError(ctx, "ClassCastException: gensym expects a string prefix, got " +
+                        std::string(valueTypeName(ctx, args->getAt(ctx, 0))));
+    if (n == 1 && !prefix.empty() && prefix[0] == ':') prefix.erase(0, 1);
+    const std::string spelling = prefix + std::to_string(nextGensymId());
+    return internNamed(ctx, cc->named, spelling.c_str());
+}
+
+// (symbol name) / (symbol ns name) — the symbol of a string (or the symbol
+// itself; a keyword loses its `:`), and `ns/name` with two arguments.
+const proto::ProtoObject* prim_symbol(proto::ProtoContext* ctx,
+                                      const proto::ProtoObject*,
+                                      const proto::ParentLink*,
+                                      const proto::ProtoArguments* args,
+                                      const proto::ProtoKeywordArguments*) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    if (n != 1 && n != 2) arityError(ctx, args, "symbol");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throwError(ctx, "symbol: no active VM context");
+    std::string spelling;
+    for (proto::proto_ulong i = 0; i < n; ++i) {
+        const proto::ProtoObject* a = args->getAt(ctx, static_cast<int>(i));
+        std::string part;
+        if (n == 2 && i == 0 && (!a || a == PROTO_NONE)) continue;  // (symbol nil "x")
+        if (!spellingOf(ctx, cc, a, part))
+            throwError(ctx, "ClassCastException: symbol expects a string, got " +
+                            std::string(valueTypeName(ctx, a)));
+        if (!part.empty() && part[0] == ':') part.erase(0, 1);
+        if (n == 2 && i == 0) part += '/';
+        spelling += part;
+    }
+    if (spelling.empty() || spelling == "nil" || spelling == "true" || spelling == "false")
+        throwError(ctx, "IllegalArgumentException: symbol: not a symbol name: \"" + spelling + "\"");
+    return internNamed(ctx, cc->named, spelling.c_str());
+}
+
+// (keyword name) / (keyword ns name) — the keyword of a string or symbol
+// (a keyword is itself); nil for nil.
+const proto::ProtoObject* prim_keyword(proto::ProtoContext* ctx,
+                                       const proto::ProtoObject*,
+                                       const proto::ParentLink*,
+                                       const proto::ProtoArguments* args,
+                                       const proto::ProtoKeywordArguments*) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    if (n != 1 && n != 2) arityError(ctx, args, "keyword");
+    const ActiveCallContext* cc = activeCallContext();
+    if (!cc) throwError(ctx, "keyword: no active VM context");
+    if (n == 1 && (!args->getAt(ctx, 0) || args->getAt(ctx, 0) == PROTO_NONE)) return PROTO_NONE;
+    std::string spelling = ":";
+    for (proto::proto_ulong i = 0; i < n; ++i) {
+        const proto::ProtoObject* a = args->getAt(ctx, static_cast<int>(i));
+        std::string part;
+        if (n == 2 && i == 0 && (!a || a == PROTO_NONE)) continue;
+        if (!spellingOf(ctx, cc, a, part))
+            throwError(ctx, "ClassCastException: keyword expects a string, got " +
+                            std::string(valueTypeName(ctx, a)));
+        if (!part.empty() && part[0] == ':') part.erase(0, 1);
+        if (n == 2 && i == 0) part += '/';
+        spelling += part;
+    }
+    return internNamed(ctx, cc->named, spelling.c_str());
+}
+
+// (name x) — the name of a symbol or keyword without its namespace (and a
+// keyword without its `:`); a string is its own name.
+const proto::ProtoObject* prim_name(proto::ProtoContext* ctx,
+                                    const proto::ProtoObject*,
+                                    const proto::ParentLink*,
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 1) arityError(ctx, args, "name");
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (v && proto::ProtoObject::isStringTagFast(v)) return v;
+    const ActiveCallContext* cc = activeCallContext();
+    std::string s;
+    if (!cc || !isNamed(ctx, cc->named, v) || !spellingOf(ctx, cc, v, s))
+        throwError(ctx, "ClassCastException: name expects a symbol, keyword or string, got " +
+                        std::string(valueTypeName(ctx, v)));
+    if (!s.empty() && s[0] == ':') s.erase(0, 1);
+    const std::size_t slash = s.find('/');
+    if (slash != std::string::npos && slash + 1 < s.size()) s = s.substr(slash + 1);
+    return ctx->fromUTF8String(s.c_str());
+}
+
+// (list* args... coll) — a list of the leading arguments followed by the
+// elements of the last one (a list, vector, map, string or nil); nil when
+// there are none, as in Clojure. (list* nil) is nil.
+const proto::ProtoObject* prim_list_star(proto::ProtoContext* ctx,
+                                         const proto::ProtoObject*,
+                                         const proto::ParentLink*,
+                                         const proto::ProtoArguments* args,
+                                         const proto::ProtoKeywordArguments*) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    if (n == 0) arityError(ctx, args, "list*");
+    ListBuilder out(ctx);
+    for (proto::proto_ulong i = 0; i + 1 < n; ++i)
+        out.push(args->getAt(out.context(), static_cast<int>(i)));
+    const proto::ProtoObject* tail = args->getAt(out.context(), static_cast<int>(n - 1));
+    if (!pushSeqElements(out, tail))
+        throwError(out.context(), "Don't know how to create ISeq from: " +
+                                  printedValue(out.context(), tail));
+    if (out.size() == 0) return PROTO_NONE;
+    return out.finish();
+}
+
 // Sequence helpers macros reach for --------------------------------------
 
 // (second coll) — (first (next coll)).
@@ -3043,6 +3177,13 @@ constexpr PrimitiveEntry kPrimitives[] = {
     {"prn",     &prim_prn},
     {"print",   &prim_print},
     {"pr",      &prim_pr},
+
+    // Symbols (syntax-quote's companions).
+    {"gensym",  &prim_gensym},
+    {"symbol",  &prim_symbol},
+    {"keyword", &prim_keyword},
+    {"name",    &prim_name},
+    {"list*",   &prim_list_star},
 };
 
 // A linear scan of the entries; printing a function is not a hot path.
@@ -3297,11 +3438,9 @@ void installPrimitives(proto::ProtoContext* ctx,
     // ProtoObject via fromMethod, store on the globals under the symbol key.
     // setAttribute on a mutable receiver mutates in place.
     for (const PrimitiveEntry& p : kPrimitives) {
-        const proto::ProtoString* key =
-            proto::ProtoString::createSymbol(ctx, p.name);
         const proto::ProtoObject* callable =
             ctx->fromMethod(nullptr /* self */, p.fn);
-        globals->setAttribute(ctx, key, callable);
+        defineBuiltin(ctx, globals, p.name, callable);
     }
     // Input and output (IO.h).
     installIO(ctx, globals);

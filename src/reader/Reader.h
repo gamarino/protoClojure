@@ -27,6 +27,8 @@
 
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace proto {
 class ProtoContext;
@@ -97,6 +99,14 @@ public:
     // driver uses one per top-level form (SourceInfo.h).
     void setSourceInfo(SourceInfo* info) { info_ = info; }
 
+    // How syntax-quote qualifies a symbol without a namespace: the resolver
+    // answers the spelling to use (`clojure.core/map`, `user/helper`, or the
+    // symbol unchanged). The drivers install the one in compiler/Eval.h,
+    // which knows the globals; without a resolver symbols stay unqualified.
+    using SymbolResolver = std::string (*)(proto::ProtoContext* ctx,
+                                           const std::string& name);
+    void setSymbolResolver(SymbolResolver r) { resolver_ = r; }
+
     // Read every form until EOF. Returns a protoCore ProtoList of forms in
     // source order — same representation a Clojure file's top-level forms
     // would have. No std container is used; the protoCore GC traces the
@@ -113,6 +123,13 @@ private:
     SourceInfo* info_;
     int formLine_ = 0;
     int formColumn_ = 0;
+    SymbolResolver resolver_ = nullptr;
+
+    // One table per syntax-quote being expanded, innermost last: each
+    // `foo#` spelling maps to the generated symbol `foo__N__auto__` it
+    // stands for throughout that syntax-quote, as in Clojure. The symbols
+    // are interned (never collected), so the raw pointers stay valid.
+    std::vector<std::unordered_map<std::string, const proto::ProtoObject*>> gensyms_;
 
     // readAll without the conversion of StackOverflowError to ReaderError.
     const proto::ProtoList* readAllForms();

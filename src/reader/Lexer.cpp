@@ -518,7 +518,9 @@ Token Lexer::lexSymbolOrPunct() {
     }
     std::string s;
     while (!eof()) {
-        const std::size_t len = symbolCharLength(pos_);
+        // `#` continues a symbol, as in Clojure: `foo#` is a symbol, which
+        // syntax-quote turns into an auto-gensym (Reader.cpp).
+        const std::size_t len = (!s.empty() && current() == '#') ? 1 : symbolCharLength(pos_);
         if (len == 0) break;
         s.append(source_, pos_, len);
         for (std::size_t i = 0; i < len; ++i) advance();

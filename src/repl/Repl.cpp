@@ -321,6 +321,7 @@ struct Session {
                     const std::function<void(const proto::ProtoObject*)>& onResult,
                     const std::string* path = nullptr) {
         Reader reader(ctx, src, named);
+        reader.setSymbolResolver(&qualifySyntaxQuoteSymbol);
         bool ok = true;
         for (;;) {
             proto::ProtoContext formScope(ctx->space, ctx);

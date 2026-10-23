@@ -253,6 +253,7 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
         actorStateKey, mailboxKey, namedLayout};
     protoClojure::setActiveCallContext(runCc);
     protoClojure::installEval();
+    reader.setSymbolResolver(&protoClojure::qualifySyntaxQuoteSymbol);
 
     // Stops HTTP servers and drains the future and actor workers before the
     // run unwinds, so no worker thread outlives the ProtoSpace; then frees the

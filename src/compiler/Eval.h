@@ -29,6 +29,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 
 namespace proto {
 class ProtoContext;
@@ -54,6 +55,19 @@ void retainModule(std::unique_ptr<BytecodeModule> mod);
 // Destroys every retained module. Call once no thread can run code they
 // hold, before the ProtoSpace is destroyed.
 void releaseRetainedModules();
+
+// How syntax-quote qualifies the symbol `name` (Reader::setSymbolResolver),
+// following Clojure's reader with the two namespaces protoClojure has (D28):
+//   - a special form (`if`, `def`, `let*`, `catch`, ...), `&`, a symbol that
+//     already has a namespace (`a/b`), one with a `.` (a class or member
+//     name) and a built-in exception class name stay as they are;
+//   - a built-in -- a function installed at start-up, a form the compiler
+//     implements (`let`, `fn`, `when`, `defn`, ...), or, while core.clj
+//     loads, any name -- becomes `clojure.core/name`, unless the program
+//     has defined `name` itself;
+//   - any other name becomes `user/name`.
+// Reads the globals of the installed call context.
+std::string qualifySyntaxQuoteSymbol(proto::ProtoContext* ctx, const std::string& name);
 
 // Installs the `eval` built-in's entry point (Macros.h): `(eval form)` is
 // evalTopLevel, with a compile error raised as a RuntimeException.
