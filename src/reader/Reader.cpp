@@ -1,15 +1,38 @@
 #include "Reader.h"
 
 #include "runtime/ListBuilder.h"
+#include "runtime/MapOps.h"
 #include "runtime/StackGuard.h"
+#include "runtime/VectorOps.h"
 
 #include "protoCore.h"
+
+#include <vector>
 
 namespace protoClojure {
 
 Reader::Reader(proto::ProtoContext* ctx, std::string source,
-               const ReaderMarkers& markers)
-    : ctx_(ctx), lexer_(std::move(source)), markers_(markers) {}
+               const NamedLayout& named, SourceInfo* info)
+    : ctx_(ctx), lexer_(std::move(source)), named_(named), info_(info) {}
+
+namespace {
+
+// How a map-literal key is spelled in the "Duplicate key" read error: the
+// source text of a keyword, a symbol, a string or an integer, and a generic
+// description of anything else (the reader has no printer of its own).
+std::string describeKey(proto::ProtoContext* ctx, const NamedLayout& named,
+                        const proto::ProtoObject* key) {
+    if (key == PROTO_NONE) return "nil";
+    if (key == PROTO_TRUE) return "true";
+    if (key == PROTO_FALSE) return "false";
+    if (isNamed(ctx, named, key)) return namedSpelling(ctx, named, key)->toStdString(ctx);
+    if (proto::ProtoObject::isStringTagFast(key))
+        return "\"" + reinterpret_cast<const proto::ProtoString*>(key)->toStdString(ctx) + "\"";
+    if (key->isInteger(ctx)) return key->asIntegerString(ctx, 10)->toStdString(ctx);
+    return "a repeated form";
+}
+
+} // namespace
 
 // Forms nested deeper than the thread's stack allows raise StackOverflowError
 // in readFromToken; readOne and readAll report it as a read error at the
@@ -67,29 +90,24 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
         case TokenKind::Float:
             return parent->fromDouble(tok.doubleValue);
 
-        case TokenKind::String: {
-            // String literal — wrap so the Compiler can distinguish it from
-            // a same-bytes inline symbol (protoCore inlines short bytes into
-            // the pointer and loses the symbol/string distinction at that
-            // representation; see ReaderMarkers doc). The raw ProtoString
-            // is stashed under bytesKey on an immutable child of
-            // stringMarkerProto: the wrapper is never mutated, and
-            // setAttribute returns the child that carries the string. `raw`
-            // and the intermediate child are young cells of `parent`.
-            const proto::ProtoObject* raw =
-                parent->fromUTF8String(tok.text.c_str());
-            return markers_.stringMarkerProto->newChild(parent)
-                ->setAttribute(parent, markers_.bytesKey, raw);
-        }
+        case TokenKind::String:
+            // A string literal is the protoCore string a program builds at
+            // run time. Symbols are named values (runtime/Named.h), never
+            // strings, so nothing is lost when protoCore stores a short
+            // string inline in the pointer.
+            return parent->fromUTF8String(tok.text.c_str());
 
         case TokenKind::Symbol: {
-            // createSymbol — interned for the lifetime of the PROCESS.
-            // protoCore 2.2.0 (P3) made interning process-global: one canonical
-            // pointer per spelling per process, not per ProtoSpace.
-            // Two reads of `foo` in the same session return THE SAME pointer.
-            // That identity is what the evaluator will use to look up vars.
-            return reinterpret_cast<const proto::ProtoObject*>(
-                proto::ProtoString::createSymbol(parent, tok.text.c_str()));
+            // `nil`, `true` and `false` are the values themselves, as in
+            // Clojure's reader. Every other symbol and every keyword (the
+            // lexer spells a keyword with its leading `:`) is the interned
+            // named value of its spelling: one pointer per spelling for the
+            // life of the process, the same value `(quote foo)` and `:foo`
+            // evaluate to.
+            if (tok.text == "nil")   return PROTO_NONE;
+            if (tok.text == "true")  return PROTO_TRUE;
+            if (tok.text == "false") return PROTO_FALSE;
+            return internNamed(parent, named_, tok.text.c_str());
         }
 
         case TokenKind::LParen:
@@ -108,13 +126,12 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
             constexpr unsigned int kSlotList = 0;
             constexpr unsigned int kSlotForm = 1;
             // (deref ...)
-            const proto::ProtoString* derefSym =
-                proto::ProtoString::createSymbol(&wrapScope, "deref");
+            const proto::ProtoObject* derefSym =
+                internNamed(&wrapScope, named_, "deref");
             const proto::ProtoObject* lst =
                 wrapScope.newList()->asObject(&wrapScope);
             lst = lst->asList(&wrapScope)
-                ->appendLast(&wrapScope,
-                    reinterpret_cast<const proto::ProtoObject*>(derefSym))
+                ->appendLast(&wrapScope, derefSym)
                 ->asObject(&wrapScope);
             wrapScope.setAutomaticLocal(kSlotList, lst);
             // Read the next form (could be a symbol, list, vector, ...).
@@ -134,59 +151,58 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
         }
 
         case TokenKind::LBracket: {
-            // Session 9 — `[..]` is now a tagged vector literal, distinct
-            // from `(..)` lists. We still parse the items into a ProtoList
-            // (same shape the rest of the reader produces), but wrap it
-            // under vectorMarkerProto with the items list under itemsKey
-            // so the compiler can tell `[x y]` apart from `(x y)`. The
-            // compiler unwraps for fn/let/loop bindings; for expressions
-            // it emits a `(vector x y)` call so a ProtoTuple materialises
-            // at runtime.
+            // `[..]` is a vector, the value `(vector ..)` builds at run time
+            // (runtime/VectorOps.h): the items are read into a ProtoList and
+            // boxed, an O(1) step.
             proto::ProtoContext wrapScope(parent->space, parent);
-            wrapScope.resizeAutomaticLocals(2);
-            constexpr unsigned int kSlotItems = 0;
-            constexpr unsigned int kSlotWrap  = 1;
-            const proto::ProtoObject* items =
-                readList(&wrapScope, TokenKind::RBracket,
-                         tok.line, tok.column);
-            wrapScope.setAutomaticLocal(kSlotItems, items);
-            // An immutable wrapper: setAttribute returns the child that
-            // carries the items.
-            wrapScope.setAutomaticLocal(kSlotWrap,
-                markers_.vectorMarkerProto->newChild(&wrapScope)
-                    ->setAttribute(&wrapScope, markers_.itemsKey,
-                                   wrapScope.getAutomaticLocal(kSlotItems)));
-            return wrapScope.getAutomaticLocal(kSlotWrap);
+            wrapScope.resizeAutomaticLocals(1);
+            wrapScope.setAutomaticLocal(0,
+                readList(&wrapScope, TokenKind::RBracket, tok.line, tok.column));
+            return newVector(&wrapScope,
+                wrapScope.getAutomaticLocal(0)->asList(&wrapScope));
         }
 
         case TokenKind::LBrace: {
-            // Session 13 — `{k1 v1 k2 v2 ...}` map literal. Same wrapping
-            // pattern as vectors but under mapMarkerProto. The entries
-            // list stores k,v,k,v,... in source order; the compiler
-            // checks the even-count rule (odd → reader error). The
-            // compiler emits `(hash-map k1 v1 ...)` for the expression
-            // case and unwraps directly for fn `& {:keys ...}`
-            // destructuring.
+            // `{k1 v1 k2 v2 ...}` is a map, the value `(hash-map ..)` builds
+            // at run time (runtime/MapOps.h). The forms are read in source
+            // order into a ProtoList, then associated. As in Clojure, an odd
+            // number of forms and a repeated key are read errors.
             proto::ProtoContext wrapScope(parent->space, parent);
-            wrapScope.resizeAutomaticLocals(2);
-            constexpr unsigned int kSlotEntries = 0;
-            constexpr unsigned int kSlotWrap    = 1;
-            const proto::ProtoObject* entries =
-                readList(&wrapScope, TokenKind::RBrace,
-                         tok.line, tok.column);
-            wrapScope.setAutomaticLocal(kSlotEntries, entries);
+            wrapScope.resizeAutomaticLocals(1);
+            wrapScope.setAutomaticLocal(0,
+                readList(&wrapScope, TokenKind::RBrace, tok.line, tok.column));
             const proto::ProtoList* lst =
-                wrapScope.getAutomaticLocal(kSlotEntries)->asList(&wrapScope);
-            if (lst->getSize(&wrapScope) % 2 != 0) {
-                throw ReaderError("map literal: odd number of forms",
+                wrapScope.getAutomaticLocal(0)->asList(&wrapScope);
+            const proto::proto_ulong n = lst->getSize(&wrapScope);
+            if (n % 2 != 0) {
+                throw ReaderError("Map literal must contain an even number of forms",
                                   tok.line, tok.column);
             }
-            // An immutable wrapper, like the vector one.
-            wrapScope.setAutomaticLocal(kSlotWrap,
-                markers_.mapMarkerProto->newChild(&wrapScope)
-                    ->setAttribute(&wrapScope, markers_.entriesKey,
-                                   wrapScope.getAutomaticLocal(kSlotEntries)));
-            return wrapScope.getAutomaticLocal(kSlotWrap);
+            // The forms stay reachable through the rooted list while the map
+            // is built; protoCore does not move objects.
+            std::vector<const proto::ProtoObject*> kv;
+            kv.reserve(n);
+            for (proto::proto_ulong i = 0; i < n; ++i)
+                kv.push_back(lst->getAt(&wrapScope, static_cast<int>(i)));
+            const proto::ProtoObject* m =
+                mapAssocPairs(&wrapScope, nullptr, kv.data(), n);
+            if (mapCount(&wrapScope, m) != n / 2) {
+                for (proto::proto_ulong i = 2; i < n; i += 2) {
+                    for (proto::proto_ulong j = 0; j < i; j += 2) {
+                        if (keyEquals(&wrapScope, kv[j], kv[i])) {
+                            throw ReaderError(
+                                "Duplicate key: " + describeKey(&wrapScope, named_, kv[i]),
+                                tok.line, tok.column);
+                        }
+                    }
+                }
+            }
+            if (info_ && n > 0) {
+                std::vector<const proto::ProtoObject*>& keys = info_->mapKeyOrder[m];
+                keys.clear();
+                for (proto::proto_ulong i = 0; i < n; i += 2) keys.push_back(kv[i]);
+            }
+            return m;
         }
 
         case TokenKind::Error:

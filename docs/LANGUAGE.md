@@ -274,7 +274,9 @@ truthy).
 - **Vector**: `[a b c]` — always a literal value, never a call form.
 - **Map**: `{:a 1 :b 2}` — pairs (key value); the order of iteration and
   printing is unspecified and can change between runs, and equality ignores
-  order (§4.3).
+  order (§4.3). As in Clojure, a map literal that repeats a key is a read
+  error (`Duplicate key: :a`), and its key and value forms are evaluated
+  left to right in source order.
 - **Set**: `#{:a :b :c}` — unordered, deduplicated.
 
 ### 2.8 Reader macros
@@ -304,9 +306,15 @@ tagged forms but does not yet ship `inst?` / `uuid?` predicates.
 
 ### 3.1 The reader
 
+The reader turns source text into the values a program manipulates at run
+time, as Clojure's does: a symbol or a keyword is a symbol or keyword value,
+a string a string, `[...]` a vector, `{...}` a map, `(...)` a list, and
+`nil`, `true` and `false` are those values. Code is therefore data of the
+ordinary kinds, which is what quote and macros rely on.
+
 `(read-string s)` parses one form. `(read rdr)` reads from a reader
 object. Errors carry source position. (Planned: `read-string` and
-`read` are not available in 0.0.1; the reader is used internally.)
+`read` are not available yet; the reader is used internally.)
 
 ### 3.2 The evaluator
 

@@ -114,23 +114,20 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
 
     // Slots layout (kept stable for the whole run, rooted via the root ctx):
     //   0 : globals namespace (mutable child of objectPrototype).
-    //   1 : forms (the ProtoList readAll() returned).
-    //   2 : stringMarkerProto — see ReaderMarkers / CompilerMarkers docs.
-    //   3 : fnMarkerProto — wraps user-fn callables.
-    ctx->resizeAutomaticLocals(13);
+    //   1 : the form being compiled and run.
+    //   2.. : the prototypes of fns, atoms, futures, promises, actors and
+    //         named values, and the named-value intern table.
+    ctx->resizeAutomaticLocals(10);
     constexpr unsigned int kSlotGlobals       = 0;
     constexpr unsigned int kSlotForms         = 1;
-    constexpr unsigned int kSlotStringMarker  = 2;
-    constexpr unsigned int kSlotFnSingle      = 3;
-    constexpr unsigned int kSlotVectorMarker  = 4;
-    constexpr unsigned int kSlotFnMulti       = 5;
-    constexpr unsigned int kSlotMapMarker     = 6;
-    constexpr unsigned int kSlotAtomMarker    = 7;
-    constexpr unsigned int kSlotFutureMarker  = 8;
-    constexpr unsigned int kSlotPromiseMarker = 9;
-    constexpr unsigned int kSlotActorMarker   = 10;
-    constexpr unsigned int kSlotNamedMarker   = 11;
-    constexpr unsigned int kSlotNamedTable    = 12;
+    constexpr unsigned int kSlotFnSingle      = 2;
+    constexpr unsigned int kSlotFnMulti       = 3;
+    constexpr unsigned int kSlotAtomMarker    = 4;
+    constexpr unsigned int kSlotFutureMarker  = 5;
+    constexpr unsigned int kSlotPromiseMarker = 6;
+    constexpr unsigned int kSlotActorMarker   = 7;
+    constexpr unsigned int kSlotNamedMarker   = 8;
+    constexpr unsigned int kSlotNamedTable    = 9;
 
     const proto::ProtoObject* globalsObj =
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
@@ -148,10 +145,6 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
     // mutated in place, and only they are mutable; the atoms, futures,
     // promises and actors created later are mutable children of immutable
     // markers.
-    const proto::ProtoObject* stringMarkerProto =
-        space.objectPrototype->newChild(ctx);
-    ctx->setAutomaticLocal(kSlotStringMarker, stringMarkerProto);
-
     // Session 12 — single-arity and multi-arity wrappers use DIFFERENT
     // prototypes so the CALL dispatcher picks the path via getPrototype
     // alone, without an `__arities__` probe per call.
@@ -162,14 +155,6 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
     const proto::ProtoObject* fnMultiProto =
         space.objectPrototype->newChild(ctx);
     ctx->setAutomaticLocal(kSlotFnMulti, fnMultiProto);
-
-    const proto::ProtoObject* vectorMarkerProto =
-        space.objectPrototype->newChild(ctx);
-    ctx->setAutomaticLocal(kSlotVectorMarker, vectorMarkerProto);
-
-    const proto::ProtoObject* mapMarkerProto =
-        space.objectPrototype->newChild(ctx);
-    ctx->setAutomaticLocal(kSlotMapMarker, mapMarkerProto);
 
     // Session 16 — atoms. Mutable child of atomMarkerProto carrying
     // the current value under `__value__`. CAS via setAttributeIfEqual.
@@ -206,8 +191,6 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
         space.objectPrototype->newChild(ctx, /*isMutable=*/true);
     ctx->setAutomaticLocal(kSlotNamedTable, namedTable);
 
-    const proto::ProtoString* bytesKey =
-        proto::ProtoString::createSymbol(ctx, "__bytes__");
     const proto::ProtoString* bytecodeKey =
         proto::ProtoString::createSymbol(ctx, "__bytecode__");
     const proto::ProtoString* arityKey =
@@ -216,13 +199,6 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
         proto::ProtoString::createSymbol(ctx, "__captures__");
     const proto::ProtoString* aritiesKey =
         proto::ProtoString::createSymbol(ctx, "__arities__");
-    const proto::ProtoString* itemsKey =
-        proto::ProtoString::createSymbol(ctx, "__items__");
-    // `__entries__` holds the source-order entries of a map literal between
-    // the Reader and the Compiler. A runtime map is a ProtoMap with no
-    // attributes (src/runtime/MapOps.h).
-    const proto::ProtoString* entriesKey =
-        proto::ProtoString::createSymbol(ctx, "__entries__");
     const proto::ProtoString* valueKey =
         proto::ProtoString::createSymbol(ctx, "__value__");
     const proto::ProtoString* watchesKey =
@@ -246,21 +222,15 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
         ctx->getAutomaticLocal(kSlotNamedTable),
         proto::ProtoString::createSymbol(ctx, "__spelling__")};
 
-    protoClojure::ReaderMarkers readerMarkers{
-        ctx->getAutomaticLocal(kSlotStringMarker),
-        ctx->getAutomaticLocal(kSlotVectorMarker),
-        ctx->getAutomaticLocal(kSlotMapMarker),
-        bytesKey, itemsKey, entriesKey};
     protoClojure::CompilerMarkers compilerMarkers{
-        ctx->getAutomaticLocal(kSlotStringMarker),
-        ctx->getAutomaticLocal(kSlotVectorMarker),
-        ctx->getAutomaticLocal(kSlotMapMarker),
-        bytesKey, bytecodeKey, arityKey, capturesKey, aritiesKey,
-        itemsKey, entriesKey, namedLayout};
+        bytecodeKey, arityKey, capturesKey, aritiesKey, namedLayout};
 
     // Read every form from the file.
     std::string source = slurp(path);
-    protoClojure::Reader reader(ctx, std::move(source), readerMarkers);
+    // The forms stay rooted in kSlotForms until the run ends, so one
+    // SourceInfo describes them all (SourceInfo.h).
+    protoClojure::SourceInfo sourceInfo;
+    protoClojure::Reader reader(ctx, std::move(source), namedLayout, &sourceInfo);
     try {
         const proto::ProtoList* forms = reader.readAll();
         ctx->setAutomaticLocal(kSlotForms, forms->asObject(ctx));
@@ -271,6 +241,7 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
     }
 
     protoClojure::Compiler compiler;
+    compiler.setSourceInfo(&sourceInfo);
     protoClojure::BytecodeModule mod;
 
     const proto::ProtoList* forms =

@@ -47,7 +47,7 @@ struct RethrowFixture : ::testing::Test {
     proto::ProtoContext live{&space, space.rootContext, nullptr, nullptr, nullptr, nullptr};
     std::vector<std::unique_ptr<BytecodeModule>> modules;
 
-    enum Slot { kGlobals, kString, kVector, kMap, kFnSingle, kFnMulti, kAtom, kFuture,
+    enum Slot { kGlobals, kFnSingle, kFnMulti, kAtom, kFuture,
                 kPromise, kActor, kNamed, kNamedTable, kForms, kSlots };
 
     const proto::ProtoString* sym(const char* s) {
@@ -59,7 +59,7 @@ struct RethrowFixture : ::testing::Test {
         live.setAutomaticLocal(kGlobals, space.objectPrototype->newChild(&live, true));
         auto* globals = const_cast<proto::ProtoObject*>(live.getAutomaticLocal(kGlobals));
         installPrimitives(&live, globals);
-        for (int s = kString; s <= kNamed; ++s)
+        for (int s = kFnSingle; s <= kNamed; ++s)
             live.setAutomaticLocal(s, space.objectPrototype->newChild(&live));
         live.setAutomaticLocal(kNamedTable, space.objectPrototype->newChild(&live, true));
         // The value the foreign exception carries: an object of the module
@@ -75,14 +75,9 @@ struct RethrowFixture : ::testing::Test {
     const proto::ProtoObject* run(const std::string& source) {
         const NamedLayout named{live.getAutomaticLocal(kNamed), live.getAutomaticLocal(kNamedTable),
                                 sym("__spelling__")};
-        const ReaderMarkers rm{live.getAutomaticLocal(kString), live.getAutomaticLocal(kVector),
-                               live.getAutomaticLocal(kMap), sym("__bytes__"), sym("__items__"),
-                               sym("__entries__")};
-        const CompilerMarkers cm{live.getAutomaticLocal(kString), live.getAutomaticLocal(kVector),
-                                 live.getAutomaticLocal(kMap), sym("__bytes__"),
-                                 sym("__bytecode__"), sym("__arity__"), sym("__captures__"),
-                                 sym("__arities__"), sym("__items__"), sym("__entries__"), named};
-        Reader reader(&live, source, rm);
+        const CompilerMarkers cm{sym("__bytecode__"), sym("__arity__"), sym("__captures__"),
+                                 sym("__arities__"), named};
+        Reader reader(&live, source, named);
         live.setAutomaticLocal(kForms, reader.readAll()->asObject(&live));
         const proto::ProtoList* forms = live.getAutomaticLocal(kForms)->asList(&live);
         modules.push_back(std::make_unique<BytecodeModule>());

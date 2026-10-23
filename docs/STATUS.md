@@ -76,7 +76,11 @@ The design specifications written during development are archived under
       and NaN the printer spells that way; another symbol after `##` is
       `Unknown symbolic value: <symbol>`
 - [x] Strings — `"hello"`, with `\n \t \r \\ \" \0` escapes
-- [x] Symbols (interned via the protoCore symbol table)
+- [x] The reader yields runtime values (DESIGN.md §3, decision M1): a
+      symbol or keyword is its interned named value, a string a protoCore
+      string, a vector or map the runtime's own, `nil` / `true` / `false`
+      the values themselves
+- [x] Symbols (interned named values, `src/runtime/Named.h`)
 - [x] Keywords — `:foo`, self-evaluating constants
 - [x] Non-ASCII letters in symbols and keywords — UTF-8 encoded Unicode
       letters, combining marks and decimal digits (`año`, `:ñandú`,
@@ -84,10 +88,12 @@ The design specifications written during development are archived under
       `src/reader/UnicodeLetters.h`); other non-ASCII characters and
       malformed UTF-8 are read errors naming the character (D21); lexer
       columns count code points
-- [x] Booleans + nil — `true`, `false`, `nil` as compile-time literals
+- [x] Booleans + nil — `true`, `false`, `nil`, read as the values
 - [x] Lists `(...)`
 - [x] Vectors `[...]`
-- [x] Maps `{...}`
+- [x] Maps `{...}` — a repeated key is a read error, `Duplicate key: :a`
+      (decision M2); the key and value forms are evaluated in source order
+      (decision M3)
 - [x] `@form` — read as `(deref form)`
 - [x] Line comments `;`; commas as whitespace
 - [x] `#!` line comments, as in Clojure (anywhere, to end of line), so a
@@ -531,6 +537,10 @@ for the rationale.
 
 ### Macros (not yet)
 
+Work in progress on branch `feature/macros` (DESIGN.md §10, ROADMAP.md).
+
+- [x] Stage 1: the reader yields runtime values and the compiler consumes
+      them (DESIGN.md §10.1, M1-M4)
 - [ ] Compile-time evaluation pipeline (the bootstrap)
 - [ ] `clojure.core` macros defined in protoClojure
 - [ ] User-defined macros (`defmacro`)

@@ -1,13 +1,16 @@
 #include "reader/Reader.h"
+#include "runtime/MapOps.h"
+#include "runtime/Named.h"
+#include "runtime/VectorOps.h"
 
 #include "protoCore.h"
 #include <gtest/gtest.h>
 
 #include <stdexcept>
 
+using protoClojure::NamedLayout;
 using protoClojure::Reader;
 using protoClojure::ReaderError;
-using protoClojure::ReaderMarkers;
 
 namespace {
 
@@ -17,30 +20,22 @@ struct ReaderFixture : ::testing::Test {
     proto::ProtoSpace space;
     proto::ProtoContext* ctx = space.rootContext;
 
-    // Immutable markers, as the runtime creates them (src/main.cpp).
-    const proto::ProtoObject* stringMarker =
-        space.objectPrototype->newChild(ctx);
-    const proto::ProtoObject* vectorMarker =
-        space.objectPrototype->newChild(ctx);
-    const proto::ProtoObject* mapMarker =
-        space.objectPrototype->newChild(ctx);
-    const proto::ProtoString* bytesKey =
-        proto::ProtoString::createSymbol(ctx, "__bytes__");
-    const proto::ProtoString* itemsKey =
-        proto::ProtoString::createSymbol(ctx, "__items__");
-    const proto::ProtoString* entriesKey =
-        proto::ProtoString::createSymbol(ctx, "__entries__");
-    ReaderMarkers markers{stringMarker, vectorMarker, mapMarker,
-                          bytesKey, itemsKey, entriesKey};
+    // The intern table of keywords and symbols, as the runtime creates it
+    // (src/main.cpp): the reader yields runtime values (Reader.h).
+    NamedLayout markers{space.objectPrototype->newChild(ctx),
+                        space.objectPrototype->newChild(ctx, /*isMutable=*/true),
+                        proto::ProtoString::createSymbol(ctx, "__spelling__")};
 
-    // Convenience: extract the bytes of either a bare ProtoString (symbol or
-    // string-tagged) or a string-marker-wrapped object.
+    // The text of a string, or the spelling of a symbol or keyword.
     std::string asUtf8(const proto::ProtoObject* form) const {
-        if (form && form->getPrototype(ctx) == stringMarker) {
-            form = form->getAttribute(ctx, bytesKey);
-        }
+        if (protoClojure::isNamed(ctx, markers, form))
+            return protoClojure::namedSpelling(ctx, markers, form)->toStdString(ctx);
         return reinterpret_cast<const proto::ProtoString*>(form)
             ->toStdString(ctx);
+    }
+
+    bool isSymbolNamed(const proto::ProtoObject* form, const char* spelling) const {
+        return protoClojure::isNamed(ctx, markers, form) && asUtf8(form) == spelling;
     }
 };
 
@@ -62,25 +57,96 @@ TEST_F(ReaderFixture, NegativeInteger) {
 }
 
 TEST_F(ReaderFixture, StringLiteral) {
-    // String tokens come back wrapped (see ReaderMarkers doc) — the asUtf8
-    // fixture helper unwraps via the bytesKey attribute.
+    // A string literal is the protoCore string a program builds at run time.
     Reader r(ctx, R"("hello")", markers);
     const proto::ProtoObject* form = r.readOne();
     ASSERT_NE(form, nullptr);
-    EXPECT_EQ(form->getPrototype(ctx), stringMarker);
+    EXPECT_TRUE(proto::ProtoObject::isStringTagFast(form));
+    EXPECT_FALSE(protoClojure::isNamed(ctx, markers, form));
     EXPECT_EQ(asUtf8(form), "hello");
 }
 
 TEST_F(ReaderFixture, SymbolIsInterned) {
-    // Reading the same symbol text twice produces THE SAME pointer.
+    // Reading the same symbol text twice produces THE SAME named value, the
+    // one `(quote println)` evaluates to.
     Reader r1(ctx, "println", markers);
     Reader r2(ctx, "println", markers);
     const proto::ProtoObject* s1 = r1.readOne();
     const proto::ProtoObject* s2 = r2.readOne();
     ASSERT_NE(s1, nullptr);
     ASSERT_NE(s2, nullptr);
-    EXPECT_EQ(s1, s2) << "createSymbol must return the same pointer for "
-                         "identical names within a ProtoSpace";
+    EXPECT_EQ(s1, s2);
+    EXPECT_EQ(s1, protoClojure::internNamed(ctx, markers, "println"));
+}
+
+TEST_F(ReaderFixture, KeywordIsANamedValueWithItsColon) {
+    Reader r(ctx, ":a :a", markers);
+    const proto::ProtoObject* k1 = r.readOne();
+    const proto::ProtoObject* k2 = r.readOne();
+    EXPECT_TRUE(isSymbolNamed(k1, ":a"));
+    EXPECT_EQ(k1, k2);
+    EXPECT_FALSE(proto::ProtoObject::isStringTagFast(k1));
+}
+
+TEST_F(ReaderFixture, NilTrueFalseAreTheValues) {
+    Reader r(ctx, "nil true false nil?", markers);
+    EXPECT_EQ(r.readOne(), PROTO_NONE);
+    EXPECT_EQ(r.readOne(), PROTO_TRUE);
+    EXPECT_EQ(r.readOne(), PROTO_FALSE);
+    EXPECT_TRUE(isSymbolNamed(r.readOne(), "nil?"));
+}
+
+TEST_F(ReaderFixture, VectorLiteralIsARuntimeVector) {
+    Reader r(ctx, "[1 x \"s\"]", markers);
+    const proto::ProtoObject* form = r.readOne();
+    ASSERT_TRUE(protoClojure::isVector(form));
+    const proto::ProtoList* items = protoClojure::vectorItems(ctx, form);
+    ASSERT_EQ(items->getSize(ctx), 3u);
+    EXPECT_EQ(items->getAt(ctx, 0)->asLong(ctx), 1);
+    EXPECT_TRUE(isSymbolNamed(items->getAt(ctx, 1), "x"));
+    EXPECT_EQ(asUtf8(items->getAt(ctx, 2)), "s");
+}
+
+TEST_F(ReaderFixture, MapLiteralIsARuntimeMap) {
+    Reader r(ctx, "{:a 1 \"b\" [2]} {}", markers);
+    const proto::ProtoObject* form = r.readOne();
+    ASSERT_TRUE(protoClojure::isMap(form));
+    EXPECT_EQ(protoClojure::mapCount(ctx, form), 2u);
+    bool found = false;
+    const proto::ProtoObject* a = protoClojure::mapGet(
+        ctx, form, protoClojure::internNamed(ctx, markers, ":a"), &found);
+    ASSERT_TRUE(found);
+    EXPECT_EQ(a->asLong(ctx), 1);
+    const proto::ProtoObject* b =
+        protoClojure::mapGet(ctx, form, ctx->fromUTF8String("b"), &found);
+    ASSERT_TRUE(found);
+    EXPECT_TRUE(protoClojure::isVector(b));
+    const proto::ProtoObject* empty = r.readOne();
+    ASSERT_TRUE(protoClojure::isMap(empty));
+    EXPECT_TRUE(protoClojure::mapIsEmpty(ctx, empty));
+}
+
+TEST_F(ReaderFixture, MapLiteralWithARepeatedKeyIsAReadError) {
+    Reader r(ctx, "{:a 1 :b 2 :a 3}", markers);
+    try {
+        r.readOne();
+        FAIL() << "a repeated key must be a read error";
+    } catch (const ReaderError& e) {
+        EXPECT_STREQ(e.what(), "Duplicate key: :a");
+    }
+}
+
+TEST_F(ReaderFixture, MapLiteralWithAnOddNumberOfFormsIsAReadError) {
+    Reader r(ctx, "{:a 1 :b}", markers);
+    EXPECT_THROW(r.readOne(), ReaderError);
+}
+
+TEST_F(ReaderFixture, DerefIsAListOfTheDerefSymbol) {
+    Reader r(ctx, "@a", markers);
+    const proto::ProtoList* lst = r.readOne()->asList(ctx);
+    ASSERT_EQ(lst->getSize(ctx), 2u);
+    EXPECT_TRUE(isSymbolNamed(lst->getAt(ctx, 0), "deref"));
+    EXPECT_TRUE(isSymbolNamed(lst->getAt(ctx, 1), "a"));
 }
 
 TEST_F(ReaderFixture, SymbolVsStringDistinctIdentity) {
@@ -117,12 +183,10 @@ TEST_F(ReaderFixture, HelloWorldShape) {
     ASSERT_NE(arg, nullptr);
 
     // The head is the interned `println` symbol.
-    const proto::ProtoString* printlnSym =
-        proto::ProtoString::createSymbol(ctx, "println");
-    EXPECT_EQ(head, reinterpret_cast<const proto::ProtoObject*>(printlnSym));
+    EXPECT_EQ(head, protoClojure::internNamed(ctx, markers, "println"));
 
-    // The arg is the wrapped string "hello".
-    EXPECT_EQ(arg->getPrototype(ctx), stringMarker);
+    // The arg is the string "hello".
+    EXPECT_TRUE(proto::ProtoObject::isStringTagFast(arg));
     EXPECT_EQ(asUtf8(arg), "hello");
 }
 
@@ -181,4 +245,19 @@ TEST_F(ReaderFixture, IntegerBeyondLongRangeReadsExactly) {
     const proto::ProtoObject* negative = r.readOne();
     ASSERT_NE(negative, nullptr);
     EXPECT_EQ(negative->asIntegerString(ctx)->toStdString(ctx), "-12345678901234567890");
+}
+
+TEST_F(ReaderFixture, MapLiteralKeysAreRecordedInSourceOrder) {
+    // The map has no order; the SourceInfo keeps the literal's (SourceInfo.h).
+    protoClojure::SourceInfo info;
+    Reader r(ctx, "{:z 1 :a 2 :m {:q 3}}", markers, &info);
+    const proto::ProtoObject* form = r.readOne();
+    ASSERT_TRUE(protoClojure::isMap(form));
+    auto it = info.mapKeyOrder.find(form);
+    ASSERT_NE(it, info.mapKeyOrder.end());
+    ASSERT_EQ(it->second.size(), 3u);
+    EXPECT_TRUE(isSymbolNamed(it->second[0], ":z"));
+    EXPECT_TRUE(isSymbolNamed(it->second[1], ":a"));
+    EXPECT_TRUE(isSymbolNamed(it->second[2], ":m"));
+    EXPECT_EQ(info.mapKeyOrder.size(), 2u);  // the nested map too
 }

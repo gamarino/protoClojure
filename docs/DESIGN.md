@@ -163,12 +163,19 @@ strings, booleans, nil, lists, vectors, maps and `@` (read as
 `(deref form)`); the quote, quasiquote, `#` reader macros, characters
 and metadata are rejected with a "reserved-for-later token" error.
 
-Every reader output is a protoCore object. In the implementation, a
-list is a `ProtoList`, a vector is a `ProtoList` inside a one-entry
-`ProtoSparseList` box (`src/runtime/VectorOps.h`, decision R2), and a map
-literal is a
-map-marker child holding its entries as a source-order `ProtoList`. The
-compiler turns that literal into a `hash-map` call. The runtime map it builds
+Every reader output is a runtime value: the reader yields exactly what a
+program manipulates at run time, so code is data with no conversion at any
+boundary (decision M1, §10.1). A list is a `ProtoList`; a vector is a
+`ProtoList` inside a one-entry `ProtoSparseList` box
+(`src/runtime/VectorOps.h`, decision R2); a map literal is the runtime map;
+a symbol or a keyword is its interned named value (`src/runtime/Named.h`); a
+string is a protoCore string; `nil`, `true` and `false` are the values
+themselves. A map literal that repeats a key is a read error, as in Clojure.
+The compiler turns a vector literal into a `vector` call and a map literal
+into a `hash-map` call, so their elements are evaluated; it evaluates a map
+literal's forms in source order, which the reader records on the side
+(`src/reader/SourceInfo.h`, decision M3) because the map itself has none.
+The runtime map
 is an immutable `ProtoMap`, with no wrapper object and no mutable state,
 read and written through protoCore's shared hashed-collection helper
 (`hashedPut` / `hashedGet` / `hashedRemove` / `hashedForEach`) with one
@@ -203,8 +210,8 @@ read and written through protoCore's shared hashed-collection helper
   layer this replaced kept every key alive for the life of the process
   (deviation D23, withdrawn).
 
-The user-facing rules are in `LANGUAGE.md` §4.3. Symbols are interned
-`ProtoString`s.
+The user-facing rules are in `LANGUAGE.md` §4.3. Symbols and keywords are
+interned named values, never strings (`src/runtime/Named.h`).
 
 The reader is the place where "code is data" becomes literal: the result
 of `(read-string "(+ 1 2)")` is a real `ProtoList` of three elements that
@@ -728,7 +735,12 @@ The implementation cost of nREPL is the highest in the v0.1 plan — bencode
 parser, an op dispatcher, session management. We accept it because
 without it the language fails the *respect* test.
 
-## 10. Macros (planned)
+## 10. Macros (in progress)
+
+Status: stage 1 (the reader yields runtime values) is built; quote, file
+form-by-form execution, `defmacro`, syntax-quote and the `clojure.core`
+macros follow (ROADMAP.md, "Macros"). The plan below is the original one;
+§10.1 records the decisions taken while building it.
 
 Macros are functions that take and return reader output (data). The
 compiler expands them at compile time: when it sees a symbol that resolves
@@ -754,6 +766,63 @@ GC interaction during macro expansion — we have to be careful that the
 unevaluated forms (which are data, but are protoCore objects) stay rooted
 across calls into user code. The existing GC discipline patterns
 (TransientPin, ProtoRootSet) carry over.
+
+### 10.1 Decisions
+
+The maintainer is not a Clojure programmer: the rule is to follow Clojure
+by default. Each decision below is marked with who took it. Those marked
+*agent, pending review* were taken by the implementing agent and wait for
+the maintainer's review; each lists the alternatives considered.
+
+**M1. The reader yields runtime values** (*maintainer*). The reader
+produces the values the runtime manipulates: a symbol or a keyword is its
+interned named value (`runtime/Named.h`), a string a protoCore string, a
+vector and a map the runtime's own, `nil` / `true` / `false` the values
+themselves, a list a `ProtoList`. The compiler consumes those values. There
+is no conversion at the reader/compiler boundary, and none at the
+compiler/macro boundary later: a macro receives and returns the same values
+a program builds with `list`, `vector`, `hash-map` and quote.
+As built (*agent, pending review*): the marker prototypes that used to wrap
+strings, vectors and maps between the reader and the compiler
+(`stringMarkerProto`, `vectorMarkerProto`, `mapMarkerProto` and their
+`__bytes__` / `__items__` / `__entries__` keys) are gone. The value
+representation (`Named`, `VectorOps`, `MapOps`) moved from the runtime
+library into `protoclj_support`, so the reader still does not depend on the
+runtime; the alternative, linking the reader against the whole runtime, was
+rejected because it would pull the VM and the I/O layer into every reader
+user. Symbols and keywords are now interned when they are read rather than
+when they are compiled; since the print order of a map keyed by keywords
+follows their addresses (D24), such a map may print its entries in another
+order than before for the same program. That order was already unspecified.
+
+**M2. A repeated key in a map literal is a read error** (*agent, pending
+review*), `Duplicate key: :a`, as in Clojure. It follows from M1: the reader
+builds the map, and a map cannot hold the key twice. Alternative: keep the
+previous behaviour, the last value wins, by building the map with the last
+value; rejected because it differs from Clojure and silently drops a form
+(with its side effects). This is a behaviour change against 0.0.3, where
+`{:a 1 :a 2}` was `{:a 2}`.
+
+**M3. A map literal's forms are evaluated in source order** (*agent,
+pending review*). A runtime map has no order (D24), so the reader records
+each map literal's keys in source order in a side table, `SourceInfo`
+(`src/reader/SourceInfo.h`), keyed by the map it yielded, and the compiler
+compiles the literal in that order. This keeps 0.0.3's behaviour and
+Clojure's: `{:a (f) :b (g)}` calls `f` before `g`. A map the reader did not
+yield (one a macro builds) is compiled in its walk order, as Clojure
+compiles a hash map. The table holds raw pointers and is valid only while
+the forms it describes are alive, so each driver keeps one per unit it reads
+and compiles. Alternatives: (a) evaluate in the map's walk order, which is
+Clojure's rule for maps over 8 entries but here applies to every literal and
+changes with the keywords' addresses, so side effects would run in an order
+that depends on what was interned earlier; rejected as a silent behaviour
+change; (b) an ordered map type for literals; rejected because it would be a
+second map representation, against M1.
+
+**M4. `nil`, `true` and `false` are read as values** (*agent, pending
+review*), as Clojure's reader does. Before, they were symbols the compiler
+recognised by name. Consequence: `(quote nil)` is now `nil`, as in Clojure,
+where it was the symbol `nil`.
 
 ## 11. The standard library
 

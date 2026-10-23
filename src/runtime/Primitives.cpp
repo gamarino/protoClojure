@@ -178,8 +178,8 @@ void appendReadableString(std::string& out, const std::string& bytes) {
 // Runtime objects are recognised by the prototypes in the ActiveCallContext;
 // without one only the literal kinds and collections render.
 //
-// Runtime strings are plain protoCore strings (the Reader's string wrapper
-// never reaches the VM), so their bytes are read directly.
+// Strings are plain protoCore strings, as the reader yields them and as
+// programs build them, so their bytes are read directly.
 //
 // GC: allocates only to render a LargeInteger. `v` must be rooted by the
 // caller; every nested value is reachable from it. Recurses once per level

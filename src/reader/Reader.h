@@ -19,11 +19,11 @@
  *       protoCore copies the bytes into its own ProtoString. After
  *       that, the std side is free to die.
  *
- * Session 2 scope: integers, strings, symbols, and lists (the
- * recursive case).
  */
 #pragma once
 #include "Lexer.h"
+#include "runtime/Named.h"
+#include "reader/SourceInfo.h"
 
 #include <stdexcept>
 #include <string>
@@ -44,34 +44,32 @@ struct ReaderError : std::runtime_error {
         : std::runtime_error(msg), line(ln), column(col) {}
 };
 
-// Markers used by the reader/compiler to disambiguate strings from symbols
-// when short bytes (≤6) make protoCore inline them into the pointer
-// (POINTER_TAG_EMBEDDED_VALUE | EMBEDDED_TYPE_INLINE_STRING). At that
-// encoding ProtoString::isSymbol() returns false uniformly, so the
-// createSymbol vs fromUTF8String distinction is lost at the pointer level.
+// The values the reader yields are the runtime's own values (decision M1,
+// docs/DESIGN.md §3 and §10): code is data the program itself can take apart.
 //
-// Workaround: the Reader WRAPS every string-token result in a small heap
-// object (a mutable child of stringMarkerProto) with the raw ProtoString
-// stored under bytesKey. The Compiler checks the form's prototype against
-// stringMarkerProto to decide string vs symbol; the wrapped bytes are
-// extracted via getAttribute(bytesKey).
+//   source            value read
+//   ------            ----------
+//   42, 1.5, 12345N   an integer or a double, as at run time
+//   "text"            a protoCore string, as at run time
+//   foo, a/b          a symbol: the interned named value (runtime/Named.h)
+//   :foo              a keyword: the interned named value spelled ":foo"
+//   nil true false    PROTO_NONE, PROTO_TRUE, PROTO_FALSE
+//   (a b)             a ProtoList
+//   [a b]             a vector (runtime/VectorOps.h)
+//   {k v}             a map (runtime/MapOps.h); a repeated key is a read
+//                     error, "Duplicate key: k", as in Clojure. The keys'
+//                     source order goes to the SourceInfo, if one is given
+//                     (SourceInfo.h)
+//   @x                the list (deref x)
 //
-// Symbols stay as raw ProtoString and may inline as before — they remain
-// the cheap representation (Clojure code is symbol-heavy). String literals
-// pay one extra heap allocation each, which is acceptable.
-struct ReaderMarkers {
-    const proto::ProtoObject* stringMarkerProto;
-    const proto::ProtoObject* vectorMarkerProto;  // `[..]` literals
-    const proto::ProtoObject* mapMarkerProto;     // `{..}` literals
-    const proto::ProtoString* bytesKey;
-    const proto::ProtoString* itemsKey;           // vector items list
-    const proto::ProtoString* entriesKey;         // map (k,v,k,v) list
-};
-
+// The only thing the reader needs from the runtime is the intern table of
+// keywords and symbols.
 class Reader {
 public:
+    // `info`, when not null, receives what the values cannot carry (the
+    // source order of map literals); it must outlive the reader's use.
     Reader(proto::ProtoContext* ctx, std::string source,
-           const ReaderMarkers& markers);
+           const NamedLayout& named, SourceInfo* info = nullptr);
 
     // Read one form. Returns nullptr ONLY at EOF.
     //
@@ -93,7 +91,8 @@ public:
 private:
     proto::ProtoContext* ctx_;
     Lexer lexer_;
-    ReaderMarkers markers_;
+    NamedLayout named_;
+    SourceInfo* info_;
 
     // readAll without the conversion of StackOverflowError to ReaderError.
     const proto::ProtoList* readAllForms();
@@ -103,11 +102,11 @@ private:
     const proto::ProtoObject* readFromToken(proto::ProtoContext* parent,
                                             const Token& tok);
 
-    // Read a list, opening bracket already consumed. The caller passes
-    // `closeKind` to specify which closing token closes this list
-    // (RParen for `(...)`, RBracket for `[...]`). v0.0.x materialises
-    // both as a ProtoList — the distinction is lost after read; that is
-    // sufficient for fn/let/loop bindings.
+    // Read the forms up to the closing token, opening bracket already
+    // consumed, as a ProtoList. The caller passes `closeKind` to specify
+    // which closing token closes this sequence (RParen for `(...)`,
+    // RBracket for `[...]`, RBrace for `{...}`); the caller turns the list
+    // into a vector or a map.
     //
     // Pushes its own child ProtoContext; uses slot 0 for the building
     // list and slot 1 for the most recently read element. Returns the

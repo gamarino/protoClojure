@@ -195,12 +195,18 @@ else()
         "https://github.com/gamarino/protoIO next to protoClojure (../protoIO).")
 endif()
 
-# --- protoClojure support library (native stack guard, bulk list builder) ---
+# --- protoClojure support library (native stack guard, bulk list builder,
+# value representation) ---
 # Used by the reader, the compiler and the runtime alike, so the reader does
-# not depend on the runtime.
+# not depend on the runtime. The value representation (keywords and symbols,
+# vectors, maps) is here because the reader yields runtime values: it builds
+# the same vectors, maps and named values the runtime manipulates.
 add_library(protoclj_support STATIC
     src/runtime/ListBuilder.cpp
+    src/runtime/MapOps.cpp
+    src/runtime/Named.cpp
     src/runtime/StackGuard.cpp
+    src/runtime/VectorOps.cpp
 )
 target_link_libraries(protoclj_support PUBLIC ${PROTOCORE_LIBRARY})
 target_compile_options(protoclj_support PRIVATE ${PROTOCLJ_WARNINGS})
@@ -221,9 +227,6 @@ add_library(protoclj_runtime STATIC
     src/runtime/ExecutionEngine.cpp
     src/runtime/GCCensus.cpp
     src/runtime/IO.cpp
-    src/runtime/MapOps.cpp
-    src/runtime/VectorOps.cpp
-    src/runtime/Named.cpp
     src/runtime/Primitives.cpp
 )
 target_link_libraries(protoclj_runtime PUBLIC ${PROTOCORE_LIBRARY} protoclj_support

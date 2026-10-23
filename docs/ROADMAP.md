@@ -116,6 +116,17 @@ follow-ups below.
 **Goal:** stop installing primitives in C++ and start composing them in
 Clojure. Macros become user-writable.
 
+Work in progress on branch `feature/macros`, in six stages
+(DESIGN.md §10; decisions in §10.1):
+
+1. [x] The reader yields runtime values; the compiler consumes them.
+2. [ ] `quote` of any datum; the reader macros `'`, `` ` ``, `~`, `~@`.
+3. [ ] Files compiled and run form by form, as the REPL does.
+4. [ ] `defmacro`, expansion, `macroexpand-1`, `macroexpand`, `eval`.
+5. [ ] Syntax-quote with auto-gensyms, `gensym`, `symbol`, `concat`,
+   `seq`, `list*`.
+6. [ ] `clojure.core` macros in a bootstrap `core.clj`.
+
 - A minimal `core.clj` shipped with the runtime; `protoclj` evaluates it
   before any user code.
 - Re-implement `every?`, `some?`, `comp`, `partial`, `juxt`, the threading

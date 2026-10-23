@@ -9,6 +9,35 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Changed — macros, stage 1: the reader yields runtime values
+
+- **The reader produces the values the runtime manipulates** (DESIGN.md
+  §10.1, decision M1): a symbol or a keyword is its interned named value, a
+  string a protoCore string, `[...]` the runtime vector, `{...}` the runtime
+  map, `nil` / `true` / `false` the values themselves. The compiler consumes
+  those values; the reader-only marker objects (`stringMarkerProto`,
+  `vectorMarkerProto`, `mapMarkerProto`) are gone. The value representation
+  (`Named`, `VectorOps`, `MapOps`) moved into the `protoclj_support` library
+  so the reader still does not depend on the runtime. This is the base for
+  quote and macros: code is data of the ordinary kinds.
+- **A map literal that repeats a key is a read error**, `Duplicate key: :a`,
+  as in Clojure (decision M2). It used to keep the last value. The odd-forms
+  message is Clojure's: `Map literal must contain an even number of forms`.
+- A map literal's forms are still evaluated in source order (decision M3):
+  the reader records each literal's key order in a side table
+  (`src/reader/SourceInfo.h`) because the map itself has none.
+- Keywords and symbols are interned when read rather than when compiled, so
+  a map keyed by keywords may print its entries in another (still
+  unspecified, D24) order than 0.0.3 did for the same program.
+- New tests: 8 reader unit tests (string, keyword, `nil`/`true`/`false`,
+  vector and map values, a repeated key, an odd map, `@`, the recorded key
+  order), the conformance fixtures
+  `16-maps/literal-evaluates-in-source-order.clj` and
+  `16-maps/literal-duplicate-key-is-read-error.clj`, and the CLI checks
+  `cli/repl-literals` and `cli/reader-values-under-heap-limit` (a
+  20000-entry map literal and 300 literal-heavy forms read and compiled
+  under a 1,000,000-cell heap).
+
 ## [0.0.3] - 2026-10-22
 
 **Requires protoCore 3.0.0** (SOVERSION 4), the declared minimum for a build from source; the `.deb` depends on `protocore (>= 3.0.0)`. CI pins protoCore tag `v3.0.0` on every job.

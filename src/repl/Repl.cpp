@@ -168,24 +168,18 @@ struct Session {
 
     proto::ProtoObject* globals;
 
-    const proto::ProtoObject* stringMarker;
     const proto::ProtoObject* fnSingleProto;
     const proto::ProtoObject* fnMultiProto;
-    const proto::ProtoObject* vectorMarker;
-    const proto::ProtoObject* mapMarker;
     const proto::ProtoObject* atomMarker;
     const proto::ProtoObject* futureMarker;
     const proto::ProtoObject* promiseMarker;
     const proto::ProtoObject* actorMarker;
     NamedLayout               named;          // keywords and symbols (Named.h)
 
-    const proto::ProtoString* bytesKey;
     const proto::ProtoString* bytecodeKey;
     const proto::ProtoString* arityKey;
     const proto::ProtoString* capturesKey;
     const proto::ProtoString* aritiesKey;
-    const proto::ProtoString* itemsKey;
-    const proto::ProtoString* entriesKey;     // Reader map-literal entries
     const proto::ProtoString* valueKey;
     const proto::ProtoString* watchesKey;
     const proto::ProtoString* thunkKey;
@@ -200,7 +194,6 @@ struct Session {
     const proto::ProtoString* star2Key;
     const proto::ProtoString* star3Key;
 
-    ReaderMarkers      readerMarkers;
     CompilerMarkers    compilerMarkers;
     ActiveCallContext  printerCc;     // installed on TLS for replPrintValue
                                       // so the atom/future/promise/map/actor
@@ -224,7 +217,7 @@ struct Session {
 
     explicit Session(proto::ProtoContext* c)
         : space(*c->space), ctx(c) {
-        ctx->resizeAutomaticLocals(13);
+        ctx->resizeAutomaticLocals(10);
 
         globals = const_cast<proto::ProtoObject*>(
             space.objectPrototype->newChild(ctx, /*isMutable=*/true));
@@ -234,11 +227,8 @@ struct Session {
 
         // Prototype markers are never mutated, so they are immutable
         // objects; only the globals and the Named table are mutable.
-        stringMarker   = space.objectPrototype->newChild(ctx);
         fnSingleProto  = space.objectPrototype->newChild(ctx);
         fnMultiProto   = space.objectPrototype->newChild(ctx);
-        vectorMarker   = space.objectPrototype->newChild(ctx);
-        mapMarker      = space.objectPrototype->newChild(ctx);
         atomMarker     = space.objectPrototype->newChild(ctx);
         futureMarker   = space.objectPrototype->newChild(ctx);
         promiseMarker  = space.objectPrototype->newChild(ctx);
@@ -246,32 +236,26 @@ struct Session {
 
         // Pin the markers in slots so the GC sees them; main.cpp does
         // the same per session-3 engineering principles (P1 / P2).
-        ctx->setAutomaticLocal(2,  stringMarker);
-        ctx->setAutomaticLocal(3,  fnSingleProto);
-        ctx->setAutomaticLocal(4,  vectorMarker);
-        ctx->setAutomaticLocal(5,  fnMultiProto);
-        ctx->setAutomaticLocal(6,  mapMarker);
-        ctx->setAutomaticLocal(7,  atomMarker);
-        ctx->setAutomaticLocal(8,  futureMarker);
-        ctx->setAutomaticLocal(9,  promiseMarker);
-        ctx->setAutomaticLocal(10, actorMarker);
+        ctx->setAutomaticLocal(1,  fnSingleProto);
+        ctx->setAutomaticLocal(2,  fnMultiProto);
+        ctx->setAutomaticLocal(3,  atomMarker);
+        ctx->setAutomaticLocal(4,  futureMarker);
+        ctx->setAutomaticLocal(5,  promiseMarker);
+        ctx->setAutomaticLocal(6,  actorMarker);
 
         // Keywords and symbols: the prototype of every named value and the
         // table that interns them by spelling, pinned like the markers.
         named.marker = space.objectPrototype->newChild(ctx);
-        ctx->setAutomaticLocal(11, named.marker);
+        ctx->setAutomaticLocal(7, named.marker);
         named.table = space.objectPrototype->newChild(ctx, true);
-        ctx->setAutomaticLocal(12, named.table);
+        ctx->setAutomaticLocal(8, named.table);
 
         named.spellingKey = proto::ProtoString::createSymbol(ctx, "__spelling__");
 
-        bytesKey      = proto::ProtoString::createSymbol(ctx, "__bytes__");
         bytecodeKey   = proto::ProtoString::createSymbol(ctx, "__bytecode__");
         arityKey      = proto::ProtoString::createSymbol(ctx, "__arity__");
         capturesKey   = proto::ProtoString::createSymbol(ctx, "__captures__");
         aritiesKey    = proto::ProtoString::createSymbol(ctx, "__arities__");
-        itemsKey      = proto::ProtoString::createSymbol(ctx, "__items__");
-        entriesKey    = proto::ProtoString::createSymbol(ctx, "__entries__");
         valueKey      = proto::ProtoString::createSymbol(ctx, "__value__");
         watchesKey    = proto::ProtoString::createSymbol(ctx, "__watches__");
         thunkKey      = proto::ProtoString::createSymbol(ctx, "__thunk__");
@@ -291,12 +275,8 @@ struct Session {
         globals->setAttribute(ctx, star2Key, PROTO_NONE);
         globals->setAttribute(ctx, star3Key, PROTO_NONE);
 
-        readerMarkers   = ReaderMarkers{stringMarker, vectorMarker, mapMarker,
-                                        bytesKey, itemsKey, entriesKey};
-        compilerMarkers = CompilerMarkers{stringMarker, vectorMarker, mapMarker,
-                                          bytesKey, bytecodeKey, arityKey,
-                                          capturesKey, aritiesKey,
-                                          itemsKey, entriesKey, named};
+        compilerMarkers = CompilerMarkers{bytecodeKey, arityKey,
+                                          capturesKey, aritiesKey, named};
 
         // Build the ActiveCallContext the printer needs. ExecutionEngine::run
         // installs its own cc for the duration of a call (then restores
@@ -321,7 +301,8 @@ struct Session {
     // printed to stderr and the REPL loop continues.
     bool evalForm(const std::string& src, const proto::ProtoObject** out) {
         *out = nullptr;
-        Reader reader(ctx, src, readerMarkers);
+        SourceInfo sourceInfo;  // lives as long as the form is rooted below
+        Reader reader(ctx, src, named, &sourceInfo);
         const proto::ProtoObject* form = nullptr;
         try {
             form = reader.readOne();
@@ -340,6 +321,7 @@ struct Session {
             formScope.resizeAutomaticLocals(1);
             formScope.setAutomaticLocal(0, form);
             Compiler compiler;
+            compiler.setSourceInfo(&sourceInfo);
             try {
                 compiler.compileForm(&formScope, form, mod, compilerMarkers);
             } catch (const std::exception& e) {
@@ -419,7 +401,8 @@ void cmdLoad(Session& s, const std::string& path) {
 
     // :load runs every form in the file like the original `protoclj
     // <file>` path, but against the live session — defs persist.
-    Reader reader(s.ctx, src, s.readerMarkers);
+    SourceInfo sourceInfo;  // the forms stay rooted in formsScope below
+    Reader reader(s.ctx, src, s.named, &sourceInfo);
     const proto::ProtoList* forms = nullptr;
     try {
         forms = reader.readAll();
@@ -440,6 +423,7 @@ void cmdLoad(Session& s, const std::string& path) {
         auto modPtr = std::make_unique<BytecodeModule>();
         BytecodeModule& mod = *modPtr;
         Compiler compiler;
+        compiler.setSourceInfo(&sourceInfo);
         try {
             compiler.compileForm(&formsScope, form, mod, s.compilerMarkers);
         } catch (const std::exception& e) {

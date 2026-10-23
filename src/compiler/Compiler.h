@@ -1,6 +1,6 @@
 /*
- * Compiler — turns a Clojure form (a ProtoObject tree from the Reader) into
- * a BytecodeModule.
+ * Compiler — turns a Clojure form (a runtime value, as the Reader yields it
+ * or as a program builds it) into a BytecodeModule.
  *
  * P1/P2: the compiler receives a ProtoContext from its caller and walks
  * the form's children. Every intermediate ProtoObject* it inspects is
@@ -25,6 +25,7 @@
 #pragma once
 #include "runtime/BytecodeModule.h"
 #include "runtime/Named.h"
+#include "reader/SourceInfo.h"
 
 #include <memory>
 #include <stdexcept>
@@ -47,25 +48,18 @@ struct CompileError : std::runtime_error {
     CompileError(const std::string& msg) : std::runtime_error(msg) {}
 };
 
-// Marker prototypes + attribute keys the Compiler and VM need. The same
-// wrapping idea as ReaderMarkers: a user fn is a small heap object whose
-// prototype is fnMarkerProto with the bytecode pointer + arity stored as
-// attributes. The Compiler emits MAKE_FN; the VM constructs the wrapper.
+// Attribute keys the Compiler and VM share, and the intern table of keywords
+// and symbols. The forms the compiler reads are runtime values (decision M1,
+// Reader.h): symbols and keywords are named values, strings are protoCore
+// strings, vectors and maps are the runtime's own, so no marker prototype is
+// needed to recognise them. A user fn is a small heap object built by the VM
+// at MAKE_FN / MAKE_FN_MULTI time; the VM carries the single-arity and
+// multi-arity prototypes through ActiveCallContext.
 struct CompilerMarkers {
-    // The Compiler does NOT use any fn prototype directly — wrappers are
-    // built at MAKE_FN / MAKE_FN_MULTI time inside the VM. The session-12
-    // cleanup removed fnMarkerProto from this struct; the VM carries the
-    // single-arity and multi-arity prototypes through ActiveCallContext.
-    const proto::ProtoObject* stringMarkerProto;
-    const proto::ProtoObject* vectorMarkerProto; // `[..]` literal
-    const proto::ProtoObject* mapMarkerProto;    // `{..}` literal
-    const proto::ProtoString* bytesKey;
     const proto::ProtoString* bytecodeKey;       // opaque ptr
     const proto::ProtoString* arityKey;          // fn arity
     const proto::ProtoString* capturesKey;       // closure captures list
     const proto::ProtoString* aritiesKey;        // multi-arity dispatch list
-    const proto::ProtoString* itemsKey;          // vector items list
-    const proto::ProtoString* entriesKey;        // map entries list
     NamedLayout               named;             // keyword and symbol values
 };
 
@@ -104,7 +98,20 @@ public:
                  proto::proto_ulong bodyStartIdx,
                  const CompilerMarkers& markers);
 
+    // What the reader recorded about the forms this compiler will compile
+    // (SourceInfo.h): the source order of map literals. Optional; without
+    // it a map literal is compiled in its walk order. Must outlive the
+    // compileForm calls it is set for.
+    void setSourceInfo(const SourceInfo* info) { source_ = info; }
+
 private:
+    const SourceInfo* source_ = nullptr;
+
+    // The entries of a map form, alternating keys and values, in source
+    // order when source_ knows it.
+    std::vector<const proto::ProtoObject*>
+    mapFormEntries(proto::ProtoContext* ctx, const proto::ProtoObject* m) const;
+
     // One per active function scope. The outermost compileForm call (top-
     // level) operates with scopes_ empty; `fn` pushes a new scope, the
     // fn-body's locals live there, and the scope is popped when the body

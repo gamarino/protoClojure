@@ -1,7 +1,9 @@
 #include "Compiler.h"
 
 #include "runtime/Exceptions.h"
+#include "runtime/MapOps.h"
 #include "runtime/StackGuard.h"
+#include "runtime/VectorOps.h"
 
 #include "protoCore.h"
 
@@ -36,26 +38,34 @@ bool isList(const proto::ProtoObject* form) {
     return t == kTagList || t == kTagListSmall;
 }
 
-// Returns true if the form is a ProtoString of any kind — symbol-tagged
-// (POINTER_TAG_SYMBOL = 22) or string-tagged (POINTER_TAG_STRING = 6).
-// The protoCore `isString(ctx)` instance method returns false on
-// symbol-tagged values; the tag-only `isStringTagFast` static accepts
-// both. The Compiler does not need the distinction between a symbol and a
-// string at this layer — it disambiguates by the form's *position* (head
-// of a list ≡ var reference, top-level standalone ≡ literal).
-bool isStringy(const proto::ProtoObject* form) {
-    return form && proto::ProtoObject::isStringTagFast(form);
+// True iff the form is a symbol or a keyword: a named value
+// (runtime/Named.h), which is what the reader yields for both. The compiler
+// tells the two apart by spelling where it matters (a keyword's starts with
+// `:`), and by the form's position otherwise.
+bool isNameForm(proto::ProtoContext* ctx, const NamedLayout& named,
+                const proto::ProtoObject* form) {
+    return isNamed(ctx, named, form);
 }
 
-// Extract the std-side bytes of a ProtoString-tagged ProtoObject. Works
-// for both string and symbol tags because both encode a ProtoString
-// underneath. The toStdString cross is the same boundary every other call
-// site uses (P3 — copy out via raw bytes, the std::string lives only on
-// the C++ stack).
-std::string asUtf8(proto::ProtoContext* ctx, const proto::ProtoObject* form) {
-    const proto::ProtoString* s =
-        reinterpret_cast<const proto::ProtoString*>(form);
-    return s->toStdString(ctx);
+// The spelling of a symbol or keyword form (`isNameForm` must hold), with
+// the leading `:` of a keyword. The std::string lives only on the C++ stack
+// (P3).
+std::string nameOf(proto::ProtoContext* ctx, const NamedLayout& named,
+                   const proto::ProtoObject* form) {
+    return namedSpelling(ctx, named, form)->toStdString(ctx);
+}
+
+// True iff the form is a string literal: a protoCore string. Symbols and
+// keywords are named values, never strings.
+bool isStringForm(const proto::ProtoObject* form) {
+    return form && form != PROTO_NONE && proto::ProtoObject::isStringTagFast(form);
+}
+
+// The symbol `name` as a form, for the forms the compiler builds itself
+// (the with-open rewrite, the fn wrapper of a top-level try).
+const proto::ProtoObject* symbolForm(proto::ProtoContext* ctx, const NamedLayout& named,
+                                     const char* name) {
+    return internNamed(ctx, named, name);
 }
 
 // The const-pool entry for the integer `value`, a literal or a quoted
@@ -74,62 +84,44 @@ std::size_t addIntegerConst(proto::ProtoContext* ctx,
 
 } // namespace
 
-// True iff `form` is a Reader-wrapped string literal (its prototype is the
-// Reader's stringMarkerProto). The wrapped bytes are extracted via
-// getAttribute(bytesKey).
-static bool isWrappedString(proto::ProtoContext* ctx,
-                            const proto::ProtoObject* form,
-                            const CompilerMarkers& markers) {
-    if (!form) return false;
-    const proto::ProtoObject* proto = form->getPrototype(ctx);
-    return proto == markers.stringMarkerProto;
-}
-
-// Session 9 — true iff `form` is a Reader-wrapped `[..]` vector literal.
-// The underlying items live in a ProtoList under itemsKey.
-static bool isWrappedVector(proto::ProtoContext* ctx,
-                            const proto::ProtoObject* form,
-                            const CompilerMarkers& markers) {
-    if (!form) return false;
-    const proto::ProtoObject* proto = form->getPrototype(ctx);
-    return proto == markers.vectorMarkerProto;
-}
-
-// Returns the ProtoList of items under a wrapped vector. Caller has already
-// verified isWrappedVector.
-static const proto::ProtoList* vectorItems(proto::ProtoContext* ctx,
-                                           const proto::ProtoObject* form,
-                                           const CompilerMarkers& markers) {
-    const proto::ProtoObject* raw =
-        form->getAttribute(ctx, markers.itemsKey);
-    return raw->asList(ctx);
-}
-
-// Session 13 — true iff `form` is a Reader-wrapped `{..}` map literal.
-static bool isWrappedMap(proto::ProtoContext* ctx,
-                         const proto::ProtoObject* form,
-                         const CompilerMarkers& markers) {
-    if (!form) return false;
-    return form->getPrototype(ctx) == markers.mapMarkerProto;
-}
-
-static const proto::ProtoList* mapEntries(proto::ProtoContext* ctx,
-                                          const proto::ProtoObject* form,
-                                          const CompilerMarkers& markers) {
-    const proto::ProtoObject* raw =
-        form->getAttribute(ctx, markers.entriesKey);
-    return raw->asList(ctx);
-}
-
-// Session 14 — true iff `form` is a stringy form whose UTF-8 starts
-// with `:`. That is exactly a Clojure keyword as the Reader produces
-// it (`:foo` → a Symbol whose first byte is `:`). Used to detect a
-// trailing kv-pair suffix at call sites.
-static bool isKeywordSymbol(proto::ProtoContext* ctx,
-                            const proto::ProtoObject* form) {
-    if (!isStringy(form)) return false;
-    std::string s = asUtf8(ctx, form);
+// True iff `form` is a keyword: a named value spelled with a leading `:`.
+// Used to detect a trailing kv-pair suffix at call sites.
+static bool isKeywordForm(proto::ProtoContext* ctx, const NamedLayout& named,
+                          const proto::ProtoObject* form) {
+    if (!isNameForm(ctx, named, form)) return false;
+    std::string s = nameOf(ctx, named, form);
     return !s.empty() && s[0] == ':';
+}
+
+// The entries of the map form `m` as alternating keys and values: in source
+// order when the reader recorded it (SourceInfo.h), in the map's walk order
+// otherwise. The map is rooted by the caller, and protoCore does not move
+// objects, so the pointers stay valid while the map lives.
+std::vector<const proto::ProtoObject*>
+Compiler::mapFormEntries(proto::ProtoContext* ctx, const proto::ProtoObject* m) const {
+    std::vector<const proto::ProtoObject*> kv;
+    if (source_) {
+        auto it = source_->mapKeyOrder.find(m);
+        if (it != source_->mapKeyOrder.end()) {
+            for (const proto::ProtoObject* k : it->second) {
+                bool found = false;
+                const proto::ProtoObject* v = mapGet(ctx, m, k, &found);
+                if (!found) break;  // not the map the reader recorded
+                kv.push_back(k);
+                kv.push_back(v);
+            }
+            if (kv.size() == 2 * mapCount(ctx, m)) return kv;
+            kv.clear();
+        }
+    }
+    mapForEach(ctx, m, &kv,
+        [](proto::ProtoContext*, void* self, const proto::ProtoObject* k,
+           const proto::ProtoObject* v) {
+            auto* out = static_cast<std::vector<const proto::ProtoObject*>*>(self);
+            out->push_back(k);
+            out->push_back(v);
+        });
+    return kv;
 }
 
 std::unique_ptr<BytecodeModule>
@@ -141,7 +133,7 @@ Compiler::compileFnBody(proto::ProtoContext* ctx,
     // both here and we discover the shape from the head's name.
     proto::proto_ulong n = fnForm->getSize(ctx);
     const proto::ProtoObject* head = fnForm->getAt(ctx, 0);
-    std::string headName = asUtf8(ctx, head);
+    std::string headName = nameOf(ctx, markers.named, head);
     proto::proto_ulong paramsAt = 0;
     if (headName == "fn")        paramsAt = 1;
     else if (headName == "defn") paramsAt = 2;
@@ -154,14 +146,14 @@ Compiler::compileFnBody(proto::ProtoContext* ctx,
     // dropped (self-reference via `name` inside the body is a v0.2
     // follow-up — needs a wrapper-into-slot capture). Shifting
     // paramsAt by one is enough to make the surface parse.
-    if (headName == "fn" && isStringy(paramsForm)) {
+    if (headName == "fn" && isNameForm(ctx, markers.named, paramsForm)) {
         paramsAt += 1;
         if (n <= paramsAt) throw CompileError("fn: missing parameter vector after name");
         paramsForm = fnForm->getAt(ctx, (int)paramsAt);
     }
     const proto::ProtoList* params = nullptr;
-    if (isWrappedVector(ctx, paramsForm, markers)) {
-        params = vectorItems(ctx, paramsForm, markers);
+    if (isVector(paramsForm)) {
+        params = vectorItems(ctx, paramsForm);
     } else if (isList(paramsForm)) {
         params = paramsForm->asList(ctx);
     } else {
@@ -182,7 +174,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     // Session 7/8/13 — scan for `& <rest>`. The rest can be:
     //   - a symbol (`& rest`): variadic, collects leftover positionals as
     //     a list — the session-7 shape, unchanged.
-    //   - a wrapped map (`& {:keys [k1 k2 ...]}`): kw-based, names each
+    //   - a map (`& {:keys [k1 k2 ...]}`): kw-based, names each
     //     declared key as a local slot whose value will be supplied by
     //     the kwArgs map the VM builds from the caller's trailing
     //     key/value pairs at CALL_KW time (or the caller's trailing map).
@@ -205,7 +197,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     std::vector<KwKeyDecl> kwKeyDecls;
     for (proto::proto_ulong i = 0; i < rawCount; ++i) {
         const proto::ProtoObject* p = params->getAt(ctx, (int)i);
-        if (isStringy(p) && asUtf8(ctx, p) == "&") {
+        if (isNameForm(ctx, markers.named, p) && nameOf(ctx, markers.named, p) == "&") {
             if (i + 1 != rawCount - 1) {
                 throw CompileError(
                     "fn/defn: `&` must be followed by exactly one form");
@@ -213,48 +205,48 @@ Compiler::compileArity(proto::ProtoContext* ctx,
             const proto::ProtoObject* rp = params->getAt(ctx, (int)(i + 1));
             fixedArity = i;
 
-            if (isWrappedMap(ctx, rp, markers)) {
+            if (isMap(rp)) {
                 // `& {:keys [k1 k2] :or {k1 default} :as opts}` — kw
                 // destructuring.
                 isKwBased = true;
-                const proto::ProtoList* entries = mapEntries(ctx, rp, markers);
-                proto::proto_ulong ne = entries->getSize(ctx);
+                // The map's entries, in its (unspecified) iteration order;
+                // every entry is independent of the others.
+                const std::vector<const proto::ProtoObject*> entries = mapFormEntries(ctx, rp);
+                const std::size_t ne = entries.size();
                 bool sawKeys = false;
                 // Defer reading :or until after :keys — so we can attach
-                // defaults to the right KwKeyDecl regardless of source
-                // order. Cache the :or entries list pointer.
-                const proto::ProtoList* orEntries = nullptr;
-                for (proto::proto_ulong j = 0; j < ne; j += 2) {
-                    const proto::ProtoObject* mk = entries->getAt(ctx, (int)j);
-                    if (!isStringy(mk))
+                // defaults to the right KwKeyDecl whatever the order.
+                std::vector<const proto::ProtoObject*> orEntries;
+                for (std::size_t j = 0; j < ne; j += 2) {
+                    const proto::ProtoObject* mk = entries[j];
+                    if (!isNameForm(ctx, markers.named, mk))
                         throw CompileError("fn/defn: `& {...}` key must be a keyword");
-                    std::string mkName = asUtf8(ctx, mk);
-                    const proto::ProtoObject* mv =
-                        entries->getAt(ctx, (int)(j + 1));
+                    std::string mkName = nameOf(ctx, markers.named, mk);
+                    const proto::ProtoObject* mv = entries[j + 1];
                     if (mkName == ":keys") {
-                        if (!isWrappedVector(ctx, mv, markers)) {
+                        if (!isVector(mv)) {
                             throw CompileError(
                                 "fn/defn: `:keys` must be a vector of symbols");
                         }
-                        const proto::ProtoList* ks = vectorItems(ctx, mv, markers);
+                        const proto::ProtoList* ks = vectorItems(ctx, mv);
                         proto::proto_ulong nk = ks->getSize(ctx);
                         for (proto::proto_ulong t = 0; t < nk; ++t) {
                             const proto::ProtoObject* sym = ks->getAt(ctx, (int)t);
-                            if (!isStringy(sym))
+                            if (!isNameForm(ctx, markers.named, sym))
                                 throw CompileError("fn/defn: `:keys` entry must be a symbol");
-                            kwKeyDecls.push_back({asUtf8(ctx, sym), nullptr});
+                            kwKeyDecls.push_back({nameOf(ctx, markers.named, sym), nullptr});
                         }
                         sawKeys = true;
                     } else if (mkName == ":or") {
-                        if (!isWrappedMap(ctx, mv, markers)) {
+                        if (!isMap(mv)) {
                             throw CompileError("fn/defn: `:or` must be a map");
                         }
-                        orEntries = mapEntries(ctx, mv, markers);
+                        orEntries = mapFormEntries(ctx, mv);
                     } else if (mkName == ":as") {
-                        if (!isStringy(mv)) {
+                        if (!isNameForm(ctx, markers.named, mv)) {
                             throw CompileError("fn/defn: `:as` binding must be a symbol");
                         }
-                        asBindName = asUtf8(ctx, mv);
+                        asBindName = nameOf(ctx, markers.named, mv);
                     } else {
                         throw CompileError(
                             std::string("fn/defn: unsupported entry in `& {...}`: ") + mkName);
@@ -264,15 +256,14 @@ Compiler::compileArity(proto::ProtoContext* ctx,
                     throw CompileError("fn/defn: `& {...}` needs at least :keys");
                 }
                 // Attach :or defaults to the matching KwKeyDecl.
-                if (orEntries) {
-                    proto::proto_ulong nor = orEntries->getSize(ctx);
-                    for (proto::proto_ulong j = 0; j < nor; j += 2) {
-                        const proto::ProtoObject* ok = orEntries->getAt(ctx, (int)j);
-                        if (!isStringy(ok))
+                if (!orEntries.empty()) {
+                    const std::size_t nor = orEntries.size();
+                    for (std::size_t j = 0; j < nor; j += 2) {
+                        const proto::ProtoObject* ok = orEntries[j];
+                        if (!isNameForm(ctx, markers.named, ok))
                             throw CompileError("fn/defn: `:or` key must be a symbol");
-                        std::string okName = asUtf8(ctx, ok);
-                        const proto::ProtoObject* ov =
-                            orEntries->getAt(ctx, (int)(j + 1));
+                        std::string okName = nameOf(ctx, markers.named, ok);
+                        const proto::ProtoObject* ov = orEntries[j + 1];
                         bool matched = false;
                         for (auto& d : kwKeyDecls) {
                             if (d.name == okName) {
@@ -287,9 +278,9 @@ Compiler::compileArity(proto::ProtoContext* ctx,
                         }
                     }
                 }
-            } else if (isStringy(rp)) {
+            } else if (isNameForm(ctx, markers.named, rp)) {
                 // `& rest` — variadic, session-7 shape.
-                restName   = asUtf8(ctx, rp);
+                restName   = nameOf(ctx, markers.named, rp);
                 isVariadic = true;
             } else {
                 throw CompileError(
@@ -315,11 +306,11 @@ Compiler::compileArity(proto::ProtoContext* ctx,
         scope.arity = static_cast<int>(fixedArity);
         for (proto::proto_ulong i = 0; i < fixedArity; ++i) {
             const proto::ProtoObject* p = params->getAt(ctx, (int)i);
-            if (!isStringy(p)) {
+            if (!isNameForm(ctx, markers.named, p)) {
                 scopes_.pop_back();
                 throw CompileError("fn/defn: parameter name must be a symbol");
             }
-            scope.nameToSlot[asUtf8(ctx, p)] = static_cast<int>(i);
+            scope.nameToSlot[nameOf(ctx, markers.named, p)] = static_cast<int>(i);
         }
         scope.nextSlot = static_cast<int>(fixedArity);
         if (isVariadic) {
@@ -419,13 +410,13 @@ void Compiler::compileWithOpen(proto::ProtoContext* ctx, const proto::ProtoList*
     // primitive under a name a program cannot shadow. The binding vector is
     // rebuilt as a plain list, which `let` accepts as well.
     auto sym = [&](const char* name) {
-        return proto::ProtoString::createSymbol(ctx, name)->asObject(ctx);
+        return symbolForm(ctx, markers.named, name);
     };
     const proto::proto_ulong n = lst->getSize(ctx);
     const proto::ProtoObject* bindings = n >= 2 ? lst->getAt(ctx, 1) : nullptr;
     const proto::ProtoList* bvec = nullptr;
-    if (bindings && isWrappedVector(ctx, bindings, markers)) {
-        bvec = vectorItems(ctx, bindings, markers);
+    if (bindings && isVector(bindings)) {
+        bvec = vectorItems(ctx, bindings);
     } else if (bindings && isList(bindings)) {
         bvec = bindings->asList(ctx);
     } else {
@@ -436,7 +427,7 @@ void Compiler::compileWithOpen(proto::ProtoContext* ctx, const proto::ProtoList*
         throw CompileError("with-open requires an even number of forms in binding vector");
     }
     for (proto::proto_ulong i = 0; i < bn; i += 2) {
-        if (!isStringy(bvec->getAt(ctx, static_cast<int>(i)))) {
+        if (!isNameForm(ctx, markers.named, bvec->getAt(ctx, static_cast<int>(i)))) {
             throw CompileError("with-open only allows Symbols in bindings");
         }
     }
@@ -505,7 +496,7 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
     // body.
     if (scopes_.empty()) {
         const proto::ProtoList* wrapper = ctx->newList()
-            ->appendLast(ctx, proto::ProtoString::createSymbol(ctx, "fn")->asObject(ctx))
+            ->appendLast(ctx, symbolForm(ctx, markers.named, "fn"))
             ->appendLast(ctx, lst->asObject(ctx));
         std::unique_ptr<BytecodeModule> body =
             compileArity(ctx, ctx->newList(), wrapper, /*bodyStartIdx=*/1, markers);
@@ -537,8 +528,8 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
         std::string clause;
         if (isList(f)) {
             const proto::ProtoList* fl = f->asList(ctx);
-            if (fl->getSize(ctx) > 0 && isStringy(fl->getAt(ctx, 0))) {
-                clause = asUtf8(ctx, fl->getAt(ctx, 0));
+            if (fl->getSize(ctx) > 0 && isNameForm(ctx, markers.named, fl->getAt(ctx, 0))) {
+                clause = nameOf(ctx, markers.named, fl->getAt(ctx, 0));
             }
         }
         if (finallyForm) {
@@ -546,16 +537,16 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
         }
         if (clause == "catch") {
             const proto::ProtoList* cl = f->asList(ctx);
-            if (cl->getSize(ctx) < 3 || !isStringy(cl->getAt(ctx, 1)) ||
-                !isStringy(cl->getAt(ctx, 2))) {
+            if (cl->getSize(ctx) < 3 || !isNameForm(ctx, markers.named, cl->getAt(ctx, 1)) ||
+                !isNameForm(ctx, markers.named, cl->getAt(ctx, 2))) {
                 throw CompileError(
                     "catch: expects (catch ClassName binding body...)");
             }
-            const std::string className = asUtf8(ctx, cl->getAt(ctx, 1));
+            const std::string className = nameOf(ctx, markers.named, cl->getAt(ctx, 1));
             // `Object` catches every value, as `Throwable` does.
             const int classId = (className == "Object" || className == "java.lang.Object")
                 ? kThrowableClassId : exceptionClassId(className);
-            catches.push_back({classId, className, asUtf8(ctx, cl->getAt(ctx, 2)), cl});
+            catches.push_back({classId, className, nameOf(ctx, markers.named, cl->getAt(ctx, 2)), cl});
         } else if (clause == "finally") {
             finallyForm = f->asList(ctx);
         } else {
@@ -774,13 +765,13 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
     // thread's stack allows raise StackOverflowError, which the drivers
     // report as a compile error.
     checkNativeStack(StackUse::Source);
-    if (form == nullptr || form == PROTO_NONE) {
-        // nil literal — not yet emitting a PUSH_NIL opcode. For now we
-        // represent nil as a const-pool entry with kind String "" until
-        // PUSH_NIL lands. Cheating but bounded; nil is not exercised by
-        // hello-world.
+    if (form == nullptr) {
         throw CompileError("compile: internal error: null form");
     }
+    // nil, true and false: the reader yields the values themselves.
+    if (form == PROTO_NONE)  { out.emit(Op::PUSH_NIL,   0); return; }
+    if (form == PROTO_TRUE)  { out.emit(Op::PUSH_TRUE,  0); return; }
+    if (form == PROTO_FALSE) { out.emit(Op::PUSH_FALSE, 0); return; }
 
     // Integer literal — emit PUSH_CONST <addLong>.
     if (form->isInteger(ctx)) {
@@ -810,7 +801,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // qualify. A non-stringy head (e.g. `((outer 100) 20)` where the
         // callable is itself an expression) is always a regular call and
         // is compiled below via compileForm on the head.
-        std::string headName = isStringy(head) ? asUtf8(ctx, head) : std::string{};
+        std::string headName = isNameForm(ctx, markers.named, head) ? nameOf(ctx, markers.named, head) : std::string{};
 
         // ---- Special forms -------------------------------------------------
 
@@ -822,11 +813,11 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (n != 3) throw CompileError("def: expects (def name expr)");
             const proto::ProtoObject* nameForm = lst->getAt(ctx, 1);
             const proto::ProtoObject* exprForm = lst->getAt(ctx, 2);
-            if (!isStringy(nameForm)) {
+            if (!isNameForm(ctx, markers.named, nameForm)) {
                 throw CompileError("def: name must be a symbol");
             }
             compileForm(ctx, exprForm, out, markers);
-            std::size_t nameIdx = out.addSymbol(ctx, asUtf8(ctx, nameForm));
+            std::size_t nameIdx = out.addSymbol(ctx, nameOf(ctx, markers.named, nameForm));
             out.emit(Op::STORE_GLOBAL, nameIdx);
             return;
         }
@@ -906,9 +897,9 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             for (proto::proto_ulong i = 1; i < n; i += 2) {
                 const proto::ProtoObject* test = lst->getAt(ctx, (int)i);
                 const proto::ProtoObject* expr = lst->getAt(ctx, (int)(i + 1));
-                bool isElse = isStringy(test) &&
-                              (asUtf8(ctx, test) == ":else" ||
-                               asUtf8(ctx, test) == "else");
+                bool isElse = isNameForm(ctx, markers.named, test) &&
+                              (nameOf(ctx, markers.named, test) == ":else" ||
+                               nameOf(ctx, markers.named, test) == "else");
                 std::size_t skipAt = 0;
                 if (!isElse) {
                     compileForm(ctx, test, out, markers);
@@ -1003,20 +994,20 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             // Atom: emit as a PUSH_CONST. Symbol is the interesting case —
             // we add it to the const pool as Symbol kind so PUSH_CONST
             // materialises an interned symbol, not a string.
-            if (isWrappedString(ctx, q, markers)) {
-                const proto::ProtoObject* raw =
-                    q->getAttribute(ctx, markers.bytesKey);
+            if (isStringForm(q)) {
                 std::size_t idx = out.addString(
-                    reinterpret_cast<const proto::ProtoString*>(raw)
-                        ->toStdString(ctx));
+                    reinterpret_cast<const proto::ProtoString*>(q)->toStdString(ctx));
                 out.emit(Op::PUSH_CONST, idx);
                 return;
             }
-            if (isStringy(q)) {
-                // A quoted symbol or keyword: its interned value (Named.h).
-                const std::string spelling = asUtf8(ctx, q);
-                std::size_t idx = out.addNamed(
-                    spelling, internNamed(ctx, markers.named, spelling.c_str()));
+            if (q == PROTO_NONE || q == PROTO_TRUE || q == PROTO_FALSE) {
+                compileForm(ctx, q, out, markers);
+                return;
+            }
+            if (isNameForm(ctx, markers.named, q)) {
+                // A quoted symbol or keyword: the interned value the reader
+                // yielded (Named.h).
+                std::size_t idx = out.addNamed(nameOf(ctx, markers.named, q), q);
                 out.emit(Op::PUSH_CONST, idx);
                 return;
             }
@@ -1041,20 +1032,20 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             const proto::ProtoObject* nameForm = nullptr;
             if (headName == "defn") {
                 nameForm = lst->getAt(ctx, 1);
-                if (!isStringy(nameForm)) {
+                if (!isNameForm(ctx, markers.named, nameForm)) {
                     throw CompileError("defn: name must be a symbol");
                 }
             }
 
             const proto::ProtoObject* first = lst->getAt(ctx, (int)aritiesStart);
-            // Single-arity: the form right after the head/name is a vector
-            // literal `[..]` (wrapped). Multi-arity: a list whose first
-            // element is itself a wrapped vector — `(fn ([x] ...) ([x y] ...))`.
+            // Single-arity: the form right after the head/name is a
+            // vector `[..]`. Multi-arity: a list whose first
+            // element is itself a vector — `(fn ([x] ...) ([x y] ...))`.
             bool multiArity = false;
             if (isList(first)) {
                 const proto::ProtoList* fl = first->asList(ctx);
                 if (fl->getSize(ctx) >= 1 &&
-                    isWrappedVector(ctx, fl->getAt(ctx, 0), markers)) {
+                    isVector(fl->getAt(ctx, 0))) {
                     multiArity = true;
                 }
             }
@@ -1091,8 +1082,8 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                     }
                     const proto::ProtoObject* paramsForm = alist->getAt(ctx, 0);
                     const proto::ProtoList* params = nullptr;
-                    if (isWrappedVector(ctx, paramsForm, markers)) {
-                        params = vectorItems(ctx, paramsForm, markers);
+                    if (isVector(paramsForm)) {
+                        params = vectorItems(ctx, paramsForm);
                     } else if (isList(paramsForm)) {
                         params = paramsForm->asList(ctx);
                     } else {
@@ -1118,7 +1109,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             }
 
             if (headName == "defn") {
-                std::size_t nameIdx = out.addSymbol(ctx, asUtf8(ctx, nameForm));
+                std::size_t nameIdx = out.addSymbol(ctx, nameOf(ctx, markers.named, nameForm));
                 out.emit(Op::STORE_GLOBAL, nameIdx);
             }
             return;
@@ -1135,8 +1126,8 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (n < 2) throw CompileError("let: expects bindings vector");
             const proto::ProtoObject* bindings = lst->getAt(ctx, 1);
             const proto::ProtoList* bvec = nullptr;
-            if (isWrappedVector(ctx, bindings, markers)) {
-                bvec = vectorItems(ctx, bindings, markers);
+            if (isVector(bindings)) {
+                bvec = vectorItems(ctx, bindings);
             } else if (isList(bindings)) {
                 bvec = bindings->asList(ctx);
             } else {
@@ -1149,7 +1140,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             for (proto::proto_ulong i = 0; i < bn; i += 2) {
                 const proto::ProtoObject* nameForm = bvec->getAt(ctx, (int)i);
                 const proto::ProtoObject* valForm  = bvec->getAt(ctx, (int)(i + 1));
-                if (!isStringy(nameForm)) {
+                if (!isNameForm(ctx, markers.named, nameForm)) {
                     throw CompileError("let: binding name must be a symbol");
                 }
                 compileForm(ctx, valForm, out, markers);  // push value
@@ -1157,7 +1148,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 // pushed nested fn scopes and reallocated scopes_.
                 Scope& scope = scopes_.back();
                 int slot = scope.nextSlot++;
-                scope.nameToSlot[asUtf8(ctx, nameForm)] = slot;
+                scope.nameToSlot[nameOf(ctx, markers.named, nameForm)] = slot;
                 out.emit(Op::STORE_LOCAL, slot);
             }
             // Body — last expression's value stays on the stack as `let`'s
@@ -1183,8 +1174,8 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (n < 2) throw CompileError("loop: expects bindings vector");
             const proto::ProtoObject* bindings = lst->getAt(ctx, 1);
             const proto::ProtoList* bvec = nullptr;
-            if (isWrappedVector(ctx, bindings, markers)) {
-                bvec = vectorItems(ctx, bindings, markers);
+            if (isVector(bindings)) {
+                bvec = vectorItems(ctx, bindings);
             } else if (isList(bindings)) {
                 bvec = bindings->asList(ctx);
             } else {
@@ -1198,13 +1189,13 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             for (proto::proto_ulong i = 0; i < bn; i += 2) {
                 const proto::ProtoObject* nameForm = bvec->getAt(ctx, (int)i);
                 const proto::ProtoObject* valForm  = bvec->getAt(ctx, (int)(i + 1));
-                if (!isStringy(nameForm)) {
+                if (!isNameForm(ctx, markers.named, nameForm)) {
                     throw CompileError("loop: binding name must be a symbol");
                 }
                 compileForm(ctx, valForm, out, markers);
                 Scope& scope = scopes_.back();    // re-acquire post-recursion
                 int slot = scope.nextSlot++;
-                scope.nameToSlot[asUtf8(ctx, nameForm)] = slot;
+                scope.nameToSlot[nameOf(ctx, markers.named, nameForm)] = slot;
                 out.emit(Op::STORE_LOCAL, slot);
                 recurSlots.push_back(slot);
             }
@@ -1349,7 +1340,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // LE / GT / GE / EQ) directly. The VM short-circuits when both
         // operands are tagged SmallInt; otherwise it falls back to the
         // primitive on globals — same semantics as PUSH_VAR + CALL.
-        if (isStringy(head)) {
+        if (isNameForm(ctx, markers.named, head)) {
             Op binOp = Op::NOP;
             if      (headName == "+")  binOp = Op::ADD;
             else if (headName == "-")  binOp = Op::SUB;
@@ -1428,7 +1419,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         for (long long i = (long long)n - 2; i >= 1; i -= 2) {
             const proto::ProtoObject* arg =
                 lst->getAt(ctx, static_cast<int>(i));
-            if (!isKeywordSymbol(ctx, arg)) break;
+            if (!isKeywordForm(ctx, markers.named, arg)) break;
             hasKvSuffix = true;
         }
 
@@ -1442,28 +1433,22 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         return;
     }
 
-    // Session 13 — `{..}` map literal in expression position. Compile as
-    // a call to the `hash-map` primitive: emit PUSH_VAR hash-map, then
-    // each k,v in source order, then CALL 2*N. The wrapper marker stays
-    // out of the bytecode — purely a compile-time hint.
-    if (isWrappedMap(ctx, form, markers)) {
-        const proto::ProtoList* entries = mapEntries(ctx, form, markers);
-        proto::proto_ulong ne = entries->getSize(ctx);  // already validated even
+    // `{..}` map literal in expression position: a call to the `hash-map`
+    // primitive with every key and value form, in source order (SourceInfo.h),
+    // so they are evaluated left to right as in Clojure.
+    if (isMap(form)) {
+        const std::vector<const proto::ProtoObject*> entries = mapFormEntries(ctx, form);
         std::size_t headIdx = out.addSymbol(ctx, "hash-map");
         out.emit(Op::PUSH_VAR, headIdx);
-        for (proto::proto_ulong i = 0; i < ne; ++i) {
-            compileForm(ctx, entries->getAt(ctx, (int)i), out, markers);
-        }
-        out.emit(Op::CALL, ne);
+        for (const proto::ProtoObject* e : entries) compileForm(ctx, e, out, markers);
+        out.emit(Op::CALL, entries.size());
         return;
     }
 
-    // Session 9 — `[..]` vector literal in expression position. Compile as
-    // a call to the `vector` primitive: emit PUSH_VAR vector, then each
-    // item, then CALL N. The wrapper marker stays out of the bytecode —
-    // it is purely a compile-time hint to distinguish `[..]` from `(..)`.
-    if (isWrappedVector(ctx, form, markers)) {
-        const proto::ProtoList* items = vectorItems(ctx, form, markers);
+    // `[..]` vector literal in expression position: a call to the `vector`
+    // primitive with every item form, so the items are evaluated.
+    if (isVector(form)) {
+        const proto::ProtoList* items = vectorItems(ctx, form);
         proto::proto_ulong ni = items->getSize(ctx);
         std::size_t headIdx = out.addSymbol(ctx, "vector");
         out.emit(Op::PUSH_VAR, headIdx);
@@ -1474,34 +1459,22 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         return;
     }
 
-    // Wrapped string literal — every string token comes back from the Reader
-    // wrapped in a child of stringMarkerProto with the raw ProtoString stored
-    // under bytesKey. We check the prototype to distinguish a string
-    // literal from a (potentially-inline) symbol, since at the pointer-tag
-    // level inline short content is indistinguishable.
-    if (isWrappedString(ctx, form, markers)) {
-        const proto::ProtoObject* raw =
-            form->getAttribute(ctx, markers.bytesKey);
-        if (!raw || !proto::ProtoObject::isStringTagFast(raw)) {
-            throw CompileError("compile: malformed string-wrapper");
-        }
+    // String literal — a protoCore string, pushed from the const pool.
+    if (isStringForm(form)) {
         std::size_t idx = out.addString(
-            reinterpret_cast<const proto::ProtoString*>(raw)->toStdString(ctx));
+            reinterpret_cast<const proto::ProtoString*>(form)->toStdString(ctx));
         out.emit(Op::PUSH_CONST, idx);
         return;
     }
 
-    // Bare stringy atom — keyword literal, reserved literal (true / false
-    // / nil), local reference, or runtime global lookup, in that order.
-    if (isStringy(form)) {
-        std::string name = asUtf8(ctx, form);
-        if (name == "true")  { out.emit(Op::PUSH_TRUE,  0); return; }
-        if (name == "false") { out.emit(Op::PUSH_FALSE, 0); return; }
-        if (name == "nil")   { out.emit(Op::PUSH_NIL,   0); return; }
+    // Symbol or keyword atom — keyword literal, local reference, or runtime
+    // global lookup, in that order.
+    if (isNameForm(ctx, markers.named, form)) {
+        std::string name = nameOf(ctx, markers.named, form);
         if (!name.empty() && name[0] == ':') {
-            // Interned once here; PUSH_CONST pushes the pointer (Named.h).
-            std::size_t idx = out.addNamed(
-                name, internNamed(ctx, markers.named, name.c_str()));
+            // The keyword is the interned value the reader yielded;
+            // PUSH_CONST pushes the pointer (Named.h).
+            std::size_t idx = out.addNamed(name, form);
             out.emit(Op::PUSH_CONST, idx);
             return;
         }
