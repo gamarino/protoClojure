@@ -67,6 +67,7 @@ tell at a glance which parts of the surface are runnable today. The
 | Input and output: `slurp`, `spit`, `read-line`, `reader` / `writer` / `with-open`, `line-seq`, `file-seq`, `sh`, `getenv`, `exit`, HTTP client and Ring server, TCP / UDP / TLS sockets | Implemented, in the global namespace (§18) |
 | Closures with N-level lexical capture | Implemented |
 | Named arguments `& {:keys [...] :or {...} :as m}` | Implemented |
+| Destructuring in `let`, `loop`, `fn`, `defn`, `defmacro` and the binding macros (`[a b & r :as all]`, `{x :x :keys [...] :strs [...] :syms [...] :or {...} :as m}`, nested) | Implemented (§5.4) |
 | Namespaces (`ns`, `:require`, `:as`, `:refer`) | Planned |
 | State (`atom`, `swap!`, `reset!`, `compare-and-set!`, `@`, watches) | Implemented |
 | `future`, `promise`, `deliver`, `pmap` | Implemented |
@@ -685,6 +686,50 @@ on a 32 MiB stack, where a simple self-recursive function reaches about
 Captured locals are bound by value at closure creation; values can be
 updated by referring to an `atom`.
 
+### 5.4 Destructuring
+
+Wherever a local is bound -- `let`, `loop`, the parameters of `fn`, `defn`
+and `defmacro`, and the binding macros of `core.clj` (`if-let`, `when-let`,
+`if-some`, `when-some`, `doseq`) -- the name may be a *binding form* that
+takes a value apart, as in Clojure:
+
+```clojure
+(let [[a b & more :as all] [1 2 3 4]]
+  [a b more all])                    ;; => [1 2 (3 4) [1 2 3 4]]
+
+(let [{x :x, :keys [y z], :strs [s], :or {z 0}, :as m} {:x 1 :y 2 "s" 3}]
+  [x y z s])                         ;; => [1 2 0 3]
+
+(defn area [{:keys [w h] :or {h 1}}] (* w h))
+(area {:w 3 :h 2})                   ;; => 6
+
+(doseq [[k v] {:a 1}] (println k v)) ;; prints :a 1
+```
+
+- **Sequential** `[...]`: each name takes the next element (`nth` with a
+  `nil` default, so missing elements are `nil`); `& r` binds the rest as a
+  seq (`nil` when empty); `:as all` binds the whole value. Works on
+  vectors, lists, strings (one-character strings, D3), maps (entries as
+  `[k v]`) and `nil`. Only `:as` may follow the rest binding.
+- **Associative** `{...}`: `{x :x}` binds `x` to `(get m :x)` (the key is an
+  expression); `:keys [a b]` binds `a` and `b` to the keywords `:a` and
+  `:b`, `:strs` to string keys and `:syms` to symbol keys; `:keys [a/b]` and
+  `:a/keys [b]` read the qualified keyword `:a/b`. `:or {a default}` gives a
+  default used only when the key is missing (a present `nil` or `false`
+  stays), and `:as m` binds the map. A seq of key/value pairs destructures
+  as the map they make, so `[& {:as opts}]` collects trailing keyword
+  arguments.
+- Binding forms nest: `(let [[[a b] {[c d] :pt}] v] ...)`.
+- `& {:keys [...] :or {...} :as m}` in a parameter vector, with plain
+  symbols in `:keys`, keeps protoClojure's keyword-argument call convention
+  (§5.1, D16); any other map after `&` destructures the rest arguments.
+
+The compiler rewrites a binding form into the plain bindings that
+`clojure.core/destructure` would produce (`vec__N`, `seq__N`, `map__N`
+locals read with `nth`, `first`, `next` and `get`), so the cost is the cost
+of those calls. A form that is not a symbol, a vector or a map is a compile
+error, `Unsupported binding form: 1`.
+
 ---
 
 ## 6. Special forms — the irreducible set
@@ -778,9 +823,9 @@ in Clojure, with Clojure's definitions and expansions:
 | Macros | Notes |
 |---|---|
 | `when` `when-not` `if-not` `cond` `comment` `while` | `cond` with an odd number of forms is an expansion error |
-| `if-let` `when-let` `if-some` `when-some` | the binding vector holds one symbol and a test (no destructuring yet) |
+| `if-let` `when-let` `if-some` `when-some` | the binding vector holds one binding form (a symbol or a destructuring form, §5.4) and a test |
 | `->` `->>` `as->` `some->` `some->>` `cond->` `cond->>` `doto` | |
-| `dotimes` `doseq` | `doseq` nests several bindings; no `:let` / `:when` / `:while` yet |
+| `dotimes` `doseq` | `doseq` nests several bindings, each a binding form (§5.4); no `:let` / `:when` / `:while` yet |
 | `case` `condp` | `case` constants are not evaluated, a list groups alternatives; no match and no default raises `IllegalArgumentException: No matching clause: x` (D44) |
 | `with-open` `future` | |
 

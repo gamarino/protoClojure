@@ -128,6 +128,12 @@ The design specifications written during development are archived under
 - [x] `let` — inside function bodies only
 - [x] `loop` — inside function bodies only
 - [x] `recur` — inside `loop` and at the top of a fn body (implicit recur target)
+- [x] Destructuring (DESIGN.md §10.2, M23) in `let`, `loop`, `fn`, `defn`,
+      `defmacro` parameters and the `core.clj` binding macros: sequential
+      `[a b & r :as all]`, associative `{x :x :keys [...] :strs [...]
+      :syms [...] :or {...} :as m}` with `:ns/keys`, nested forms; `:or`
+      applies to missing keys only, as in Clojure (the `& {:keys ...}`
+      keyword-argument path keeps D16)
 - [x] `if`
 - [x] `do`
 - [x] `quote` — of symbols, keywords and other atoms (list quoting is not implemented)
@@ -458,14 +464,11 @@ raises a read, compile or runtime error.
 (`let` and `loop` at the top level and docstrings in `defn` / `defmacro`
 work since macros stage 4.)
 
-- [ ] Vector and map destructuring in `let` and in parameter vectors (only `& {:keys ...}` works)
 - [ ] `(apply f x y coll)` with leading arguments (`apply` over a list, a
       vector or nil works)
 - [ ] `let*` / `fn*` raw forms
 - [ ] `var` form
 - [ ] `letfn` (needs a `letfn*` form; DESIGN.md §10.1, M22)
-- [ ] Destructuring in the binding forms of `when-let`, `if-let`, `doseq`
-      (symbols only; Part B, stage 7)
 - [ ] `doseq` modifiers `:let`, `:when`, `:while` (Part B, stage 10)
 
 ### Data structures (not yet)
@@ -529,9 +532,10 @@ four shapes work end to end:
       `opts` receives the raw kwArgs map (or nil when none was supplied).
 - [x] Reader: map literals `{...}`.
 
-Still planned:
-- [ ] Keyword shorthand `:strs` / `:syms`.
-- [ ] Per-key destructuring outside the kwArgs map (`{x :x}` binding).
+Since Part B, stage 7, a `& {...}` map with `:strs`, `:syms`, `{x :x}`
+entries or nested forms destructures the rest arguments as a map instead
+(DESIGN.md §10.2, M23); `:keys`, `:or` and `:as` alone keep the
+keyword-argument path.
 
 See the archived
 [call-convention design](archive/design-specs/2026-06-14-protocore-call-convention.md)
@@ -614,7 +618,7 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D13 | `read-string` strict on unregistered reader literals       | core   |
 | D14 | LargeInteger promotion is automatic in `+ - * / inc dec`, so `(* 9223372036854775807 2)` is `18446744073709551614` where JVM Clojure throws `ArithmeticException: integer overflow` — no `+'` / `*'` needed; big integers are not a separate type, so the `N` suffix is accepted but does not change the value or how it prints (CONTRA Clojure-JVM, by design) | (perm) |
 | D15 | `(= 1 1.0)` returns `true` in v0.x (CONTRA Clojure-JVM where `=` is type-strict). Map keys do **not** follow `=` across numeric types: `1`, `1.0`, an equal big integer, and `0` / `-0.0` are different keys, as in JVM Clojure, so `(hash-map 1 :a 1.0 :b)` has two entries and `(= {1 :a} {1.0 :a})` is `false` | (perm) |
-| D16 | `:or` defaults fire on **explicit nil** as well as missing keys (CONTRA JVM-Clojure where only missing keys take the default) | v0.2 |
+| D16 | In the keyword-argument form `& {:keys [...] :or {...}}` of a parameter vector, `:or` defaults fire on **explicit nil** as well as missing keys (CONTRA JVM-Clojure where only missing keys take the default). Every other map binding form (`let`, positional parameters, `& {:strs ...}`, ...) follows Clojure (DESIGN.md §10.2, M23) | v0.2 |
 | D17 | String ops (`upper-case`, `lower-case`, `split`, `reverse`, `trim`, `index-of`) are byte-level / ASCII-correct only; multi-byte UTF-8 codepoints traverse as bytes (CONTRA JVM-Clojure which is codepoint-aware) | v0.2 |
 | D18 | `(fn name [args] body)` — the name is accepted by the compiler but dropped; self-reference via `name` inside the body is not supported (use `defn` for self-recursion). Planned for v0.2 via wrapper-into-slot capture. | v0.2 |
 | D20 | Atoms, futures, promises, actors and fns print as tags such as `#<atom 1>`, `#<fn>` and `#<fn println>` in `println`, `str` and the REPL (JVM Clojure: `#object[clojure.lang.Atom 0x... {:status :ready, :val 1}]` when printed, and `clojure.lang.Atom@...` or the class name under `str`) | v0.x |

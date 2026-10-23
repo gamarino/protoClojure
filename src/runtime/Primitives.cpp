@@ -2916,6 +2916,30 @@ const proto::ProtoObject* prim_raise_illegal_argument(proto::ProtoContext* ctx,
     throwClassed(ctx, "IllegalArgumentException", message);
 }
 
+// (__destructure-map v) — what a map binding form destructures, as
+// clojure.core/destructure computes it: a seq (here, a list) of alternating
+// keys and values becomes the map they make (`[& {:as opts}]` called with
+// `:a 1`), a one-element seq its element (a trailing map, Clojure 1.11), an
+// empty seq the empty map; any other value is itself.
+const proto::ProtoObject* prim_destructure_map(proto::ProtoContext* ctx,
+                                               const proto::ProtoObject*,
+                                               const proto::ParentLink*,
+                                               const proto::ProtoArguments* args,
+                                               const proto::ProtoKeywordArguments*) {
+    const proto::ProtoObject* v = (args && args->getSize(ctx) == 1) ? args->getAt(ctx, 0) : PROTO_NONE;
+    if (!isListTag(v)) return v;
+    const proto::ProtoList* lst = v->asList(ctx);
+    const proto::proto_ulong n = lst->getSize(ctx);
+    if (n == 1) return lst->getFirst(ctx);
+    if (n % 2 != 0)
+        throwClassed(ctx, "IllegalArgumentException",
+                     "No value supplied for key: " + printedValue(ctx, lst->getAt(ctx, static_cast<int>(n - 1))));
+    std::vector<const proto::ProtoObject*> kv;
+    kv.reserve(n);
+    for (proto::proto_ulong i = 0; i < n; ++i) kv.push_back(lst->getAt(ctx, static_cast<int>(i)));
+    return mapAssocPairs(ctx, nullptr, kv.data(), n);
+}
+
 // Sequence helpers macros reach for --------------------------------------
 
 // (second coll) — (first (next coll)).
@@ -3230,6 +3254,9 @@ constexpr PrimitiveEntry kPrimitives[] = {
     {"even?",   &prim_even_p},
     {"odd?",    &prim_odd_p},
     {"__raise-illegal-argument", &prim_raise_illegal_argument},
+
+    // Destructuring (compiler/Compiler.h, destructure).
+    {"__destructure-map", &prim_destructure_map},
 };
 
 // A linear scan of the entries; printing a function is not a hot path.

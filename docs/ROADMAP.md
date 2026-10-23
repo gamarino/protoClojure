@@ -128,6 +128,17 @@ Work in progress on branch `feature/macros`, in six stages
 6. [x] `clojure.core` macros in a bootstrap `core.clj` (embedded in the
    binary; `and` / `or` stay in C++).
 
+Part B of the macros brief, the scripting vocabulary, on the same branch:
+
+7. [x] Destructuring in `let`, `loop`, `fn`, `defn`, `defmacro` and the
+   binding macros (DESIGN.md §10.2, M23).
+8. [ ] Sets and `clojure.set`.
+9. [ ] Regular expressions.
+10. [ ] `format` / `printf`, `doseq` modifiers, `for`.
+11. [ ] Lazy sequences.
+12. [ ] JSON and EDN.
+13. [ ] Showcase against Babashka.
+
 - A minimal `core.clj` shipped with the runtime; `protoclj` evaluates it
   before any user code.
 - Re-implement `every?`, `some?`, `comp`, `partial`, `juxt`, the threading

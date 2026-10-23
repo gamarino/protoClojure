@@ -111,6 +111,31 @@ std::size_t addIntegerConst(proto::ProtoContext* ctx,
     }
 }
 
+// The list form of `items`, in order, for the forms the compiler builds
+// itself. Allocated in `ctx`, whose young generation protects it (and the
+// items) until the caller roots it.
+const proto::ProtoObject* listForm(proto::ProtoContext* ctx,
+                                   std::initializer_list<const proto::ProtoObject*> items) {
+    const proto::ProtoList* l = ctx->newList();
+    for (const proto::ProtoObject* item : items) l = l->appendLast(ctx, item);
+    return l->asObject(ctx);
+}
+
+// A fresh generated symbol `prefixN`, as the gensyms clojure.core's
+// destructure uses (`vec__12`, `map__13`).
+const proto::ProtoObject* freshSymbol(proto::ProtoContext* ctx, const NamedLayout& named,
+                                      const char* prefix) {
+    const std::string s = prefix + std::to_string(nextGensymId());
+    return internNamed(ctx, named, s.c_str());
+}
+
+// The form as `pr` prints it, for an error message.
+std::string printedForm(proto::ProtoContext* ctx, const proto::ProtoObject* form) {
+    std::string s;
+    printValueTo(ctx, s, form, /*readable=*/true);
+    return s;
+}
+
 } // namespace
 
 // True iff `form` is a keyword: a named value spelled with a leading `:`.
@@ -151,6 +176,196 @@ Compiler::mapFormEntries(proto::ProtoContext* ctx, const proto::ProtoObject* m) 
             out->push_back(v);
         });
     return kv;
+}
+
+// Destructuring, following clojure.core/destructure (Clojure 1.11):
+//
+//   [a b & r :as all] v   vec__ v, all vec__, seq__ (seq vec__),
+//                         first__ (first seq__), seq__ (next seq__), a first__,
+//                         ... r seq__
+//   [a b] v               vec__ v, a (nth vec__ 0 nil), b (nth vec__ 1 nil)
+//   {a :a :keys [b] :strs [c] :syms [d] :or {b 1} :as m} v
+//                         map__ v, map__ (__destructure-map map__), m map__,
+//                         a (get map__ :a), b (get map__ :b 1),
+//                         c (get map__ "c"), d (get map__ 'd)
+//
+// Nested forms recurse on the expression that reads their part. Generated
+// names are rebound freely (`seq__` once per element): a `let` binding gets a
+// fresh slot each time, so each read sees the binding before it.
+void Compiler::destructure(proto::ProtoContext* ctx, const CompilerMarkers& markers,
+                           const proto::ProtoObject* pattern, const proto::ProtoObject* value,
+                           std::vector<const proto::ProtoObject*>& out) const {
+    checkNativeStack(StackUse::Source);
+    const NamedLayout& named = markers.named;
+    auto sym = [&](const char* s) { return internNamed(ctx, named, s); };
+
+    if (isNameForm(ctx, named, pattern)) {
+        const std::string s = nameOf(ctx, named, pattern);
+        if (!s.empty() && s[0] == ':')
+            throw CompileError("Unsupported binding form: " + s);
+        out.push_back(pattern);
+        out.push_back(value);
+        return;
+    }
+
+    if (isVector(pattern)) {
+        const proto::ProtoList* items = vectorItems(ctx, pattern);
+        const proto::proto_ulong n = items->getSize(ctx);
+        const proto::ProtoObject* amp = sym("&");
+        const proto::ProtoObject* asKw = sym(":as");
+        bool hasRest = false;
+        for (proto::proto_ulong i = 0; i < n; ++i)
+            if (items->getAt(ctx, static_cast<int>(i)) == amp) hasRest = true;
+        const proto::ProtoObject* gvec = freshSymbol(ctx, named, "vec__");
+        out.push_back(gvec);
+        out.push_back(value);
+        const proto::ProtoObject* gseq = nullptr;
+        if (hasRest) {
+            gseq = freshSymbol(ctx, named, "seq__");
+            out.push_back(gseq);
+            out.push_back(listForm(ctx, {sym("clojure.core/seq"), gvec}));
+        }
+        bool seenRest = false;
+        long long index = 0;
+        for (proto::proto_ulong i = 0; i < n; ++i) {
+            const proto::ProtoObject* b = items->getAt(ctx, static_cast<int>(i));
+            if (b == amp || b == asKw) {
+                if (i + 1 >= n)
+                    throw CompileError(std::string("Unsupported binding form, missing binding after ") +
+                                       (b == amp ? "&" : ":as"));
+                const proto::ProtoObject* target = items->getAt(ctx, static_cast<int>(i + 1));
+                if (b == amp) {
+                    if (seenRest)
+                        throw CompileError("Unsupported binding form, only :as can follow & parameter");
+                    destructure(ctx, markers, target, gseq, out);
+                    seenRest = true;
+                    ++i;
+                    continue;
+                }
+                // `:as` binds the whole value; Clojure ignores what follows.
+                destructure(ctx, markers, target, gvec, out);
+                return;
+            }
+            if (seenRest)
+                throw CompileError("Unsupported binding form, only :as can follow & parameter");
+            if (hasRest) {
+                const proto::ProtoObject* gfirst = freshSymbol(ctx, named, "first__");
+                out.push_back(gfirst);
+                out.push_back(listForm(ctx, {sym("clojure.core/first"), gseq}));
+                out.push_back(gseq);
+                out.push_back(listForm(ctx, {sym("clojure.core/next"), gseq}));
+                destructure(ctx, markers, b, gfirst, out);
+            } else {
+                destructure(ctx, markers, b,
+                            listForm(ctx, {sym("clojure.core/nth"), gvec,
+                                           ctx->fromLong(index), PROTO_NONE}),
+                            out);
+            }
+            ++index;
+        }
+        return;
+    }
+
+    if (isMap(pattern)) {
+        const std::vector<const proto::ProtoObject*> entries = mapFormEntries(ctx, pattern);
+        const proto::ProtoObject* gmap = freshSymbol(ctx, named, "map__");
+        out.push_back(gmap);
+        out.push_back(value);
+        out.push_back(gmap);
+        out.push_back(listForm(ctx, {sym("clojure.core/__destructure-map"), gmap}));
+        // :or defaults, by the name of the local they default.
+        std::unordered_map<std::string, const proto::ProtoObject*> defaults;
+        for (std::size_t j = 0; j < entries.size(); j += 2) {
+            if (entries[j] != sym(":or")) continue;
+            if (!isMap(entries[j + 1])) throw CompileError(":or must be a map, got " + printedForm(ctx, entries[j + 1]));
+            const std::vector<const proto::ProtoObject*> ors = mapFormEntries(ctx, entries[j + 1]);
+            for (std::size_t t = 0; t < ors.size(); t += 2) {
+                if (!isNameForm(ctx, named, ors[t]))
+                    throw CompileError(":or key must be a symbol, got " + printedForm(ctx, ors[t]));
+                defaults[nameOf(ctx, named, ors[t])] = ors[t + 1];
+            }
+        }
+        auto getForm = [&](const proto::ProtoObject* key, const std::string& local) {
+            auto it = defaults.find(local);
+            if (it == defaults.end()) return listForm(ctx, {sym("clojure.core/get"), gmap, key});
+            return listForm(ctx, {sym("clojure.core/get"), gmap, key, it->second});
+        };
+        for (std::size_t j = 0; j < entries.size(); j += 2) {
+            const proto::ProtoObject* k = entries[j];
+            const proto::ProtoObject* v = entries[j + 1];
+            if (k == sym(":or")) continue;
+            if (k == sym(":as")) {
+                if (!isNameForm(ctx, named, v) || isKeywordForm(ctx, named, v))
+                    throw CompileError(":as must be followed by a symbol, got " + printedForm(ctx, v));
+                out.push_back(v);
+                out.push_back(gmap);
+                continue;
+            }
+            if (isKeywordForm(ctx, named, k)) {
+                // :keys, :strs, :syms, or :ns/keys and :ns/syms.
+                const std::string kw = nameOf(ctx, named, k).substr(1);
+                const std::size_t slash = kw.find('/');
+                const std::string kind = slash == std::string::npos ? kw : kw.substr(slash + 1);
+                const std::string kwNs = slash == std::string::npos ? "" : kw.substr(0, slash);
+                if (kind != "keys" && kind != "strs" && kind != "syms")
+                    throw CompileError("Unsupported binding key: " + nameOf(ctx, named, k));
+                if (kind == "strs" && !kwNs.empty())
+                    throw CompileError("Unsupported binding key: " + nameOf(ctx, named, k));
+                if (!isVector(v))
+                    throw CompileError(nameOf(ctx, named, k) + " must be followed by a vector, got " +
+                                       printedForm(ctx, v));
+                const proto::ProtoList* names = vectorItems(ctx, v);
+                const proto::proto_ulong nn = names->getSize(ctx);
+                for (proto::proto_ulong t = 0; t < nn; ++t) {
+                    const proto::ProtoObject* s = names->getAt(ctx, static_cast<int>(t));
+                    if (!isNameForm(ctx, named, s))
+                        throw CompileError("Unsupported binding form: " + printedForm(ctx, s));
+                    std::string spelled = nameOf(ctx, named, s);
+                    if (spelled[0] == ':') spelled.erase(0, 1);  // `:keys [:a]`
+                    const std::size_t sl = spelled.find('/');
+                    const std::string local = sl == std::string::npos ? spelled : spelled.substr(sl + 1);
+                    std::string full = spelled;  // the key's namespace/name
+                    if (sl == std::string::npos && !kwNs.empty()) full = kwNs + "/" + spelled;
+                    const proto::ProtoObject* key = nullptr;
+                    if (kind == "keys") key = sym((":" + full).c_str());
+                    else if (kind == "strs") key = ctx->fromUTF8String(local.c_str());
+                    else key = listForm(ctx, {sym("quote"), sym(full.c_str())});
+                    out.push_back(sym(local.c_str()));
+                    out.push_back(getForm(key, local));
+                }
+                continue;
+            }
+            // {binding-form key}: the key is an expression, as in Clojure.
+            if (isNameForm(ctx, named, k)) {
+                out.push_back(k);
+                out.push_back(getForm(v, nameOf(ctx, named, k)));
+            } else {
+                destructure(ctx, markers, k, listForm(ctx, {sym("clojure.core/get"), gmap, v}), out);
+            }
+        }
+        return;
+    }
+
+    throw CompileError("Unsupported binding form: " + printedForm(ctx, pattern));
+}
+
+const proto::ProtoObject* Compiler::destructureBindings(proto::ProtoContext* ctx,
+                                                        const CompilerMarkers& markers,
+                                                        const proto::ProtoList* bindings) const {
+    const proto::proto_ulong n = bindings->getSize(ctx);
+    bool simple = true;
+    for (proto::proto_ulong i = 0; i < n; i += 2) {
+        const proto::ProtoObject* b = bindings->getAt(ctx, static_cast<int>(i));
+        if (!isNameForm(ctx, markers.named, b) || isKeywordForm(ctx, markers.named, b)) simple = false;
+    }
+    if (simple) return nullptr;
+    std::vector<const proto::ProtoObject*> flat;
+    for (proto::proto_ulong i = 0; i + 1 < n; i += 2)
+        destructure(ctx, markers, bindings->getAt(ctx, static_cast<int>(i)),
+                    bindings->getAt(ctx, static_cast<int>(i + 1)), flat);
+    const proto::ProtoList* l = ctx->newList();
+    for (const proto::ProtoObject* f : flat) l = l->appendLast(ctx, f);
+    return newVector(ctx, l);
 }
 
 std::unique_ptr<BytecodeModule>
@@ -198,6 +413,79 @@ Compiler::compileArity(proto::ProtoContext* ctx,
                        const proto::ProtoList* arityForm,
                        proto::proto_ulong bodyStartIdx,
                        const CompilerMarkers& markers) {
+    // Destructured parameters, as clojure.core/fn does it: each parameter
+    // that is a vector or map form becomes a generated symbol p__N, and the
+    // body is compiled as (let [form p__N ...] body...). `& [a b]` and a
+    // `& {...}` map the keyword-argument path below cannot take (anything
+    // but symbol :keys, :or and :as) become a variadic rest bound the same
+    // way. The rewritten forms are rooted in this scope's slots.
+    proto::ProtoContext dscope(ctx->space, ctx);
+    dscope.resizeAutomaticLocals(2);
+    ctx = &dscope;
+    {
+        const proto::proto_ulong pc = params->getSize(ctx);
+        auto kwPathTakes = [&](const proto::ProtoObject* m) {
+            const std::vector<const proto::ProtoObject*> es = mapFormEntries(ctx, m);
+            bool keys = false;
+            for (std::size_t j = 0; j < es.size(); j += 2) {
+                if (!isNameForm(ctx, markers.named, es[j])) return false;
+                const std::string k = nameOf(ctx, markers.named, es[j]);
+                if (k == ":keys") {
+                    if (!isVector(es[j + 1])) return false;
+                    const proto::ProtoList* ks = vectorItems(ctx, es[j + 1]);
+                    for (proto::proto_ulong t = 0; t < ks->getSize(ctx); ++t) {
+                        const proto::ProtoObject* s = ks->getAt(ctx, static_cast<int>(t));
+                        if (!isNameForm(ctx, markers.named, s) || isKeywordForm(ctx, markers.named, s) ||
+                            isQualifiedName(nameOf(ctx, markers.named, s)))
+                            return false;
+                    }
+                    keys = true;
+                } else if (k == ":or") {
+                    if (!isMap(es[j + 1])) return false;
+                } else if (k == ":as") {
+                    if (!isNameForm(ctx, markers.named, es[j + 1])) return false;
+                } else {
+                    return false;
+                }
+            }
+            return keys;
+        };
+        std::vector<const proto::ProtoObject*> pairs;  // form, generated symbol
+        const proto::ProtoList* effective = ctx->newList();
+        for (proto::proto_ulong i = 0; i < pc; ++i) {
+            const proto::ProtoObject* p = params->getAt(ctx, static_cast<int>(i));
+            const bool afterAmp = i > 0 && isNameForm(ctx, markers.named, params->getAt(ctx, static_cast<int>(i - 1))) &&
+                                  nameOf(ctx, markers.named, params->getAt(ctx, static_cast<int>(i - 1))) == "&";
+            if (!isVector(p) && !isMap(p) &&
+                (!isNameForm(ctx, markers.named, p) || isKeywordForm(ctx, markers.named, p)))
+                throw CompileError("Unsupported binding form: " + printedForm(ctx, p));
+            if (isVector(p) || (isMap(p) && !(afterAmp && kwPathTakes(p)))) {
+                const proto::ProtoObject* g = freshSymbol(ctx, markers.named, "p__");
+                pairs.push_back(p);
+                pairs.push_back(g);
+                effective = effective->appendLast(ctx, g);
+            } else {
+                effective = effective->appendLast(ctx, p);
+            }
+        }
+        if (!pairs.empty()) {
+            dscope.setAutomaticLocal(0, effective->asObject(ctx));
+            params = dscope.getAutomaticLocal(0)->asList(ctx);
+            const proto::ProtoList* bvec = ctx->newList();
+            for (const proto::ProtoObject* f : pairs) bvec = bvec->appendLast(ctx, f);
+            const proto::ProtoList* letForm = ctx->newList()
+                ->appendLast(ctx, symbolForm(ctx, markers.named, "let"))
+                ->appendLast(ctx, newVector(ctx, bvec));
+            const proto::proto_ulong an = arityForm->getSize(ctx);
+            for (proto::proto_ulong i = bodyStartIdx; i < an; ++i)
+                letForm = letForm->appendLast(ctx, arityForm->getAt(ctx, static_cast<int>(i)));
+            // The arity becomes ([params] (let [...] body...)).
+            dscope.setAutomaticLocal(1, ctx->newList()
+                ->appendLast(ctx, PROTO_NONE)->appendLast(ctx, letForm->asObject(ctx))->asObject(ctx));
+            arityForm = dscope.getAutomaticLocal(1)->asList(ctx);
+            bodyStartIdx = 1;
+        }
+    }
     proto::proto_ulong n = arityForm->getSize(ctx);
     proto::proto_ulong rawCount = params->getSize(ctx);
 
@@ -1234,6 +1522,23 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (bn % 2 != 0) {
                 throw CompileError("let: bindings must come in name/value pairs");
             }
+            // Destructuring: `(let [[a b] v] ...)` is compiled as the `let`
+            // of the symbol bindings it stands for (destructure), rooted in
+            // a slot of its own scope while it is compiled.
+            {
+                proto::ProtoContext scope(ctx->space, ctx);
+                scope.resizeAutomaticLocals(1);
+                if (const proto::ProtoObject* flat = destructureBindings(&scope, markers, bvec)) {
+                    scope.setAutomaticLocal(0, flat);
+                    const proto::ProtoList* rebuilt = scope.newList()
+                        ->appendLast(&scope, head)->appendLast(&scope, scope.getAutomaticLocal(0));
+                    for (proto::proto_ulong i = 2; i < n; ++i)
+                        rebuilt = rebuilt->appendLast(&scope, lst->getAt(&scope, static_cast<int>(i)));
+                    scope.setAutomaticLocal(0, rebuilt->asObject(&scope));
+                    compileForm(&scope, scope.getAutomaticLocal(0), out, markers);
+                    return;
+                }
+            }
             // The names the bindings shadow, restored once the body is
             // compiled: a binding is in scope in the let's body only.
             BindingRestore restore(scopes_);
@@ -1280,6 +1585,48 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             proto::proto_ulong bn = bvec->getSize(ctx);
             if (bn % 2 != 0) {
                 throw CompileError("loop: bindings must come in name/value pairs");
+            }
+            // Destructuring, as clojure.core/loop does it: a binding form that
+            // is not a symbol is bound to a generated local g, which the loop
+            // rebinds and the body destructures:
+            //   (let [g v form g ...] (loop [g g ...] (let [form g ...] body)))
+            // so later inits see the earlier destructured names.
+            {
+                bool simple = true;
+                for (proto::proto_ulong i = 0; i < bn; i += 2) {
+                    const proto::ProtoObject* b = bvec->getAt(ctx, static_cast<int>(i));
+                    if (!isNameForm(ctx, markers.named, b) || isKeywordForm(ctx, markers.named, b)) simple = false;
+                }
+                if (!simple) {
+                    proto::ProtoContext scope(ctx->space, ctx);
+                    scope.resizeAutomaticLocals(1);
+                    const proto::ProtoList* outer = scope.newList();
+                    const proto::ProtoList* loopBs = scope.newList();
+                    const proto::ProtoList* inner = scope.newList();
+                    for (proto::proto_ulong i = 0; i < bn; i += 2) {
+                        const proto::ProtoObject* b = bvec->getAt(&scope, static_cast<int>(i));
+                        const proto::ProtoObject* v = bvec->getAt(&scope, static_cast<int>(i + 1));
+                        const bool isSym = isNameForm(&scope, markers.named, b);
+                        const proto::ProtoObject* g = isSym ? b : freshSymbol(&scope, markers.named, "p__");
+                        outer = outer->appendLast(&scope, g)->appendLast(&scope, v);
+                        if (!isSym) {
+                            outer = outer->appendLast(&scope, b)->appendLast(&scope, g);
+                            inner = inner->appendLast(&scope, b)->appendLast(&scope, g);
+                        }
+                        loopBs = loopBs->appendLast(&scope, g)->appendLast(&scope, g);
+                    }
+                    const proto::ProtoList* innerLet = scope.newList()
+                        ->appendLast(&scope, symbolForm(&scope, markers.named, "let"))
+                        ->appendLast(&scope, newVector(&scope, inner));
+                    for (proto::proto_ulong i = 2; i < n; ++i)
+                        innerLet = innerLet->appendLast(&scope, lst->getAt(&scope, static_cast<int>(i)));
+                    const proto::ProtoObject* loopForm = listForm(&scope,
+                        {head, newVector(&scope, loopBs), innerLet->asObject(&scope)});
+                    scope.setAutomaticLocal(0, listForm(&scope,
+                        {symbolForm(&scope, markers.named, "let"), newVector(&scope, outer), loopForm}));
+                    compileForm(&scope, scope.getAutomaticLocal(0), out, markers);
+                    return;
+                }
             }
             std::vector<int> recurSlots;
             BindingRestore restore(scopes_);

@@ -9,6 +9,27 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — scripting vocabulary, stage 7: destructuring
+
+- **Destructuring** (DESIGN.md §10.2, M23) in `let`, `loop`, the
+  parameters of `fn`, `defn` and `defmacro`, and the `core.clj` binding
+  macros (`if-let`, `when-let`, `if-some`, `when-some`, `doseq`):
+  `[a b & r :as all]`, `{x :x :keys [...] :strs [...] :syms [...] :or {...}
+  :as m}`, `:ns/keys`, nested forms. The compiler rewrites a binding form
+  into the bindings `clojure.core/destructure` produces. `:or` applies to
+  missing keys only, except in the keyword-argument form `& {:keys ...}`,
+  which keeps D16. A seq of key/value pairs destructures as their map
+  (`[& {:as opts}]`). New internal built-in `__destructure-map`.
+- Errors with Clojure's messages: `Unsupported binding form: :a`,
+  `Unsupported binding form, only :as can follow & parameter`, `No value
+  supplied for key: :b`. A parameter that is a keyword or a number used to
+  be `fn/defn: parameter name must be a symbol`.
+- New tests: 23 fixtures in `tests/conformance/33-destructuring/` (the
+  README, LANGUAGE §5.4 and tutorial chapter 5 snippets among them), the
+  CLI checks `cli/destructuring-survives-gc` (compile-time rewrites and
+  run-time destructuring under a 1,000,000-cell ceiling, as a file and at
+  the REPL) and `cli/repl-scripting` (destructuring typed at the REPL).
+
 ### Added — macros, stage 6: the `clojure.core` macros in `core.clj`
 
 - **`core.clj`** (`src/core/core.clj`, DESIGN.md §10.1, M20): the part of

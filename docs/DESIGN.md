@@ -1091,8 +1091,8 @@ definitions, and the functions `identity`, `some?`, `true?`, `false?`,
 `zero?`, `pos?`, `neg?`, `nnext`, `ffirst`, `nthnext`, `butlast`
 (`even?` and `odd?` are new C++ built-ins). Binding macros check their
 binding vector at expansion time and raise `IllegalArgumentException` with
-Clojure's messages. Differences: binding forms are symbols only until
-destructuring lands (Part B, stage 7); `doseq` has no `:let`, `:when` or
+Clojure's messages; since Part B stage 7 their binding forms destructure
+(M23). Differences: `doseq` has no `:let`, `:when` or
 `:while` yet (stage 10); `case` tests its constants one after the other
 with `=` instead of a constant-time hash dispatch, so it costs O(n) in the
 number of clauses (D44), and its constants are compared with protoClojure's
@@ -1100,6 +1100,40 @@ number of clauses (D44), and its constants are compared with protoClojure's
 recursive local functions need a `letfn*` that binds names before the
 functions exist, and closures here capture locals by value when they are
 created (with D18, no fn can name itself).
+
+### 10.2 Decisions of the scripting vocabulary (macros brief, Part B)
+
+**M23. Destructuring is a compile-time rewrite in the C++ compiler, into
+Clojure's own expansion** (*agent, pending review*). `let`, `loop` and the
+parameter vectors of `fn`, `defn` and `defmacro` accept binding forms:
+`[a b & r :as all]` and `{x :x :keys [...] :strs [...] :syms [...] :or {...}
+:as m}` (and `:ns/keys`, `:ns/syms`), nested. `Compiler::destructure`
+(`src/compiler/Compiler.cpp`) turns a binding form into the symbol bindings
+`clojure.core/destructure` produces -- `vec__N`, `seq__N`, `first__N` and
+`map__N` locals read with `clojure.core/nth` (with a `nil` default),
+`first`, `next`, `seq` and `get`, and `__destructure-map` for a map form
+(a seq of pairs becomes their map, as Clojure's `createAsIfByAssoc`) -- and
+the compiler compiles that `let`. `loop` is rewritten as Clojure's macro
+does, `(let [g v form g] (loop [g g] (let [form g] body)))`, so an init
+sees the names earlier forms destructured and `recur` re-destructures; a
+destructured parameter becomes `p__N` and the body `(let [form p__N] ...)`,
+so the implicit `recur` of a fn works too. The binding macros of
+`core.clj` (`if-let`, `when-let`, `if-some`, `when-some`, `doseq`) needed
+no change: they expand into `let`. `& {:keys [...] :or {...} :as m}` with
+symbol keys keeps the keyword-argument call convention (D16, its `:or`
+fires on an explicit nil); any other map after `&`, and every map form
+elsewhere, destructures with Clojure's semantics (`:or` only for a missing
+key). Errors use Clojure's messages (`Unsupported binding form: 1`, `Unsupported
+binding form, only :as can follow & parameter`). Alternatives: (a)
+`destructure` as a Clojure function in `core.clj`, as JVM Clojure has it;
+rejected because `let`, `loop` and `fn` are C++ forms that `core.clj` itself
+uses before it could define it, and it would add its definition to every
+start-up; (b) dedicated opcodes that read positions and keys; rejected:
+each read is one call either way, and the rewrite keeps the expansion
+identical to Clojure's; (c) taking `& {:keys}` off the keyword-argument
+path; rejected because the call convention is how protoClojure functions
+take named arguments from other protoCore runtimes. `macroexpand` does not
+show the rewrite, since `let` and `fn` are compiled, not expanded (D41).
 
 ## 11. The standard library
 

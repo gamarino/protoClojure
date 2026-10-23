@@ -27,9 +27,10 @@ under a `Dnn` id.
 >   `macroexpand-1`, `macroexpand` and `eval` (chapter 11); the
 >   `clojure.core` macros (`when-let`, `if-let`, the threading macros,
 >   `doto`, `doseq`, `dotimes`, `case`, `condp`, ...) from `core.clj`, with
->   symbol-only bindings and no `letfn`. Other reader macros, sets, most
+>   no `letfn`; destructuring in `let`, `loop`, parameter vectors and the
+>   binding macros. Other reader macros, sets, most
 >   collection functions, lazy sequences, the higher-order combinators,
->   destructuring, namespaces, vars and `binding`, volatiles and delays are
+>   namespaces, vars and `binding`, volatiles and delays are
 >   not implemented yet. Exceptions are implemented: `try` / `catch` /
 >   `finally`, `throw`, `ex-info`, `ex-data`, `ex-message`, `ex-cause`
 >   (§3.3.6 lists the differences).

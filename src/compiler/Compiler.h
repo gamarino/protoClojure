@@ -238,6 +238,25 @@ private:
     void compileDefmacro(proto::ProtoContext* ctx, const proto::ProtoList* lst,
                          BytecodeModule& out, const CompilerMarkers& markers);
 
+    // Destructuring (docs/DESIGN.md §10.1, M23), as clojure.core/destructure
+    // does it: appends to `out` the symbol/expression pairs that bind the
+    // binding form `pattern` (a symbol, a vector or a map form) to the value
+    // of `value`, in order. The expressions it builds call clojure.core/nth,
+    // first, next, seq, get and __destructure-map on generated locals
+    // (vec__N, seq__N, first__N, map__N). The forms are allocated in `ctx`,
+    // which the caller keeps alive (and roots the result in) until they are
+    // compiled. An unsupported form is a CompileError with Clojure's message.
+    void destructure(proto::ProtoContext* ctx, const CompilerMarkers& markers,
+                     const proto::ProtoObject* pattern, const proto::ProtoObject* value,
+                     std::vector<const proto::ProtoObject*>& out) const;
+
+    // The binding vector `bindings` (pattern/value pairs) with every pattern
+    // destructured into symbols: a vector form of symbol/value pairs, built in
+    // `ctx`, or nullptr when every pattern already is a symbol.
+    const proto::ProtoObject* destructureBindings(proto::ProtoContext* ctx,
+                                                  const CompilerMarkers& markers,
+                                                  const proto::ProtoList* bindings) const;
+
     // Compiles `form` as the body of a zero-argument fn called on the spot,
     // `((fn [] form))`: how a top-level form that needs local slots (`let`,
     // `loop`, `try`) runs, since the top level has none.

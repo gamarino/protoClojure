@@ -124,6 +124,10 @@ add_test(NAME cli/core-embedded
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/core-embedded.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/macro-expansion-survives-gc
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/macro-expansion-survives-gc.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/destructuring-survives-gc
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/destructuring-survives-gc.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/repl-scripting
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/repl-scripting.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/file-form-by-form
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/file-form-by-form.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/repl-forms-in-order

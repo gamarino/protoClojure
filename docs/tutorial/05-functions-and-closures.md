@@ -5,11 +5,12 @@
 > `recur`, `apply` over a list, `map` / `filter` / `reduce`, atoms,
 > named-argument destructuring with `& {:keys [...]}`, and exceptions
 > (`try` / `catch` / `finally`, `throw`, `ex-info`). Not available yet:
-> docstrings and `doc`, the `#(...)` shorthand, vector and map
-> destructuring in `let` and parameter vectors, `zero?`, `even?`, `conj`,
+> docstrings (accepted and dropped) and `doc`, the `#(...)` shorthand,
 > `comp`, `partial`, `juxt`, `complement`, lazy sequences (`range`,
-> `take`), `doseq`, pre/post conditions, `defn-` and `memoize`. See
-> [STATUS.md](../STATUS.md).
+> `take`), pre/post conditions, `defn-` and `memoize`. Vector and map
+> destructuring (§5.10) works in `let`, `loop`, `fn`, `defn` and
+> `defmacro` parameters and the binding macros; `zero?`, `even?`, `conj`
+> and `doseq` exist. See [STATUS.md](../STATUS.md).
 
 Functions are values. They have a name (sometimes), an arglist, and a
 body. They close over the lexical environment where they were defined.

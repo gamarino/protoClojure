@@ -11,7 +11,8 @@
 ;; Names that start with `__` are internal helpers, not part of Clojure.
 ;;
 ;; The macros follow clojure.core's definitions, without what protoClojure
-;; does not have yet (metadata, destructuring in binding forms, lazy seqs).
+;; does not have yet (metadata, lazy seqs). Binding forms destructure: the
+;; binding macros expand into `let`, which the compiler destructures.
 ;; `and`, `or`, `fn`, `let`, `loop`, `defn` and `defmacro` stay in the C++
 ;; compiler (decision M21).
 
