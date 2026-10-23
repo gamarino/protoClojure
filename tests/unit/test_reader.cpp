@@ -1,6 +1,7 @@
 #include "reader/Reader.h"
 #include "runtime/MapOps.h"
 #include "runtime/Named.h"
+#include "runtime/SetOps.h"
 #include "runtime/VectorOps.h"
 
 #include "protoCore.h"
@@ -343,5 +344,31 @@ TEST_F(ReaderFixture, SyntaxQuoteErrors) {
         Reader r(ctx, "`", markers);
         try { r.readOne(); FAIL() << "a syntax-quote at the end of input must be a read error"; }
         catch (const ReaderError& e) { EXPECT_STREQ(e.what(), "EOF while reading: ` must be followed by a form"); }
+    }
+}
+
+// `#{...}` reads as a set value (runtime/SetOps.h); a repeated element is a
+// read error naming it, as in Clojure, and an open set names itself.
+TEST_F(ReaderFixture, SetLiteral) {
+    protoClojure::initSetOps(ctx);
+    {
+        Reader r(ctx, "#{1 :a \"s\"}", markers);
+        const proto::ProtoObject* form = r.readOne();
+        ASSERT_TRUE(protoClojure::isSet(ctx, form));
+        EXPECT_EQ(protoClojure::setCount(ctx, form), 3u);
+        bool found = false;
+        protoClojure::setGet(ctx, form, ctx->fromLong(1), &found);
+        EXPECT_TRUE(found);
+        EXPECT_FALSE(protoClojure::isMap(form));
+    }
+    {
+        Reader r(ctx, "#{:a :a}", markers);
+        try { r.readOne(); FAIL() << "a repeated element must be a read error"; }
+        catch (const ReaderError& e) { EXPECT_STREQ(e.what(), "Duplicate key: :a"); }
+    }
+    {
+        Reader r(ctx, "#{1 2", markers);
+        try { r.readOne(); FAIL() << "an open set must be a read error"; }
+        catch (const ReaderError& e) { EXPECT_NE(std::string(e.what()).find("unterminated set"), std::string::npos); }
     }
 }

@@ -9,6 +9,33 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — scripting vocabulary, stage 8: sets
+
+- **Sets** (DESIGN.md §10.2, M24): the `#{...}` literal (a repeated element
+  is the read error `Duplicate key: x`), `hash-set`, `set`, `set?`, `disj`,
+  and `conj`, `contains?`, `get`, `count`, `empty?`, `seq` and every
+  sequence function on sets; a set is a function of its elements and a
+  keyword looks itself up in a set. A set is an immutable object holding a
+  `ProtoMap` from each element to itself, matched as map keys are; sets are
+  map keys and set elements by value. `clojure.set`'s `union`,
+  `intersection`, `difference`, `subset?` and `superset?` are globals (D28).
+- `into` (in `core.clj`).
+- `()` evaluates to the empty list (it was the compile error `empty list ()
+  is not supported yet`).
+
+### Changed — stage 8
+
+- `first`, `rest`, `cons`, `map`, `filter`, `reduce`, `vec`, `reverse` and
+  `apply` accept maps (entries as `[k v]`), sets and strings, as `seq`
+  already did; another value raises `IllegalArgumentException: Don't know
+  how to create ISeq from: ...` (it was `seq op: argument is not a list or
+  vector`).
+- D24 and D25 cover sets; D28 covers `clojure.set`.
+- New tests: 13 fixtures in `tests/conformance/34-sets/` and
+  `08-collections/empty-list-literal`, unit tests `Lexer.HashBraceOpensASet`,
+  `ReaderFixture.SetLiteral` and `MapOpsFixture.SetsAreValueKeys`, the CLI
+  check `cli/sets-survive-gc`, and set lines in `cli/repl-scripting`.
+
 ### Added — scripting vocabulary, stage 7: destructuring
 
 - **Destructuring** (DESIGN.md §10.2, M23) in `let`, `loop`, the

@@ -164,9 +164,12 @@ private:
     // Pushes its own child ProtoContext; uses slot 0 for the building
     // list and slot 1 for the most recently read element. Returns the
     // slot-0 ProtoObject — caller must root immediately.
+    // `what` names the form in the "unterminated" error when it is not
+    // the one closeKind implies (a set closes with `}` too).
     const proto::ProtoObject* readList(proto::ProtoContext* parent,
                                        TokenKind closeKind,
-                                       int openLine, int openColumn);
+                                       int openLine, int openColumn,
+                                       const char* what = nullptr);
 };
 
 } // namespace protoClojure

@@ -1135,6 +1135,32 @@ path; rejected because the call convention is how protoClojure functions
 take named arguments from other protoCore runtimes. `macroexpand` does not
 show the rewrite, since `let` and `fn` are compiled, not expanded (D41).
 
+**M24. A set is an object holding a ProtoMap, matched as map keys are**
+(*agent, pending review*). `src/runtime/SetOps.h`: a set is an immutable
+child of a set prototype (created per ProtoSpace, rooted on the globals)
+whose own attribute `__set__` is a `ProtoMap` from each element to itself,
+through the map's hashed-collection helper and `clojureKeySemantics`. So
+STATUS.md's plan (a `ProtoMap` through the map's helper) holds, and element
+equality, hashing and the cost model are the map's: `#{1 1.0}` has two
+elements, as in JVM Clojure, and a set is a map key by value
+(`keyHash` / `keyEquals` know sets). The reader yields a set for `#{...}`
+(M1), a repeated element being a read error; the compiler pins a set
+literal whose elements are all constants as a datum (M5) and compiles any
+other as a call of `clojure.core/hash-set`; syntax-quote applies
+`hash-set` to a set template. Alternatives: (a) protoCore's `ProtoSet`,
+rejected because it keys elements by a 64-bit hash with no collision
+bucket, so two different elements with one hash would be one; (b) a
+distinct pointer tag in the way a vector boxes its list (VectorOps.h),
+rejected because no tag the collector traces and protoCore does not intern
+is left (a `ProtoTuple` is interned and never freed); (c) a marker entry
+inside the map, rejected because every `map?` would then pay a lookup. The
+cost of the object is one cell per set and an own-attribute read per
+operation; protoScala's sets have the same shape. `clojure.set`'s
+functions are globals (D28). Also in this stage, as a prerequisite of
+`into`: `()` evaluates to the empty list (it was a compile error), and
+`first`, `rest`, `map`, `filter`, `reduce`, `count` and the other sequence
+functions accept maps, sets and strings, as `seq` already did.
+
 ## 11. The standard library
 
 Two phases:

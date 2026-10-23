@@ -91,6 +91,8 @@ The design specifications written during development are archived under
 - [x] Booleans + nil — `true`, `false`, `nil`, read as the values
 - [x] Lists `(...)`
 - [x] Vectors `[...]`
+- [x] Sets `#{...}` — a repeated element is a read error, `Duplicate key: :a`;
+      a set of constants is built once, at compile time (DESIGN.md §10.2, M24)
 - [x] Maps `{...}` — a repeated key is a read error, `Duplicate key: :a`
       (decision M2); the key and value forms are evaluated in source order
       (decision M3)
@@ -449,7 +451,6 @@ raises a read, compile or runtime error.
 
 ### Reader (not yet)
 
-- [ ] Sets `#{...}`
 - [ ] Anonymous-fn shorthand `#(...)`
 - [ ] Var-quote `#'`
 - [ ] Discard `#_`
@@ -473,8 +474,6 @@ work since macros stage 4.)
 
 ### Data structures (not yet)
 
-- [ ] Sets — `ProtoMap` based, through the same hashed-collection helper
-      the map uses, with `conj` / `disj`
 - [ ] Lazy seqs — `LazySeq` wrapper
 - [ ] `hash` as a function
 - [ ] Vectors as functions (`(v 0)`)
@@ -625,11 +624,11 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D21 | Beyond ASCII, symbols and keywords accept only Unicode letters, combining marks and decimal digits: `a→b`, or a symbol containing a no-break space, is a read error (CONTRA JVM-Clojure, whose reader accepts any character that is neither whitespace nor a macro character) | v0.x |
 | D22 | A NaN map key is found by a NaN with exactly the same 64-bit pattern: `(get {##NaN :n} ##NaN)` is `:n` (CONTRA JVM-Clojure, which never finds a NaN key). A NaN produced by arithmetic can have a different bit pattern and then does not find a `##NaN` key: on x86-64, `(/ 0 0.0)` has its sign bit set | (perm) |
 | ~~D23~~ | **Withdrawn.** Map keys used to be interned and never freed. Since maps moved onto protoCore's `ProtoMap` and its hashed-collection helper, a key is stored as the object the caller passed and dies with the last map that holds it, as in JVM Clojure | — |
-| D24 | Map iteration and print order is unspecified for maps of every size and can change between runs of the same program (JVM Clojure keeps insertion order for array maps of up to 8 entries) | (perm) |
-| D25 | `count` of a map is O(n), not O(1) (JVM Clojure: O(1)). Two keys whose hashes collide in their low 54 bits share one slot of the underlying `ProtoMap`, so the slot count is a lower bound on the number of entries, not the number itself; `count` therefore walks the entries. `empty?` stays O(1), because a slot always holds at least one entry | (perm) |
+| D24 | Map and set iteration and print order is unspecified for every size and can change between runs of the same program (JVM Clojure keeps insertion order for array maps of up to 8 entries; its hash sets have a fixed hash order) | (perm) |
+| D25 | `count` of a map or a set is O(n), not O(1) (JVM Clojure: O(1)). Two keys whose hashes collide in their low 54 bits share one slot of the underlying `ProtoMap`, so the slot count is a lower bound on the number of entries, not the number itself; `count` therefore walks the entries. `empty?` stays O(1), because a slot always holds at least one entry | (perm) |
 | D26 | A runtime error whose message names no class is a `RuntimeException` carrying the whole message: most arity and argument-type errors raised by primitives (`(inc 1 2)`: `inc: expects 1 arg`, where JVM Clojure raises `ArityException`; `(upper-case 1)`: `upper-case: arg must be a string`, where it raises `ClassCastException`), and an unresolved global, which is caught at run time as a `RuntimeException` where JVM Clojure reports it at compile time. The class-naming errors (`ArithmeticException`, `ClassCastException` for arithmetic on non-numbers, `IndexOutOfBoundsException`, `StringIndexOutOfBoundsException`, `UnsupportedOperationException`, `StackOverflowError`) have JVM Clojure's classes | v0.x |
 | D27 | Exceptions are not Java objects: there are no stack traces, no user-defined exception classes, no `class` / `instance?` and no `.getMessage`-style interop; `catch` names one of 23 built-in classes, `Object`, or a type held by a var or a module member (D34, `DESIGN.md` §4.1). An exception prints on one line as `#error {:type C, :message "m", :data {...}, :cause #error {...}}` (JVM Clojure: a multi-line `#error` map with `:via`, `:trace` and a root-cause `:cause` string), and its toString and the uncaught-error report use the simple class name, `ArithmeticException: Divide by zero` (JVM Clojure: `java.lang.ArithmeticException: Divide by zero`). `throw` of a value that is neither an exception nor a foreign (module) object raises `ClassCastException: throw expects an exception, got an integer` | (perm) |
-| D28 | The I/O functions are globals, not in `clojure.java.io`, `clojure.java.shell` or babashka's `babashka.http-client` (there are no namespaces yet), and small functions stand in for Java interop: `close` / `write` / `(read-line r)` for `.close` / `.write` / `.readLine`, `exists?` / `directory?` for `.exists` / `.isDirectory`, `getenv` / `exit` for `System/getenv` / `System/exit`. `file` answers a protoClojure file handle, not a `java.io.File` (`str` gives its path; `file-seq` answers such handles); readers and writers are UTF-8 only, with no InputStream / Reader stack | (perm while there are no namespaces) |
+| D28 | The I/O functions are globals, not in `clojure.java.io`, `clojure.java.shell` or babashka's `babashka.http-client` (there are no namespaces yet), and so are `clojure.set`'s `union`, `intersection`, `difference`, `subset?` and `superset?`, and small functions stand in for Java interop: `close` / `write` / `(read-line r)` for `.close` / `.write` / `.readLine`, `exists?` / `directory?` for `.exists` / `.isDirectory`, `getenv` / `exit` for `System/getenv` / `System/exit`. `file` answers a protoClojure file handle, not a `java.io.File` (`str` gives its path; `file-seq` answers such handles); readers and writers are UTF-8 only, with no InputStream / Reader stack | (perm while there are no namespaces) |
 | D29 | `line-seq` is eager: it reads the reader to its end and answers a list (nil when empty), because there are no lazy sequences yet (JVM Clojure: a lazy seq read as it is consumed). On an endless stream, such as a socket that never closes, use `read-line` in a loop | v0.2 (lazy seqs) |
 | D30 | Sockets are protoClojure's own functions (`tcp-connect`, `tcp-listen`, `tcp-accept`, `socket-read-line`, `socket-write`, `socket-close`, `udp-socket`, `udp-send`, `udp-receive`, `server-port`): Clojure has only Java interop (`java.net.Socket`) | (perm) |
 | D31 | The Ring request `:body` is a string (nil when empty), not an InputStream, and a response `:body` may be a string, nil, a list or vector of strings or a file, not an InputStream; `run-server` answers a server handle (http-kit answers a stop fn), serves one request per connection (`connection: close`, no keep-alive), each on its own thread, and a server still running when the script ends is stopped (the JVM keeps running while a server thread lives) | v0.x |

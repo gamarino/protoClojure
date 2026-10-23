@@ -12,6 +12,7 @@
 
 #include "runtime/MapOps.h"
 #include "runtime/Named.h"
+#include "runtime/SetOps.h"
 #include "runtime/VectorOps.h"
 
 #include "protoCore.h"
@@ -559,3 +560,30 @@ TEST_F(MapOpsFixture, EmptinessIsReadOffTheSlotCount) {
 }
 
 } // namespace
+
+// Sets (SetOps.h) are matched as map keys by their elements: two sets built
+// in different orders are one key and hash alike, a set is never a map, and
+// a set key lands in a hashed slot, not an identity slot.
+TEST_F(MapOpsFixture, SetsAreValueKeys) {
+    protoClojure::initSetOps(ctx);
+    const proto::ProtoObject* ab[] = {kw(":a"), str("b")};
+    const proto::ProtoObject* ba[] = {str("b"), kw(":a")};
+    const proto::ProtoObject* s1 = protoClojure::setConj(ctx, nullptr, ab, 2);
+    const proto::ProtoObject* s2 = protoClojure::setConj(ctx, nullptr, ba, 2);
+    ASSERT_NE(s1, s2);
+    EXPECT_TRUE(protoClojure::isSet(ctx, s1));
+    EXPECT_FALSE(protoClojure::isMap(s1));
+    EXPECT_FALSE(protoClojure::keyIsIdentity(ctx, s1));
+    EXPECT_TRUE(protoClojure::keyEquals(ctx, s1, s2));
+    EXPECT_EQ(protoClojure::keyHash(ctx, s1), protoClojure::keyHash(ctx, s2));
+    const proto::ProtoObject* kv[] = {s1, kw(":x")};
+    const proto::ProtoObject* m = protoClojure::mapAssocPairs(ctx, nullptr, kv, 2);
+    bool found = false;
+    EXPECT_EQ(protoClojure::mapGet(ctx, m, s2, &found), kw(":x"));
+    EXPECT_TRUE(found);
+    // An element already present keeps the stored object and the same set.
+    const proto::ProtoObject* again[] = {str("b")};
+    EXPECT_EQ(protoClojure::setConj(ctx, s1, again, 1), s1);
+    EXPECT_EQ(protoClojure::setDisj(ctx, s1, kw(":zz")), s1);
+    EXPECT_EQ(protoClojure::setCount(ctx, protoClojure::setDisj(ctx, s1, kw(":a"))), 1u);
+}

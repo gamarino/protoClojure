@@ -56,7 +56,7 @@ tell at a glance which parts of the surface are runnable today. The
 | Lists `(...)` | Implemented |
 | Vectors `[...]` | Implemented (a `ProtoList` in a one-entry sparse-list box, distinct from list) |
 | Maps `{...}` | Implemented (`hash-map`, `assoc`, `dissoc`, `get`, `contains?`, `keys`, `vals`; `count` and `empty?` accept maps) |
-| Sets `#{...}` | Planned |
+| Sets `#{...}` | Implemented (`hash-set`, `set`, `set?`, `conj`, `disj`, `contains?`, `get`, a set as a function; `union`, `intersection`, `difference`, `subset?`, `superset?` as globals; §4.4) |
 | `def`, `defn`, `fn`, `let`, `loop`, `recur` | Implemented (`let` and `loop` also at the top level; docstrings accepted) |
 | Multi-arity `defn` | Implemented |
 | Variadic `& rest` | Implemented |
@@ -308,7 +308,8 @@ truthy).
 - `~x` → `(clojure.core/unquote x)`, `~@x` → `(clojure.core/unquote-splicing x)`.
 - `#(...)` → anonymous function: `#(+ 1 %)` is `(fn [%] (+ 1 %))`.
   Args are `%`, `%1`..`%9`, `%&` (rest).
-- `#{...}` → set literal (already covered).
+- `#{...}` → set literal (implemented; §4.4). A repeated element is a read
+  error (`Duplicate key: :a`), as in Clojure.
 - `#'sym` → var-quote: produces the var, not the value (`@#'my-fn`
   returns the current value).
 - `#_form` → discard the next form.
@@ -578,17 +579,39 @@ map is immutable: the garbage collector scans it like any other value, and it
 never enters protoCore's mutables tree. The implementation is
 `src/runtime/MapOps.{h,cpp}`.
 
-### 4.4 Set (planned)
+### 4.4 Set
 
-Persistent hash set, backed by a `ProtoMap` keyed on the element (the same
-hashed-collection helper the map uses).
+Persistent hash set: an immutable object holding a `ProtoMap` that maps
+each element to itself, driven by the same hashed-collection helper and key
+semantics as a map (§4.3), so elements are matched as map keys are.
 
 ```clojure
-(conj #{:a :b} :c)             ;; => #{:a :b :c}
+(conj #{:a :b} :c)             ;; => #{:a :b :c} (in some order)
 (disj #{:a :b :c} :a)          ;; => #{:b :c}
 (contains? #{:a :b} :a)        ;; => true
-(#{:a :b} :a)                  ;; => :a (sets are membership predicates)
+(#{:a :b} :a)                  ;; => :a (sets are functions of their elements)
+(get #{:a} :z :none)           ;; => :none
+(set [1 1 2])                  ;; => #{1 2}
+(into #{} [3 3])               ;; => #{3}
+(union #{1} #{2})              ;; => #{1 2}
 ```
+
+- Constructors: `#{...}`, `hash-set`, `set` (of any collection), `into`;
+  `set?` is the predicate.
+- `conj` adds (an element already present keeps the stored object), `disj`
+  removes, `contains?` and `get` look an element up, and a set called on a
+  value answers the element or `nil` (or the second argument); a keyword
+  called on a set looks itself up, as `get` does.
+- A set is seqable: `seq`, `first`, `map`, `filter`, `reduce`, `doseq`,
+  `apply`, `vec` and destructuring walk its elements, in an unspecified
+  order (D24); `count` is O(n) (D25).
+- `=` holds between sets with the same elements; numbers of different types
+  are different elements, so `(= #{1} #{1.0})` is false, as in JVM Clojure.
+  A set is a map key and a set element by value.
+- `clojure.set`: `union`, `intersection`, `difference`, `subset?`,
+  `superset?`, in the global namespace (D28).
+- A set literal of constants (keywords, strings, numbers) is built once, when
+  the form is compiled; any other evaluates its element forms each time.
 
 ### 4.5 Equality
 
@@ -602,7 +625,7 @@ Lists and vectors are *sequential* collections: two sequential
 collections are `=` when they hold `=` elements in the same order,
 whatever their concrete types, so `(= [1 2] '(1 2))` and `(= [] '())` are
 true. A sequential collection is never `=` to a map, a set, a string or
-`nil`.
+`nil`. Two sets are `=` when they hold the same elements.
 
 Keywords, symbols and strings are three different kinds of value, never
 `=` to one another even when spelled alike: `(= :a ":a")`,

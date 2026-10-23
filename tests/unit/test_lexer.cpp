@@ -355,3 +355,12 @@ TEST(Lexer, HashInsideSymbol) {
     EXPECT_EQ(toks[4].kind, TokenKind::Symbol);
     EXPECT_EQ(toks[4].text, "a#");
 }
+
+// `#{` opens a set literal.
+TEST(Lexer, HashBraceOpensASet) {
+    auto toks = tokenise("#{1}");
+    ASSERT_GE(toks.size(), 3u);
+    EXPECT_EQ(toks[0].kind, TokenKind::HashLBrace);
+    EXPECT_EQ(toks[1].kind, TokenKind::Integer);
+    EXPECT_EQ(toks[2].kind, TokenKind::RBrace);
+}

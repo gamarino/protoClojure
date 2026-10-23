@@ -1,0 +1,16 @@
+;; EXPECT: true true true :a nil true true true true 3 true true true true true
+;; docs/tutorial/04-data-structures.md §4.5, §4.7 and §4.8: sets.
+(println (= #{:a :b :c} (hash-set :a :b :c))
+         (= (set [1 1 2 2 3 3]) #{1 2 3})
+         (= (set [1 1 2 2 3 3]) #{3 2 1})
+         (#{:a :b :c} :a) (#{:a :b :c} :z)
+         (contains? #{:a :b} :a)
+         (= (conj #{:a :b} :c) #{:a :b :c})
+         (= (disj #{:a :b :c} :a) #{:b :c})
+         (= (into #{} [1 2 2 3]) #{1 2 3})
+         (count #{1 2 3})
+         (= (union #{1 2} #{2 3}) #{1 2 3})
+         (= (intersection #{1 2} #{2 3}) #{2})
+         (= (difference #{1 2 3} #{1}) #{2 3})
+         (= (into #{} (filter odd? [1 2 3 4 5])) #{1 3 5})
+         (= #{1 2 3} #{3 2 1}))

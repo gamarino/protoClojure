@@ -4,11 +4,13 @@
 > (`[...]`, `vector`, `vec`, `nth`, `count`, `empty?`, `first`, `rest`,
 > `reverse`), lists (`list`, `cons`, `first`, `rest`) and maps (`{...}`,
 > `hash-map`, `get`, `assoc`, `dissoc`, `contains?`, `keys`, `vals`,
-> `count`, `empty?`). Not available
-> yet: sets, `conj`, `pop`, `peek`, `last`,
+> `count`, `empty?`), sets (§4.5: `#{...}`, `hash-set`, `set`, `conj`,
+> `disj`, `contains?`, `union`, `intersection`, `difference`), `conj`,
+> `last` and `into`. Not available
+> yet: `pop`, `peek`,
 > `assoc` on vectors, `update`, `merge`, `select-keys`,
 > `zipmap`, the `get-in` / `assoc-in` / `update-in` family,
-> `into`, vectors as functions, `==`,
+> vectors as functions, `==`,
 > `identical?`, `hash`, and the sequence and regex functions used in
 > §4.11. See
 > [STATUS.md](../STATUS.md).
@@ -245,9 +247,19 @@ Core operations:
 (count #{1 2 3})               ;; => 3
 ```
 
-Set algebra lives in `clojure.set` (a v0.2 deliverable; not in v0.1
-core): `union`, `intersection`, `difference`. In v0.1, write them by
-hand with `filter` and `into`.
+Set algebra lives in `clojure.set`: `union`, `intersection`,
+`difference`, `subset?` and `superset?`. protoClojure has no namespaces
+yet, so they are global functions (`(union #{1} #{2})`), not
+`clojure.set/union`:
+
+```clojure
+(union #{1 2} #{2 3})          ;; => #{1 2 3}
+(intersection #{1 2} #{2 3})   ;; => #{2}
+(difference #{1 2 3} #{1})     ;; => #{2 3}
+```
+
+A set prints its elements in an unspecified order, which can differ
+between runs (as a map's entries do).
 
 ## 4.6 Lists
 
@@ -326,8 +338,9 @@ defines a cross-type equivalence:
 > nested collections (`(= {:a [{:b 1 :c 2}]} {:a [{:c 2 :b 1}]})` and
 > `(= [1 [2]] (list 1 (list 2)))` are `true`), and so does `not=`. Maps
 > whose keys differ only in numeric type are not `=`: `(= {1 :a} {1.0 :a})`
-> is `false`, because `1` and `1.0` are different keys (§4.4). Sets are not
-> implemented yet.
+> is `false`, because `1` and `1.0` are different keys (§4.4). The set
+> line holds too; set elements are matched as map keys are, so
+> `(= #{1} #{1.0})` is `false`, as in JVM Clojure.
 
 `==` is the *numeric* equality across number types, with no cross-type
 equivalence for collections:
@@ -361,8 +374,8 @@ and equality / set membership just work.
 > depth (§4.4, "Keys, order and memory"), so `(get {{:a 1} :x} {:a 1})` and
 > `(get {[1 2] :x} (list 1 2))` return `:x`. Numbers of different types are
 > different keys: although `(= 1 1.0)` is true in protoClojure (deviation
-> D15), `1` and `1.0` are different map keys, as in JVM Clojure. Sets are not
-> implemented.
+> D15), `1` and `1.0` are different map keys, as in JVM Clojure. Set
+> elements follow the same rules, and a set is a map key by its elements.
 
 ## 4.10 The substrate underneath
 

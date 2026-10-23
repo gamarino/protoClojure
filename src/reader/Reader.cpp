@@ -2,6 +2,7 @@
 
 #include "runtime/ListBuilder.h"
 #include "runtime/MapOps.h"
+#include "runtime/SetOps.h"
 #include "runtime/StackGuard.h"
 #include "runtime/VectorOps.h"
 
@@ -206,6 +207,37 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
             return m;
         }
 
+        case TokenKind::HashLBrace: {
+            // `#{a b}` is a set, the value `(hash-set ..)` builds at run time
+            // (runtime/SetOps.h). As in Clojure, a repeated element is a read
+            // error.
+            proto::ProtoContext wrapScope(parent->space, parent);
+            wrapScope.resizeAutomaticLocals(1);
+            wrapScope.setAutomaticLocal(0,
+                readList(&wrapScope, TokenKind::RBrace, tok.line, tok.column,
+                         "unterminated set — missing `}`"));
+            const proto::ProtoList* lst =
+                wrapScope.getAutomaticLocal(0)->asList(&wrapScope);
+            const proto::proto_ulong n = lst->getSize(&wrapScope);
+            std::vector<const proto::ProtoObject*> items;
+            items.reserve(n);
+            for (proto::proto_ulong i = 0; i < n; ++i)
+                items.push_back(lst->getAt(&wrapScope, static_cast<int>(i)));
+            const proto::ProtoObject* s = setConj(&wrapScope, nullptr, items.data(), n);
+            if (setCount(&wrapScope, s) != n) {
+                for (proto::proto_ulong i = 1; i < n; ++i) {
+                    for (proto::proto_ulong j = 0; j < i; ++j) {
+                        if (keyEquals(&wrapScope, items[j], items[i])) {
+                            throw ReaderError(
+                                "Duplicate key: " + describeKey(&wrapScope, named_, items[i]),
+                                tok.line, tok.column);
+                        }
+                    }
+                }
+            }
+            return s;
+        }
+
         case TokenKind::Error:
             throw ReaderError(tok.text, tok.line, tok.column);
 
@@ -374,6 +406,14 @@ const proto::ProtoObject* Reader::syntaxQuote(proto::ProtoContext* parent,
                     out->push_back(v);
                 });
         }
+    } else if (isSet(parent, form)) {
+        // A set template is applied to hash-set, as in Clojure; its elements
+        // come in the set's (unspecified) order.
+        builder = "clojure.core/hash-set";
+        setForEach(parent, form, &items,
+            [](proto::ProtoContext*, void* self, const proto::ProtoObject* e) {
+                static_cast<std::vector<const proto::ProtoObject*>*>(self)->push_back(e);
+            });
     } else {
         // Anything else the reader does not yield; quoted as data.
         return parent->newList()
@@ -435,7 +475,7 @@ const proto::ProtoObject* Reader::syntaxQuote(proto::ProtoContext* parent,
 
 const proto::ProtoObject*
 Reader::readList(proto::ProtoContext* parent, TokenKind closeKind,
-                 int openLine, int openColumn) {
+                 int openLine, int openColumn, const char* unterminated) {
     // One read scope per recursive call, as a ListBuilder: it owns a child
     // context of `parent` that roots the in-progress list, and it folds the
     // elements in in chunks so a large literal — `[0 1 … 69999]` — does not
@@ -457,6 +497,7 @@ Reader::readList(proto::ProtoContext* parent, TokenKind closeKind,
             const char* what = "unterminated list — missing `)`";
             if (closeKind == TokenKind::RBracket) what = "unterminated vector — missing `]`";
             else if (closeKind == TokenKind::RBrace) what = "unterminated map — missing `}`";
+            if (unterminated) what = unterminated;
             throw ReaderError(what, openLine, openColumn);
         }
         if (tok.kind == closeKind) {

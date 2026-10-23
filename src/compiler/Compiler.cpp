@@ -3,6 +3,7 @@
 #include "runtime/Exceptions.h"
 #include "runtime/Macros.h"
 #include "runtime/MapOps.h"
+#include "runtime/SetOps.h"
 #include "runtime/Primitives.h"
 #include "runtime/StackGuard.h"
 #include "runtime/VectorOps.h"
@@ -1196,7 +1197,9 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         const proto::ProtoList* lst = form->asList(ctx);
         proto::proto_ulong n = lst->getSize(ctx);
         if (n == 0) {
-            throw CompileError("empty list () is not supported yet");
+            // `()` evaluates to the empty list, as in Clojure.
+            out.emit(Op::PUSH_CONST, out.addDatum(ctx, form));
+            return;
         }
         const proto::ProtoObject* head = lst->getAt(ctx, 0);
         // Special-form dispatch keys on the head's text; only symbols
@@ -1865,6 +1868,33 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             compileForm(ctx, items->getAt(ctx, (int)i), out, markers);
         }
         out.emit(Op::CALL, ni);
+        return;
+    }
+
+    // `#{..}` set literal in expression position. A set of constants
+    // (keywords, strings, numbers, nil, booleans) is the very set the reader
+    // built, pinned by the module as a quoted datum is (M5), as Clojure
+    // compiles a constant set; any other is a call to hash-set with every
+    // element form, evaluated in the set's (unspecified) order.
+    if (isSet(ctx, form)) {
+        std::vector<const proto::ProtoObject*> elems;
+        setForEach(ctx, form, &elems,
+            [](proto::ProtoContext*, void* self, const proto::ProtoObject* e) {
+                static_cast<std::vector<const proto::ProtoObject*>*>(self)->push_back(e);
+            });
+        bool constant = true;
+        for (const proto::ProtoObject* e : elems) {
+            if (!(e == PROTO_NONE || e == PROTO_TRUE || e == PROTO_FALSE || isStringForm(e) ||
+                  e->isInteger(ctx) || e->isFloat(ctx) || isKeywordForm(ctx, markers.named, e)))
+                constant = false;
+        }
+        if (constant) {
+            out.emit(Op::PUSH_CONST, out.addDatum(ctx, form));
+            return;
+        }
+        out.emit(Op::PUSH_VAR, out.addSymbol(ctx, "clojure.core/hash-set"));
+        for (const proto::ProtoObject* e : elems) compileForm(ctx, e, out, markers);
+        out.emit(Op::CALL, elems.size());
         return;
     }
 

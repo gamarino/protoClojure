@@ -482,7 +482,16 @@ Token Lexer::lexSymbolOrPunct() {
     if (c == '#') {
         char la = lookahead();
         if (la == '#') return lexSymbolicValue();
-        if (la == '{' || la == '(' || la == '_' || la == '\'' || la == '"') {
+        if (la == '{') {
+            Token t;
+            t.kind = TokenKind::HashLBrace;
+            t.text = "#{";
+            t.line = startLine;
+            t.column = startCol;
+            advance(); advance();
+            return t;
+        }
+        if (la == '(' || la == '_' || la == '\'' || la == '"') {
             std::string s = std::string("#") + la;
             advance(); advance();
             return reserved(s);

@@ -57,6 +57,13 @@ class ExecutionEngine;
 bool valuesEqual(proto::ProtoContext* ctx,
                  const proto::ProtoObject* a, const proto::ProtoObject* b);
 
+// The elements of `v` as a list, as `seq` walks them: a list or a vector
+// itself, a map's entries as [key value] vectors, a set's elements, a
+// string's characters; nullptr for nil. Any other value raises
+// IllegalArgumentException "Don't know how to create ISeq from: ...". The
+// result is unrooted; `v` must be rooted by the caller.
+const proto::ProtoList* seqItems(proto::ProtoContext* ctx, const proto::ProtoObject* v);
+
 // Install all v0.0.x primitives on the supplied globals object. The globals
 // object must be a mutable protoCore object (typically a child of
 // objectPrototype) so setAttribute is in-place. After this call, references

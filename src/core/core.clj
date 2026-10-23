@@ -34,6 +34,13 @@
   (loop [acc [] xs (seq coll)]
     (if (next xs) (recur (conj acc (first xs)) (next xs)) (seq acc))))
 
+(defn into
+  "Returns a new coll consisting of to-coll with all of the items of
+  from-coll conjoined."
+  ([] [])
+  ([to] to)
+  ([to from] (reduce conj to from)))
+
 ;; ---- Control flow --------------------------------------------------------
 
 (defmacro when

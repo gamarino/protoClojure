@@ -1,4 +1,5 @@
 #include "MapOps.h"
+#include "SetOps.h"
 #include "StackGuard.h"
 #include "VectorOps.h"
 
@@ -225,7 +226,7 @@ void requireEven(proto::proto_ulong n) {
 
 } // namespace
 
-bool keyIsIdentity(proto::ProtoContext* /*ctx*/, const proto::ProtoObject* key) {
+bool keyIsIdentity(proto::ProtoContext* ctx, const proto::ProtoObject* key) {
     if (!key) return true;
     // A string is matched by content whatever protoCore stores it in: a
     // pointer tag (6, 22) or an inline string in an embedded word.
@@ -243,8 +244,9 @@ bool keyIsIdentity(proto::ProtoContext* /*ctx*/, const proto::ProtoObject* key) 
             return false;
         case kTagObject:
             // Keywords and symbols (interned Named values), atoms, futures,
-            // promises, actors: equal only to themselves.
-            return true;
+            // promises, actors: equal only to themselves. A set (SetOps.h)
+            // is matched by its elements.
+            return !isSet(ctx, key);
         default:
             // A map and a vector are matched by value; anything else
             // protoCore may hand out (a method, a thread, a byte buffer) is
@@ -287,6 +289,10 @@ proto::proto_ulong keyHash(proto::ProtoContext* ctx, const proto::ProtoObject* k
                 checkNativeStack();
                 return mapHash(ctx, key);
             }
+            if (isSet(ctx, key)) {
+                checkNativeStack();
+                return setHash(ctx, key);
+            }
             return combine(kSaltIdentity, reinterpret_cast<proto::proto_ulong>(key));
     }
 }
@@ -311,6 +317,10 @@ bool keyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
     const bool aMap = isMap(a);
     const bool bMap = isMap(b);
     if (aMap || bMap) return aMap && bMap && mapKeyEquals(ctx, a, b);
+
+    const bool aSet = isSet(ctx, a);
+    const bool bSet = isSet(ctx, b);
+    if (aSet || bSet) return aSet && bSet && setEquals(ctx, a, b);
 
     if (tagOf(a) != tagOf(b)) return false;
     switch (tagOf(a)) {

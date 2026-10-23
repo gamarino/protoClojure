@@ -1,11 +1,9 @@
 # 2. For the Python or JavaScript Developer
 
 > **Implementation status.** Some forms in this chapter are not
-> available yet: set
-> literals `#{...}`, the `#(...)` shorthand, `conj`, `dissoc`, `update`,
-> `even?`, `pos?`, `mapv`, `sort`, the threading macros `->` / `->>`, and
-> editor integration through nREPL. `let` works only inside function
-> bodies. See [STATUS.md](../STATUS.md) for what runs today.
+> available yet: the `#(...)` shorthand, `update`, `mapv`, `sort`, and
+> editor integration through nREPL. Set literals `#{...}`, `conj`,
+> `dissoc`, `even?`, `pos?` and the threading macros work. See [STATUS.md](../STATUS.md) for what runs today.
 
 Clojure looks unfamiliar at first — there are a lot of parentheses and
 the function comes *before* the arguments — but the underlying ideas

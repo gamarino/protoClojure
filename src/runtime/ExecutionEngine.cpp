@@ -3,6 +3,7 @@
 #include "Exceptions.h"
 #include "ListBuilder.h"
 #include "MapOps.h"
+#include "SetOps.h"
 #include "Named.h"
 #include "Opcodes.h"
 #include "Primitives.h"
@@ -135,7 +136,7 @@ const proto::ProtoObject* callLookup(proto::ProtoContext* ctx,
                                      const proto::ProtoObject* const* args,
                                      unsigned int argc) {
     if (argc != 1 && argc != 2) {
-        std::string what = "a map";
+        std::string what = isSet(ctx, callable) ? "a set" : "a map";
         if (!callableIsMap) {
             const std::string spelling =
                 namedSpelling(ctx, named, callable)->toStdString(ctx);
@@ -148,8 +149,14 @@ const proto::ProtoObject* callLookup(proto::ProtoContext* ctx,
     const proto::ProtoObject* m   = callableIsMap ? callable : args[0];
     const proto::ProtoObject* key = callableIsMap ? args[0] : callable;
     const proto::ProtoObject* notFound = (argc == 2) ? args[1] : PROTO_NONE;
-    if (!callableIsMap && !isMap(m)) return notFound;
     bool found = false;
+    // A set is a function of its elements, and a keyword looks itself up in
+    // a set, as `get` does (SetOps.h).
+    if (isSet(ctx, m)) {
+        const proto::ProtoObject* e = setGet(ctx, m, key, &found);
+        return found ? e : notFound;
+    }
+    if (!callableIsMap && !isMap(m)) return notFound;
     const proto::ProtoObject* v = mapGet(ctx, m, key, &found);
     return found ? v : notFound;
 }
@@ -510,9 +517,9 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
     }
 
     // Keywords, quoted symbols and maps are functions: a map lookup.
-    if (proto == cc->named.marker || isMap(callable)) {
+    if (proto == cc->named.marker || isMap(callable) || (proto && proto == setPrototype())) {
         return callLookup(ctx, cc->named, callable,
-                          isMap(callable), args, argc);
+                          proto != cc->named.marker, args, argc);
     }
 
     // C++ primitive. The caller's `args` need not be traced memory, so they
@@ -856,7 +863,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
         // A keyword, a quoted symbol or a map in call position looks a key
         // up, as `get` does (callLookup). The arguments stay rooted in their
         // stack slots until the lookup returns.
-        const bool callableIsMap = isMap(callable);
+        const bool callableIsMap = isMap(callable) || (proto && proto == setPrototype());
         if (proto == env.named.marker || callableIsMap) {
             const proto::ProtoObject* lookupArgs[2] = {nullptr, nullptr};
             for (unsigned int i = 0; i < argc && i < 2; ++i) {
@@ -1026,8 +1033,13 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                     argsList = frame.newList();
                 } else if (isVector(listObj)) {
                     argsList = vectorItems(&frame, listObj);
-                } else {
+                } else if ((reinterpret_cast<proto::proto_ulong>(listObj) & 0x3F) == 2 ||
+                           (reinterpret_cast<proto::proto_ulong>(listObj) & 0x3F) == 25) {
+                    // A ProtoList, large or small (POINTER_TAG_LIST, _LIST_SMALL).
                     argsList = listObj->asList(&frame);
+                } else {
+                    // A map, a set or a string spreads its seq (seqItems).
+                    argsList = seqItems(&frame, listObj);
                 }
                 if (!argsList)
                     throwError(&frame, "VM: CALL_APPLY: not a list");

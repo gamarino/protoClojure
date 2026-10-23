@@ -6,6 +6,7 @@
 #include "ListBuilder.h"
 #include "MapOps.h"
 #include "Macros.h"
+#include "SetOps.h"
 #include "VectorOps.h"
 #include "StackGuard.h"
 
@@ -255,6 +256,21 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
             reinterpret_cast<const proto::ProtoString*>(v)->toStdString(ctx);
         if (readable) appendReadableString(out, bytes);
         else          out += bytes;
+        return;
+    }
+    // A set, `#{a b}`, in its unspecified walk order (SetOps.h).
+    if (isSet(ctx, v)) {
+        out += "#{";
+        struct Acc { std::string* out; bool readable; bool first; }
+            acc{&out, readable, true};
+        setForEach(ctx, v, &acc,
+            [](proto::ProtoContext* c, void* self, const proto::ProtoObject* e) {
+                auto* a = static_cast<Acc*>(self);
+                if (!a->first) *a->out += ' ';
+                a->first = false;
+                printTo(c, *a->out, e, a->readable);
+            });
+        out += '}';
         return;
     }
     // Built-in functions are protoCore method cells (a pointer-tag check).
@@ -640,13 +656,22 @@ const proto::ProtoObject* prim_str(proto::ProtoContext* ctx,
 // Treat nil as the empty seq. A vector's elements already ARE a ProtoList
 // (VectorOps.h), so seq-coercing one is an unbox, not a conversion. Strings
 // stay opaque for the first version; later changes added string support.
+bool pushSeqElements(ListBuilder& out, const proto::ProtoObject* v);
+
+// A list or vector is read in place; a map (its entries as [k v] vectors),
+// a set (its elements) and a string (its characters) are walked into a new
+// list, as `seq` builds it; anything else raises Clojure's "Don't know how
+// to create ISeq from" IllegalArgumentException.
 const proto::ProtoList* asSeqOrNull(proto::ProtoContext* ctx,
                                     const proto::ProtoObject* v) {
     if (!v || v == PROTO_NONE) return nullptr;
     if (isListTag(v)) return v->asList(ctx);
     if (isVector(v)) return vectorItems(ctx, v);
-    throwError(ctx,
-        "seq op: argument is not a list or vector");
+    ListBuilder out(ctx);
+    if (!pushSeqElements(out, v))
+        throwClassed(ctx, "IllegalArgumentException",
+                     "Don't know how to create ISeq from: " + std::string(valueTypeName(ctx, v)));
+    return out.finishList();
 }
 
 const proto::ProtoObject* prim_list(proto::ProtoContext* ctx,
@@ -874,8 +899,12 @@ const proto::ProtoObject* prim_get(proto::ProtoContext* ctx,
     const proto::ProtoObject* m = args->getAt(ctx, 0);
     const proto::ProtoObject* k = args->getAt(ctx, 1);
     const proto::ProtoObject* nf = (n == 3) ? args->getAt(ctx, 2) : PROTO_NONE;
-    if (!isMap(m)) return nf;
     bool found = false;
+    if (isSet(ctx, m)) {
+        const proto::ProtoObject* e = setGet(ctx, m, k, &found);
+        return found ? e : nf;
+    }
+    if (!isMap(m)) return nf;
     const proto::ProtoObject* v = mapGet(ctx, m, k, &found);
     return found ? v : nf;
 }
@@ -891,8 +920,12 @@ const proto::ProtoObject* prim_contains_p(proto::ProtoContext* ctx,
     if (!cc) throwError(ctx, "contains?: no active VM context");
     const proto::ProtoObject* m = args->getAt(ctx, 0);
     const proto::ProtoObject* k = args->getAt(ctx, 1);
-    if (!isMap(m)) return PROTO_FALSE;
     bool found = false;
+    if (isSet(ctx, m)) {
+        setGet(ctx, m, k, &found);
+        return found ? PROTO_TRUE : PROTO_FALSE;
+    }
+    if (!isMap(m)) return PROTO_FALSE;
     mapGet(ctx, m, k, &found);
     return found ? PROTO_TRUE : PROTO_FALSE;
 }
@@ -1005,8 +1038,9 @@ const proto::ProtoObject* prim_count(proto::ProtoContext* ctx,
     if (isStringLike(v)) {
         return ctx->fromLong(static_cast<long long>(asProtoString(v)->getSize(ctx)));
     }
-    // A map: its number of entries, O(1).
+    // A map: its number of entries; a set: its number of elements (O(n), D25).
     if (isMap(v)) return ctx->fromLong(static_cast<long long>(mapCount(ctx, v)));
+    if (isSet(ctx, v)) return ctx->fromLong(static_cast<long long>(setCount(ctx, v)));
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     return ctx->fromLong(lst ? static_cast<long long>(lst->getSize(ctx)) : 0);
 }
@@ -1023,7 +1057,8 @@ const proto::ProtoObject* prim_empty_p(proto::ProtoContext* ctx,
     if (isStringLike(v)) {
         return asProtoString(v)->getSize(ctx) == 0 ? PROTO_TRUE : PROTO_FALSE;
     }
-    if (isMap(v)) return mapCount(ctx, v) == 0 ? PROTO_TRUE : PROTO_FALSE;
+    if (isMap(v)) return mapIsEmpty(ctx, v) ? PROTO_TRUE : PROTO_FALSE;
+    if (isSet(ctx, v)) return setIsEmpty(ctx, v) ? PROTO_TRUE : PROTO_FALSE;
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     return (!lst || lst->getSize(ctx) == 0) ? PROTO_TRUE : PROTO_FALSE;
 }
@@ -1108,6 +1143,15 @@ bool pushSeqElements(ListBuilder& out, const proto::ProtoObject* v) {
             proto::ProtoContext* ec = out.context();
             out.push(newVector(ec, ec->newList()->appendLast(ec, kv[i])->appendLast(ec, kv[i + 1])));
         }
+        return true;
+    }
+    if (isSet(c, v)) {
+        std::vector<const proto::ProtoObject*> items;
+        setForEach(c, v, &items,
+            [](proto::ProtoContext*, void* self, const proto::ProtoObject* e) {
+                static_cast<std::vector<const proto::ProtoObject*>*>(self)->push_back(e);
+            });
+        for (const proto::ProtoObject* e : items) out.push(e);
         return true;
     }
     if (isStringLike(v)) {
@@ -2940,6 +2984,191 @@ const proto::ProtoObject* prim_destructure_map(proto::ProtoContext* ctx,
     return mapAssocPairs(ctx, nullptr, kv.data(), n);
 }
 
+// Sets (SetOps.h) ----------------------------------------------------------
+
+// The elements of `coll` (nil, a list, vector, map, set or string) gathered
+// into `out`; each is reachable from `coll`, which the caller roots.
+void collectElements(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
+                     std::vector<const proto::ProtoObject*>& out) {
+    if (isSet(ctx, coll)) {
+        setForEach(ctx, coll, &out,
+            [](proto::ProtoContext*, void* self, const proto::ProtoObject* e) {
+                static_cast<std::vector<const proto::ProtoObject*>*>(self)->push_back(e);
+            });
+        return;
+    }
+    const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
+    if (!lst) return;
+    const proto::proto_ulong n = lst->getSize(ctx);
+    out.reserve(out.size() + n);
+    for (proto::proto_ulong i = 0; i < n; ++i) out.push_back(lst->getAt(ctx, static_cast<int>(i)));
+}
+
+// The set argument `i` of `who`: a set, or nil as the empty set.
+const proto::ProtoObject* setArg(proto::ProtoContext* ctx, const proto::ProtoArguments* args,
+                                 proto::proto_ulong i, const char* who) {
+    const proto::ProtoObject* s = args->getAt(ctx, static_cast<int>(i));
+    if (!s || s == PROTO_NONE || isSet(ctx, s)) return s;
+    throwClassed(ctx, "ClassCastException", std::string(who) + " expects a set, got " +
+                                            valueTypeName(ctx, s));
+}
+
+// (hash-set x ...) — the set of the arguments; also what `#{...}` compiles to.
+const proto::ProtoObject* prim_hash_set(proto::ProtoContext* ctx,
+                                        const proto::ProtoObject*,
+                                        const proto::ParentLink*,
+                                        const proto::ProtoArguments* args,
+                                        const proto::ProtoKeywordArguments*) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    return setConj(ctx, nullptr, n ? args->values() : nullptr, n);
+}
+
+// (set coll) — the set of the elements of a collection (a set is itself).
+const proto::ProtoObject* prim_set(proto::ProtoContext* ctx,
+                                   const proto::ProtoObject*,
+                                   const proto::ParentLink*,
+                                   const proto::ProtoArguments* args,
+                                   const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 1) throwError(ctx, "set: expects 1 arg");
+    const proto::ProtoObject* coll = args->getAt(ctx, 0);
+    if (isSet(ctx, coll)) return coll;
+    std::vector<const proto::ProtoObject*> items;
+    collectElements(ctx, coll, items);
+    return setConj(ctx, nullptr, items.data(), items.size());
+}
+
+const proto::ProtoObject* prim_set_p(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject*,
+                                     const proto::ParentLink*,
+                                     const proto::ProtoArguments* args,
+                                     const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 1) throwError(ctx, "set?: expects 1 arg");
+    return isSet(ctx, args->getAt(ctx, 0)) ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// (disj s) / (disj s x & xs) — `s` without the given elements; nil stays nil.
+const proto::ProtoObject* prim_disj(proto::ProtoContext* ctx,
+                                    const proto::ProtoObject*,
+                                    const proto::ParentLink*,
+                                    const proto::ProtoArguments* args,
+                                    const proto::ProtoKeywordArguments*) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    if (n < 1) throwError(ctx, "disj: expects (disj set x ...)");
+    const proto::ProtoObject* s = setArg(ctx, args, 0, "disj");
+    if (!s || s == PROTO_NONE) return PROTO_NONE;
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    scope.setAutomaticLocal(0, s);
+    for (proto::proto_ulong i = 1; i < n; ++i)
+        scope.setAutomaticLocal(0, setDisj(&scope, scope.getAutomaticLocal(0),
+                                           args->getAt(&scope, static_cast<int>(i))));
+    return scope.getAutomaticLocal(0);
+}
+
+// clojure.set/union: every element of every set; (union) is #{}.
+const proto::ProtoObject* prim_union(proto::ProtoContext* ctx,
+                                     const proto::ProtoObject*,
+                                     const proto::ParentLink*,
+                                     const proto::ProtoArguments* args,
+                                     const proto::ProtoKeywordArguments*) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    if (n == 0) return setConj(ctx, nullptr, nullptr, 0);
+    const proto::ProtoObject* first = setArg(ctx, args, 0, "union");
+    std::vector<const proto::ProtoObject*> items;
+    for (proto::proto_ulong i = 1; i < n; ++i) collectElements(ctx, setArg(ctx, args, i, "union"), items);
+    if (!first || first == PROTO_NONE) {
+        if (n == 1) return PROTO_NONE;
+        return setConj(ctx, nullptr, items.data(), items.size());
+    }
+    return setConj(ctx, first, items.data(), items.size());
+}
+
+// clojure.set/intersection: the elements of the first set that every other
+// set holds.
+const proto::ProtoObject* prim_intersection(proto::ProtoContext* ctx,
+                                            const proto::ProtoObject*,
+                                            const proto::ParentLink*,
+                                            const proto::ProtoArguments* args,
+                                            const proto::ProtoKeywordArguments*) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    if (n == 0) throwError(ctx, "intersection: expects at least 1 set");
+    const proto::ProtoObject* first = setArg(ctx, args, 0, "intersection");
+    if (n == 1) return first;
+    for (proto::proto_ulong i = 1; i < n; ++i) setArg(ctx, args, i, "intersection");
+    std::vector<const proto::ProtoObject*> items, kept;
+    collectElements(ctx, first, items);
+    for (const proto::ProtoObject* e : items) {
+        bool everywhere = true;
+        for (proto::proto_ulong i = 1; i < n && everywhere; ++i) {
+            bool found = false;
+            setGet(ctx, args->getAt(ctx, static_cast<int>(i)), e, &found);
+            everywhere = found;
+        }
+        if (everywhere) kept.push_back(e);
+    }
+    if (kept.size() == items.size()) return first;
+    return setConj(ctx, nullptr, kept.data(), kept.size());
+}
+
+// clojure.set/difference: the first set without the elements of the others.
+const proto::ProtoObject* prim_difference(proto::ProtoContext* ctx,
+                                          const proto::ProtoObject*,
+                                          const proto::ParentLink*,
+                                          const proto::ProtoArguments* args,
+                                          const proto::ProtoKeywordArguments*) {
+    const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    if (n == 0) throwError(ctx, "difference: expects at least 1 set");
+    const proto::ProtoObject* first = setArg(ctx, args, 0, "difference");
+    for (proto::proto_ulong i = 1; i < n; ++i) setArg(ctx, args, i, "difference");
+    if (n == 1 || !first || first == PROTO_NONE) return first;
+    std::vector<const proto::ProtoObject*> items, kept;
+    collectElements(ctx, first, items);
+    for (const proto::ProtoObject* e : items) {
+        bool elsewhere = false;
+        for (proto::proto_ulong i = 1; i < n && !elsewhere; ++i) {
+            bool found = false;
+            setGet(ctx, args->getAt(ctx, static_cast<int>(i)), e, &found);
+            elsewhere = found;
+        }
+        if (!elsewhere) kept.push_back(e);
+    }
+    if (kept.size() == items.size()) return first;
+    return setConj(ctx, nullptr, kept.data(), kept.size());
+}
+
+// clojure.set/subset? and superset?: every element of the smaller set in the
+// larger one.
+bool isSubset(proto::ProtoContext* ctx, const proto::ProtoObject* a, const proto::ProtoObject* b) {
+    std::vector<const proto::ProtoObject*> items;
+    collectElements(ctx, a, items);
+    for (const proto::ProtoObject* e : items) {
+        bool found = false;
+        setGet(ctx, b, e, &found);
+        if (!found) return false;
+    }
+    return true;
+}
+
+const proto::ProtoObject* prim_subset_p(proto::ProtoContext* ctx,
+                                        const proto::ProtoObject*,
+                                        const proto::ParentLink*,
+                                        const proto::ProtoArguments* args,
+                                        const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 2) throwError(ctx, "subset?: expects 2 sets");
+    return isSubset(ctx, setArg(ctx, args, 0, "subset?"), setArg(ctx, args, 1, "subset?"))
+        ? PROTO_TRUE : PROTO_FALSE;
+}
+
+const proto::ProtoObject* prim_superset_p(proto::ProtoContext* ctx,
+                                          const proto::ProtoObject*,
+                                          const proto::ParentLink*,
+                                          const proto::ProtoArguments* args,
+                                          const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) != 2) throwError(ctx, "superset?: expects 2 sets");
+    return isSubset(ctx, setArg(ctx, args, 1, "superset?"), setArg(ctx, args, 0, "superset?"))
+        ? PROTO_TRUE : PROTO_FALSE;
+}
+
 // Sequence helpers macros reach for --------------------------------------
 
 // (second coll) — (first (next coll)).
@@ -3024,6 +3253,10 @@ const proto::ProtoObject* prim_conj(proto::ProtoContext* ctx,
         }
         // Every key and value is reachable from the rooted arguments.
         return mapAssocPairs(ctx, coll, kv.data(), kv.size());
+    }
+    if (isSet(ctx, coll)) {
+        // Every element is reachable from the rooted arguments.
+        return setConj(ctx, coll, args->values() + 1, n - 1);
     }
     if (isVector(coll)) {
         proto::ProtoContext::CriticalSection guard(ctx);
@@ -3255,6 +3488,17 @@ constexpr PrimitiveEntry kPrimitives[] = {
     {"odd?",    &prim_odd_p},
     {"__raise-illegal-argument", &prim_raise_illegal_argument},
 
+    // Sets (SetOps.h) and clojure.set, in the global namespace (D28).
+    {"hash-set",     &prim_hash_set},
+    {"set",          &prim_set},
+    {"set?",         &prim_set_p},
+    {"disj",         &prim_disj},
+    {"union",        &prim_union},
+    {"intersection", &prim_intersection},
+    {"difference",   &prim_difference},
+    {"subset?",      &prim_subset_p},
+    {"superset?",    &prim_superset_p},
+
     // Destructuring (compiler/Compiler.h, destructure).
     {"__destructure-map", &prim_destructure_map},
 };
@@ -3285,6 +3529,11 @@ void shutdownFutures(proto::ProtoContext* ctx) {
 void replPrintValue(proto::ProtoContext* ctx, std::FILE* out,
                     const proto::ProtoObject* v) {
     printValue(ctx, out, v, /*readable=*/true);
+}
+
+// Declared in Primitives.h.
+const proto::ProtoList* seqItems(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    return asSeqOrNull(ctx, v);
 }
 
 // Declared in Primitives.h; the exception printer's way back into printTo.
@@ -3344,6 +3593,7 @@ const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v)
     if (isListTag(v))                       return "a list";
     if (isVector(v))                        return "a vector";
     if (isMap(v))                           return "a map";
+    if (isSet(ctx, v))                      return "a set";
     if (v->isMethod(ctx))                   return "a fn";
     if (isException(ctx, v))                return "an exception";
     if (const char* io = ioHandleTypeName(ctx, v)) return io;
@@ -3471,6 +3721,13 @@ bool valuesEqual(proto::ProtoContext* ctx,
                 });
     }
 
+    // Sets: the same elements, matched as map keys are (SetOps.h), so
+    // (= #{1} #{1.0}) is false, as in Clojure, whose sets hash 1 and 1.0
+    // differently.
+    const bool aSet = isSet(ctx, a);
+    const bool bSet = isSet(ctx, b);
+    if (aSet || bSet) return aSet && bSet && setEquals(ctx, a, b);
+
     // Any other object — keywords and symbols (interned, Named.h), atoms,
     // functions, ... — is equal only to itself. Decided by the pointer tag:
     // protoCore's isString and compare would first probe the
@@ -3507,6 +3764,10 @@ void installPrimitives(proto::ProtoContext* ctx,
                        proto::ProtoObject* globals) {
     // The exception marker and the in-flight root set (Exceptions.h).
     initExceptions(ctx, globals);
+    // The set prototype (SetOps.h), reachable from the globals, which every
+    // entry point roots.
+    globals->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__set_prototype__"),
+                          initSetOps(ctx));
     // Install each primitive: wrap the C function pointer in a callable
     // ProtoObject via fromMethod, store on the globals under the symbol key.
     // setAttribute on a mutable receiver mutates in place.
