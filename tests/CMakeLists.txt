@@ -118,6 +118,10 @@ add_test(NAME cli/repl-quote
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/repl-quote.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/quoted-data-survive-gc
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/quoted-data-survive-gc.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/file-form-by-form
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/file-form-by-form.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/repl-forms-in-order
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/repl-forms-in-order.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/deeply-nested-source
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/deeply-nested-source.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/uncaught-exception

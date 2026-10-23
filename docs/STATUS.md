@@ -553,6 +553,9 @@ Work in progress on branch `feature/macros` (DESIGN.md §10, ROADMAP.md).
       them (DESIGN.md §10.1, M1-M4)
 - [x] Stage 2: `quote` of any datum; the reader macros `'`, `` ` ``, `~`,
       `~@` (M5-M8)
+- [x] Stage 3: scripts are read, compiled and run one top-level form at a
+      time, as the REPL is; a compile error names its form's line and column
+      (M9)
 - [ ] Compile-time evaluation pipeline (the bootstrap)
 - [ ] `clojure.core` macros defined in protoClojure
 - [ ] User-defined macros (`defmacro`)

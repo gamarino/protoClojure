@@ -75,7 +75,7 @@ Code is data: a quoted form is an ordinary list, and a syntax-quote template bui
 (println `(max ~@xs 10))             ;; => (max 1 2 10)
 ```
 
-The 436 conformance fixtures under `tests/conformance/` are the executable reference for what the language accepts today (this README's examples among them: `tests/conformance/28-quote/readme-code-is-data.clj`).
+The 438 conformance fixtures under `tests/conformance/` are the executable reference for what the language accepts today (this README's examples among them: `tests/conformance/28-quote/readme-code-is-data.clj`).
 
 ## Concurrency — atoms, futures, actors
 
@@ -258,7 +258,7 @@ The property this membership is designed to confer: a value materialised in any 
 
 ## Project status
 
-protoClojure runs scripts and an interactive REPL. Version 0.0.3, a preview tag (v0.1.0 is the first planned release). Shipped changes are listed in [CHANGELOG.md](CHANGELOG.md).
+protoClojure runs scripts and an interactive REPL, both one top-level form at a time: each form is read, compiled and run before the next is read, as in Clojure. Version 0.0.3, a preview tag (v0.1.0 is the first planned release). Shipped changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 | Area | Status |
 |---|---|
@@ -275,12 +275,13 @@ protoClojure runs scripts and an interactive REPL. Version 0.0.3, a preview tag 
 | Exceptions: `try` / `catch` / `finally`, `throw`, `ex-info` | Implemented |
 | Input and output: files, `with-open`, `sh`, `getenv`, HTTP client and Ring server, TCP / UDP / TLS sockets (on protoIO) | Implemented |
 | Quote `'` and syntax-quote `` ` `` / `~` / `~@` | Implemented (no namespace qualification or `foo#` gensyms yet) |
-| Macros (`defmacro`, `macroexpand`, `clojure.core` macros) | In progress on branch `feature/macros`: stages 1-2 of 6 done |
+| Scripts run form by form, as the REPL does (a compile error names its form's line and column) | Implemented |
+| Macros (`defmacro`, `macroexpand`, `clojure.core` macros) | In progress on branch `feature/macros`: stages 1-3 of 6 done |
 | Sets, lazy sequences | Planned |
 | Namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **585 test cases: 436 conformance fixtures, 124 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics, value lifetime, the vector representation, value equality and hashing, native stack guard, double printer, exception values, rethrow) **and 25 CLI checks** (`--help`, three checks of the adaptive heap controller -- on by default, off with `PROTOCORE_ADAPTIVE_HEAP=0`, peak RSS bounded under a small budget --, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, the reader's values under a heap limit, the garbage a `loop` makes under a heap limit, joins that park for the collector, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, literals and quote in the REPL, quoted data under a heap limit, deeply nested source, an uncaught exception, exceptions under a heap limit, `read-line` in pipelines, `*command-line-args*`, exit statuses, `sh` with `:dir` and `:env` and no shell on `PATH`, `localhost` requests to a server started without a host, an HTTP server under a heap limit, and scripts run as commands through a `#!` line). All 585 pass locally on Linux against protoCore 3.0.0 (2026-10-23, branch `feature/macros`). The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **589 test cases: 438 conformance fixtures, 124 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics, value lifetime, the vector representation, value equality and hashing, native stack guard, double printer, exception values, rethrow) **and 27 CLI checks** (`--help`, three checks of the adaptive heap controller -- on by default, off with `PROTOCORE_ADAPTIVE_HEAP=0`, peak RSS bounded under a small budget --, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, the reader's values under a heap limit, the garbage a `loop` makes under a heap limit, joins that park for the collector, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, literals and quote in the REPL, several forms per REPL line and `:load`, quoted data under a heap limit, scripts run form by form, deeply nested source, an uncaught exception, exceptions under a heap limit, `read-line` in pipelines, `*command-line-args*`, exit statuses, `sh` with `:dir` and `:env` and no shell on `PATH`, `localhost` requests to a server started without a host, an HTTP server under a heap limit, and scripts run as commands through a `#!` line). All 589 pass locally on Linux against protoCore 3.0.0 (2026-10-23, branch `feature/macros`). The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 
@@ -334,7 +335,7 @@ cmake --build build_release
 ./build_release/protoclj script.clj a b      # run a .clj file; *command-line-args* is ("a" "b")
 ./build_release/protoclj --version           # version
 
-ctest --test-dir build_release -j1           # 585 cases: 436 fixtures + 124 unit tests + 25 CLI checks
+ctest --test-dir build_release -j1           # 589 cases: 438 fixtures + 124 unit tests + 27 CLI checks
 ./benchmarks/bench.sh                        # benchmark against Babashka
 ./benchmarks/actor-bench.sh                  # actor throughput, varied worker counts
 ```

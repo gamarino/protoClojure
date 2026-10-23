@@ -9,6 +9,33 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Changed — macros, stage 3: scripts run form by form
+
+- **A script is read, compiled and run one top-level form at a time**, as
+  the REPL does and as Clojure's `load` does (DESIGN.md §10.1, M9): a form
+  is compiled only after the previous one has run, which is what lets a
+  `defmacro` apply to the forms after it (stage 4). The forms before a
+  failing one have run and printed (before, a compile or read error
+  anywhere in the file stopped the script before anything ran); the exit
+  status is still 1.
+- **A compile error names where its top-level form starts**:
+  `script.clj:3:1: compile error: ...` (it used to name only the file).
+  Read and runtime errors keep their formats.
+- Each form is read into a context of its own and is garbage once it has
+  run, in scripts, at the REPL and under `:load`; it used to stay alive
+  until the end of the run (the REPL's for the whole session).
+- **The REPL evaluates every form of an input line**, in order, printing
+  each result; it used to evaluate the first and silently drop the rest.
+  `:load` runs its file form by form through the same loop and reports
+  errors with the file's positions.
+- New tests: CLI checks `cli/file-form-by-form` (output before a compile,
+  read or runtime error, error positions, exit statuses) and
+  `cli/repl-forms-in-order` (several forms per line, an error mid-line,
+  `:load`), and the fixtures `29-loading/compile-error-names-its-form.clj`
+  and `29-loading/later-form-sees-earlier-definition.clj`.
+  `cli/quoted-data-survive-gc` now fails, in both modes, when a module does
+  not pin its quoted data (checked by disabling the pin).
+
 ### Added — macros, stage 2: quote and syntax-quote
 
 - **`quote` takes any datum** (DESIGN.md §10.1, M5): `'(+ 1 2)` is a list
@@ -42,9 +69,7 @@ first planned release (`docs/ROADMAP.md`).
   lexer unit tests (quote / unquote / splice lists, the syntax-quote
   expansions, nested syntax-quote, read errors, the new tokens), and the CLI
   checks `cli/repl-quote` and `cli/quoted-data-survive-gc` (file and REPL
-  mode under a 1,000,000-cell heap). The latter cannot fail yet: both
-  drivers still keep every read form alive (stage 3 changes the file
-  driver).
+  mode under a 1,000,000-cell heap).
 
 ### Changed — macros, stage 1: the reader yields runtime values
 

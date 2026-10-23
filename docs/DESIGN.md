@@ -722,9 +722,11 @@ is mechanical.
 A respected REPL is a v0.1 hard requirement. Two layers:
 
 - **The read-eval-print loop itself**: read one form, eval, print,
-  loop. Implemented in 0.0.1 on libreadline (`src/repl/Repl.cpp`), with
+  loop. Implemented on libreadline (`src/repl/Repl.cpp`), with
   multi-line input, history, `*1` / `*2` / `*3` and the `:help`,
-  `:quit`, `:load` and `:time` commands.
+  `:quit`, `:load` and `:time` commands. Every form of an input is read,
+  compiled and run in turn (several on one line print one result each), in
+  a context of its own, as a script's forms are (decision M9).
 - **nREPL server** (planned for v0.1): a TCP server speaking the
   [nREPL protocol](https://nrepl.org/) so CIDER / Calva / Conjure can
   connect. The protocol is bencode over a socket; the operations a v0.1
@@ -738,8 +740,9 @@ without it the language fails the *respect* test.
 
 ## 10. Macros (in progress)
 
-Status: stage 1 (the reader yields runtime values) and stage 2 (quote and
-syntax-quote) are built; file form-by-form execution, `defmacro`, syntax-quote and the `clojure.core`
+Status: stage 1 (the reader yields runtime values), stage 2 (quote and
+syntax-quote) and stage 3 (scripts compiled and run form by form) are
+built; `defmacro`, syntax-quote and the `clojure.core`
 macros follow (ROADMAP.md, "Macros"). The plan below is the original one;
 §10.1 records the decisions taken while building it.
 
@@ -878,6 +881,28 @@ directly under a syntax-quote, `` `~@x ``, is the read error
 `splice (~@) not in list`, Clojure's. At the REPL, a line that ends in a
 reader macro (`'`, `` ` ``, `~`, `~@`, `@`) is incomplete: the REPL waits
 for the form on the next line, as Clojure's REPL does.
+
+**M9. A script is read, compiled and run one top-level form at a time**
+(*agent, pending review*), as the REPL does and as Clojure's `load` does:
+the next form is read only after the previous one has run, so a definition
+made at run time (a `defmacro`, from stage 4) is in effect for the forms
+after it. Each form is read into a context of its own, rooted in a slot of
+that context while it is compiled and run, and is garbage once it has run
+unless something reachable from the globals holds it; each form gets its own
+`BytecodeModule`, kept until the run ends (the functions it defined point
+into it) and its own `SourceInfo`. One `ExecutionEngine` serves the whole
+run. The REPL and `:load` go through the same per-form loop
+(`Session::evalSource`). Consequences, all as in Clojure: the forms before a
+failing one have run and printed; a read error late in a file no longer
+prevents the earlier forms from running; the exit status is still 1 on any
+error. A compile error now names the line and column where its top-level
+form starts (`script.clj:3:1: compile error: ...`; the read error already
+named its position, the runtime error format is unchanged). The REPL used
+to evaluate only the first form of an input line and drop the rest; it now
+evaluates them all and prints each result. Alternative: keep reading the
+whole file first and compile each form after the previous one ran; rejected
+because it holds every form alive for the whole run, reports a read error
+before running anything, and differs from Clojure's `load`.
 
 ## 11. The standard library
 

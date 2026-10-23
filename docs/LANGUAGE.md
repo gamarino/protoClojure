@@ -330,8 +330,13 @@ object. Errors carry source position. (Planned: `read-string` and
 
 ### 3.2 The evaluator
 
-Each top-level form is read, compiled to bytecode, and evaluated. Forms
-are evaluated by case:
+Each top-level form is read, compiled to bytecode, and evaluated before the
+next one is read, in a script as at the REPL (implemented), so a definition
+is in effect for every later form. An error stops a script with exit status
+1 after the forms before it have run: a read error names the line and
+column where reading stopped, a compile error those where its top-level
+form starts (`script.clj:3:1: compile error: ...`), a runtime error the
+exception (`script.clj: runtime error: ...`). Forms are evaluated by case:
 
 - Self-evaluating literals (numbers, strings, keywords, booleans, nil,
   vectors of constants, maps of constants, sets of constants) return

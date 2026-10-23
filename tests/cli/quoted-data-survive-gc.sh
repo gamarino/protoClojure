@@ -7,8 +7,10 @@
 # allocates garbage under a 1,000,000-cell hard ceiling until several
 # collection cycles have run, and walks the datum again after every round.
 # A datum the collector reclaimed shows up as a wrong sum or a crash. The
-# program runs twice: as a file and typed at the REPL, where nothing but the
-# module's root set holds the datum once its form has been compiled.
+# program runs twice: as a file and typed at the REPL. In both, each form is
+# read into a context of its own (docs/DESIGN.md §10.1, M9), so once its
+# form has been compiled nothing but the module's root set holds the datum.
+# Checked to fail when the module does not pin its data.
 #
 # The program is read from standard input. Registered as the
 # `cli/quoted-data-survive-gc` ctest case by tests/CMakeLists.txt.

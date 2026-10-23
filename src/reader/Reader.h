@@ -82,6 +82,21 @@ public:
     // calling convention.
     const proto::ProtoObject* readOne();
 
+    // readOne, allocating the form in `ctx` instead of the context the
+    // reader was built with: a driver reads each top-level form into a
+    // context of its own, so the form can be collected once it has run.
+    // `ctx` must be the innermost context of the calling thread.
+    const proto::ProtoObject* readOne(proto::ProtoContext* ctx);
+
+    // Where the form the last readOne returned starts (1-based), for
+    // reporting a compile error at that form.
+    int formLine() const { return formLine_; }
+    int formColumn() const { return formColumn_; }
+
+    // Replaces the SourceInfo the reader records into (nullptr: none); a
+    // driver uses one per top-level form (SourceInfo.h).
+    void setSourceInfo(SourceInfo* info) { info_ = info; }
+
     // Read every form until EOF. Returns a protoCore ProtoList of forms in
     // source order — same representation a Clojure file's top-level forms
     // would have. No std container is used; the protoCore GC traces the
@@ -96,6 +111,8 @@ private:
     Lexer lexer_;
     NamedLayout named_;
     SourceInfo* info_;
+    int formLine_ = 0;
+    int formColumn_ = 0;
 
     // readAll without the conversion of StackOverflowError to ReaderError.
     const proto::ProtoList* readAllForms();

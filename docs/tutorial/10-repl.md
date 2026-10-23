@@ -56,6 +56,10 @@ A few things to know up front:
   `~`, `~@`, `@`) waits the same way for the form it applies to. A blank
   line at the continuation prompt forces evaluation (useful escape hatch
   if you got the count wrong).
+- **Several forms on one line** are evaluated in order, each result
+  printed on its own line: `(def a 1) (def b (+ a 1)) b` prints `1`, `2`
+  and `2` (a `def` answers its value). An error stops the rest of that
+  input.
 - **History.** Arrow keys recall earlier lines. The history is
   persisted across sessions in `~/.protoclj_history`.
 - **Error recovery.** A parse / compile / runtime error is printed and

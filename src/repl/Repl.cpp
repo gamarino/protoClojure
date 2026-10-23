@@ -58,6 +58,7 @@ static int write_history(const char*) { return 0; }
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -312,71 +313,101 @@ struct Session {
         setActiveCallContext(printerCc);
     }
 
-    // Run one accumulated form. Returns true on a clean eval; the result
-    // value is placed in `*out` on success (nullptr on error). Errors are
-    // printed to stderr and the REPL loop continues.
-    bool evalForm(const std::string& src, const proto::ProtoObject** out) {
-        *out = nullptr;
-        SourceInfo sourceInfo;  // lives as long as the form is rooted below
-        Reader reader(ctx, src, named, &sourceInfo);
-        const proto::ProtoObject* form = nullptr;
-        try {
-            form = reader.readOne();
-        } catch (const ReaderError& e) {
-            std::fprintf(stderr, "read error: %s\n", e.what());
-            return false;
-        }
-        if (!form) return true;  // empty input — treat as a no-op
-
-        auto modPtr = std::make_unique<BytecodeModule>();
-        BytecodeModule& mod = *modPtr;
-        {
-            // readOne returns the form unrooted: keep it in a slot while it
-            // is compiled, as runFile keeps the forms readAll returns.
+    // Read, compile and run every form in `src`, one at a time, as Clojure's
+    // REPL does: a form is compiled only after the one before it has run,
+    // so `(defmacro m ...) (m)` on one line works once macros exist. Each
+    // result is handed to `onResult` while it is still rooted (the caller
+    // prints it and binds *1). Stops at the first error, which is printed;
+    // the rest of the input is dropped. Returns false on an error.
+    //
+    // Each form lives in a context of its own, rooted in its slot while it
+    // is compiled and run, and is garbage afterwards unless something it
+    // built is reachable from the globals (or *1 *2 *3).
+    //
+    // With `path` (`:load`), errors are reported as a script's are:
+    // `path:line:col: read error`, `path:line:col: compile error` (where the
+    // form starts) and `path: runtime error`.
+    bool evalSource(const std::string& src,
+                    const std::function<void(const proto::ProtoObject*)>& onResult,
+                    const std::string* path = nullptr) {
+        Reader reader(ctx, src, named);
+        for (;;) {
             proto::ProtoContext formScope(ctx->space, ctx);
-            formScope.resizeAutomaticLocals(1);
-            formScope.setAutomaticLocal(0, form);
-            Compiler compiler;
-            compiler.setSourceInfo(&sourceInfo);
+            formScope.resizeAutomaticLocals(2);  // the form, its result
+            SourceInfo sourceInfo;
+            reader.setSourceInfo(&sourceInfo);
+            const proto::ProtoObject* form = nullptr;
             try {
-                compiler.compileForm(&formScope, form, mod, compilerMarkers);
-            } catch (const std::exception& e) {
-                // A CompileError, or a bytecode limit (BytecodeModule::emit).
-                std::fprintf(stderr, "compile error: %s\n", e.what());
+                form = reader.readOne(&formScope);
+            } catch (const ReaderError& e) {
+                if (path) std::fprintf(stderr, "%s:%d:%d: read error: %s\n",
+                                       path->c_str(), e.line, e.column, e.what());
+                else      std::fprintf(stderr, "read error: %s\n", e.what());
                 return false;
             }
-        }
-        mod.emit(Op::RETURN, 0);
-        // Retain BEFORE run — the fn objects defn allocates carry a
-        // pointer into mod's byte buffer, and they have to survive past
-        // this scope.
-        retainedModules.push_back(std::move(modPtr));
+            reader.setSourceInfo(nullptr);
+            if (!form) return true;  // end of the input
+            formScope.setAutomaticLocal(0, form);
 
-        // Use a separate ExecutionEngine instance per form. Cheap; keeps
-        // the engine's internal state from leaking across forms.
-        ExecutionEngine eng;
-        const proto::ProtoObject* result = nullptr;
-        try {
-            result = eng.run(ctx, mod, globals,
-                fnSingleProto, fnMultiProto, atomMarker,
-                futureMarker, promiseMarker, actorMarker,
-                bytecodeKey, arityKey, capturesKey, aritiesKey,
-                valueKey, watchesKey,
-                thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
-                actorStateKey, mailboxKey, named);
-        } catch (const proto::ProtoException& e) {
-            // An uncaught Clojure exception, protoCore error or module error.
-            std::fprintf(stderr, "error: %s\n", describeThrown(ctx, e.value()).c_str());
-            return false;
-        } catch (const std::exception& e) {
-            std::fprintf(stderr, "error: %s\n", e.what());
-            return false;
-        } catch (...) {
-            std::fprintf(stderr, "error: unknown C++ exception\n");
-            return false;
+            auto modPtr = std::make_unique<BytecodeModule>();
+            BytecodeModule& mod = *modPtr;
+            {
+                Compiler compiler;
+                compiler.setSourceInfo(&sourceInfo);
+                try {
+                    compiler.compileForm(&formScope, formScope.getAutomaticLocal(0), mod,
+                                         compilerMarkers);
+                } catch (const std::exception& e) {
+                    // A CompileError, or a bytecode limit (BytecodeModule::emit).
+                    if (path) std::fprintf(stderr, "%s:%d:%d: compile error: %s\n",
+                                           path->c_str(), reader.formLine(),
+                                           reader.formColumn(), e.what());
+                    else      std::fprintf(stderr, "compile error: %s\n", e.what());
+                    return false;
+                }
+            }
+            mod.emit(Op::RETURN, 0);
+            // Retain BEFORE run — the fn objects defn allocates carry a
+            // pointer into mod's byte buffer, and they have to survive past
+            // this scope.
+            retainedModules.push_back(std::move(modPtr));
+
+            // Use a separate ExecutionEngine instance per form. Cheap; keeps
+            // the engine's internal state from leaking across forms.
+            ExecutionEngine eng;
+            try {
+                formScope.setAutomaticLocal(1, eng.run(&formScope, mod, globals,
+                    fnSingleProto, fnMultiProto, atomMarker,
+                    futureMarker, promiseMarker, actorMarker,
+                    bytecodeKey, arityKey, capturesKey, aritiesKey,
+                    valueKey, watchesKey,
+                    thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
+                    actorStateKey, mailboxKey, named));
+            } catch (const proto::ProtoException& e) {
+                // An uncaught Clojure exception, protoCore error or module error.
+                reportRuntimeError(path, describeThrown(&formScope, e.value()));
+                return false;
+            } catch (const std::exception& e) {
+                reportRuntimeError(path, e.what());
+                return false;
+            } catch (...) {
+                reportRuntimeError(path, "unknown C++ exception");
+                return false;
+            }
+            onResult(formScope.getAutomaticLocal(1));
         }
-        *out = result;
-        return true;
+    }
+
+    static void reportRuntimeError(const std::string* path, const std::string& what) {
+        if (path) std::fprintf(stderr, "%s: runtime error: %s\n", path->c_str(), what.c_str());
+        else      std::fprintf(stderr, "error: %s\n", what.c_str());
+    }
+
+    // Prints a result readably and makes it *1.
+    void printAndBind(const proto::ProtoObject* r) {
+        replPrintValue(ctx, stdout, r);
+        std::fputc('\n', stdout);
+        bindStars(r);
     }
 
     // After each successful eval, shift the *1 / *2 / *3 chain so the
@@ -415,77 +446,26 @@ void cmdLoad(Session& s, const std::string& path) {
     std::stringstream buf; buf << f.rdbuf();
     std::string src = buf.str();
 
-    // :load runs every form in the file like the original `protoclj
-    // <file>` path, but against the live session — defs persist.
-    SourceInfo sourceInfo;  // the forms stay rooted in formsScope below
-    Reader reader(s.ctx, src, s.named, &sourceInfo);
-    const proto::ProtoList* forms = nullptr;
-    try {
-        forms = reader.readAll();
-    } catch (const ReaderError& e) {
-        std::fprintf(stderr, "%s:%d:%d: read error: %s\n",
-                     path.c_str(), e.line, e.column, e.what());
-        return;
+    // :load runs the file's forms one at a time, as `protoclj <file>` does,
+    // but against the live session — defs persist. It stops at the first
+    // error; the forms before it have run.
+    proto::proto_ulong n = 0;
+    if (s.evalSource(src, [&](const proto::ProtoObject*) { ++n; }, &path)) {
+        std::printf("loaded %s (%" PROTO_FMT_U " forms)\n", path.c_str(), n);
     }
-    // readAll returns the forms unrooted: keep them in a slot while they are
-    // compiled and run, as runFile does. The forms' contexts chain to it.
-    proto::ProtoContext formsScope(s.ctx->space, s.ctx);
-    formsScope.resizeAutomaticLocals(1);
-    formsScope.setAutomaticLocal(0, forms->asObject(&formsScope));
-    proto::proto_ulong n = forms->getSize(&formsScope);
-    for (proto::proto_ulong i = 0; i < n; ++i) {
-        const proto::ProtoObject* form =
-            forms->getAt(&formsScope, static_cast<int>(i));
-        auto modPtr = std::make_unique<BytecodeModule>();
-        BytecodeModule& mod = *modPtr;
-        Compiler compiler;
-        compiler.setSourceInfo(&sourceInfo);
-        try {
-            compiler.compileForm(&formsScope, form, mod, s.compilerMarkers);
-        } catch (const std::exception& e) {
-            std::fprintf(stderr, "%s: compile error: %s\n",
-                         path.c_str(), e.what());
-            return;
-        }
-        mod.emit(Op::RETURN, 0);
-        s.retainedModules.push_back(std::move(modPtr));
-        ExecutionEngine eng;
-        try {
-            eng.run(&formsScope, mod, s.globals,
-                s.fnSingleProto, s.fnMultiProto, s.atomMarker,
-                s.futureMarker, s.promiseMarker, s.actorMarker,
-                s.bytecodeKey, s.arityKey, s.capturesKey, s.aritiesKey,
-                s.valueKey, s.watchesKey,
-                s.thunkKey, s.ccBlobKey, s.threadKey, s.resultKey, s.doneKey,
-                s.actorStateKey, s.mailboxKey, s.named);
-        } catch (const proto::ProtoException& e) {
-            std::fprintf(stderr, "%s: runtime error: %s\n",
-                         path.c_str(), describeThrown(&formsScope, e.value()).c_str());
-            return;
-        } catch (const std::exception& e) {
-            std::fprintf(stderr, "%s: runtime error: %s\n",
-                         path.c_str(), e.what());
-            return;
-        } catch (...) {
-            std::fprintf(stderr, "%s: runtime error: unknown C++ exception\n",
-                         path.c_str());
-            return;
-        }
-    }
-    std::printf("loaded %s (%" PROTO_FMT_U " forms)\n", path.c_str(), n);
 }
 
 void cmdTime(Session& s, const std::string& expr) {
+    // Times the reading, compiling and running of the forms, not the
+    // printing of their results.
+    double ms = 0.0;
     auto t0 = std::chrono::steady_clock::now();
-    const proto::ProtoObject* r = nullptr;
-    bool ok = s.evalForm(expr, &r);
-    auto t1 = std::chrono::steady_clock::now();
-    double ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
-    if (ok) {
-        replPrintValue(s.ctx, stdout, r);
-        std::fputc('\n', stdout);
-        s.bindStars(r);
-    }
+    s.evalSource(expr, [&](const proto::ProtoObject* r) {
+        ms += std::chrono::duration<double, std::milli>(
+                  std::chrono::steady_clock::now() - t0).count();
+        s.printAndBind(r);
+        t0 = std::chrono::steady_clock::now();
+    });
     std::printf("elapsed: %.3f ms\n", ms);
 }
 
@@ -577,12 +557,9 @@ int runRepl(proto::ProtoContext* ctx) {
 
         // Force-flush a stuck multi-line form.
         if (inMultiline && blank) {
-            const proto::ProtoObject* r = nullptr;
-            if (session.evalForm(buffer, &r) && r) {
-                replPrintValue(session.ctx, stdout, r);
-                std::fputc('\n', stdout);
-                session.bindStars(r);
-            }
+            session.evalSource(buffer, [&](const proto::ProtoObject* r) {
+                session.printAndBind(r);
+            });
             buffer.clear();
             inMultiline = false;
             std::fflush(stdout);
@@ -595,13 +572,9 @@ int runRepl(proto::ProtoContext* ctx) {
             continue;
         }
         // Balanced (or Error — let the reader complain). Eval.
-        const proto::ProtoObject* r = nullptr;
-        bool ok = session.evalForm(buffer, &r);
-        if (ok && r) {
-            replPrintValue(session.ctx, stdout, r);
-            std::fputc('\n', stdout);
-            session.bindStars(r);
-        }
+        session.evalSource(buffer, [&](const proto::ProtoObject* r) {
+            session.printAndBind(r);
+        });
         buffer.clear();
         inMultiline = false;
         std::fflush(stdout);

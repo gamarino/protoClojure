@@ -39,10 +39,16 @@ std::string describeKey(proto::ProtoContext* ctx, const NamedLayout& named,
 // position where reading stopped, so every driver handles it like any other
 // read error.
 const proto::ProtoObject* Reader::readOne() {
+    return readOne(ctx_);
+}
+
+const proto::ProtoObject* Reader::readOne(proto::ProtoContext* ctx) {
     try {
         Token tok = lexer_.next();
         if (tok.kind == TokenKind::EndOfFile) return nullptr;
-        return readFromToken(ctx_, tok);
+        formLine_ = tok.line;
+        formColumn_ = tok.column;
+        return readFromToken(ctx, tok);
     } catch (const StackOverflowError& e) {
         throw ReaderError(e.what(), lexer_.line(), lexer_.column());
     }
