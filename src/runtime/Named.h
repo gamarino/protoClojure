@@ -31,6 +31,8 @@
  */
 #pragma once
 
+#include <atomic>
+
 namespace proto {
 class ProtoContext;
 class ProtoObject;
@@ -66,6 +68,30 @@ bool isNamed(proto::ProtoContext* ctx, const NamedLayout& layout,
 const proto::ProtoString* namedSpelling(proto::ProtoContext* ctx,
                                         const NamedLayout& layout,
                                         const proto::ProtoObject* v);
+
+// The fast "is this an interned named value?" test of the map key semantics
+// (MapOps.cpp, keyIsIdentity), which sits on every keyword `get` / `assoc`.
+// A direct-mapped table of the named values interned so far, indexed by the
+// value's cell address. A hit proves `v` is a named value: named values are
+// never collected, so a recorded address can never be reused by another
+// object. A miss proves nothing (two values may share a slot), and the
+// caller falls back to reading the prototype. Lock-free: slots are relaxed
+// atomic words, written by internNamed on every call.
+namespace namedcache {
+constexpr unsigned long kSlots = 1024;
+extern std::atomic<const proto::ProtoObject*> slots[kSlots];
+inline unsigned long slotOf(const proto::ProtoObject* v) {
+    return (reinterpret_cast<unsigned long>(v) >> 6) & (kSlots - 1);
+}
+inline void record(const proto::ProtoObject* v) {
+    std::atomic<const proto::ProtoObject*>& s = slots[slotOf(v)];
+    if (s.load(std::memory_order_relaxed) != v) s.store(v, std::memory_order_relaxed);
+}
+} // namespace namedcache
+
+inline bool isKnownNamed(const proto::ProtoObject* v) {
+    return namedcache::slots[namedcache::slotOf(v)].load(std::memory_order_relaxed) == v;
+}
 
 // The next number of the process-wide sequence that `gensym` and
 // syntax-quote's auto-gensyms (`foo#`) draw from, as Clojure's RT.nextID:

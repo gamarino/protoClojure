@@ -1,4 +1,5 @@
 #include "MapOps.h"
+#include "Named.h"
 #include "SetOps.h"
 #include "StackGuard.h"
 #include "VectorOps.h"
@@ -245,8 +246,11 @@ bool keyIsIdentity(proto::ProtoContext* ctx, const proto::ProtoObject* key) {
         case kTagObject:
             // Keywords and symbols (interned Named values), atoms, futures,
             // promises, actors: equal only to themselves. A set (SetOps.h)
-            // is matched by its elements.
-            return !isSet(ctx, key);
+            // is matched by its elements. The keyword or symbol a program
+            // looks up is found in the named-value cache (Named.h) without
+            // reading its prototype, so the set test costs nothing on the
+            // common path.
+            return isKnownNamed(key) || !isSet(ctx, key);
         default:
             // A map and a vector are matched by value; anything else
             // protoCore may hand out (a method, a thread, a byte buffer) is

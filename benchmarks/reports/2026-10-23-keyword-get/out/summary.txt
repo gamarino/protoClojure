@@ -1,0 +1,8 @@
+== map-loop (results: map-loop 2000007000002 )
+s6 median 3658 Mcycles (min 3587 max 3686)
+s10 median 3929 Mcycles (min 3843 max 4016)
+fix median 3688 Mcycles (min 3639 max 3748)
+== macro-loop (results: macro-loop 19998890 )
+s6 median 5213 Mcycles (min 5186 max 5443)
+s10 median 5251 Mcycles (min 5220 max 5594)
+fix median 5308 Mcycles (min 5226 max 5500)

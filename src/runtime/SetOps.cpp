@@ -8,11 +8,11 @@
 
 namespace protoClojure {
 
-namespace {
-
 // Set once per ProtoSpace by initSetOps, before any thread other than the
 // initialising one runs Clojure code; rooted by the caller (the globals).
 const proto::ProtoObject* g_setPrototype = nullptr;
+
+namespace {
 
 const proto::ProtoString* elementsKey(proto::ProtoContext* ctx) {
     return proto::ProtoString::createSymbol(ctx, "__set__");
@@ -36,7 +36,6 @@ const proto::ProtoObject* initSetOps(proto::ProtoContext* ctx) {
     return g_setPrototype;
 }
 
-const proto::ProtoObject* setPrototype() { return g_setPrototype; }
 
 bool isSet(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     if (!v || !g_setPrototype) return false;

@@ -41,6 +41,37 @@ runs the script through each interpreter 3 times and reports the
 minimum wall-clock (cold-start + execution). No JVM warmup phase.
 Result strings are compared across runtimes for correctness.
 
+## Keyword `get` / `assoc`: the stage-10 regression fixed, 2026-10-23
+
+Stage 10's `map-loop.clj` ran 7 % slower than stage 6 because the map key
+semantics asked every object key whether it is a set (`keyIsIdentity`,
+`src/runtime/MapOps.cpp`), one out-of-line `getPrototype` per keyword. The
+fix: (a) a hit in the named-value cache (`isKnownNamed`,
+`src/runtime/Named.h`), a direct-mapped table of the interned keywords and
+symbols, answers "identity key" before the prototype is read; a recorded
+address can never be reused because named values are never collected; (b)
+the VM's call path tests for a keyword callable before it asks whether the
+callable is a map or a set, and `setPrototype()` is inline. Script and raw
+output: [`reports/2026-10-23-keyword-get/`](reports/2026-10-23-keyword-get/):
+stage 6 (`e5a48c5`), stage 10 (`1f14ba4`) and the fix, 9 interleaved rounds
+of `perf stat` cycles, each binary on its own fresh copy of
+`libprotoCore.so.4`, behind the quiet gate (`QUIET_CORES=4.0`). Medians
+(Mcycles, min-max):
+
+| loop | stage 6 | stage 10 | fix |
+|---|---|---|---|
+| `map-loop.clj` | 3658 (3587-3686) | 3929 (3843-4016), +7.4 % | 3688 (3639-3748), +0.8 % |
+| `macro-loop.clj` | 5213 (5186-5443) | 5251 (5220-5594) | 5308 (5226-5500), +1.8 % |
+
+Four builds were measured (the cache alone, plus the inline
+`setPrototype()`, plus the reordered call test, both together); the
+map-loop median of the fix ranged from +0.0 % to +3.1 % against stage 6 and
+the macro loop's from -0.6 % to +1.8 %, with overlapping ranges: what
+remains is inside the run-to-run and layout noise of this machine. The
+macro loop touches no map; its +1-2 % in the chosen build is not explained
+by the change and was +0.6 % in another build of the same source minus the
+call reorder.
+
 ## Scripting vocabulary: stage 6 (`e5a48c5`) against stage 10 (`71d34d2`), 2026-10-23
 
 Whether Part B stages 7-10 (destructuring, sets, regular expressions,
@@ -73,9 +104,8 @@ and `assoc`): **1.02 s against 1.09 s, +7 %** (user time 0.87 s against
 set, one `getPrototype` per keyword key) ran at 0.88 s of user time against
 0.915 s for stage 10 and 0.85 s for stage 6, on four interleaved runs: the
 set test explains about half of it; the rest is not explained and may be
-the library placement effect seen before. Not fixed: telling a set from a
-keyword needs the prototype read, and the alternatives (a separate key
-semantics for keys known to be keywords) are left for a follow-up.
+the library placement effect seen before. Fixed afterwards; see the next
+section.
 
 Start-up, an empty file, `perf stat -r 20`, two interleaved passes: stage 6
 16.5 / 15.5 ms and 60.7 M / 58.3 M cycles, stage 10 15.9 / 17.0 ms and

@@ -9,6 +9,13 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Fixed — keyword `get` / `assoc` speed
+
+- The 7 % slowdown stage 10 brought to keyword-keyed map reads and `assoc`
+  is gone (benchmarks/RESULTS.md, 2026-10-23): the map key semantics find
+  a keyword or a symbol in a cache of interned named values before asking
+  whether the key is a set.
+
 ### Added — scripting vocabulary, stage 10: `format`, `printf`, `for`, `doseq` modifiers
 
 - **`format`** and **`printf`** (DESIGN.md §10.2, M27; D47): Java's

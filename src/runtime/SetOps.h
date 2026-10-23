@@ -44,8 +44,9 @@ namespace protoClojure {
 const proto::ProtoObject* initSetOps(proto::ProtoContext* ctx);
 
 // The set prototype of the current ProtoSpace (the VM compares a callable's
-// prototype with it).
-const proto::ProtoObject* setPrototype();
+// prototype with it on every call, so the read is inline).
+extern const proto::ProtoObject* g_setPrototype;
+inline const proto::ProtoObject* setPrototype() { return g_setPrototype; }
 
 // True when `v` is a set. O(1): a pointer-tag test and a prototype read.
 bool isSet(proto::ProtoContext* ctx, const proto::ProtoObject* v);

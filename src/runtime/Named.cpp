@@ -6,6 +6,10 @@
 
 namespace protoClojure {
 
+namespace namedcache {
+std::atomic<const proto::ProtoObject*> slots[kSlots];
+}
+
 const proto::ProtoObject* internNamed(proto::ProtoContext* ctx,
                                       const NamedLayout& layout,
                                       const char* spelling) {
@@ -14,7 +18,7 @@ const proto::ProtoObject* internNamed(proto::ProtoContext* ctx,
     // in both the read and the compare-and-set below.
     const proto::ProtoString* key = proto::ProtoString::createSymbol(ctx, spelling);
     const proto::ProtoObject* found = layout.table->getOwnAttributeDirect(ctx, key);
-    if (found) return found;
+    if (found) { namedcache::record(found); return found; }
 
     // First use of this spelling: build the value, rooted in a child
     // context until the table holds it.
@@ -28,10 +32,12 @@ const proto::ProtoObject* internNamed(proto::ProtoContext* ctx,
 
     // Publish it, or adopt the value another thread published first.
     for (;;) {
-        if (layout.table->setAttributeIfEqual(&scope, key, nullptr, fresh))
+        if (layout.table->setAttributeIfEqual(&scope, key, nullptr, fresh)) {
+            namedcache::record(fresh);
             return fresh;
+        }
         found = layout.table->getOwnAttributeDirect(&scope, key);
-        if (found) return found;
+        if (found) { namedcache::record(found); return found; }
     }
 }
 

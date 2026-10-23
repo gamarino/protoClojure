@@ -863,8 +863,10 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
         // A keyword, a quoted symbol or a map in call position looks a key
         // up, as `get` does (callLookup). The arguments stay rooted in their
         // stack slots until the lookup returns.
-        const bool callableIsMap = isMap(callable) || (proto && proto == setPrototype());
-        if (proto == env.named.marker || callableIsMap) {
+        const bool callableIsNamed = proto == env.named.marker;
+        const bool callableIsMap =
+            !callableIsNamed && (isMap(callable) || (proto && proto == setPrototype()));
+        if (callableIsNamed || callableIsMap) {
             const proto::ProtoObject* lookupArgs[2] = {nullptr, nullptr};
             for (unsigned int i = 0; i < argc && i < 2; ++i) {
                 lookupArgs[i] = frame.getAutomaticLocal(stackBase + sp - argc + i);
