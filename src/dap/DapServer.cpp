@@ -219,9 +219,10 @@ std::string formatValue(proto::ProtoContext* ctx, const proto::ProtoObject* v, b
 
 // The children the Variables view shows when a value is expanded; empty when
 // it has none to show (an atom, a number, an unrealised lazy seq...).
-std::vector<std::pair<std::string, const proto::ProtoObject*>>
-childrenOf(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    std::vector<std::pair<std::string, const proto::ProtoObject*>> kids;
+using Children = std::vector<std::pair<std::string, const proto::ProtoObject*>>;
+
+Children childrenOf(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    Children kids;
     constexpr std::size_t kMaxChildren = 1000;
     if (isListValue(v) || isVector(v)) {
         const proto::ProtoList* l = isVector(v) ? vectorItems(ctx, v) : v->asList(ctx);
@@ -229,14 +230,14 @@ childrenOf(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
         for (proto::proto_ulong i = 0; i < n; ++i)
             kids.emplace_back("[" + std::to_string(i) + "]", l->getAt(ctx, static_cast<int>(i)));
     } else if (isMap(v)) {
-        struct Acc { proto::ProtoContext* ctx; decltype(kids)* kids; } acc{ctx, &kids};
+        struct Acc { Children* kids; } acc{&kids};
         mapForEach(ctx, v, &acc, [](proto::ProtoContext* c, void* self,
                                     const proto::ProtoObject* k, const proto::ProtoObject* val) {
             auto* a = static_cast<Acc*>(self);
             if (a->kids->size() < kMaxChildren) a->kids->emplace_back(formatValue(c, k), val);
         });
     } else if (isSet(ctx, v)) {
-        struct Acc { decltype(kids)* kids; } acc{&kids};
+        struct Acc { Children* kids; } acc{&kids};
         setForEach(ctx, v, &acc, [](proto::ProtoContext*, void* self, const proto::ProtoObject* e) {
             auto* a = static_cast<Acc*>(self);
             if (a->kids->size() < kMaxChildren)
