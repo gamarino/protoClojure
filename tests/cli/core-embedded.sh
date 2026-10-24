@@ -13,7 +13,10 @@ PROTOCLJ="${1:?usage: core-embedded.sh <protoclj>}"
 
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
-cp "$PROTOCLJ" "$dir/protoclj"
+# The copy keeps the binary's own name: protoclj.exe on Windows, where a
+# file without the extension is not a program (exit 127).
+exe=$(basename "$PROTOCLJ")
+cp "$PROTOCLJ" "$dir/$exe"
 # On Windows the copy still needs the DLLs beside the original (protoCore and
 # its dependencies); the loader searches PATH. What this checks is that no
 # core.clj file is looked up, which PATH does not affect.
@@ -21,13 +24,13 @@ if command -v cygpath >/dev/null 2>&1; then
     PATH="$(dirname "$PROTOCLJ"):$PATH"; export PATH
 fi
 printf '(println (when-let [x 2] (-> x inc (* 10))) (case :b :a 1 :b 2))\n' > "$dir/p.clj"
-out=$(cd "$dir" && env -u PROTOCLJ_HOME ./protoclj p.clj 2>&1)
+out=$(cd "$dir" && env -u PROTOCLJ_HOME "./$exe" p.clj 2>&1)
 rc=$?
 if [[ $rc -ne 0 || "$out" != "30 2" ]]; then
     echo "FAIL: copied binary printed '$out' (exit $rc), expected '30 2'"
     exit 1
 fi
-out=$(printf '%s\n' "(macroexpand '(-> a (b c)))" "(dotimes [i 2] (print i))" | (cd "$dir" && ./protoclj 2>&1))
+out=$(printf '%s\n' "(macroexpand '(-> a (b c)))" "(dotimes [i 2] (print i))" | (cd "$dir" && "./$exe" 2>&1))
 if ! grep -qF 'user=> (b a c)' <<<"$out" || ! grep -qF '01' <<<"$out"; then
     echo "FAIL: core macros missing at the REPL"
     sed 's/^/  /' <<<"$out"

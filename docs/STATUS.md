@@ -740,7 +740,10 @@ See `LANGUAGE.md` for the full discussion. Summary:
     a match at the start of each line where Java finds one only at the start
     of the input. Its engine bounds its own recursion and work; a match that
     goes past those bounds raises StackOverflowError (as Java's overflows),
-    so long subjects with long matches (`.*` over 300 KB) may fail there.
+    so long subjects with long matches may fail there: `(a|b)*` over
+    300 KB does (`.*` passes), and `conformance/35-regex/long-subject.clj`
+    is registered WILL_FAIL with MSVC (tests/CMakeLists.txt) until the
+    engine decision below.
   A single engine everywhere (a bundled one) would remove all three
   differences; that is a dependency decision left to the maintainer.
 
