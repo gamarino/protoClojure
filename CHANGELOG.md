@@ -9,6 +9,24 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — debugger: exception breakpoints and threads (2026-10-24)
+
+- Exception breakpoints: *All Exceptions* (`raised`) and *Uncaught
+  Exceptions* (`userUnhandled`), with `exceptionInfo`. The thread stops
+  before the exception propagates — at a `throw`, an error the runtime
+  raises for the script, or a protoCore error such as a division by zero —
+  in the script's innermost frame. The Uncaught filter tests the exception
+  against the `catch` clauses of every active `try` of the thread, through
+  clojure.core's native calls back into the script. Rethrows and the
+  runtime's own probes never stop. docs/debugging.md.
+- Threads: each thread that runs the script (`main`, `future@file:line`,
+  `pmap@file:line`, `actor worker N`, `http@file:line`) is a thread of its
+  own in the client, with `thread` started/exited events. A stop stops only
+  its thread; continue, step and pause act on the thread they name; several
+  threads can be stopped and inspected at once, and the collector runs
+  while they are.
+- `cli/dap-session` covers both.
+
 ### Added — debugging in VS Code (2026-10-24)
 
 - `protoclj --dap`: a Debug Adapter Protocol server over stdin/stdout. Line

@@ -21,12 +21,12 @@ small VS Code extension, `editor-integration/vscode/`, that registers the
    ```bash
    cd editor-integration/vscode
    npx @vscode/vsce@3.2.1 package --skip-license
-   code --install-extension protoclj-debug-0.1.0.vsix
+   code --install-extension protoclj-debug-0.2.0.vsix
    ```
 
    On Linux and macOS a symlink also works, and picks up edits after
    **Developer: Reload Window**:
-   `ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protoclj-debug-0.1.0`.
+   `ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protoclj-debug-0.2.0`.
 
 Syntax highlighting of `.clj`, `.cljs`, `.cljc` and `.edn` files is VS Code's own
 (language id `clojure`); the extension adds no grammar and no language, only the
@@ -79,6 +79,81 @@ the protocol.
   globals and every function are available as in the script. Hovering a local
   shows its value.
 - **stopOnEntry**, and the program's exit status in the Debug Console.
+- **Exception breakpoints** (the Breakpoints view's checkboxes; see below):
+  *All Exceptions* and *Uncaught Exceptions*, with the exception's class,
+  message and stack in VS Code's exception widget (`exceptionInfo`).
+- **Threads**: every thread that runs the script's code — `main`, each
+  `future`, each `pmap` element, the actor workers, an HTTP server's
+  connection threads — is its own thread in the Call Stack view, and stops
+  on its own (see below).
+
+### Exception breakpoints
+
+Two filters, both off by default:
+
+- **All Exceptions** (`raised`): stop at every exception the script raises,
+  caught or not — a `throw`, an error the runtime raises on the script's
+  behalf (an arity error, `(nth v 10)`, a missing file...) and a protoCore
+  error (`(/ 1 0)`, an integer overflow). The thread stops **before** the
+  exception propagates, in the innermost frame of the script, so the stack,
+  Locals and evaluate show the state of the throw. When the exception comes
+  from a clojure.core function or the runtime rather than a `throw`, the
+  frame shown is the script's frame that made the call, and the description
+  says so ("raised by the runtime in a call on this line").
+- **Uncaught Exceptions** (`userUnhandled`): stop at a raise that no
+  `try`/`catch` of the script catches. At the moment of the throw the
+  adapter walks the thread's frames from the innermost out and, for each
+  active `try`, tests the exception against its `catch` clauses as the
+  clauses themselves would (built-in classes, `ex-info`'s
+  `clojure.lang.ExceptionInfo`, a type named by a global or a local); a
+  `finally` alone catches nothing. The walk goes through clojure.core
+  functions implemented in C++ that call back into the script (`map` and its
+  lazy seq, `reduce`, `swap!`...), which pass an exception on unchanged. It
+  stops at a native site that swallows what it calls throws — an atom's
+  watch — so an exception that the script can never catch stops even when a
+  `try` encloses the `swap!`. A `future` or `pmap` body, an actor's turn and
+  an HTTP handler start a thread's frames: an exception leaving them is
+  uncaught there (the future keeps it for `deref`, which raises an
+  `ExecutionException` on the derefing thread, a new exception of its own).
+
+What is never an exception stop:
+
+- a rethrow: the `RETHROW` of a `finally` or of a `try` none of whose
+  clauses matched raises the exception already reported, so one throw
+  stops once;
+- the runtime's own probes, raised and caught inside C++ (an integer
+  constant or a `format` argument that may not fit a long);
+- `loop`/`recur`, `reduce`, lazy seqs, `doseq`, iteration in general: none
+  is implemented with exceptions in protoClojure, so there is nothing to
+  filter;
+- code run by the debugger itself (`evaluate`), and code with no frame of
+  the script on the thread (clojure.core while it loads);
+- a C++ exception that is not a language exception: `StackOverflowError`
+  (the guard of the native stack) and a module's defect, which become
+  exceptions only where a `try` catches them.
+
+### Threads
+
+When a thread stops — a breakpoint, a step, a pause, an exception — **only
+that thread stops**; the others keep running. Each stopped thread is
+inspected on its own (call stack, Locals, evaluate) and resumed on its own:
+Continue, Step Over / Into / Out and Pause act on the thread the request
+names. Several threads can be stopped at once. Breakpoints apply to every
+thread; stepping in one thread never stops another.
+
+Thread names: `main` for the script's own thread; `future@file.clj:12` for
+a future whose body starts on line 12 of file.clj (also when the body calls
+a fn defined elsewhere: the line is the one the future's thread entered
+first); `pmap@file.clj:7` for an element of a `pmap`; `actor worker N` for
+the threads that run actors' turns (a worker runs the turns of every actor
+in turn); `http@file.clj:30` for a connection thread of an HTTP server.
+VS Code shows a thread when it first runs a line of the script, and drops it
+when it ends.
+
+Pause names a thread too. A thread that is running the script's code stops
+at the next line it enters; a thread that is waiting (a `deref`, a socket
+read, a join) or is inside clojure.core's C++ code stops when it comes back
+to a line of the script.
 
 ### Which line a breakpoint binds to
 
@@ -125,16 +200,33 @@ last thing on its line, that is the caller's next line.
   stops stays inside the hook, parked in a protoCore unmanaged region, and
   answers the requests that read the program (stack, scopes, variables,
   evaluate) itself, on its own context, so every value it reads is rooted in the
-  stopped frames. The script's file descriptors 1 and 2 are pipes the adapter
+  stopped frames. Each thread has its own stop state and its own queue of
+  requests; frame ids and variable references carry the id of the thread
+  that owns them, so a request reaches the thread whose stack holds the
+  value. A stopped thread does not hold up the collector: the other threads
+  allocate and collections run while it is stopped, and its frames' values
+  stay rooted. The script's file descriptors 1 and 2 are pipes the adapter
   drains into `output` events; descriptor 0 is the null device.
+- The runtime's raise funnels — `throw` (`throwException`), the runtime's
+  helpers (`throwClassed`, `throwError`) and the error factory protoCore's
+  kernel errors go through — call the hook before the C++ exception is
+  thrown (`DebugHook::onThrow`, `src/runtime/Exceptions.cpp`). Each frame of
+  the debugger's chain points at its active `try` handlers, whose handler
+  code (`STORE_CAUGHT`, the clauses' type tests, `RETHROW`) the Uncaught
+  filter reads to tell whether a clause would select the exception
+  (`debugFrameCatches`, `src/runtime/ExecutionEngine.cpp`).
 
 ## Limitations
 
-- One thread in the client's view, "main". A breakpoint hit on a `future`,
-  `pmap` or actor thread stops that thread and shows its stack under the same
-  id; the other threads keep running. Stops are taken one at a time.
-- No exception breakpoints: an uncaught exception ends the script, and its
-  message appears in the Debug Console, as on the command line.
+- A thread blocked in native code (a `deref`, I/O, a join), or running
+  clojure.core's C++ code, is listed but cannot show a call stack until it
+  stops; a pause takes effect when it returns to the script's code. A thread
+  that has not run a line of the script yet is not listed.
+- All stops are one-thread stops; there is no "stop every thread" mode.
+- Uncaught Exceptions: a `catch` whose type is an arbitrary expression the
+  adapter cannot work out without running code counts as catching; an
+  exception raised as a C++ exception (StackOverflowError, a module's
+  defect) never stops.
 - No conditional breakpoints, hit counts, logpoints, data breakpoints,
   `setVariable`, restart or attach.
 - Forms a macro builds have no lines: a breakpoint binds to the forms of the
@@ -155,4 +247,11 @@ VS Code does — absolute paths with a lowercase drive letter on Windows — thr
 a breakpoint in a function, the call stack, Locals, evaluate, Step Over, Step
 Out, a script printing more than 64 KB of non-ASCII text and reading standard
 input, `stopOnEntry`, a breakpoint in a loop, a breakpoint moved to the next
-form and a script that throws. A watchdog fails a session that hangs.
+form and a script that throws; both exception filters (the throw's line and
+locals, `exceptionInfo`, one stop through a `finally`, a division by zero,
+no stop on the runtime's own control flow, no stop with the filters off, no
+Uncaught stop on caught throws — also through `map`'s lazy seq — and a stop
+on a `catch` of another class); two futures stopped at the same breakpoint
+while `main` runs on, stepping one while the other stays stopped, pausing one
+busy future, and a thread stopped while another allocates through several
+collections. A watchdog fails a session that hangs.

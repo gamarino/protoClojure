@@ -1,8 +1,8 @@
 {
   "name": "protoclj-debug",
   "displayName": "protoClojure Debugger",
-  "description": "Debug Clojure scripts with protoClojure (protoclj --dap): breakpoints, stepping, call stack, locals and the Debug Console. Uses VS Code's own Clojure syntax support; coexists with Calva.",
-  "version": "0.1.0",
+  "description": "Debug Clojure scripts with protoClojure (protoclj --dap): breakpoints, exception breakpoints, stepping, threads, call stack, locals and the Debug Console. Uses VS Code's own Clojure syntax support; coexists with Calva.",
+  "version": "0.2.0",
   "publisher": "protoclojure-placeholder",
   "engines": {
     "vscode": "^1.66.0"

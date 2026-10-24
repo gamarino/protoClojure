@@ -617,7 +617,7 @@ the extension (Node.js for `npx`):
 ```bash
 cd editor-integration/vscode
 npx @vscode/vsce@3.2.1 package --skip-license
-code --install-extension protoclj-debug-0.1.0.vsix
+code --install-extension protoclj-debug-0.2.0.vsix
 ```
 
 **Start a session.** Open a `.clj` file, click in the gutter to set breakpoints,
@@ -629,14 +629,19 @@ call stack (named fns, anonymous ones as `fn@file.clj:line`, `<top level>`);
 Locals of the selected frame by name — parameters, closure captures, `let`,
 `loop` and `catch` bindings — with collections expandable; Watch, Debug Console
 and hover evaluate expressions in the selected frame; the script's output in
-the Debug Console; `stopOnEntry`. A breakpoint binds to the first line, from
+the Debug Console; `stopOnEntry`; exception breakpoints (*All Exceptions*,
+*Uncaught Exceptions*: a throw no `try`/`catch` of the script catches) that
+stop before the exception propagates, with the throw's stack and locals;
+every thread that runs the script (`main`, `future@file.clj:12`,
+`pmap@...`, actor workers) is its own thread, and a stop stops only that
+thread while the others run on. A breakpoint binds to the first line, from
 its own on, where a form starts, and stops when a frame enters that line
 (every iteration of a loop; the line of a `(defn f [x]` stops at each call of
 `f`).
 
-**Limitations.** One thread in the client's view (a stop on a `future` or actor
-thread shows that thread's stack); no exception, conditional or hit-count
-breakpoints, no `setVariable`; forms a macro generates have no lines; the
+**Limitations.** A thread blocked in native code (a `deref`, I/O) shows no
+stack until it returns to the script; no "stop all threads" mode; no
+conditional or hit-count breakpoints, no `setVariable`; forms a macro generates have no lines; the
 Variables view does not realise lazy seqs; the script's standard input is
 empty under the debugger; stopping the session ends the script. Details in
 [docs/debugging.md](docs/debugging.md).

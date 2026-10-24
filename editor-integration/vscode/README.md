@@ -1,9 +1,9 @@
 # protoClojure Debugger — VS Code extension
 
 Debugs Clojure scripts with [protoClojure](https://github.com/gamarino/protoClojure):
-breakpoints, stepping, call stack, locals, Watch and the Debug Console. The
-debug adapter is the `protoclj` binary itself, run as `protoclj --dap`, which
-speaks the [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/)
+breakpoints, exception breakpoints, stepping, threads, call stack, locals, Watch
+and the Debug Console. The debug adapter is the `protoclj` binary itself, run as
+`protoclj --dap`, which speaks the [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/)
 over stdin/stdout. What the script prints shows up in the Debug Console.
 
 Syntax highlighting is VS Code's own Clojure support (language id `clojure`:
@@ -26,14 +26,14 @@ repository). The extension looks for it in this order:
 ```bash
 cd editor-integration/vscode
 npx @vscode/vsce@3.2.1 package --skip-license
-code --install-extension protoclj-debug-0.1.0.vsix
+code --install-extension protoclj-debug-0.2.0.vsix
 ```
 
 On Linux and macOS you can symlink the folder instead (picks up edits after
 **Developer: Reload Window**):
 
 ```bash
-ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protoclj-debug-0.1.0
+ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protoclj-debug-0.2.0
 ```
 
 ## Use
@@ -63,5 +63,15 @@ ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protoclj-debug-0.1
 
 A breakpoint binds to the first line, from its own on, where a form starts, and
 stops when execution enters that line; on the line of `(defn f [x]` it stops at
-each call of `f`. See `docs/debugging.md` for the rules, stepping, and the
+each call of `f`.
+
+The Breakpoints view offers two exception filters: **All Exceptions** stops at
+every throw (and every error the runtime or protoCore raises, such as a division
+by zero), **Uncaught Exceptions** only at one no `try`/`catch` of the script
+catches; the thread stops before the exception propagates. Every thread that
+runs the script — `main`, `future@file.clj:12`, `pmap@...`, the actor workers —
+appears in the Call Stack view; a stop stops only its thread, the others keep
+running, and Continue / Step / Pause act on the selected thread.
+
+See `docs/debugging.md` for the rules, stepping, exceptions, threads and the
 known limitations.
