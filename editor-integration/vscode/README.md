@@ -26,14 +26,14 @@ repository). The extension looks for it in this order:
 ```bash
 cd editor-integration/vscode
 npx @vscode/vsce@3.2.1 package --skip-license
-code --install-extension protoclj-debug-0.2.0.vsix
+code --install-extension protoclj-debug-0.3.0.vsix
 ```
 
 On Linux and macOS you can symlink the folder instead (picks up edits after
 **Developer: Reload Window**):
 
 ```bash
-ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protoclj-debug-0.2.0
+ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protoclj-debug-0.3.0
 ```
 
 ## Use
@@ -68,7 +68,11 @@ each call of `f`.
 The Breakpoints view offers two exception filters: **All Exceptions** stops at
 every throw (and every error the runtime or protoCore raises, such as a division
 by zero), **Uncaught Exceptions** only at one no `try`/`catch` of the script
-catches; the thread stops before the exception propagates. Every thread that
+catches; the thread stops before the exception propagates. Each filter takes a
+condition, a Clojure form in which `ex` is the exception, for example
+`(= "bad" (ex-message ex))`. Line breakpoints take a condition, a hit count
+(`N`, `>= N`, `% N`...) and a log message (`i={i}`, `{{` for a literal brace).
+Every thread that
 runs the script — `main`, `future@file.clj:12`, `pmap@...`, the actor workers —
 appears in the Call Stack view; a stop stops only its thread, the others keep
 running, and Continue / Step / Pause act on the selected thread.

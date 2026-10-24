@@ -9,6 +9,17 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — debugger: conditions, hit counts and log points (2026-10-24)
+
+- Exception filters take a condition (`supportsExceptionFilterOptions`): a
+  Clojure form evaluated in the throwing frame with the exception bound to
+  `ex`; a condition that throws stops and reports its error.
+- Line breakpoints: `condition`, `hitCondition` (`N`, `== N`, `>= N`, `> N`,
+  `<= N`, `< N`, `% N`; anything else is unverified) and `logMessage`
+  (`{form}` interpolation, `{{`/`}}` literal braces, `<error: ...>` for a
+  form that fails). Conditions and log forms run on the hitting thread with
+  its breakpoints and exception stops off. The VS Code extension is 0.3.0.
+
 ### Added — debugger: exception breakpoints and threads (2026-10-24)
 
 - Exception breakpoints: *All Exceptions* (`raised`) and *Uncaught

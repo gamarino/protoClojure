@@ -21,12 +21,12 @@ small VS Code extension, `editor-integration/vscode/`, that registers the
    ```bash
    cd editor-integration/vscode
    npx @vscode/vsce@3.2.1 package --skip-license
-   code --install-extension protoclj-debug-0.2.0.vsix
+   code --install-extension protoclj-debug-0.3.0.vsix
    ```
 
    On Linux and macOS a symlink also works, and picks up edits after
    **Developer: Reload Window**:
-   `ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protoclj-debug-0.2.0`.
+   `ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protoclj-debug-0.3.0`.
 
 Syntax highlighting of `.clj`, `.cljs`, `.cljc` and `.edn` files is VS Code's own
 (language id `clojure`); the extension adds no grammar and no language, only the
@@ -63,7 +63,8 @@ the protocol.
 
 ## What works
 
-- **Line breakpoints**, set and cleared at any time, also while the script runs.
+- **Line breakpoints**, set and cleared at any time, also while the script runs,
+  with a **condition**, a **hit count** or a **log message** (see below).
 - **Continue, Step Over, Step Into, Step Out, Pause.**
 - **Call stack**: one frame per function call — named fns by their name
   (`defn`, `(fn name [..] ..)`, `(def name (fn ..))`), anonymous ones as
@@ -116,6 +117,26 @@ Two filters, both off by default:
   uncaught there (the future keeps it for `deref`, which raises an
   `ExecutionException` on the derefing thread, a new exception of its own).
 
+**Conditions.** Each filter takes a condition (the pencil next to the filter
+in the Breakpoints view): a Clojure form evaluated in the throwing frame — its
+locals and the script's globals, as in Watch — with the exception bound to
+**`ex`** (a local named `ex` is shadowed). The thread stops only when the form
+is truthy (anything but `nil` and `false`). Examples:
+
+```clojure
+(= "bad" (ex-message ex))
+(contains? (ex-data ex) :id)
+(and (= 2 (:y (ex-data ex))) (> x 1))     ; x: a local of the throwing frame
+```
+
+protoClojure has no `instance?`: select by `ex-message`, `ex-data` or a local
+instead. The condition runs on the throwing thread with the debugger's hooks
+off (see "Evaluations the debugger makes" below). A condition that cannot be
+read is reported in the Debug Console when it is set; a condition that fails
+when it runs (it throws) **stops**, and the stop's description and the Debug
+Console say `exception breakpoint condition `...` failed: <message>` — a
+condition is never skipped silently.
+
 What is never an exception stop:
 
 - a rethrow: the `RETHROW` of a `finally` or of a `try` none of whose
@@ -131,6 +152,45 @@ What is never an exception stop:
 - a C++ exception that is not a language exception: `StackOverflowError`
   (the guard of the native stack) and a module's defect, which become
   exceptions only where a `try` catches them.
+
+### Conditional, hit-count and log breakpoints
+
+A line breakpoint can carry (right-click the breakpoint → Edit Breakpoint):
+
+- **Condition**: a Clojure form evaluated in the frame at the line, with its
+  locals and the globals; the thread stops when it is truthy. A condition that
+  fails stops, with `breakpoint condition `...` failed: <message>` as the
+  stop's description and in the Debug Console; one that cannot be read is also
+  reported when it is set.
+- **Hit count**: counts the hits of the breakpoint whose condition passed (all
+  threads together; the count starts again when the file's breakpoints are
+  set again) and stops when it matches:
+
+  | Hit count | Stops on |
+  |-----------|----------|
+  | `N`, `== N` | the Nth hit only |
+  | `>= N`, `> N` | the Nth hit and later / after the Nth |
+  | `<= N`, `< N` | the first N hits / the first N-1 |
+  | `% N` | every Nth hit (N, 2N, ...) |
+
+  Anything else marks the breakpoint unverified, with a message.
+- **Log message**: a log point — it never stops; it prints the message to the
+  Debug Console, each `{form}` replaced by the form's value in the frame (a
+  string without quotes, anything else as `pr-str` would print it); `{{` and
+  `}}` are literal braces, and a form that fails prints `<error: message>`. A
+  log point with a condition or a hit count logs only when they pass.
+
+  ```
+  i={i} total={(reduce + xs)} {{literal braces}}
+  ```
+
+### Evaluations the debugger makes
+
+Conditions, log messages, Watch, hover and the Debug Console run on the thread
+they inspect (the values are its own), with that thread's breakpoints, steps
+and exception stops off: a condition that throws, or that calls a function
+with a breakpoint, never enters the debugger again. Other threads are not
+affected.
 
 ### Threads
 
@@ -227,8 +287,9 @@ last thing on its line, that is the caller's next line.
   adapter cannot work out without running code counts as catching; an
   exception raised as a C++ exception (StackOverflowError, a module's
   defect) never stops.
-- No conditional breakpoints, hit counts, logpoints, data breakpoints,
-  `setVariable`, restart or attach.
+- No data breakpoints, function breakpoints, `setVariable`, restart or attach.
+- A condition or log form is compiled each time it runs (there is no cache):
+  a breakpoint with a condition costs a compilation per hit.
 - Forms a macro builds have no lines: a breakpoint binds to the forms of the
   script itself, including those a macro call passes through (the body of a
   `when`, a `doseq`, ...). Lines inside quoted data or a syntax-quote template
@@ -254,4 +315,8 @@ Uncaught stop on caught throws — also through `map`'s lazy seq — and a stop
 on a `catch` of another class); two futures stopped at the same breakpoint
 while `main` runs on, stepping one while the other stays stopped, pausing one
 busy future, and a thread stopped while another allocates through several
-collections. A watchdog fails a session that hangs.
+collections; exception filter conditions (true, false, one that throws, one
+that does not read, one calling a fn with a breakpoint), line conditions, hit
+counts (`3`, `>= 2`, `% 2`, with a condition, an invalid one), log points
+(`{i}`, `{{literal}}`, an expression error), and a condition evaluated per
+thread. A watchdog fails a session that hangs.
