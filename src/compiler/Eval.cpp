@@ -6,6 +6,7 @@
 #include "reader/SourceInfo.h"
 
 #include "runtime/BytecodeModule.h"
+#include "runtime/DebugHook.h"
 #include "runtime/Exceptions.h"
 #include "runtime/ExecutionEngine.h"
 #include "runtime/Macros.h"
@@ -76,10 +77,20 @@ void installEval() {
     setSyntaxQuoteResolverHook(&qualifySyntaxQuoteSymbol);
 }
 
-bool loadCore(proto::ProtoContext* ctx) {
-    static const char kSource[] = {
+namespace {
+const char kCoreSource[] = {
 #include "core_clj.inc"
-        0};
+    0};
+} // namespace
+
+const std::string& embeddedCoreSource() {
+    static const std::string text(kCoreSource, sizeof kCoreSource - 1);
+    return text;
+}
+
+const char* embeddedCoreSourceName() { return "protoclj:/clojure/core.clj"; }
+
+bool loadCore(proto::ProtoContext* ctx) {
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) {
         std::fprintf(stderr, "core.clj: no evaluator is running\n");
@@ -87,12 +98,20 @@ bool loadCore(proto::ProtoContext* ctx) {
     }
     setCoreNamespaceActive(true);
     struct Reset { ~Reset() { setCoreNamespaceActive(false); } } reset;
-    Reader reader(ctx, std::string(kSource, sizeof kSource - 1), cc->named);
+    Reader reader(ctx, embeddedCoreSource(), cc->named);
+    // Under the debugger clojure.core is compiled with debug information as
+    // library code: its fns can be stepped into and carry breakpoints.
+    const bool debugging = debugHook() != nullptr;
     reader.setSymbolResolver(&qualifySyntaxQuoteSymbol);
     for (;;) {
         proto::ProtoContext formScope(ctx->space, ctx);
         formScope.resizeAutomaticLocals(1);
         SourceInfo sourceInfo;
+        if (debugging) {
+            sourceInfo.recordPositions = true;
+            sourceInfo.sourceName = embeddedCoreSourceName();
+            sourceInfo.library = true;
+        }
         reader.setSourceInfo(&sourceInfo);
         try {
             const proto::ProtoObject* form = reader.readOne(&formScope);
@@ -198,6 +217,7 @@ const proto::ProtoObject* evalTopLevel(proto::ProtoContext* ctx,
         BytecodeModule::DebugInfo& di = mod.ensureDebugInfo();
         di.source = info->sourceName;
         di.name = "<top level>";
+        di.library = info->library;
     }
     {
         Compiler compiler;

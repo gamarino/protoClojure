@@ -237,6 +237,7 @@ public:
         std::string name;     // the fn's name, `fn@file:line`, or "<top level>"
         int         line = 0; // where the fn (or the top-level form) starts
         bool        topLevelThunk = false;  // a top-level let/loop/try run as a fn
+        bool        library = false;        // clojure.core: not the program's own code
         std::vector<LocalVar> locals;
     };
     const DebugInfo* debugInfo() const { return debug_.get(); }

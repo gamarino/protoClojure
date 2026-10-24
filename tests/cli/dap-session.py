@@ -38,7 +38,16 @@ them. Covered:
      with a breakpoint does not stop there;
  14. line breakpoints with condition, hitCondition (3, >= 2, % 2, with a
      condition), log points ({i}, {{literal}}, an expression error), an
-     invalid hitCondition; a condition evaluated per thread.
+     invalid hitCondition; a condition evaluated per thread;
+ 15. pathMappings: a fake client root (c:/Fake/Proj, spelled C:/FAKE/proj; or /fake/proj) mapped to
+     the real directory: launch and breakpoint by the fake path, the stack
+     in fake paths, loadedSources; stepping into clojure.core (embedded,
+     justMyCode false) shows a sourceReference frame whose `source` is
+     src/core/core.clj, and a breakpoint set on that reference stops; with
+     justMyCode (the default) stepIn does not enter clojure.core; a script
+     no mapping covers comes back as a sourceReference (its text served by
+     the adapter) and takes breakpoints through it; a malformed mapping
+     fails the launch.
 A watchdog fails a session that hangs instead of hanging the test.
 """
 import json
@@ -167,6 +176,17 @@ LOOP = """\
     (recur (inc i))))
 (println "done")
 """
+
+
+MAPPED = """\
+(defn twice [x]
+  (* 2 x))
+(println (pos? (twice 5)))
+(println (some? 1))
+(println "mapped done")
+"""
+
+CORE_CLJ = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "src", "core", "core.clj")
 
 
 def vscode_path(p):
@@ -761,6 +781,128 @@ def session_thread_condition(prog):
     check(seen == [(True, "4")] and code == 0, "a condition evaluated per thread: %r %r" % (seen, code))
 
 
+def fake_root():
+    return r"c:\Fake\Proj" if os.name == "nt" else "/fake/proj"
+
+
+def fake_path(name):
+    # Another spelling of the same root: case and separators the mapping must match.
+    if os.name == "nt":
+        return "C:/FAKE/proj/" + name
+    return "/fake/proj/" + name
+
+
+def mapped_name(name):
+    return fake_root() + ("\\" if os.name == "nt" else "/") + name
+
+
+def session_path_mappings(real_dir):
+    with open(CORE_CLJ, encoding="utf-8", newline="") as f:
+        core_text = f.read()
+    maps = [{"localRoot": fake_root(), "remoteRoot": real_dir}]
+    s = Session()
+    s.capabilities = s.request("initialize", {"adapterID": "protoclj", "linesStartAt1": True})["body"]
+    check(s.capabilities.get("supportsLoadedSourcesRequest"), "loadedSources advertised")
+    r = s.request("launch", {"program": fake_path("prog-mapped.clj"), "pathMappings": maps, "justMyCode": False})
+    check(r["success"], "launch by a mapped path: %r" % r)
+    bp = line_of(MAPPED, "(println (pos? (twice 5)))")
+    r = s.request("setBreakpoints", {"source": {"path": fake_path("prog-mapped.clj")}, "breakpoints": [{"line": bp}]})
+    check(r["body"]["breakpoints"][0]["verified"], "breakpoint by a mapped path: %r" % r["body"])
+    s.request("configurationDone")
+    st = s.event("stopped")
+    frames = s.top()
+    check(frames[0]["line"] == bp and frames[0]["source"].get("path") == mapped_name("prog-mapped.clj"),
+          "the stack is in client paths: %r" % frames[0])
+    ls = s.request("loadedSources")["body"]["sources"]
+    check(any(x.get("path") == mapped_name("prog-mapped.clj") for x in ls) and
+          any(x.get("name") == "core.clj" and x.get("sourceReference") for x in ls),
+          "loadedSources: the script and clojure.core: %r" % ls)
+    # Into the fn the line calls (twice), through its body, then into
+    # clojure.core's pos?.
+    s.request("stepIn", {"threadId": 1})
+    s.event("stopped")
+    frames = s.top()
+    check(frames[0]["name"] == "twice", "stepIn into the script's fn: %r" % frames[0])
+    s.request("stepIn", {"threadId": 1})
+    s.event("stopped")
+    s.request("stepIn", {"threadId": 1})
+    s.event("stopped")
+    frames = s.top()
+    src = frames[0]["source"]
+    ref = src.get("sourceReference", 0)
+    check(frames[0]["name"] == "pos?" and ref > 0 and "path" not in src
+          and frames[0]["line"] == line_of(core_text, "(defn pos? [n]"),
+          "stepIn into clojure.core: %r" % frames[0])
+    body = s.request("source", {"sourceReference": ref, "source": src}).get("body", {})
+    check(body.get("content") == core_text, "source serves core.clj (%d chars, expected %d)"
+          % (len(body.get("content", "")), len(core_text)))
+    some_line = line_of(core_text, "(defn some? [x]")
+    r = s.request("setBreakpoints", {"source": {"name": "core.clj", "sourceReference": ref},
+                                     "breakpoints": [{"line": some_line}]})
+    b = r["body"]["breakpoints"][0]
+    check(b["verified"] and b.get("source", {}).get("sourceReference") == ref,
+          "a breakpoint on the reference: %r" % b)
+    s.request("continue", {"threadId": 1})
+    st = s.event("stopped")
+    frames = s.top()
+    check(st["body"]["reason"] == "breakpoint" and frames[0]["name"] == "some?" and frames[0]["line"] == some_line
+          and frames[1]["source"].get("path") == mapped_name("prog-mapped.clj"),
+          "the core breakpoint stops: %r" % frames[:2])
+    s.request("continue", {"threadId": 1})
+    code, rc = s.finish()
+    check(code == 0 and s.stdout_text() == "true\ntrue\nmapped done\n", "mapped session end: %r %r" % (code, s.stdout_text()))
+
+    # justMyCode (the default): stepIn steps over clojure.core.
+    s = Session()
+    s.request("initialize", {"adapterID": "protoclj"})
+    s.request("launch", {"program": fake_path("prog-mapped.clj"), "pathMappings": maps})
+    s.request("setBreakpoints", {"source": {"path": fake_path("prog-mapped.clj")},
+                                 "breakpoints": [{"line": line_of(MAPPED, "(println (some? 1))")}]})
+    s.request("configurationDone")
+    s.event("stopped")
+    s.request("stepIn", {"threadId": 1})
+    s.event("stopped")
+    frames = s.top()
+    check(frames[0]["name"] == "<top level>" and frames[0]["line"] == line_of(MAPPED, '(println "mapped done")'),
+          "justMyCode: stepIn does not enter clojure.core: %r" % frames[0])
+    s.request("continue", {"threadId": 1})
+    s.finish()
+
+    # A script under no mapping: a sourceReference, its text from the adapter.
+    prog = vscode_path(os.path.join(real_dir, "prog-mapped.clj"))
+    s = Session()
+    s.request("initialize", {"adapterID": "protoclj"})
+    s.request("launch", {"program": prog, "pathMappings": [{"localRoot": fake_root(), "remoteRoot": os.path.join(real_dir, "nowhere")}]})
+    s.request("setBreakpoints", {"source": {"path": prog}, "breakpoints": [{"line": 2}]})
+    s.request("configurationDone")
+    s.event("stopped")
+    frames = s.top()
+    src = frames[0]["source"]
+    check("path" not in src and src.get("sourceReference", 0) > 0 and src.get("name") == "prog-mapped.clj"
+          and os.path.normcase(src.get("origin", "")) == os.path.normcase(prog),
+          "an unmapped script is a sourceReference: %r" % src)
+    body = s.request("source", {"sourceReference": src["sourceReference"]}).get("body", {})
+    check(body.get("content") == MAPPED, "its text served by the adapter: %r" % body.get("content", "")[:40])
+    r = s.request("setBreakpoints", {"source": {"name": src["name"], "sourceReference": src["sourceReference"]},
+                                     "breakpoints": [{"line": line_of(MAPPED, '(println "mapped done")')}]})
+    check(r["body"]["breakpoints"][0]["verified"], "breakpoint on the unmapped script's reference: %r" % r["body"])
+    s.request("continue", {"threadId": 1})
+    st = s.event("stopped")
+    frames = s.top()
+    check(frames[0]["line"] == line_of(MAPPED, '(println "mapped done")'), "it stops there: %r" % frames[0])
+    s.request("continue", {"threadId": 1})
+    s.finish()
+
+    # A malformed mapping fails the launch.
+    s = Session()
+    s.request("initialize", {"adapterID": "protoclj"})
+    r = s.request("launch", {"program": prog, "pathMappings": [{"localRoot": fake_root()}]})
+    check(not r["success"] and "remoteRoot" in r.get("message", ""), "malformed pathMappings: %r" % r)
+    s.request("disconnect")
+    s.p.wait(timeout=20)
+    s.timer.cancel()
+
+
 def main():
     with tempfile.TemporaryDirectory() as work:
         prog = os.path.join(work, "prog.clj")
@@ -773,7 +915,8 @@ def main():
         throws = vscode_path(throws)
         files = {}
         for name, text in [("exc", EXC), ("internal", INTERNAL), ("uncaught", UNCAUGHT),
-                           ("threads", THREADS), ("spin", SPIN), ("gc", GC), ("loop", LOOP)]:
+                           ("threads", THREADS), ("spin", SPIN), ("gc", GC), ("loop", LOOP),
+                           ("mapped", MAPPED)]:
             path = os.path.join(work, "prog-%s.clj" % name)
             with open(path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(text)
@@ -793,7 +936,8 @@ def main():
                               ("gc while stopped", session_gc_while_stopped, files["gc"]),
                               ("exception conditions", session_exception_conditions, files["exc"]),
                               ("line conditions", session_line_conditions, files["loop"]),
-                              ("thread condition", session_thread_condition, files["threads"])]:
+                              ("thread condition", session_thread_condition, files["threads"]),
+                              ("path mappings", session_path_mappings, work)]:
             if only and only not in name:
                 continue
             started = time.time()

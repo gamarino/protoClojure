@@ -572,6 +572,7 @@ PROTOCLJ_DEBUG_HELPER void Compiler::beginDebugBody(BytecodeModule& body) {
     di.source = source_->sourceName;
     di.line = fnLine;
     di.topLevelThunk = thunk;
+    di.library = source_->library;
     di.name = !fnName.empty() ? fnName
             : "fn@" + baseName(source_->sourceName) + ":" + std::to_string(fnLine);
     if (fnLine > 0 && !thunk) body.emit(Op::LINE, static_cast<std::size_t>(fnLine));
@@ -956,7 +957,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     scopes_.pop_back();
     // Under the debugger every local keeps its value until its scope ends,
     // so the Locals view shows it (Clojure's disable-locals-clearing).
-    if (!debugBody) clearLastReads(*body, static_cast<int>(fixedArity), paramEnd);
+    if (!debugBody || keepsClearing()) clearLastReads(*body, static_cast<int>(fixedArity), paramEnd);
     return body;
 }
 

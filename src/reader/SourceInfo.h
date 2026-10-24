@@ -51,6 +51,10 @@ struct SourceInfo {
     // Debugging only (see above): list form -> its 1-based line and column.
     bool recordPositions = false;
     std::string sourceName;
+    // Library code (clojure.core under the debugger): its modules are marked
+    // DebugInfo::library and keep locals clearing, so the program's lazy
+    // seqs are not held by core's frames while they are walked.
+    bool library = false;
     struct Position { int line; int column; };
     std::unordered_map<const proto::ProtoObject*, Position> formPos;
 

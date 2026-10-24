@@ -28,6 +28,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -67,6 +68,82 @@ std::string pathKey(std::string p) {
 std::string baseName(const std::string& path) {
     const std::size_t at = path.find_last_of("/\\");
     return at == std::string::npos ? path : path.substr(at + 1);
+}
+
+// ---------------------------------------------------------------------------
+// pathMappings: the client's paths ("local") and the adapter's ("remote")
+// ---------------------------------------------------------------------------
+
+struct PathMapping {
+    std::string local;    // the client's side: c:\Users\me\proj, /home/me/proj
+    std::string remote;   // where the adapter runs
+};
+
+// A Windows-style path: a drive letter, a backslash, or a UNC prefix.
+bool windowsLike(const std::string& p) {
+    return (p.size() >= 2 && p[1] == ':' && std::isalpha(static_cast<unsigned char>(p[0]))) ||
+           p.find('\\') != std::string::npos;
+}
+
+// `p` with `/` separators, lowercased when `fold`. Same length as `p`.
+std::string normalizedPath(std::string p, bool fold) {
+    for (char& c : p) {
+        if (c == '\\') c = '/';
+        else if (fold && c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+    }
+    return p;
+}
+
+// A root without its trailing separators (but "/" and "c:/" keep theirs).
+std::string rootForm(std::string r) {
+    while (r.size() > 1 && (r.back() == '/' || r.back() == '\\')) {
+        if (r.size() == 3 && r[1] == ':') break;
+        r.pop_back();
+    }
+    return r;
+}
+
+// Whether `p` is `root` or under it; `rest` is what follows the root, without
+// its leading separator, spelled as in `p`.
+bool underRoot(const std::string& p, const std::string& rootIn, bool fold, std::string& rest) {
+    const std::string root = rootForm(rootIn);
+    const std::string np = normalizedPath(p, fold), nr = normalizedPath(root, fold);
+    if (nr.empty() || np.size() < nr.size() || np.compare(0, nr.size(), nr) != 0) return false;
+    if (np.size() == nr.size()) { rest.clear(); return true; }
+    if (nr.back() != '/' && np[nr.size()] != '/') return false;   // /proj vs /project
+    std::size_t at = nr.size();
+    while (at < p.size() && (p[at] == '/' || p[at] == '\\')) ++at;
+    rest = p.substr(at);
+    return true;
+}
+
+// `rest` (any separators) under `root`, in the root's own style.
+std::string joinUnder(const std::string& rootIn, std::string rest) {
+    const std::string root = rootForm(rootIn);
+    const char sep = windowsLike(root) ? '\\' : '/';
+    for (char& c : rest) if (c == '/' || c == '\\') c = sep;
+    if (rest.empty()) return root;
+    if (root.back() == '/' || root.back() == '\\') return root + rest;
+    return root + sep + rest;
+}
+
+// The longest-prefix translation of `p` from one side to the other; nullopt
+// when no mapping covers it.
+std::optional<std::string> translatePath(const std::vector<PathMapping>& maps, const std::string& p,
+                                         bool toRemote) {
+    std::size_t best = 0;
+    std::optional<std::string> out;
+    for (const PathMapping& m : maps) {
+        const std::string& from = toRemote ? m.local : m.remote;
+        const std::string& to = toRemote ? m.remote : m.local;
+        std::string rest;
+        if (!underRoot(p, from, windowsLike(from), rest)) continue;
+        const std::size_t len = rootForm(from).size();
+        if (out && len <= best) continue;
+        best = len;
+        out = joinUnder(to, rest);
+    }
+    return out;
 }
 
 bool readFile(const std::string& path, std::string& out) {
@@ -359,6 +436,21 @@ thread_local bool tEvaluating = false;
 // taken on the stopping thread).
 thread_local std::string tPendingDescription;
 
+// Per thread: the breakpoint lines of each module's source, as of the
+// breakpoint generation it was read at, so that a line entered checks a
+// small vector instead of taking the server's lock.
+struct BreakpointLines {
+    std::uint64_t    gen = 0;
+    std::vector<int> lines;
+};
+thread_local std::unordered_map<const void*, BreakpointLines> tBreakpointLines;
+thread_local std::uint64_t tBreakpointLinesGen = 0;
+
+bool isLibrary(const DebugFrame* f) {
+    const BytecodeModule::DebugInfo* di = f->mod->debugInfo();
+    return di && di->library;
+}
+
 // A frame id or a variablesReference carries the DAP id of the thread that
 // owns it: `threadId * kIdStride + n`. A request about a frame or a value
 // reaches the stopped thread whose stack holds it.
@@ -386,6 +478,7 @@ struct ThreadState {
     // The thread's own: read and written only by the thread itself.
     StepKind stepKind = StepKind::None;
     int      stepDepth = 0;
+    bool     stepFromLibrary = false;   // the step began in clojure.core
 
     // Guarded by the server's mu_.
     bool             stopped = false, resumeReady = false;
@@ -454,6 +547,11 @@ public:
         if (start) {
             programKey_ = pathKey(launch_.program);
             entryPending_.store(launch_.stopOnEntry);
+            if (!cwd_.empty()) {
+                std::error_code ec;
+                std::filesystem::current_path(cwd_, ec);
+                if (ec) sendOutput("stderr", "protoclj --dap: cannot change to cwd " + cwd_ + ": " + ec.message() + "\n");
+            }
             setDebugHook(this);
             rc = runProgram(launch_, arg);
             setDebugHook(nullptr);
@@ -497,13 +595,18 @@ public:
             !ts->pauseRequested.load(std::memory_order_relaxed) && !entry)
             return;
 
+        // clojure.core's lines: never the entry stop (core loads first); with
+        // justMyCode no pause or step stops there either, unless the step
+        // began in core. A breakpoint set in core always stops.
+        const bool library = isLibrary(frame);
+        const bool skipLibrary = library && justMyCode_;
         const char* reason = nullptr;
-        if (entry && entryPending_.exchange(false)) {
+        if (entry && !library && entryPending_.exchange(false)) {
             reason = "entry";
-        } else if (ts->pauseRequested.exchange(false)) {
+        } else if (!skipLibrary && ts->pauseRequested.exchange(false)) {
             reason = "pause";
         } else {
-            if (ts->stepKind != StepKind::None) {
+            if (ts->stepKind != StepKind::None && !(skipLibrary && !ts->stepFromLibrary)) {
                 const int depth = depthOf(frame);
                 switch (ts->stepKind) {
                     case StepKind::None: break;
@@ -512,7 +615,7 @@ public:
                     case StepKind::Out:  if (depth <  ts->stepDepth) reason = "step"; break;
                 }
             }
-            if (!reason && anyBreakpoints_.load()) {
+            if (!reason && anyBreakpoints_.load() && breakpointLineSet(frame)) {
                 LineBreakpoint bp;
                 if (breakpointAt(frame, bp)) {
                     if (breakpointHit(ctx, frame, bp)) return;   // a log point, or it does not stop
@@ -534,8 +637,14 @@ public:
         if (!raised && !uncaught) return;
         DebugFrame* top = debugTop();
         if (!top) return;
+        // With justMyCode the stop shows the program's innermost frame; a
+        // throw with none (clojure.core loading) does not stop.
+        DebugFrame* shown = top;
+        if (justMyCode_)
+            while (shown && isLibrary(shown)) shown = shown->parent;
+        if (!shown) return;
         ThreadState* ts = tState;
-        if (!ts) ts = registerThread(top);
+        if (!ts) ts = registerThread(shown);
 
         // The value stays rooted here while the thread is stopped.
         proto::ProtoContext scope(ctx->space, ctx);
@@ -555,7 +664,7 @@ public:
             if (cond.empty()) return true;
             std::string error;
             bool truthy = false;
-            if (!evalInFrame(&scope, top, cond, scope.getAutomaticLocal(0), error,
+            if (!evalInFrame(&scope, shown, cond, scope.getAutomaticLocal(0), error,
                              [&](proto::ProtoContext*, const proto::ProtoObject* v) {
                                  truthy = v != PROTO_NONE && v != PROTO_FALSE && v != nullptr;
                              })) {
@@ -572,8 +681,10 @@ public:
             return;
         }
         describeException(&scope, value, site, top, ex);
+        if (shown != top && site == ThrowSite::Throw)
+            ex.description += " (thrown in clojure.core, called on this line)";
         if (!conditionError.empty()) sendOutput("console", conditionError + "\n");
-        stop(&scope, ts, top, "exception", &ex, conditionError);
+        stop(&scope, ts, shown, "exception", &ex, conditionError);
     }
 
     // A thread that ran the program's code ended (ThreadExit).
@@ -591,6 +702,28 @@ private:
         int d = 0;
         for (; f; f = f->parent) ++d;
         return d;
+    }
+
+    // Whether some breakpoint is on the line `frame` entered, from the
+    // thread's cache of its source's breakpoint lines.
+    bool breakpointLineSet(const DebugFrame* frame) {
+        const BytecodeModule::DebugInfo* di = frame->mod->debugInfo();
+        if (!di) return false;
+        const std::uint64_t gen = bpGen_.load(std::memory_order_acquire);
+        if (tBreakpointLinesGen != gen) {
+            tBreakpointLines.clear();
+            tBreakpointLinesGen = gen;
+        }
+        BreakpointLines& e = tBreakpointLines[di];
+        if (e.gen != gen) {
+            e.lines.clear();
+            std::lock_guard<std::mutex> lk(mu_);
+            auto it = breakpoints_.find(di->source == launch_.program ? programKey_ : pathKey(di->source));
+            if (it != breakpoints_.end())
+                for (const auto& [line, bp] : it->second) e.lines.push_back(line);
+            e.gen = gen;
+        }
+        return std::find(e.lines.begin(), e.lines.end(), frame->line) != e.lines.end();
     }
 
     // Whether a breakpoint is set on the line `frame` entered; a copy of it.
@@ -851,6 +984,7 @@ private:
                 case Resume::StepOut:  ts->stepKind = StepKind::Out;  break;
             }
             ts->stepDepth = depthOf(frame);
+            ts->stepFromLibrary = isLibrary(frame);
         }
         for (const json& r : late) sendErrorResponse(r, "the thread is running");
     }
@@ -914,7 +1048,8 @@ private:
                               {"name", di->name},
                               {"line", f->shownLine},
                               {"column", 1},
-                              {"source", {{"name", baseName(di->source)}, {"path", di->source}}}});
+                              {"source", sourceFor(di->source)}});
+            if (di->library) frames.back()["presentationHint"] = "subtle";
         }
         sendResponse(req, {{"stackFrames", frames}, {"totalFrames", total}});
     }
@@ -1074,6 +1209,75 @@ private:
         return {{"result", formatValue(ctx, v, !rooted)}, {"variablesReference", ref}};
     }
 
+    // --- sources -----------------------------------------------------------------
+
+    // The adapter-side path of a client path: translated by pathMappings when
+    // one covers it, else as given.
+    std::string toAdapterPath(const std::string& clientPath) const {
+        if (auto t = translatePath(mappings_, clientPath, /*toRemote=*/true)) return *t;
+        return clientPath;
+    }
+
+    // The stable sourceReference of an adapter-side source.
+    long long referenceFor(const std::string& adapter) {
+        std::lock_guard<std::mutex> lk(srcMu_);
+        auto it = sourceRefs_.find(adapter);
+        if (it != sourceRefs_.end()) return it->second;
+        refSources_.push_back(adapter);
+        const long long ref = static_cast<long long>(refSources_.size());
+        sourceRefs_[adapter] = ref;
+        return ref;
+    }
+
+    std::optional<std::string> sourceOfReference(long long ref) {
+        std::lock_guard<std::mutex> lk(srcMu_);
+        if (ref < 1 || static_cast<std::size_t>(ref) > refSources_.size()) return std::nullopt;
+        return refSources_[static_cast<std::size_t>(ref) - 1];
+    }
+
+    static bool isEmbedded(const std::string& adapter) { return adapter == embeddedCoreSourceName(); }
+
+    // How the client sees an adapter-side source: a path it can open, or a
+    // sourceReference whose text the `source` request serves (clojure.core,
+    // embedded in the binary; a file no pathMapping covers).
+    json sourceFor(const std::string& adapter) {
+        if (isEmbedded(adapter))
+            return {{"name", "core.clj"},
+                    {"sourceReference", referenceFor(adapter)},
+                    {"origin", "clojure.core (embedded in protoclj)"},
+                    {"presentationHint", "deemphasize"}};
+        const std::string name = baseName(adapter);
+        if (mappings_.empty()) return {{"name", name}, {"path", adapter}};
+        if (auto local = translatePath(mappings_, adapter, /*toRemote=*/false))
+            return {{"name", name}, {"path", *local}};
+        return {{"name", name}, {"sourceReference", referenceFor(adapter)}, {"origin", adapter}};
+    }
+
+    // The adapter-side source a client `source` object names: by its
+    // sourceReference, else by its path.
+    std::optional<std::string> adapterSourceOf(const json& source) {
+        const long long ref = source.is_object() ? source.value("sourceReference", 0LL) : 0;
+        if (ref > 0) return sourceOfReference(ref);
+        const std::string path = source.is_object() ? source.value("path", "") : "";
+        if (path.empty()) return std::nullopt;
+        return toAdapterPath(path);
+    }
+
+    static bool sourceText(const std::string& adapter, std::string& out) {
+        if (isEmbedded(adapter)) { out = embeddedCoreSource(); return true; }
+        return readFile(adapter, out);
+    }
+
+    // A source the program loaded: listed by loadedSources, announced once.
+    void sourceLoaded(const std::string& adapter) {
+        {
+            std::lock_guard<std::mutex> lk(srcMu_);
+            if (std::find(loaded_.begin(), loaded_.end(), adapter) != loaded_.end()) return;
+            loaded_.push_back(adapter);
+        }
+        sendEvent("loadedSource", {{"reason", "new"}, {"source", sourceFor(adapter)}});
+    }
+
     // --- the protocol thread ------------------------------------------------
 
     void readLoop() {
@@ -1142,14 +1346,51 @@ private:
                                {"supportsConditionalBreakpoints", true},
                                {"supportsHitConditionalBreakpoints", true},
                                {"supportsLogPoints", true},
+                               {"supportsLoadedSourcesRequest", true},
                                {"exceptionBreakpointFilters", filters}});
             sendEvent("initialized", json::object());
             return false;
         }
         if (command == "launch") {
             DapLaunch l;
-            l.program = args.value("program", "");
+            std::vector<PathMapping> maps;
+            if (args.contains("pathMappings")) {
+                const json& pm = args["pathMappings"];
+                std::string problem;
+                if (!pm.is_array()) problem = "launch: pathMappings must be an array of {localRoot, remoteRoot}";
+                else
+                    for (std::size_t i = 0; i < pm.size() && problem.empty(); ++i) {
+                        const json& m = pm[i];
+                        const std::string lr = m.is_object() && m.contains("localRoot") && m["localRoot"].is_string()
+                                                   ? m["localRoot"].get<std::string>() : "";
+                        const std::string rr = m.is_object() && m.contains("remoteRoot") && m["remoteRoot"].is_string()
+                                                   ? m["remoteRoot"].get<std::string>() : "";
+                        if (lr.empty() || rr.empty())
+                            problem = "launch: pathMappings[" + std::to_string(i) +
+                                      "] needs both localRoot and remoteRoot (non-empty strings)";
+                        else
+                            maps.push_back({lr, rr});
+                    }
+                if (!problem.empty()) {
+                    sendErrorResponse(req, problem);
+                    sendEvent("terminated", json::object());
+                    return false;
+                }
+            }
+            mappings_ = maps;
+            justMyCode_ = args.value("justMyCode", true);
+            l.program = toAdapterPath(args.value("program", ""));
             l.stopOnEntry = args.value("stopOnEntry", false);
+            const std::string cwd = args.value("cwd", "");
+            if (!cwd.empty()) {
+                cwd_ = toAdapterPath(cwd);
+                std::error_code ec;
+                if (!std::filesystem::is_directory(cwd_, ec)) {
+                    sendErrorResponse(req, "launch: cwd " + cwd_ + " is not a directory");
+                    sendEvent("terminated", json::object());
+                    return false;
+                }
+            }
             if (args.contains("args") && args["args"].is_array())
                 for (const auto& a : args["args"])
                     if (a.is_string()) l.args.push_back(a.get<std::string>());
@@ -1170,11 +1411,38 @@ private:
                 launched_ = true;
             }
             sendResponse(req, json::object());
+            // What the program loads: the script and clojure.core.
+            sourceLoaded(l.program);
+            sourceLoaded(embeddedCoreSourceName());
             cv_.notify_all();
             return false;
         }
         if (command == "setBreakpoints") {
             setBreakpoints(req, args);
+            return false;
+        }
+        if (command == "source") {
+            std::optional<std::string> adapter;
+            const long long ref = args.value("sourceReference", 0LL);
+            if (ref > 0) adapter = sourceOfReference(ref);
+            else if (args.contains("source")) adapter = adapterSourceOf(args["source"]);
+            if (!adapter && args.contains("source")) adapter = adapterSourceOf(args["source"]);
+            std::string text;
+            if (adapter && sourceText(*adapter, text))
+                sendResponse(req, {{"content", text}, {"mimeType", "text/x-clojure"}});
+            else
+                sendErrorResponse(req, "source: unknown source" + (adapter ? " " + *adapter : std::string()));
+            return false;
+        }
+        if (command == "loadedSources") {
+            std::vector<std::string> loaded;
+            {
+                std::lock_guard<std::mutex> lk(srcMu_);
+                loaded = loaded_;
+            }
+            json list = json::array();
+            for (const auto& a : loaded) list.push_back(sourceFor(a));
+            sendResponse(req, {{"sources", list}});
             return false;
         }
         if (command == "setExceptionBreakpoints") {
@@ -1341,9 +1609,10 @@ private:
     }
 
     void setBreakpoints(const json& req, const json& args) {
-        const std::string path = args.value("source", json::object()).value("path", "");
+        const json clientSource = args.value("source", json::object());
+        const std::string path = adapterSourceOf(clientSource).value_or("");
         std::string source;
-        const bool readable = !path.empty() && readFile(path, source);
+        const bool readable = !path.empty() && sourceText(path, source);
         const std::set<int> candidates = readable ? formLines(source) : std::set<int>{};
         std::map<int, LineBreakpoint> armed;
         json result = json::array();
@@ -1354,8 +1623,9 @@ private:
                 // a form starts.
                 auto it = candidates.lower_bound(line);
                 if (it == candidates.end()) {
-                    result.push_back({{"verified", false}, {"line", line},
-                                      {"message", "no form starts on or after this line"}});
+                    result.push_back({{"verified", false}, {"line", line}, {"source", clientSource},
+                                      {"message", readable ? "no form starts on or after this line"
+                                                           : "the adapter cannot read this source"}});
                     continue;
                 }
                 LineBreakpoint spec;
@@ -1366,10 +1636,11 @@ private:
                 }
                 const std::string hitProblem = spec.hit.parse(bp.value("hitCondition", ""));
                 if (!hitProblem.empty()) {
-                    result.push_back({{"verified", false}, {"line", *it}, {"message", hitProblem}});
+                    result.push_back({{"verified", false}, {"line", *it}, {"source", clientSource},
+                                      {"message", hitProblem}});
                     continue;
                 }
-                json r = {{"verified", true}, {"line", *it}};
+                json r = {{"verified", true}, {"line", *it}, {"source", clientSource}};
                 if (!spec.condition.empty()) {
                     const std::string problem = syntaxProblem(spec.condition);
                     if (!problem.empty()) {
@@ -1388,6 +1659,7 @@ private:
             if (armed.empty()) breakpoints_.erase(pathKey(path));
             else breakpoints_[pathKey(path)] = armed;
             anyBreakpoints_.store(!breakpoints_.empty());
+            bpGen_.fetch_add(1, std::memory_order_acq_rel);
         }
         sendResponse(req, {{"breakpoints", result}});
     }
@@ -1439,6 +1711,19 @@ private:
     int lastStopped_ = 0;
 
     std::atomic<bool> anyBreakpoints_{false}, entryPending_{false};
+    std::atomic<std::uint64_t> bpGen_{1};             // bumped by every setBreakpoints
+
+    // Set by launch, before the program runs; read-only afterwards.
+    std::vector<PathMapping> mappings_;
+    bool justMyCode_ = true;
+    std::string cwd_;
+
+    // Sources (guarded by srcMu_): sourceReference -> adapter-side source,
+    // and the sources the program loaded.
+    std::mutex srcMu_;
+    std::map<std::string, long long> sourceRefs_;
+    std::vector<std::string> refSources_;
+    std::vector<std::string> loaded_;
     std::atomic<bool> exRaised_{false}, exUncaught_{false};
 };
 

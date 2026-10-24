@@ -127,6 +127,8 @@ private:
     int noDebug_ = 0;
     bool debugOn() const { return source_ && source_->recordPositions && noDebug_ == 0; }
     bool marking(const BytecodeModule& out) const { return debugOn() && out.debugInfo(); }
+    // Library code compiled for the debugger keeps locals clearing.
+    bool keepsClearing() const { return source_ && source_->library; }
     // The line the reader recorded for the list form `form`, or 0.
     int formLineOf(const proto::ProtoObject* form) const;
     // What the next compileArity is: the fn's name and line, set by the

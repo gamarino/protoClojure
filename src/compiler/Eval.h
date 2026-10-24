@@ -49,6 +49,12 @@ const proto::ProtoObject* evalTopLevel(proto::ProtoContext* ctx,
                                        const proto::ProtoObject* form,
                                        const SourceInfo* info);
 
+// clojure.core's source (src/core/core.clj, embedded in the binary), and
+// the name its modules carry as their source when it is compiled for the
+// debugger (loadCore under `protoclj --dap`): not a path on disk.
+const std::string& embeddedCoreSource();
+const char* embeddedCoreSourceName();
+
 // Keeps `mod` alive until releaseRetainedModules. Thread-safe.
 void retainModule(std::unique_ptr<BytecodeModule> mod);
 
