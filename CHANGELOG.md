@@ -9,6 +9,23 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — debugging in VS Code (2026-10-24)
+
+- `protoclj --dap`: a Debug Adapter Protocol server over stdin/stdout. Line
+  breakpoints, continue / step in / step over / step out / pause, the call
+  stack (fn names, `fn@file:line`, `<top level>`), Locals of the selected
+  frame by name (parameters, captures, `let` / `loop` / `catch` bindings;
+  collections expand), evaluate in the selected frame (Watch, Debug Console,
+  hover), stopOnEntry; the script's stdout and stderr go to the Debug
+  Console. docs/debugging.md.
+- The reader records where list forms start, and the compiler emits line
+  marks (`Op::LINE`), locals' scopes and function names, only for code run
+  under `--dap`; other code is compiled as before.
+- `editor-integration/vscode/`: the `protoclj` debug type for VS Code's own
+  `clojure` language (no grammar of its own; coexists with Calva), F5
+  without a launch.json; `examples/.vscode/launch.json`.
+- ctest `cli/dap-session` drives the adapter as VS Code does.
+
 ### Changed — CI
 
 - ci.yml and cross-platform.yml pin protoCore 3.1.0 (master 34eca79f; not

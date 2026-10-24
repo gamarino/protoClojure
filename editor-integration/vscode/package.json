@@ -1,0 +1,103 @@
+{
+  "name": "protoclj-debug",
+  "displayName": "protoClojure Debugger",
+  "description": "Debug Clojure scripts with protoClojure (protoclj --dap): breakpoints, stepping, call stack, locals and the Debug Console. Uses VS Code's own Clojure syntax support; coexists with Calva.",
+  "version": "0.1.0",
+  "publisher": "protoclojure-placeholder",
+  "engines": {
+    "vscode": "^1.66.0"
+  },
+  "categories": [
+    "Debuggers"
+  ],
+  "main": "./extension.js",
+  "files": [
+    "extension.js"
+  ],
+  "activationEvents": [
+    "onDebug",
+    "onDebugResolve:protoclj",
+    "onDebugDynamicConfigurations:protoclj",
+    "onLanguage:clojure"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "protoClojure",
+      "properties": {
+        "protoclj.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the protoclj executable. Leave empty to use the default install location (%LOCALAPPDATA%\\Programs\\proto\\bin\\protoclj.exe on Windows, ~/.local/bin/protoclj elsewhere) or else 'protoclj' from PATH."
+        }
+      }
+    },
+    "breakpoints": [
+      {
+        "language": "clojure"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "protoclj",
+        "label": "protoClojure",
+        "languages": [
+          "clojure"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [
+              "program"
+            ],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Absolute path to the Clojure (.clj) script to debug.",
+                "default": "${file}"
+              },
+              "args": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Arguments for the script (*command-line-args*).",
+                "default": []
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop before the script's first form runs.",
+                "default": false
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "protoclj",
+            "request": "launch",
+            "name": "Debug current Clojure script (protoclj)",
+            "program": "${file}",
+            "stopOnEntry": false
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "protoClojure: Launch current script",
+            "description": "Debug the active .clj file with protoclj --dap.",
+            "body": {
+              "type": "protoclj",
+              "request": "launch",
+              "name": "Debug current Clojure script (protoclj)",
+              "program": "^\"\\${file}\"",
+              "stopOnEntry": false
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gamarino/protoClojure"
+  },
+  "license": "MIT"
+}

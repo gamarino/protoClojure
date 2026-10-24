@@ -1,0 +1,27 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "protoclj",
+      "request": "launch",
+      "name": "Debug current Clojure script (protoclj)",
+      "program": "${file}",
+      "stopOnEntry": false
+    },
+    {
+      "type": "protoclj",
+      "request": "launch",
+      "name": "Debug current Clojure script (stop on entry)",
+      "program": "${file}",
+      "stopOnEntry": true
+    },
+    {
+      "type": "protoclj",
+      "request": "launch",
+      "name": "Debug 03-closures.clj",
+      "program": "${workspaceFolder}/03-closures.clj",
+      "args": [],
+      "stopOnEntry": false
+    }
+  ]
+}

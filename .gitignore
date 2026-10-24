@@ -5,6 +5,7 @@ build_asan/
 build-dbg/
 .idea/
 .vscode/
+!examples/.vscode/
 *.swp
 *~
 .DS_Store
@@ -12,3 +13,6 @@ docs/_build/
 docs/venv/
 build_pkg/
 tasks/
+
+# VS Code extension packages (editor-integration/vscode: vsce package)
+*.vsix

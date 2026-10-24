@@ -602,10 +602,50 @@ protoclj /usr/share/protoClojure/examples/02-factorial.clj
 
 Only the TGZ and DEB artifacts have been verified on Linux, and the ZIP on Windows 11. The RPM, macOS and NSIS generators are configured but unverified, and no packages are published.
 
+## Debugging in VS Code
+
+`protoclj --dap` is a [Debug Adapter Protocol](https://microsoft.github.io/debug-adapter-protocol/)
+server, and `editor-integration/vscode/` is the VS Code extension that uses it.
+VS Code highlights Clojure itself; the extension adds the debugger (debug type
+`protoclj`) and breakpoints for the `clojure` language, and coexists with Calva.
+
+**Install.** Install `protoclj` (above); the extension finds it through the
+`protoclj.path` setting, else `%LOCALAPPDATA%\Programs\proto\bin\protoclj.exe`
+(Windows) or `~/.local/bin/protoclj`, else the `PATH`. Then package and install
+the extension (Node.js for `npx`):
+
+```bash
+cd editor-integration/vscode
+npx @vscode/vsce@3.2.1 package --skip-license
+code --install-extension protoclj-debug-0.1.0.vsix
+```
+
+**Start a session.** Open a `.clj` file, click in the gutter to set breakpoints,
+press **F5** — no `launch.json` needed; `examples/.vscode/launch.json` has
+ready-made configurations (`program`, `args`, `stopOnEntry`).
+
+**What works.** Line breakpoints; Continue, Step Over / Into / Out, Pause; the
+call stack (named fns, anonymous ones as `fn@file.clj:line`, `<top level>`);
+Locals of the selected frame by name — parameters, closure captures, `let`,
+`loop` and `catch` bindings — with collections expandable; Watch, Debug Console
+and hover evaluate expressions in the selected frame; the script's output in
+the Debug Console; `stopOnEntry`. A breakpoint binds to the first line, from
+its own on, where a form starts, and stops when a frame enters that line
+(every iteration of a loop; the line of a `(defn f [x]` stops at each call of
+`f`).
+
+**Limitations.** One thread in the client's view (a stop on a `future` or actor
+thread shows that thread's stack); no exception, conditional or hit-count
+breakpoints, no `setVariable`; forms a macro generates have no lines; the
+Variables view does not realise lazy seqs; the script's standard input is
+empty under the debugger; stopping the session ends the script. Details in
+[docs/debugging.md](docs/debugging.md).
+
 ## Documentation
 
 | Document | What it covers |
 |---|---|
+| [docs/debugging.md](docs/debugging.md) | Debugging scripts in VS Code (`protoclj --dap`): installing, breakpoints, stepping, limitations. |
 | [docs/LANGUAGE.md](docs/LANGUAGE.md) | The language reference — reader, evaluator, special forms, primitives. |
 | [docs/STATUS.md](docs/STATUS.md) | Live status — what works, what departs from Clojure-JVM, what is on the list. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Planned milestones, versioning, and how to read the plan. |
