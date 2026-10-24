@@ -53,12 +53,12 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 3.0.0 (tag v3.0.0, commit ce00a4a2),
-  # SOVERSION 4: methods receive ProtoArguments / ProtoKeywordArguments.  It is
-  # also the minimum CMakeLists.txt declares (PROTOCORE_MIN_VERSION, 3.0.0),
+  # protoCore 3.1.0 (master commit 34eca79f, untagged), SOVERSION 4: lazy
+  # objects (ProtoObject::newLazyChild), which lazy sequences are built on.  It
+  # is also the minimum CMakeLists.txt declares (PROTOCORE_MIN_VERSION, 3.1.0),
   # which the floor job in cross-platform.yml (Windows) tests.  Bump this
-  # deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'ce00a4a26b6583ea8a58e776eee2ea91c743469e' }}
+  # deliberately; move it to the v3.1.0 tag once protoCore tags the release.
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '34eca79fd16191497971714228f5e5c65f005b76' }}
   PROTOIO_REPO: gamarino/protoIO
   # protoIO 0.2.2 (main, 2026-10-02): RunOptions for sh :dir/:env, the
   # dual-stack wildcard listener.  Bump this deliberately.

@@ -9,6 +9,11 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Changed — CI
+
+- ci.yml and cross-platform.yml pin protoCore 3.1.0 (master 34eca79f; not
+  tagged yet), the minimum CMakeLists.txt declares since lazy sequences.
+
 ### Fixed — the macros-branch regression (2026-10-24)
 
 - Start-up: the reader and the compiler interned and spelled the same
