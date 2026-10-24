@@ -65,10 +65,53 @@ struct CompiledPattern {
     // character: the engine's backtracking executor. With libstdc++ a
     // pattern without back-references runs on its breadth-first executor
     // (the `__polynomial` option), whose native depth does not grow with the
-    // subject; a pattern with back-references, and every pattern with
-    // another standard library, runs on the backtracking one.
+    // subject; a pattern with back-references runs on the recursive one.
+    // libc++ (macOS) backtracks on a heap vector of states, never on the
+    // native stack (basic_regex::__match_at_start_ecma), so no pattern is
+    // recursive there. Every other standard library (MSVC) counts as
+    // recursive.
     bool        recursive;
 };
+
+// The match flags for a search that starts at byte `pos` of `subject` and
+// continues an earlier one (re-find on a matcher, re-seq, replace, split):
+// the text before `pos` is context, as for Java's Matcher.find. That is
+// match_prev_avail; with libc++ also match_not_bol, unless `^` may truly
+// match there (a multi-line pattern right after a line terminator), because
+// libc++ takes the first position of every search for the beginning of the
+// input whatever match_prev_avail says, so `^` matched at every step.
+std::regex_constants::match_flag_type continuationFlags(const CompiledPattern* cp,
+                                                       const std::string& subject,
+                                                       std::size_t pos);
+
+// Calls `f(m)` for each successive match of `cp` in `s`, as
+// std::sregex_iterator walks them (after an empty match, a non-empty match
+// at the same place first, else the search moves one byte on), but with
+// continuationFlags for every search after the first. The positions in `m`
+// are relative to where that search started: use m[0].first - s.begin().
+// `f` returns false to stop.
+template <typename F>
+void forEachMatch(const std::string& s, const CompiledPattern* cp, F&& f) {
+    namespace rc = std::regex_constants;
+    std::smatch m;
+    auto search = [&](std::size_t from, rc::match_flag_type extra) {
+        return std::regex_search(s.cbegin() + static_cast<std::ptrdiff_t>(from), s.cend(), m,
+                                 cp->regex, continuationFlags(cp, s, from) | extra);
+    };
+    if (!search(0, rc::match_default)) return;
+    for (;;) {
+        if (!f(static_cast<const std::smatch&>(m))) return;
+        const std::size_t start = static_cast<std::size_t>(m[0].first - s.cbegin());
+        const std::size_t end = static_cast<std::size_t>(m[0].second - s.cbegin());
+        if (end > start) {
+            if (!search(end, rc::match_default)) return;
+            continue;
+        }
+        if (end >= s.size()) return;
+        if (search(end, rc::match_not_null | rc::match_continuous)) continue;
+        if (!search(end + 1, rc::match_default)) return;
+    }
+}
 
 // Raises StackOverflowError, before matching, when a recursive pattern
 // (above) on a subject of `subjectBytes` could exhaust the thread's native

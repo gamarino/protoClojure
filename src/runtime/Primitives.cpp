@@ -1697,7 +1697,7 @@ const proto::ProtoObject* matcherFind(proto::ProtoContext* ctx, const proto::Pro
     const long long pos = m->getOwnAttributeDirect(ctx, mPosKey(ctx))->asLong(ctx);
     if (pos > static_cast<long long>(subject.size())) return PROTO_NONE;
     std::smatch match;
-    auto flags = pos > 0 ? std::regex_constants::match_prev_avail : std::regex_constants::match_default;
+    const auto flags = continuationFlags(cp, subject, static_cast<std::size_t>(pos));
     guardRecursiveMatch(cp, subject.size() - static_cast<std::size_t>(pos));
     if (!std::regex_search(subject.begin() + pos, subject.end(), match, cp->regex, flags)) {
         m->setAttribute(ctx, mPosKey(ctx), ctx->fromLong(static_cast<long long>(subject.size()) + 1));
@@ -1766,8 +1766,7 @@ const proto::ProtoObject* reSeqFrom(proto::ProtoContext* ctx, const proto::Proto
         subjectBox->asExternalPointer(ctx)->getPointer(ctx));
     if (pos > subject->size()) return PROTO_NONE;
     std::smatch m;
-    const auto flags = pos > 0 ? std::regex_constants::match_prev_avail
-                               : std::regex_constants::match_default;
+    const auto flags = continuationFlags(cp, *subject, pos);
     if (!std::regex_search(subject->cbegin() + static_cast<std::ptrdiff_t>(pos), subject->cend(),
                            m, cp->regex, flags))
         return PROTO_NONE;
@@ -1873,13 +1872,12 @@ const proto::ProtoObject* replaceWithPattern(proto::ProtoContext* ctx, const std
     std::string out;
     out.reserve(s.size());
     auto last = s.begin();
-    for (std::sregex_iterator it(s.begin(), s.end(), cp->regex), end; it != end; ++it) {
-        const std::smatch& m = *it;
+    forEachMatch(s, cp, [&](const std::smatch& m) {
         out.append(last, m[0].first);
         appendReplacement(ctx, out, m, cp->groups, repl);
         last = m[0].second;
-        if (firstOnly) break;
-    }
+        return !firstOnly;
+    });
     out.append(last, s.end());
     return reinterpret_cast<const proto::ProtoObject*>(makeUtf8ProtoString(ctx, out));
 }
@@ -1915,15 +1913,16 @@ const proto::ProtoObject* splitWithPattern(proto::ProtoContext* ctx, const std::
     guardRecursiveMatch(cp, s.size());
     std::vector<std::string> pieces;
     std::size_t from = 0;
-    for (std::sregex_iterator it(s.begin(), s.end(), cp->regex), end; it != end; ++it) {
-        if (limit > 0 && static_cast<long long>(pieces.size()) == limit - 1) break;
-        const std::size_t at = static_cast<std::size_t>(it->position(0));
-        const std::size_t len = static_cast<std::size_t>(it->length(0));
-        if (at == 0 && len == 0) continue;           // no leading empty piece
-        if (len == 0 && at >= s.size()) break;      // the empty match at the end
+    forEachMatch(s, cp, [&](const std::smatch& m) {
+        if (limit > 0 && static_cast<long long>(pieces.size()) == limit - 1) return false;
+        const std::size_t at = static_cast<std::size_t>(m[0].first - s.cbegin());
+        const std::size_t len = static_cast<std::size_t>(m.length(0));
+        if (at == 0 && len == 0) return true;        // no leading empty piece
+        if (len == 0 && at >= s.size()) return false; // the empty match at the end
         pieces.push_back(s.substr(from, at - from));
         from = at + len;
-    }
+        return true;
+    });
     pieces.push_back(s.substr(from));
     if (limit == 0)
         while (pieces.size() > 1 && pieces.back().empty()) pieces.pop_back();

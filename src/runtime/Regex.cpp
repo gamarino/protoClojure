@@ -139,7 +139,11 @@ const CompiledPattern* compilePattern(const std::string& source) {
     const std::string ecma = translate(source, flags);
     auto compiled = std::make_unique<CompiledPattern>();
     compiled->source = source;
+#if defined(_LIBCPP_VERSION)
+    compiled->recursive = false;  // libc++ backtracks on the heap (Regex.h)
+#else
     compiled->recursive = true;
+#endif
     try {
 #if defined(__GLIBCXX__)
         try {
@@ -160,6 +164,22 @@ const CompiledPattern* compilePattern(const std::string& source) {
     const CompiledPattern* result = compiled.get();
     g_cache.emplace(source, std::move(compiled));
     return result;
+}
+
+std::regex_constants::match_flag_type continuationFlags(const CompiledPattern* cp,
+                                                       const std::string& subject,
+                                                       std::size_t pos) {
+    if (pos == 0 || pos > subject.size()) return std::regex_constants::match_default;
+    auto flags = std::regex_constants::match_prev_avail;
+#if defined(_LIBCPP_VERSION)
+    const char prev = subject[pos - 1];
+    const bool afterLineEnd = prev == '\n' || prev == '\r';
+    const bool multiline = (cp->regex.flags() & std::regex::multiline) != 0;
+    if (!(multiline && afterLineEnd)) flags |= std::regex_constants::match_not_bol;
+#else
+    (void)cp;
+#endif
+    return flags;
 }
 
 void guardRecursiveMatch(const CompiledPattern* cp, std::size_t subjectBytes) {

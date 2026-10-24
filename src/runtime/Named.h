@@ -111,10 +111,11 @@ const std::string& namedSpellingText(proto::ProtoContext* ctx,
 // caller falls back to reading the prototype. Lock-free: slots are relaxed
 // atomic words, written by internNamed on every call.
 namespace namedcache {
-constexpr unsigned long kSlots = 1024;
+constexpr std::uintptr_t kSlots = 1024;
 extern std::atomic<const proto::ProtoObject*> slots[kSlots];
-inline unsigned long slotOf(const proto::ProtoObject* v) {
-    return (reinterpret_cast<unsigned long>(v) >> 6) & (kSlots - 1);
+// std::uintptr_t, not unsigned long: a 32-bit type on Windows (LLP64).
+inline std::uintptr_t slotOf(const proto::ProtoObject* v) {
+    return (reinterpret_cast<std::uintptr_t>(v) >> 6) & (kSlots - 1);
 }
 inline void record(const proto::ProtoObject* v) {
     std::atomic<const proto::ProtoObject*>& s = slots[slotOf(v)];
