@@ -370,7 +370,8 @@ TEST(Lexer, HashQuoteIsARegexLiteral) {
     auto toks = tokenise(R"(#"a\d\"b" x)");
     ASSERT_GE(toks.size(), 2u);
     EXPECT_EQ(toks[0].kind, TokenKind::Regex);
-    EXPECT_EQ(toks[0].text, R"(a\d\"b)");
+    const std::string want = R"(a\d\"b)";  // outside the macro: see BadStringEscapesAreErrors
+    EXPECT_EQ(toks[0].text, want);
     EXPECT_EQ(toks[1].kind, TokenKind::Symbol);
     auto open = tokenise(R"(#"abc)");
     EXPECT_EQ(open.back().kind, TokenKind::Error);
@@ -388,12 +389,15 @@ TEST(Lexer, StringEscapes) {
     EXPECT_EQ(toks[2].text, "\b\f");
 }
 
+// Ordinary literals with the backslash escaped, not raw strings: inside a
+// macro argument (EXPECT_EQ) MSVC's traditional preprocessor does not treat
+// R"(...)" as raw and reads the \u and octal escapes in it (C3850, C7744).
 TEST(Lexer, BadStringEscapesAreErrors) {
-    EXPECT_EQ(tokenise(R"("\uD83D")")[0].kind, TokenKind::Error);    // unpaired
-    EXPECT_EQ(tokenise(R"("\uDE00")")[0].kind, TokenKind::Error);    // lone low
-    EXPECT_EQ(tokenise(R"("\u12G4")")[0].kind, TokenKind::Error);    // not hex
-    EXPECT_EQ(tokenise(R"("\400")")[0].kind, TokenKind::Error);      // octal > 377
-    EXPECT_EQ(tokenise(R"("\q")")[0].kind, TokenKind::Error);
+    EXPECT_EQ(tokenise("\"\\uD83D\"")[0].kind, TokenKind::Error);    // unpaired
+    EXPECT_EQ(tokenise("\"\\uDE00\"")[0].kind, TokenKind::Error);    // lone low
+    EXPECT_EQ(tokenise("\"\\u12G4\"")[0].kind, TokenKind::Error);    // not hex
+    EXPECT_EQ(tokenise("\"\\400\"")[0].kind, TokenKind::Error);      // octal > 377
+    EXPECT_EQ(tokenise("\"\\q\"")[0].kind, TokenKind::Error);
 }
 
 // `#_` is a token of its own; `#tag` is Clojure's unknown-tag error.
