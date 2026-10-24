@@ -9,6 +9,26 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — the showcase against Babashka (macros brief, Part B stage 13)
+
+- `examples/showcase/`: a grep over standard input, a JSON transform and
+  word frequencies that run unchanged under protoclj and Babashka, each
+  printing a result that checks its work; `(factorial 1000)` with `*'`
+  (both runtimes) and with `*` (bb overflows, protoclj promotes); a
+  deterministic input generator. `benchmarks/reports/2026-10-23-showcase/`
+  holds the runner and the raw results; README "Showcase" the numbers.
+- The vocabulary the scripts and the tutorial needed (DESIGN.md M41, D59):
+  `+'` `-'` `*'` `inc'` `dec'`, `bigint`, `biginteger`, `mapv`, `filterv`,
+  `number?`, `integer?`, `int?`, `float?`, `double?`, `==`, `hash`, `peek`,
+  `pop`, and a vector called as a function of its index.
+- `docs/tutorial/15-scripting.md`: standard input, regular expressions,
+  `ns` / `require`, JSON, EDN, lazy sequences, and what a Babashka user
+  meets.
+- `tests/docs/check_snippets.py` (ctest `docs/snippets`, M42) runs every
+  Clojure snippet of the README, LANGUAGE.md and the tutorial; 157 run, and
+  each of the 65 that cannot says why. Snippets that claimed to run and did
+  not were fixed.
+
 ### Added — JSON and EDN (macros brief, Part B stage 12)
 
 - **`read-string`** (the first form of a string, read as code is read,

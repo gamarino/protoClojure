@@ -1,0 +1,15 @@
+bench A r1 03:46:11 load 3.03 4.98 5.53
+bench B r1 03:46:19 load 2.95 4.93 5.51
+bench C r1 03:46:26 load 3.19 4.94 5.51
+bench B r2 03:46:33 load 3.38 4.93 5.50
+bench C r2 03:46:41 load 6.47 5.54 5.69
+bench A r2 03:46:48 load 5.55 5.38 5.64
+bench C r3 03:46:55 load 5.27 5.32 5.62
+bench A r3 03:47:03 load 4.60 5.18 5.57
+bench B r3 03:47:10 load 4.31 5.11 5.54
+bench A r4 03:47:17 load 3.96 5.01 5.51
+bench B r4 03:47:24 load 4.60 5.12 5.54
+bench C r4 03:47:32 load 4.34 5.05 5.51
+bench B r5 03:47:39 load 4.15 5.00 5.50
+bench C r5 03:47:46 load 3.98 4.95 5.48
+bench A r5 03:47:54 load 3.52 4.82 5.43

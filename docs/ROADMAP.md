@@ -148,7 +148,12 @@ Part B of the macros brief, the scripting vocabulary, on the same branch:
     `clojure.edn/read-string`, `cheshire.core` and `clojure.data.json` over
     one C++ parser and writer, `parse-long` / `parse-double` /
     `parse-boolean`; `pmap` joins every worker.
-13. [ ] Showcase against Babashka.
+13. [x] Showcase against Babashka: `examples/showcase/` (grep, JSON
+    transform, word frequencies, factorial), measured side by side
+    (README "Showcase", `benchmarks/reports/2026-10-23-showcase/`); the
+    vocabulary the scripts needed (`*'`, `bigint`, `mapv`, `peek`, `pop`,
+    number predicates, `==`, `hash`; D59) and the scripting tutorial
+    chapter.
 
 - A minimal `core.clj` shipped with the runtime; `protoclj` evaluates it
   before any user code.

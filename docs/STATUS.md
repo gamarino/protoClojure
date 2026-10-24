@@ -4,9 +4,9 @@
 > finished, or dropped. If a feature you expect is not listed as
 > implemented here, it is not implemented.
 
-**Branch `feature/macros` (2026-10-24).** `ctest` registers 854 test
-cases: 673 conformance fixtures, 137 GoogleTest unit tests and module
-checks, and 44 CLI checks; all pass locally on Linux against protoCore 3.1.0
+**Branch `feature/macros` (2026-10-24).** `ctest` registers 862 test
+cases: 680 conformance fixtures, 137 GoogleTest unit tests and module
+checks, 44 CLI checks and the documentation snippet check; all pass locally on Linux against protoCore 3.1.0
 (branch `feature/lazy-object`, not yet released). CI has not run this branch.
 The paragraph below describes the 0.0.3 tag.
 
@@ -66,7 +66,7 @@ directories that cover them.
 | Macros, syntax-quote, the `core.clj` macros | `30-macros`, `31-syntax-quote`, `32-core-macros` | 62 |
 | Destructuring, sets, regular expressions | `33-destructuring`, `34-sets`, `35-regex` | 57 |
 | `format` / `printf` / `for`, lazy sequences, the Part C vocabulary | `36-format-for`, `37-lazy-seqs`, `38-vocabulary` | 73 |
-| `read-string`, EDN, JSON (cheshire.core, clojure.data.json), string escapes, `#_` | `39-data-formats` | 40 |
+| `read-string`, EDN, JSON (cheshire.core, clojure.data.json), string escapes, `#_`, `parse-long` / `parse-double` | `39-data-formats` | 42 |
 | Interactive REPL | — (no conformance fixtures) | — |
 
 The design specifications written during development are archived under
@@ -638,7 +638,14 @@ On branch `feature/macros` (DESIGN.md §10.2, ROADMAP.md).
       round-trip every printable value; the string escapes `\uXXXX`,
       octal, `\b`, `\f` and `#_`; `parse-long`, `parse-double`,
       `parse-boolean` (M40, D58); `pmap` joins every worker (M39)
-- [ ] Stage 13: showcase against Babashka
+- [x] Stage 13: showcase against Babashka (`examples/showcase/`, README
+      "Showcase", `benchmarks/reports/2026-10-23-showcase/`); the
+      vocabulary its scripts and the tutorial needed: `+'` `-'` `*'` `inc'`
+      `dec'`, `bigint`, `biginteger`, `mapv`, `filterv`, `number?`,
+      `integer?`, `int?`, `float?`, `double?`, `==`, `hash`, `peek`, `pop`,
+      a vector as a function of its index (D59); the scripting tutorial
+      chapter; every runnable documentation snippet checked by
+      `tests/docs/check_snippets.py` (ctest `docs/snippets`)
 
 ### Bootstrap
 
@@ -709,6 +716,7 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D55 | Strings are UTF-8, so a `\uXXXX` escape naming an unpaired surrogate (`"\uD83D"` alone) is the read error `Invalid unicode escape: unpaired surrogate` (JVM Clojure keeps the lone UTF-16 unit in its string); a pair (`"\uD83D\uDE00"`) is the one character it encodes, so `count` gives 1 where JVM Clojure gives 2 (D17) | (perm) |
 | D56 | `read-string` and `clojure.edn/read-string` (DESIGN.md M35): a read error is a `RuntimeException` carrying the reader's own message and its line and column in the string (`Map literal must contain an even number of forms (line 2, column 1)`; an unterminated form says `unterminated vector — missing ']'`, JVM Clojure `EOF while reading`); the EDN reader rejects `'`, `` ` ``, `~`, `~@` and `@` with `EDN does not support the reader macro '` (JVM Clojure's EdnReader reads them as part of a symbol); `read-string` takes only the `:eof` option (no `:read-cond` / `:features`), and `clojure.edn/read-string` ignores `:readers` and `:default` (there are no tagged literals, D13); there is no `read` on a reader, nor `clojure.edn/read` | v0.x |
 | D57 | JSON (DESIGN.md M36-M38). Both APIs: error messages are protoClojure's own, `JSON error: <problem> at line L, column C` (Jackson and clojure.data.json word them differently), raised as `IOException` by cheshire.core and `Exception` by clojure.data.json; an unpaired surrogate escape is an error (Jackson accepts it); map keys are written in the map's unspecified order (D24); a stream (`parse-stream`, `clojure.data.json/read`) is read a line at a time and the rest of the line after the value is consumed with it. cheshire.core: a top-level array parses to a vector (Cheshire: a lazy seq; nested arrays are vectors in both); `parse-string`'s third argument (array-coerce-fn), `parsed-seq`, the SMILE / CBOR functions, custom encoders and `generate-string` options other than `:pretty`, `:escape-non-ascii` and `:key-fn` are not supported. clojure.data.json: its behaviour here follows the library's documentation, not a run against it (Babashka does not bundle it); `read-str` raises on data after the value; `:bigdec true` raises `UnsupportedOperationException` (no BigDecimal, D10); `write-str`'s `:value-fn` and `pprint` are not supported | v0.x |
+| D59 | `hash` answers protoClojure's map-key hash folded to 32 bits, consistent with `=` for map keys (a list and a vector with equal elements hash alike) but not the numbers JVM Clojure answers; `int?` is true for an integer of any size, integers being one type (D14; JVM Clojure: fixed-width only); a vector called as a function takes exactly one index, as in Clojure | (perm) |
 | D58 | `parse-double` reads what Java's `Double.valueOf` reads except hexadecimal floats (`0x1p3`) and the `d` / `f` suffixes (`1.5d`), which answer nil | (perm) |
 | D34 | A `catch` naming no built-in class names a type looked up at run time, when an exception reaches the clause (a var, a local, or a module member `alias/Type`), and is matched by the thrown value's prototype chain; JVM Clojure resolves the class at compile time. So `(try 1 (catch NoSuchException e 2))` compiles and answers 1, and the error `Unable to resolve classname: NoSuchException` is a `RuntimeException` raised when an exception reaches the clause (JVM Clojure: a compile error). A type that resolves to a value that is not a prototype object raises `IllegalArgumentException`. A module's error (a foreign value) is caught by `Exception`, `Throwable` and `Object`, by its own types, and by no other built-in class | (perm: the platform is late-binding) |
 

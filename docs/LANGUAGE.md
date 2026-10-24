@@ -75,6 +75,8 @@ tell at a glance which parts of the surface are runnable today. The
 | `read-string`, `clojure.edn/read-string`, `pr-str` round trip | Implemented (§3.1, §19.1; D56) |
 | JSON: `cheshire.core` (`parse-string`, `parse-stream`, `generate-string`, `generate-stream`) and `clojure.data.json` (`read-str`, `read`, `write-str`, `write`) | Implemented over one C++ parser and writer (§19.2; D57) |
 | `parse-long`, `parse-double`, `parse-boolean` | Implemented (D58) |
+| `+'` `-'` `*'` `inc'` `dec'`, `bigint`, `biginteger` | Implemented (the primed names are `+ - * inc dec`, which already promote, D14) |
+| `mapv`, `filterv`, `peek`, `pop`, `number?`, `integer?`, `int?`, `float?`, `double?`, `==`, `hash`; a vector as a function of its index | Implemented (D59) |
 | Full namespaces (`in-ns`, vars per namespace, loading `.clj` files by namespace) | Planned |
 | State (`atom`, `swap!`, `reset!`, `compare-and-set!`, `@`, watches) | Implemented |
 | `future`, `promise`, `deliver`, `pmap` | Implemented |

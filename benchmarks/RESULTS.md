@@ -1,5 +1,12 @@
 # protoClojure vs Babashka — benchmarks
 
+> **Newest figures (2026-10-24, branch `feature/macros`):** the macros branch
+> end to end, baseline against final, in
+> [`reports/2026-10-24-final-vs-baseline/`](reports/2026-10-24-final-vs-baseline/README.md)
+> (every bench.sh workload regressed, +7.6 % to +25 %, start-up +45 %), and
+> the showcase scripts against Babashka in
+> [`reports/2026-10-23-showcase/`](reports/2026-10-23-showcase/README.md).
+
 > **Note (2026-09-15):** this is a dated record; its tables are unchanged.
 > The following statements in it are wrong or unsupported:
 >

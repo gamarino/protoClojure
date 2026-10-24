@@ -1,0 +1,6 @@
+protoclj        0.023471953 +- 0.000328236 seconds time elapsed  ( +-  1.40% )
+bb        0.010343492 +- 0.000268468 seconds time elapsed  ( +-  2.60% )
+protoclj        0.024496056 +- 0.000522975 seconds time elapsed  ( +-  2.13% )
+bb        0.011060637 +- 0.000374457 seconds time elapsed  ( +-  3.39% )
+protoclj        0.024661652 +- 0.000588753 seconds time elapsed  ( +-  2.39% )
+bb        0.010628978 +- 0.000200740 seconds time elapsed  ( +-  1.89% )

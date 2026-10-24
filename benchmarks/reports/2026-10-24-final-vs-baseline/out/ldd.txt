@@ -1,0 +1,6 @@
+A: /home/gamarino/Documentos/proyectos/.agent_scratch/clj-macros/baseline/wt/build_release/protoclj
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/protoClojure/benchmarks/reports/2026-10-24-final-vs-baseline/out/libs/A/libprotoCore.so.4 (0x00007d5abfa66000)
+B: /home/gamarino/Documentos/proyectos/.agent_scratch/clj-macros/baseline/wt/build_release/protoclj
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/protoClojure/benchmarks/reports/2026-10-24-final-vs-baseline/out/libs/B/libprotoCore.so.4 (0x0000718e9a341000)
+C: /home/gamarino/Documentos/proyectos/.agent_scratch/clj-macros/final/protoclj-final
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/protoClojure/benchmarks/reports/2026-10-24-final-vs-baseline/out/libs/C/libprotoCore.so.4 (0x000077516ad1e000)

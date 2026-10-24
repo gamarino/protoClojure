@@ -82,7 +82,7 @@ if command -v perf > /dev/null; then
     for pass in 1 2 3; do
         for label in protoclj bb; do
             bin=$PROTOCLJ; [[ $label == bb ]] && bin=$BB
-            perf stat -r 50 -x, -e task-clock "$bin" "$SHOW/empty.clj" 2>> "$OUT/startup_perf_$label.txt" > /dev/null
+            LC_ALL=C perf stat -r 50 -x, -e task-clock "$bin" "$SHOW/empty.clj" 2>> "$OUT/startup_perf_$label.txt" > /dev/null
         done
     done
 fi

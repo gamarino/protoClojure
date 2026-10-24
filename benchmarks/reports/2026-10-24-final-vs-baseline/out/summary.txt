@@ -1,0 +1,12 @@
+workload      A base/3.0  B base/3.1  C final/3.1   C vs B   C vs A   (ms, median of 5 rounds of best-of-3; ranges in brackets)
+fib             377 [369-378]    370 [365-382]    398 [384-399]    +7.6%    +5.6%
+tak              34   [34-35]     35   [34-37]     40   [40-41]   +14.3%   +17.6%
+sum-loop         70   [67-75]     69   [68-72]     76   [74-79]   +10.1%    +8.6%
+reduce-list      27   [27-28]     28   [27-29]     34   [33-35]   +21.4%   +25.9%
+sum-squares      24   [23-25]     24   [22-24]     30   [29-32]   +25.0%   +25.0%
+map-loop     A 3627 B 3609 C 3998 Mcycles (median), C vs B +10.8%, C vs A +10.2%
+  map-loop output: {'A': 'map-loop 2000007000002', 'B': 'map-loop 2000007000002', 'C': 'map-loop 2000007000002'}
+start-up A: 48.2 Mcycles, 13.4 ms task-clock (median of 3 passes of 20 runs: 48.4, 48.2, 48.1 Mcycles)
+start-up B: 48.0 Mcycles, 13.1 ms task-clock (median of 3 passes of 20 runs: 48.2, 47.3, 48.0 Mcycles)
+start-up C: 69.5 Mcycles, 18.9 ms task-clock (median of 3 passes of 20 runs: 69.3, 69.6, 69.5 Mcycles)
+all bench results matched bb's

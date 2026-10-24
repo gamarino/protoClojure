@@ -1542,6 +1542,42 @@ whitespace, a sign, digits with an optional fraction and exponent, `NaN`
 and `Infinity`, but not Java's hexadecimal floats or the `d` / `f`
 suffixes (D58).
 
+**M41. The vocabulary the showcase needed, following Clojure** (*agent,
+pending review*). Writing the showcase scripts once for both runtimes, and
+running the tutorial's snippets, found functions a Clojure script reaches
+for that protoClojure did not have. Added (`src/runtime/CorePrims.cpp`
+unless noted): `+'`, `-'`, `*'`, `inc'`, `dec'`, installed as the very
+functions `+ - * inc dec` are, since those already promote to exact big
+integers (D14), so the portable `(reduce *' ...)` runs unchanged; `bigint`
+and `biginteger` (an integer answers itself, a float goes through its
+shortest decimal digits as Clojure's `BigDecimal.valueOf` does, so
+`(bigint 1e30)` is 10^30, a string of digits is parsed); `number?`,
+`integer?`, `int?`, `float?`, `double?`; `==`; `hash` (the map-key hash,
+D59); `peek` and `pop`; `mapv` and `filterv` (`core.clj`); and a vector
+called as a function of its index, handled where the VM finds a callable
+that is not a function (`callVector`, `src/runtime/ExecutionEngine.cpp`),
+so no call that worked before pays for it. Alternatives: (a) writing the
+showcase scripts around the gaps, rejected: the point of the showcase is
+that a Babashka script runs, and each gap is one a Clojure programmer
+trips on; (b) the primed operators as separate functions that refuse to
+overflow differently, rejected: there is no overflow to refuse.
+
+**M42. The documentation's snippets are a test** (*agent, pending
+review*). `tests/docs/check_snippets.py` runs every ```clojure block of
+README.md, LANGUAGE.md, TUTORIAL.md and the tutorial chapters through
+protoclj, in a fresh directory with a small text on standard input, and
+fails when one exits non-zero (ctest `docs/snippets`). A block that cannot
+run says why in an HTML comment just before it (`<!-- not run: planned
+(UMD interop) -->`), and a chapter about a planned feature says so once at
+its top; the checker lists every skip with its reason. On its first run 73
+of 210 blocks failed: most showed planned features or were fragments, and
+the rest claimed things protoClojure did not do (`mapv`, `pop`, `peek`, a
+vector as a function, a default argument to a vector call, which Clojure
+does not have either, and `:pre` / `:post` conditions, now marked as not
+implemented). Alternative: checking the `;; =>` results as well, deferred:
+map print order is unspecified (D24), so a textual comparison would need
+per-snippet exceptions.
+
 ## 11. The standard library
 
 Two phases:
