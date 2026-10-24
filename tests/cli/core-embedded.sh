@@ -17,11 +17,11 @@ trap 'rm -rf "$dir"' EXIT
 # file without the extension is not a program (exit 127).
 exe=$(basename "$PROTOCLJ")
 cp "$PROTOCLJ" "$dir/$exe"
-# On Windows the copy still needs the DLLs beside the original (protoCore and
-# its dependencies); the loader searches PATH. What this checks is that no
-# core.clj file is looked up, which PATH does not affect.
+# On Windows the copy still needs the DLLs the build puts beside the original
+# (protoCore, OpenSSL): a program finds its DLLs next to itself. What this
+# checks is that no core.clj file is looked up, which the DLLs do not affect.
 if command -v cygpath >/dev/null 2>&1; then
-    PATH="$(dirname "$PROTOCLJ"):$PATH"; export PATH
+    cp "$(dirname "$PROTOCLJ")"/*.dll "$dir"/ 2>/dev/null || true
 fi
 printf '(println (when-let [x 2] (-> x inc (* 10))) (case :b :a 1 :b 2))\n' > "$dir/p.clj"
 out=$(cd "$dir" && env -u PROTOCLJ_HOME "./$exe" p.clj 2>&1)
