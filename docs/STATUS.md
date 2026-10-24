@@ -722,6 +722,26 @@ See `LANGUAGE.md` for the full discussion. Summary:
 
 ## Known issues
 
+- **Regular expressions differ by standard library (std::regex), found by
+  the first macOS and Windows CI runs of the macros branch, 2026-10-24.
+  Severity: low.** The engine is each platform's `std::regex` (D45).
+  - libc++ (macOS) ignores `match_prev_avail` for `^`, so a continued search
+    (re-seq, a matcher's re-find, replace, split) is given `match_not_bol`
+    and `match_not_bow` from the byte before it instead (Regex.h,
+    `continuationFlags`). One case cannot be said with those flags: `\b`
+    right after a word byte and before a non-word byte, at the start of a
+    continued search, does not match there. libc++ backtracks on the heap,
+    so the native-stack guard never refuses a pattern; a back-reference
+    pattern on a huge subject matches (and may use much memory) where
+    libstdc++ raises StackOverflowError.
+  - MSVC's standard library has no `std::regex::multiline`: `(?m)` is
+    accepted and adds nothing; `^` and `$` behave as that library's
+    ECMAScript mode defines them. `inline-flags.clj` tests `(?m)` and is
+    expected to fail on Windows until a decision: ship one regex engine on
+    every platform, or document `(?m)` as unsupported on Windows.
+  A single engine everywhere (a bundled one) would remove all three
+  differences; that is a dependency decision left to the maintainer.
+
 - **Start-up reads and compiles core.clj every time: about +17 M cycles
   (about 4 ms of CPU) over the baseline before macros. Severity: low. Needs a
   design decision.** Measured 2026-10-24

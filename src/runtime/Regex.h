@@ -76,10 +76,10 @@ struct CompiledPattern {
 // The match flags for a search that starts at byte `pos` of `subject` and
 // continues an earlier one (re-find on a matcher, re-seq, replace, split):
 // the text before `pos` is context, as for Java's Matcher.find. That is
-// match_prev_avail; with libc++ also match_not_bol, unless `^` may truly
-// match there (a multi-line pattern right after a line terminator), because
-// libc++ takes the first position of every search for the beginning of the
-// input whatever match_prev_avail says, so `^` matched at every step.
+// match_prev_avail, except with libc++, which takes the first position of
+// every search for the beginning of the input whatever match_prev_avail
+// says (so `^` matched at every step): there match_not_bol and
+// match_not_bow stand for the byte before `pos` (Regex.cpp).
 std::regex_constants::match_flag_type continuationFlags(const CompiledPattern* cp,
                                                        const std::string& subject,
                                                        std::size_t pos);

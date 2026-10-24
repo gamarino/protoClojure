@@ -56,7 +56,10 @@ std::string translate(const std::string& src, std::regex::flag_type& flags) {
         }
         i = j + 1;
     }
-#if defined(__GLIBCXX__) || defined(_MSC_VER) || defined(_LIBCPP_VERSION)
+    // std::regex::multiline is C++17; MSVC's standard library does not
+    // provide it (C2039 on the Windows runners), so there (?m) is accepted
+    // and has no effect of its own (STATUS.md, known issues).
+#if !defined(_MSVC_STL_VERSION)
     if (multiline) flags |= std::regex::multiline;
 #endif
     std::string out;
@@ -170,16 +173,27 @@ std::regex_constants::match_flag_type continuationFlags(const CompiledPattern* c
                                                        const std::string& subject,
                                                        std::size_t pos) {
     if (pos == 0 || pos > subject.size()) return std::regex_constants::match_default;
-    auto flags = std::regex_constants::match_prev_avail;
 #if defined(_LIBCPP_VERSION)
-    const char prev = subject[pos - 1];
+    // libc++ clears match_not_bol under match_prev_avail, as the standard
+    // says, and then takes the first position for the beginning of the
+    // input anyway, so `^` matched at every continued search. Without
+    // match_prev_avail it honours match_not_bol and match_not_bow, which
+    // say what the byte before `pos` would have said: not the beginning of
+    // a line (unless a multi-line `^` follows a line terminator) and not the
+    // beginning of a word when it is a word byte. The one case this cannot
+    // express is `\b` right after a word byte before a non-word byte
+    // (STATUS.md, known issues).
+    const unsigned char prev = static_cast<unsigned char>(subject[pos - 1]);
     const bool afterLineEnd = prev == '\n' || prev == '\r';
     const bool multiline = (cp->regex.flags() & std::regex::multiline) != 0;
+    auto flags = std::regex_constants::match_default;
     if (!(multiline && afterLineEnd)) flags |= std::regex_constants::match_not_bol;
+    if (prev == '_' || std::isalnum(prev)) flags |= std::regex_constants::match_not_bow;
+    return flags;
 #else
     (void)cp;
+    return std::regex_constants::match_prev_avail;
 #endif
-    return flags;
 }
 
 void guardRecursiveMatch(const CompiledPattern* cp, std::size_t subjectBytes) {

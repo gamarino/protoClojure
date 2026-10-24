@@ -51,6 +51,12 @@ TEST(Regex, UnsupportedSyntaxIsAPatternSyntaxError) {
 }
 
 TEST(Regex, BackReferencesSelectTheBacktrackingExecutor) {
+#if defined(_LIBCPP_VERSION)
+    // libc++ backtracks on a heap vector, never on the native stack.
+    EXPECT_FALSE(compilePattern("(a)\\1")->recursive);
+    EXPECT_FALSE(compilePattern("(a|b)*")->recursive);
+    return;
+#endif
     EXPECT_TRUE(compilePattern("(a)\\1")->recursive);
 #if defined(__GLIBCXX__)
     EXPECT_FALSE(compilePattern("(a|b)*")->recursive);
@@ -58,6 +64,28 @@ TEST(Regex, BackReferencesSelectTheBacktrackingExecutor) {
     // A short subject passes the guard; a huge one is refused before matching.
     EXPECT_NO_THROW(protoClojure::guardRecursiveMatch(compilePattern("(a)\\1"), 100));
     EXPECT_ANY_THROW(protoClojure::guardRecursiveMatch(compilePattern("(a)\\1"), std::size_t(1) << 40));
+}
+
+// A continued search (re-seq, replace, split) sees the text before its start:
+// `^` does not match there, `\b` looks at the byte before. libc++ needed its
+// own flags for this (continuationFlags).
+TEST(Regex, ContinuedSearchesSeeThePrecedingText) {
+    auto all = [](const char* pattern, const std::string& s) {
+        std::string out;
+        protoClojure::forEachMatch(s, compilePattern(pattern), [&](const std::smatch& m) {
+            out += "[" + m.str(0) + "]";
+            return true;
+        });
+        return out;
+    };
+    EXPECT_EQ(all("^\\w", "ab\ncd"), "[a]");
+    EXPECT_EQ(all("\\b\\w", "ab cd"), "[a][c]");
+    EXPECT_EQ(all("\\w", "ab"), "[a][b]");
+    EXPECT_EQ(all("x*", "ab"), "[][][]");
+#if !defined(_MSVC_STL_VERSION)
+    EXPECT_EQ(all("(?m)^\\w", "ab\ncd"), "[a][c]");
+    EXPECT_EQ(all("(?m)^\\w\\n?", "a\nb\nc"), "[a\n][b\n][c]");
+#endif
 }
 
 TEST(Regex, PatternValuesKeepTheirSource) {
