@@ -17,15 +17,14 @@
 
 #include <algorithm>
 #include <charconv>
-#include <chrono>
 #include <climits>
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
 #include <mutex>
+#include <memory>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace protoClojure {
@@ -2281,22 +2280,19 @@ const proto::ProtoObject* prim_deref(proto::ProtoContext* ctx,
         return v ? v : PROTO_NONE;
     }
     if (proto == cc->promiseMarkerProto) {
-        // Busy-wait. protoCore's goUnmanaged tells the GC this thread
-        // is parked on an OS-level wait so a STW can proceed without
-        // it. Pair with returnFromUnmanaged before touching any
-        // ProtoObject* again. The 1ms sleep amortises wake-up under
-        // realistic deliver latencies. Delivery is one compare-and-set
+        // Poll. ProtoThread::sleepFor takes this thread out of the
+        // stop-the-world quorum for the sleep, so a collection can run
+        // while it waits, and parks it on the way back if one is in
+        // progress. The 1 ms sleep amortises wake-up under realistic
+        // deliver latencies. Delivery is one compare-and-set
         // (deliverPromise), so the read that finds the promise delivered
         // also yields its value.
-        proto::ProtoThread* th = ctx->thread;
         for (;;) {
             bool delivered = false;
             const proto::ProtoObject* v =
                 promiseValue(ctx, cc->valueKey, a, &delivered);
             if (delivered) return v;
-            if (th) th->goUnmanaged();
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-            if (th) th->returnFromUnmanaged();
+            proto::ProtoThread::sleepFor(ctx, 1000);
         }
     }
     throwError(ctx, "deref: not an atom, future, or promise");
@@ -2495,8 +2491,12 @@ const proto::ProtoObject* futureThreadMain(
         fut->getAttribute(ctx, ccBlobKey);
     if (!thunk || !blobObj || !blobObj->isInteger(ctx)) return PROTO_NONE;
 
-    const ActiveCallContext* parentCc =
-        reinterpret_cast<const ActiveCallContext*>(blobObj->asLong(ctx));
+    // The spawning thread's ActiveCallContext, copied for this worker at
+    // spawn time (buildFuture), which this worker owns. Not the spawner's
+    // thread-local itself: the spawner keeps running and rewrites it (a
+    // ThreadSanitizer-reported race before the copy).
+    std::unique_ptr<const ActiveCallContext> parentCc(
+        reinterpret_cast<const ActiveCallContext*>(blobObj->asLong(ctx)));
     if (!parentCc) return PROTO_NONE;
 
     // Install the parent's ActiveCallContext on this thread's TLS so
@@ -2546,8 +2546,11 @@ static const proto::ProtoObject* buildFuture(
     proto::ProtoObject* fut = const_cast<proto::ProtoObject*>(
         cc->futureMarkerProto->newChild(ctx, /*isMutable=*/true));
     fut->setAttribute(ctx, cc->thunkKey, thunk);
+    // A copy the worker owns: this thread's context is thread-local and
+    // changes as this thread runs on (futureThreadMain).
+    auto ccCopy = std::make_unique<ActiveCallContext>(*cc);
     fut->setAttribute(ctx, cc->ccBlobKey,
-        ctx->fromLong(reinterpret_cast<long long>(cc)));
+        ctx->fromLong(reinterpret_cast<long long>(ccCopy.get())));
     fut->setAttribute(ctx, cc->doneKey, PROTO_FALSE);
     fut->setAttribute(ctx, cc->resultKey, PROTO_NONE);
 
@@ -2558,6 +2561,7 @@ static const proto::ProtoObject* buildFuture(
     const proto::ProtoThread* thread =
         ctx->space->newThread(ctx, threadName, &futureThreadMain,
                               targs, nullptr);
+    (void)ccCopy.release();  // the worker owns it from here
     fut->setAttribute(ctx, cc->threadKey,
         ctx->fromLong(reinterpret_cast<long long>(thread)));
     {

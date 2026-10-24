@@ -3,7 +3,6 @@
 #include "protoCore.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -18,14 +17,28 @@ bool gcCensusEnabled() {
     return on;
 }
 
-GCCensus::GCCensus(proto::ProtoSpace& space) : space_(space) {
+GCCensus::GCCensus(proto::ProtoContext* ctx) : ctx_(ctx), space_(*ctx->space) {
     if (!gcCensusEnabled()) return;
     enabled_     = true;
     heapAtStart_ = space_.heapSize;
-    sampler_     = std::thread([this] { sample(); });
+    // `this` travels as an integer, as the future workers' arguments do.
+    const proto::ProtoList* args =
+        ctx->newList()->appendLast(ctx, ctx->fromLong(reinterpret_cast<long long>(this)));
+    sampler_ = space_.newThread(ctx, proto::ProtoString::createSymbol(ctx, "protoclj-gc-census"),
+                                &GCCensus::samplerMain, args, nullptr);
 }
 
-void GCCensus::sample() {
+const proto::ProtoObject* GCCensus::samplerMain(proto::ProtoContext* ctx, const proto::ProtoObject*,
+                                                const proto::ParentLink*,
+                                                const proto::ProtoArguments* args,
+                                                const proto::ProtoKeywordArguments*) {
+    if (!args || args->getSize(ctx) == 0) return PROTO_NONE;
+    auto* self = reinterpret_cast<GCCensus*>(args->getAt(ctx, 0)->asLong(ctx));
+    self->sample(ctx);
+    return PROTO_NONE;
+}
+
+void GCCensus::sample(proto::ProtoContext* ctx) {
     // protoCore increments gcCycleCount at the START of a cycle and publishes
     // reclaimedLastCycle at its END. So when the counter is observed to move
     // from N to N+1, reclaimedLastCycle still holds cycle N's result: reading
@@ -35,7 +48,7 @@ void GCCensus::sample() {
     // invent reclamation that did not happen.
     std::uint64_t last = space_.getGCCycleCount();
     while (!stop_.load(std::memory_order_relaxed)) {
-        std::this_thread::sleep_for(std::chrono::microseconds(200));
+        proto::ProtoThread::sleepFor(ctx, 200);
         const std::uint64_t now = space_.getGCCycleCount();
         if (now == last) continue;
         const proto::proto_ulong r = space_.reclaimedLastCycle.load();
@@ -56,7 +69,8 @@ void GCCensus::sample() {
 GCCensus::~GCCensus() {
     if (!enabled_) return;
     stop_.store(true, std::memory_order_relaxed);
-    if (sampler_.joinable()) sampler_.join();
+    // join leaves the stop-the-world quorum for the wait itself.
+    if (sampler_) const_cast<proto::ProtoThread*>(sampler_)->join(ctx_);
 
     const proto::proto_ulong mean =
         observedCycles_ ? reclaimedTotal_ / observedCycles_ : PROTO_UL(0);

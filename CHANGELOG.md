@@ -9,6 +9,29 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Fixed — waits that no longer touch native thread APIs; a future race
+
+- **No native thread API in the runtime's waits.** A reader of a lazy seq
+  another thread is realising, `deref` of a promise and the
+  `PROTOCLJ_GC_STATS=1` sampler waited with `std::this_thread::yield` /
+  `sleep_for` (the first two inside a `goUnmanaged` bracket; the sampler was
+  a `std::thread`). They now use protoCore 3.1.0's `ProtoThread::yield` /
+  `sleepFor`, which take the thread out of the stop-the-world quorum for the
+  wait, and the sampler is a ProtoThread. New CLI check
+  `cli/waiters-park-for-gc`: a lazy seq claimed by a future, and a promise
+  delivered by one, each read by the main thread while the future needs
+  collections under a 500,000-cell ceiling; with a bare native yield in
+  `waitABit` the lazy-seq case is killed by its timeout.
+- **A future copied its spawner's call context while the spawner changed
+  it.** The worker read the spawning thread's thread-local
+  `ActiveCallContext` through a pointer, while the spawner went on running
+  and rewrote it (reported by ThreadSanitizer on
+  `37-lazy-seqs/futures-share-a-seq`). `buildFuture` now hands the worker a
+  copy it owns. `pmap` keeps the pointer: its spawner joins every worker
+  before its context can change.
+- A thread that claimed a lazy seq and finds it published by someone else
+  when it publishes returns the published value, so every reader sees one.
+
 ### Added — the everyday vocabulary of a script (macros brief, Part C)
 
 - **`#(...)`** with `%`, `%1`..`%20` and `%&`, read as Clojure reads it,

@@ -104,6 +104,10 @@ add_test(NAME cli/loop-garbage-is-reclaimed
 # Four cases, one per join site, each under a heap ceiling so a cycle is needed.
 add_test(NAME cli/blocking-joins-park-for-gc
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/blocking-joins-park-for-gc.sh" "$<TARGET_FILE:protoclj>")
+# A thread that polls for another thread (a lazy seq claimed by it, an
+# undelivered promise) must leave the stop-the-world quorum while it waits.
+add_test(NAME cli/waiters-park-for-gc
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/waiters-park-for-gc.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/actor-payloads-survive-gc
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/actor-payloads-survive-gc.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/repl-stack-overflow

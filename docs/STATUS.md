@@ -759,8 +759,10 @@ See `LANGUAGE.md` for the full discussion. Summary:
   next `send`) is an open design decision.
 
 - **Promise `deref` polls.** A pending promise is checked every millisecond
-  (with the thread marked unmanaged so garbage collection can proceed);
-  adequate for hand-off latency, not for sub-millisecond waits.
+  (`ProtoThread::sleepFor`, which takes the thread out of the stop-the-world
+  quorum so garbage collection can proceed; `cli/waiters-park-for-gc`);
+  adequate for hand-off latency, not for sub-millisecond waits. A reader of
+  a lazy seq another thread is realising polls the same way.
 - **A call with tens of thousands of arguments still needs a large heap.**
   Every C++ primitive receives its positional arguments as a `ProtoList`, and
   protoCore has no bulk bottom-up `ProtoList` constructor —

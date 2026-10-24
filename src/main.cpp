@@ -112,7 +112,7 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
 
     // Declared after the space so it is joined and printed BEFORE the space it
     // samples is destroyed. Inert unless PROTOCLJ_GC_STATS=1.
-    protoClojure::GCCensus gcCensus(space);
+    protoClojure::GCCensus gcCensus(ctx);
 
     // Slots layout (kept stable for the whole run, rooted via the root ctx):
     //   0 : globals namespace (mutable child of objectPrototype).

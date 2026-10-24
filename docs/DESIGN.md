@@ -263,9 +263,14 @@ the stack guard reads the thread's stack bounds from the platform
 (`pthread_getattr_np`, `pthread_get_stackaddr_np`,
 `GetCurrentThreadStackLimits`), since protoCore reports a stack's size
 but not its address; the main thread blocks POSIX signals while it joins
-the evaluator, so they reach the evaluator; `deref` of a promise waits in
-1 ms sleeps while unmanaged; and the `PROTOCLJ_GC_STATS=1` diagnostic
-samples the collector from a `std::thread` of its own.
+the evaluator, so they reach the evaluator; and the actor scheduler sizes
+its pool with `std::thread::hardware_concurrency`. Waits poll through
+protoCore's `ProtoThread::yield` / `sleepFor` (3.1.0), which take the thread
+out of the stop-the-world quorum for the wait: `deref` of a promise sleeps
+1 ms between polls, a reader of a lazy seq another thread is realising
+yields and then sleeps (`waitABit`, `src/runtime/LazySeq.cpp`), and the
+`PROTOCLJ_GC_STATS=1` diagnostic's sampler is a ProtoThread that sleeps
+200 µs between reads.
 
 ### 4.1 Exceptions
 

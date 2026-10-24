@@ -22,11 +22,12 @@
  * with `heap` far above `heap-start`.
  *
  * Enabled only by PROTOCLJ_GC_STATS=1; constructing it without that costs a
- * getenv and starts no thread. The sampler is deliberately NOT a registered
- * protoCore thread: it touches no `ProtoObject*`, allocates nothing through
- * a context and reads only `std::atomic` members of the space, so it neither
- * needs to park for a stop-the-world nor can be seen by one. It is joined
- * before the ProtoSpace it samples is destroyed.
+ * getenv and starts no thread. The sampler is a ProtoThread (the runtime
+ * starts no native thread of its own): it allocates nothing, reads only
+ * `std::atomic` members of the space, and sleeps with
+ * `ProtoThread::sleepFor`, which takes it out of the stop-the-world quorum,
+ * so it never holds up a collection. It is joined before the ProtoSpace it
+ * samples is destroyed.
  *
  * Diagnostic only: nothing in the runtime's behaviour depends on it.
  */
@@ -36,7 +37,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <thread>
 
 namespace proto {
 class ProtoSpace;
@@ -50,8 +50,10 @@ bool gcCensusEnabled();
 
 class GCCensus {
 public:
-    // Starts sampling `space` when gcCensusEnabled(); otherwise inert.
-    explicit GCCensus(proto::ProtoSpace& space);
+    // Starts sampling the space of `ctx` when gcCensusEnabled(); otherwise
+    // inert. `ctx` is a context of the calling thread that outlives the
+    // census (it starts and joins the sampler).
+    explicit GCCensus(proto::ProtoContext* ctx);
 
     // Stops the sampler, joins it, and prints the census line.
     ~GCCensus();
@@ -60,13 +62,18 @@ public:
     GCCensus& operator=(const GCCensus&) = delete;
 
 private:
-    void sample();
+    void sample(proto::ProtoContext* ctx);
+    static const proto::ProtoObject* samplerMain(proto::ProtoContext* ctx, const proto::ProtoObject*,
+                                                 const proto::ParentLink*,
+                                                 const proto::ProtoArguments* args,
+                                                 const proto::ProtoKeywordArguments*);
 
-    proto::ProtoSpace& space_;
+    proto::ProtoContext* ctx_;
+    proto::ProtoSpace&   space_;
     bool               enabled_ = false;
     int                heapAtStart_ = 0;
     std::atomic<bool>  stop_{false};
-    std::thread        sampler_;
+    const proto::ProtoThread* sampler_ = nullptr;
 
     // Written by the sampler thread, read after the join.
     std::uint64_t  observedCycles_  = 0;

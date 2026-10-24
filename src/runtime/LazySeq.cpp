@@ -12,9 +12,7 @@
 #include "protoCore.h"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
-#include <thread>
 #include <vector>
 
 namespace protoClojure {
@@ -172,13 +170,13 @@ bool thunkIsPure(proto::ProtoContext* ctx, const PO* thunk) {
     return k >= 0 && k < static_cast<int>(StepKind::Count_) && g_steps[k].pure;
 }
 
-// Waits, parked for the collector, while another thread realises a seq.
+// Waits while another thread realises a seq. ProtoThread::yield / sleepFor
+// take this thread out of the stop-the-world quorum for the wait, so a
+// collection the realising thread needs is never held up by the waiter
+// (protoCore 3.1.0; the caller holds nothing in C++ locals only).
 void waitABit(proto::ProtoContext* ctx, unsigned round) {
-    proto::ProtoThread* th = ctx->thread;
-    if (th) th->goUnmanaged();
-    if (round < 64) std::this_thread::yield();
-    else std::this_thread::sleep_for(std::chrono::microseconds(round < 1024 ? 50 : 1000));
-    if (th) th->returnFromUnmanaged();
+    if (round < 64) proto::ProtoThread::yield(ctx);
+    else proto::ProtoThread::sleepFor(ctx, round < 1024 ? 50 : 1000);
 }
 
 // What follows the seq `s` once `tail` is appended to it: concat's step for
@@ -727,8 +725,9 @@ const PO* realizeLazy(proto::ProtoContext* ctx, const PO* ls) {
             throw;
         }
         tl_realizing.pop_back();
-        ls->publishLazy(s.ctx(), s.get(1));
-        return s.get(1);
+        if (ls->publishLazy(s.ctx(), s.get(1))) return s.get(1);
+        // Published by someone else meanwhile: every reader sees one value.
+        return orNil(ls->getLazyValue(s.ctx()));
     }
 }
 

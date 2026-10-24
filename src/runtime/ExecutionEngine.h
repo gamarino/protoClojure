@@ -194,8 +194,8 @@ private:
     //
     // Polled on a stride, for cost. `ProtoContext::safepoint()` is a call
     // across protoCore's shared-library boundary that reads five fields of
-    // the space and the context and takes `std::this_thread::get_id()` before
-    // it can decide to do nothing, and protoClojure's loop body can be as
+    // the space and the context and asks the OS for the calling thread's id
+    // (to compare it with the collector's) before it can decide to do nothing, and protoClojure's loop body can be as
     // short as five opcodes — so on a 20,000,000-iteration loop that does
     // nothing but add, one call per back-edge costs +9.4 % instructions and
     // +17.0 % cycles. Measured, `perf stat -r 3`, against the same source
