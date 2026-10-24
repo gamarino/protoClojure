@@ -9,6 +9,24 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Fixed — the macros-branch regression (2026-10-24)
+
+- Start-up: the reader and the compiler interned and spelled the same
+  symbols over and over while loading `core.clj`. Per-thread caches keyed
+  by the run (`NamedLayout::epoch`) now serve `internNamed`, `internSymbol`
+  and `namedSpellingText`: an empty file 67.9 -> 64.1 M cycles (baseline
+  before macros 47.3 M; the rest is `core.clj` itself, STATUS.md "Known
+  issues").
+- Lazy steps over a list (`map`, `filter`, `take`, `for`, ...) read it
+  through a view instead of `removeFirst`, which allocated O(log n) per
+  element, and open one context fewer per element: sum-squares run phase
+  +36.5 % -> +12.3 % against the baseline.
+- `get`, `contains?` test for a map before a set; `isSet` is inline:
+  map-loop +8.7 % -> +4.5 %.
+- Measured causes, the bisect and what remains (fib +4.4 %, tak +1.7 %,
+  mostly dispatch-loop layout, not isolated):
+  `benchmarks/reports/2026-10-24-regression/`.
+
 ### Added — the showcase against Babashka (macros brief, Part B stage 13)
 
 - `examples/showcase/`: a grep over standard input, a JSON transform and

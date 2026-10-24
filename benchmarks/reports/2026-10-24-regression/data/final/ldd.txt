@@ -1,0 +1,8 @@
+A: /home/gamarino/Documentos/proyectos/.agent_scratch/clj-regression/bins/8b7938a
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/clj-regression/final2/fresh/A_r1/libprotoCore.so.4 (0x00007d92cfbb6000)
+B: /home/gamarino/Documentos/proyectos/.agent_scratch/clj-regression/bins/8b7938a
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/clj-regression/final2/fresh/B_r1/libprotoCore.so.4 (0x00007313aaae5000)
+C: /home/gamarino/Documentos/proyectos/.agent_scratch/clj-regression/bins/3b75e41
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/clj-regression/final2/fresh/C_r1/libprotoCore.so.4 (0x00007cc2c9793000)
+D: /home/gamarino/Documentos/proyectos/.agent_scratch/clj-regression/bins/eb274bb
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/clj-regression/final2/fresh/D_r1/libprotoCore.so.4 (0x0000798995b22000)

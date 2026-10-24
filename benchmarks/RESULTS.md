@@ -1,10 +1,13 @@
 # protoClojure vs Babashka — benchmarks
 
-> **Newest figures (2026-10-24, branch `feature/macros`):** the macros branch
-> end to end, baseline against final, in
-> [`reports/2026-10-24-final-vs-baseline/`](reports/2026-10-24-final-vs-baseline/README.md)
-> (every bench.sh workload regressed, +7.6 % to +25 %, start-up +45 %), and
-> the showcase scripts against Babashka in
+> **Newest figures (2026-10-24, branch `feature/macros`):** the regression
+> found end to end, its causes and fixes, in
+> [`reports/2026-10-24-regression/`](reports/2026-10-24-regression/README.md)
+> (after the fixes: start-up +35.7 %, run phase fib +4.4 %, tak +1.7 %,
+> sum-loop +1.2 %, reduce-list +0.3 %, sum-squares +12.3 %, map-loop +4.5 %
+> against the baseline before macros); the measurement that found it, in
+> [`reports/2026-10-24-final-vs-baseline/`](reports/2026-10-24-final-vs-baseline/README.md);
+> and the showcase scripts against Babashka in
 > [`reports/2026-10-23-showcase/`](reports/2026-10-23-showcase/README.md).
 
 > **Note (2026-09-15):** this is a dated record; its tables are unchanged.

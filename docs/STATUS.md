@@ -722,6 +722,21 @@ See `LANGUAGE.md` for the full discussion. Summary:
 
 ## Known issues
 
+- **Start-up reads and compiles core.clj every time: about +17 M cycles
+  (about 4 ms of CPU) over the baseline before macros. Severity: low. Needs a
+  design decision.** Measured 2026-10-24
+  (`benchmarks/reports/2026-10-24-regression/`): an empty file costs 64.1 M
+  cycles against the baseline's 47.3 M; `loadCore` (81 top-level forms,
+  reading a third, compiling and running two thirds) is nearly all of the
+  difference, after the intern caches took 4 M cycles off it. The only large
+  saving left is not to compile `core.clj` at start-up: a build-time
+  snapshot of its bytecode modules and constant pools (quoted data, named
+  values, macro functions), or compiling each definition on first use (a
+  hook at every global miss, macro lookup and syntax-quote resolution, plus
+  a once-per-definition load that parks for the collector). Both change how
+  the runtime boots; neither is done. Registering built-ins lazily would
+  save under 1 M cycles.
+
 - **Resolved on 2026-10-10: protoclj now runs protoCore's adaptive heap
   controller** (`src/main.cpp`, README "Memory"), which starts cycles under
   heap pressure within a budget of 75 % of memory; the `churn` program below

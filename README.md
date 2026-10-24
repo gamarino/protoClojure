@@ -87,7 +87,7 @@ A first macro: `defmacro` receives its arguments unevaluated, as data, and retur
 ;; => (if (empty? xs) nil (do (println "has" (count xs) "items")))
 ```
 
-The `clojure.core` macros come from `core.clj`, written in Clojure, embedded in the binary and loaded at start-up (about 3 ms):
+The `clojure.core` macros come from `core.clj`, written in Clojure, embedded in the binary and loaded at start-up (about 4 ms of CPU):
 
 ```clojure
 (defn total [items] (->> items (map :n) (reduce +)))
@@ -218,25 +218,39 @@ Measured on 2026-06-14, the move from a per-actor `std::mutex` + `std::deque` to
 
 ## Performance — what is measured
 
-**The macros branch end to end (measured 2026-10-24).** Baseline `main`
-8b7938a against `feature/macros` 3b75e41, clean Release worktrees, both on
-protoCore 3.1.0 (the baseline also on 3.0.0, which changes nothing),
-`benchmarks/bench.sh` medians of 5 rotated rounds behind a quiet gate:
+**The macros branch end to end, after the regression fixes (measured
+2026-10-24).** Baseline `main` 8b7938a against `feature/macros` before
+(3b75e41) and after (eb274bb) the fixes, clean Release worktrees on
+protoCore 3.1.0 (the baseline also on 3.0.0, which changes nothing), fresh
+copies of each binary and library per run, 5 rotated rounds behind a quiet
+gate. Run phase = a long variant of each workload minus an empty file,
+`perf stat` cycles:
 
-| workload | baseline ms | final ms | change | bb ms |
+| | baseline | before fixes | after fixes | after vs baseline |
 |---|---:|---:|---:|---:|
-| `fib` | 370 | 398 | **+7.6 %** | 458 |
-| `tak` | 35 | 40 | **+14.3 %** | 29 |
-| `sum-loop` | 69 | 76 | **+10.1 %** | 172 |
-| `reduce-list` | 28 | 34 | **+21.4 %** | 19 |
-| `sum-squares` | 24 | 30 | **+25.0 %** | 18 |
-| start-up (empty file) | 48.0 Mcycles | 69.5 Mcycles | **+45 %** (about +6 ms) | |
+| start-up (empty file) | 47.3 Mcycles | 67.9 Mcycles | 64.1 Mcycles | **+35.7 %** (about +4 ms) |
+| `fib` run phase | 3049 Mcycles | 3224 | 3184 | +4.4 % |
+| `tak` | 1705 | 1777 | 1734 | +1.7 % |
+| `sum-loop` | 1471 | 1492 | 1489 | +1.2 % |
+| `reduce-list` | 1661 | 1649 | 1666 | +0.3 % |
+| `sum-squares` (lazy `map`) | 878 | 1199 | 987 | +12.3 % |
+| map-loop (keyword `get` / `assoc`) | 3553 | 3862 | 3714 | +4.5 % |
 
-Every workload regressed and no range overlaps. Start-up (the bootstrap
-`core.clj` and the larger set of built-ins, likely, not isolated) explains
-most of the short workloads' loss; `fib` and `tak` are also 5-15 % slower in
-the run itself, cause not isolated. Details:
-[`benchmarks/reports/2026-10-24-final-vs-baseline/`](benchmarks/reports/2026-10-24-final-vs-baseline/README.md).
+`benchmarks/bench.sh` (ms, one process per run, start-up included): fib
+336 / 354 / 348, tak 33 / 39 / 38, sum-loop 63 / 69 / 67, reduce-list
+27 / 33 / 31, sum-squares 22 / 29 / 27 (baseline / before / after); these
+short programs mostly measure start-up.
+
+What costs what: start-up is `core.clj`, read and compiled at every start
+(the intern caches took 4 M cycles off it; the rest needs a snapshot or
+on-demand compilation, STATUS.md "Known issues"). `sum-squares` pays for
+`map` being lazy, as in Clojure (a lazy object, a cons and a context per
+element). map-loop crosses the collector's initial 2 M-cell soft limit,
+which the baseline missed by 66 k cells, and runs one cycle. `fib` and `tak`
+run 1-2 % more instructions; the rest of their difference is the dispatch
+loop's code layout, which moves either way with unrelated edits (not
+isolated). Bisect, profiles and the two reverted experiments:
+[`benchmarks/reports/2026-10-24-regression/`](benchmarks/reports/2026-10-24-regression/README.md).
 
 **protoCore's unified exception model (measured 2026-10-22).**
 - Branch `feature/protocore-3-calling-convention` at `bef23b0`, against
