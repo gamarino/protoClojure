@@ -11,6 +11,7 @@
 #include "reader/Reader.h"
 #include "compiler/Compiler.h"
 #include "compiler/Eval.h"
+#include "dap/DapServer.h"
 #include "repl/Repl.h"
 #include "runtime/ActorScheduler.h"
 #include "runtime/BytecodeModule.h"
@@ -66,6 +67,8 @@ void printHelp() {
         "Options:\n"
         "  --version       Print version and exit.\n"
         "  --help, -h      Print this help and exit.\n"
+        "  --dap           Run as a Debug Adapter Protocol server over stdin/stdout\n"
+        "                  (the VS Code debugger; see docs/debugging.md).\n"
         "\n"
         "Arguments after the script's path are bound, as strings, to\n"
         "*command-line-args* (nil when there are none).\n"
@@ -104,10 +107,13 @@ std::string slurp(const char* path) {
 struct ScriptRun {
     const char* path;
     std::vector<std::string> args;  // *command-line-args*
+    bool debug = false;             // compiled for the debugger (--dap)
 };
 
-// Runs on the evaluator thread; `ctx` is that thread's context.
-int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::string>& scriptArgs) {
+// Runs on the evaluator thread; `ctx` is that thread's context. `debug`
+// compiles the program with debug information (docs/debugging.md).
+int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::string>& scriptArgs,
+            bool debug = false) {
     proto::ProtoSpace& space = *ctx->space;
 
     // Declared after the space so it is joined and printed BEFORE the space it
@@ -276,6 +282,10 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
         proto::ProtoContext formScope(ctx->space, ctx);
         formScope.resizeAutomaticLocals(1);
         protoClojure::SourceInfo sourceInfo;
+        if (debug) {
+            sourceInfo.recordPositions = true;
+            sourceInfo.sourceName = path;
+        }
         reader.setSourceInfo(&sourceInfo);
         const proto::ProtoObject* form = nullptr;
         try {
@@ -330,6 +340,25 @@ int runFile(proto::ProtoContext* ctx, const char* path, const std::vector<std::s
 } // namespace
 
 namespace {
+
+void applyHeapPolicy(proto::ProtoSpace& space);
+void prepareModules(proto::ProtoSpace& space);
+
+// `protoclj --dap`: runs the program the client launched, as `protoclj
+// script.clj args...` would, compiled for the debugger.
+int runForDebugger(const protoClojure::DapLaunch& launch, void*) {
+    ScriptRun run{launch.program.c_str(), launch.args, true};
+    proto::ProtoSpace space;
+    applyHeapPolicy(space);
+    prepareModules(space);
+    return protoClojure::runOnEvaluatorThread(
+        space,
+        [](proto::ProtoContext* ctx, void* p) {
+            auto* r = static_cast<ScriptRun*>(p);
+            return runFile(ctx, r->path, r->args, r->debug);
+        },
+        static_cast<void*>(&run));
+}
 
 // Windows: the standard streams carry exactly the bytes the program writes, as
 // on Linux and macOS (no "\n" -> "\r\n" translation), and a console shows and
@@ -417,6 +446,9 @@ int main(int argc, char** argv) {
         if (std::strcmp(a, "--help") == 0 || std::strcmp(a, "-h") == 0) {
             printHelp();
             return 0;
+        }
+        if (std::strcmp(a, "--dap") == 0) {
+            return protoClojure::runDapServer(&runForDebugger, nullptr);
         }
         if (a[0] == '-') {
             std::fprintf(stderr,

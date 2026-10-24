@@ -1,6 +1,7 @@
 #include "ExecutionEngine.h"
 #include "Utf8String.h"
 #include "BytecodeModule.h"
+#include "DebugHook.h"
 #include "Exceptions.h"
 #include "ListBuilder.h"
 #include "MapOps.h"
@@ -679,6 +680,10 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                               stackBase + stackCapacity);
     unsigned int sp = 0;   // 0 means "stack empty"; sp <= stackCapacity
 
+    // A body compiled for the debugger is a frame of the debugger's call
+    // stack while it runs (DebugHook.h); any other costs this one test.
+    DebugFrameScope debugScope(mod, &frame);
+
     // Bind incoming args (call site is responsible for matching arity).
     for (unsigned int i = 0; i < argCount; ++i) {
         frame.setAutomaticLocal(locBase + i, args[i]);
@@ -1212,6 +1217,18 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 const proto::ProtoObject* v = popVal();
                 if (v == PROTO_NONE || v == PROTO_FALSE) {
                     ip += operand;
+                }
+                break;
+            }
+
+            case Op::LINE: {
+                // Debugging only (Opcodes.h): the frame enters a line.
+                DebugFrame& df = debugScope.frame();
+                if (operand == 0) { df.line = 0; break; }
+                df.pc = static_cast<std::size_t>(ip - 1 - mod.code().data());
+                if (static_cast<int>(operand) != df.line) {
+                    df.line = df.shownLine = static_cast<int>(operand);
+                    if (DebugHook* hook = debugHook()) hook->onLine(&frame, &df);
                 }
                 break;
             }

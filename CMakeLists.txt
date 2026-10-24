@@ -229,6 +229,7 @@ add_library(protoclj_runtime STATIC
     src/runtime/ActorScheduler.cpp
     src/runtime/BytecodeModule.cpp
     src/runtime/CorePrims.cpp
+    src/runtime/DebugHook.cpp
     src/runtime/Edn.cpp
     src/runtime/Exceptions.cpp
     src/runtime/ExecutionEngine.cpp
@@ -267,6 +268,35 @@ add_library(protoclj_compiler STATIC
 target_include_directories(protoclj_compiler PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(protoclj_compiler PUBLIC protoclj_runtime protoclj_reader)
 target_compile_options(protoclj_compiler PRIVATE ${PROTOCLJ_WARNINGS})
+
+# --- protoClojure debug adapter (`protoclj --dap`, docs/debugging.md) ---
+# The Debug Adapter Protocol's messages are JSON: nlohmann/json, header-only,
+# used at build time only. An installed package (libnlohmann-json3-dev, vcpkg,
+# Homebrew) is used when there is one; otherwise the release's headers are
+# fetched.
+find_package(nlohmann_json 3.2 CONFIG QUIET)
+if(NOT TARGET nlohmann_json::nlohmann_json)
+    include(FetchContent)
+    if(POLICY CMP0135)
+        cmake_policy(SET CMP0135 NEW)
+    endif()
+    FetchContent_Declare(nlohmann_json
+        URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
+        URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d)
+    FetchContent_MakeAvailable(nlohmann_json)
+    # A dependency's headers: the warning level of protoClojure's own
+    # sources does not apply to them.
+    set_target_properties(nlohmann_json PROPERTIES INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+        "$<TARGET_PROPERTY:nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>")
+endif()
+add_library(protoclj_dap STATIC
+    src/dap/DapServer.cpp
+    src/dap/DapStdio.cpp
+    src/dap/DapTransport.cpp
+)
+target_link_libraries(protoclj_dap PUBLIC protoclj_compiler protoclj_runtime protoclj_reader
+                                    nlohmann_json::nlohmann_json)
+target_compile_options(protoclj_dap PRIVATE ${PROTOCLJ_WARNINGS})
 
 # --- protoClojure REPL library ---
 # libreadline is a hard requirement of the REPL (history, arrow-key
@@ -316,6 +346,7 @@ if(MSVC)
     target_link_options(protoclj PRIVATE /STACK:33554432)
 endif()
 target_link_libraries(protoclj PRIVATE
+    protoclj_dap
     protoclj_repl
     protoclj_reader
     protoclj_compiler
@@ -341,7 +372,7 @@ if(PROTOCLJ_GEOMETRY_LIBRARY AND PROTOCLJ_GEOMETRY_INCLUDE_DIR)
     target_compile_definitions(protoclj_geometry PRIVATE PROTOCLJ_EXAMPLE_GEOMETRY)
     target_include_directories(protoclj_geometry PRIVATE "${PROTOCLJ_GEOMETRY_INCLUDE_DIR}")
     target_link_libraries(protoclj_geometry PRIVATE
-        protoclj_repl protoclj_reader protoclj_compiler protoclj_runtime
+        protoclj_dap protoclj_repl protoclj_reader protoclj_compiler protoclj_runtime
         "${PROTOCLJ_GEOMETRY_LIBRARY}")
     target_compile_options(protoclj_geometry PRIVATE ${PROTOCLJ_WARNINGS})
     message(STATUS "protoClojure: geometry module test enabled (${PROTOCLJ_GEOMETRY_LIBRARY})")
@@ -507,7 +538,8 @@ install(DIRECTORY examples/
     DESTINATION ${CMAKE_INSTALL_DATADIR}/protoClojure/examples
     USE_SOURCE_PERMISSIONS
     COMPONENT protoClojure
-    FILES_MATCHING PATTERN "*.clj")
+    FILES_MATCHING PATTERN "*.clj"
+    PATTERN ".vscode" EXCLUDE)
 
 # Benchmark scripts (so a user can reproduce the published numbers from a
 # package install, without cloning the repo).

@@ -52,6 +52,7 @@ const char* opName(Op op) {
         case Op::GET_MEMBER:    return "GET_MEMBER";
         case Op::CALL_MEMBER:   return "CALL_MEMBER";
         case Op::STORE_CAUGHT:  return "STORE_CAUGHT";
+        case Op::LINE:          return "LINE";
     }
     return "?";
 }
@@ -174,7 +175,7 @@ void BytecodeModule::patchOperand(std::size_t at, std::size_t operand) {
 //       RESOLVE_CLASS
 //   -1  POP STORE_LOCAL STORE_CAUGHT JUMP_IF_FALSE JUMP_IF_TRUE, ADD .. EQ (two in, one out)
 //       EXC_MATCH_TYPE
-//    0  NOP STORE_GLOBAL JUMP JUMP_BACK TRY_END EXC_MATCH GET_MEMBER
+//    0  NOP STORE_GLOBAL JUMP JUMP_BACK TRY_END EXC_MATCH GET_MEMBER LINE
 //  -argc CALL CALL_KW CALL_MEMBER (callable or receiver and argc arguments
 //       in, the result out; CALL_MEMBER's data word is a NOP)
 //   -1  CALL_APPLY (callable and list in, the result out; the spread
@@ -217,7 +218,7 @@ unsigned int BytecodeModule::computeMaxStack() const {
             case Op::EXC_MATCH_TYPE:
                 after = d - 1; break;
             case Op::NOP: case Op::STORE_GLOBAL: case Op::TRY_END: case Op::EXC_MATCH:
-            case Op::GET_MEMBER:
+            case Op::GET_MEMBER: case Op::LINE:
                 break;
             case Op::CALL: case Op::CALL_KW: case Op::CALL_MEMBER:
                 after = d - static_cast<int>(operand); break;

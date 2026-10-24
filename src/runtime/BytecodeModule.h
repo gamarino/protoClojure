@@ -223,7 +223,30 @@ public:
     const ArityGroup& arityGroup(std::size_t i) const { return arityGroups_[i]; }
     std::size_t arityGroupCount() const { return arityGroups_.size(); }
 
+    // Debug information (docs/debugging.md), present only in code compiled
+    // for the debugger (SourceInfo::recordPositions); nullptr otherwise. A
+    // body with it starts a DebugFrame when it runs (DebugHook.h).
+    struct LocalVar {
+        std::string name;
+        int         slot;
+        std::size_t startPc;  // the local is bound from this instruction...
+        std::size_t endPc;    // ...up to (not including) this one
+    };
+    struct DebugInfo {
+        std::string source;   // the script's path
+        std::string name;     // the fn's name, `fn@file:line`, or "<top level>"
+        int         line = 0; // where the fn (or the top-level form) starts
+        bool        topLevelThunk = false;  // a top-level let/loop/try run as a fn
+        std::vector<LocalVar> locals;
+    };
+    const DebugInfo* debugInfo() const { return debug_.get(); }
+    DebugInfo& ensureDebugInfo() {
+        if (!debug_) debug_ = std::make_unique<DebugInfo>();
+        return *debug_;
+    }
+
 private:
+    std::unique_ptr<DebugInfo>                   debug_;
     std::vector<Instr>                           code_;
     std::vector<Const>                           consts_;
     // Const-pool indices by value, one index per kind (doubles by bit pattern).

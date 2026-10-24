@@ -96,6 +96,8 @@ void Reader::discardNextForm(proto::ProtoContext* parent, const Token& tok) {
     // The discarded form is built like any other (it may hold a nested
     // `#_`), in a scope of its own that drops it.
     proto::ProtoContext scope(parent->space, parent);
+    ++noPositions_;
+    struct Restore { int& n; ~Restore() { --n; } } restore{noPositions_};
     (void)readNextForm(&scope, tok);
 }
 
@@ -211,13 +213,18 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
                 ->appendLast(&scope, internNamed(&scope, named_, "fn*"))
                 ->appendLast(&scope, scope.getAutomaticLocal(1))
                 ->appendLast(&scope, scope.getAutomaticLocal(0))->asObject(&scope);
+            recordPosition(scope.getAutomaticLocal(0), tok);
+            recordPosition(form, tok);
             scope.returnValue = form;
             return form;
         }
 
-        case TokenKind::LParen:
-            return readList(parent, TokenKind::RParen,
-                            tok.line, tok.column);
+        case TokenKind::LParen: {
+            const proto::ProtoObject* form = readList(parent, TokenKind::RParen,
+                                                      tok.line, tok.column);
+            recordPosition(form, tok);
+            return form;
+        }
 
         // The reader macros that stand for a two-element list: `@x` is
         // `(clojure.core/deref x)`, `'x` is `(quote x)`, `~x` is
@@ -239,7 +246,12 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
             // (syntaxQuote below).
             proto::ProtoContext scope(parent->space, parent);
             scope.resizeAutomaticLocals(1);
-            scope.setAutomaticLocal(0, readNextForm(&scope, tok));
+            {
+                // The forms read here are replaced by their expansion.
+                ++noPositions_;
+                struct Restore { int& n; ~Restore() { --n; } } restore{noPositions_};
+                scope.setAutomaticLocal(0, readNextForm(&scope, tok));
+            }
             // Each syntax-quote has its own auto-gensym table; one nested in
             // `form` was expanded, with its own, while `form` was read.
             gensyms_.emplace_back();

@@ -131,6 +131,16 @@ private:
     int formColumn_ = 0;
     SymbolResolver resolver_ = nullptr;
     bool edn_ = false;
+    // Inside a syntax-quote or a `#_`: no positions are recorded
+    // (SourceInfo.h).
+    int noPositions_ = 0;
+
+    // Records where the list form `form`, opened by `tok`, starts, when the
+    // SourceInfo asks for positions (debugging).
+    void recordPosition(const proto::ProtoObject* form, const Token& tok) {
+        if (info_ && info_->recordPositions && noPositions_ == 0 && form)
+            info_->formPos.emplace(form, SourceInfo::Position{tok.line, tok.column});
+    }
 
     // Reads the form after a `#_` token (`tok`) and drops it.
     void discardNextForm(proto::ProtoContext* parent, const Token& tok);

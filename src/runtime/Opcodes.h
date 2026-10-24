@@ -162,6 +162,17 @@ enum class Op : uint8_t {
                            //           clearing), so a local bound to a lazy
                            //           seq does not hold its head while the
                            //           seq is walked.
+
+    // Debugging (docs/debugging.md). Emitted only into code compiled for the
+    // debugger (`protoclj --dap`, SourceInfo::recordPositions).
+    LINE            = 40,  // operand = source line (1-based) of the form
+                           //           that starts here: the frame enters
+                           //           that line, and the debugger may stop
+                           //           (DebugHook.h). Operand 0, before a
+                           //           loop's JUMP_BACK, forgets the line the
+                           //           frame is on, so the next iteration
+                           //           enters its first line again. Reads
+                           //           and writes no stack.
 };
 
 // One instruction word: opcode in the low byte, operand in the high 24 bits.

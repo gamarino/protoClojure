@@ -18,10 +18,22 @@
  * reads and compiles (a top-level form, or a file whose forms stay rooted),
  * and clears it before the forms it describes can be collected.
  *
+ * Debugging (docs/debugging.md). When `recordPositions` is set, the reader
+ * also records where every non-empty list form it yields starts -- the
+ * forms a program calls, `(f x)`, `(let ...)`, `#(...)` -- and the compiler
+ * then compiles debug information into the modules: a line mark (Op::LINE)
+ * before each such form, the names of the locals, the function names, and
+ * `sourceName` as the modules' source. Only the drivers that run under the
+ * debugger (`protoclj --dap`) set it; without it the code is exactly the
+ * code compiled before debugging existed. Forms read inside a syntax-quote
+ * or a `#_` are not recorded: they do not survive the read, so the cell of
+ * one could be reused by a later form.
+ *
  * Not thread-safe; one reader and one compiler use it on one thread.
  */
 #pragma once
 
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -36,7 +48,13 @@ struct SourceInfo {
     std::unordered_map<const proto::ProtoObject*,
                        std::vector<const proto::ProtoObject*>> mapKeyOrder;
 
-    void clear() { mapKeyOrder.clear(); }
+    // Debugging only (see above): list form -> its 1-based line and column.
+    bool recordPositions = false;
+    std::string sourceName;
+    struct Position { int line; int column; };
+    std::unordered_map<const proto::ProtoObject*, Position> formPos;
+
+    void clear() { mapKeyOrder.clear(); formPos.clear(); }
 };
 
 } // namespace protoClojure

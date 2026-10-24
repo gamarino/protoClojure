@@ -165,6 +165,10 @@ if(Python3_FOUND)
     add_test(NAME docs/snippets
         COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/docs/check_snippets.py" "$<TARGET_FILE:protoclj>")
     set_tests_properties(docs/snippets PROPERTIES TIMEOUT 300)
+    # `protoclj --dap`, driven as VS Code drives it (docs/debugging.md).
+    add_test(NAME cli/dap-session
+        COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/cli/dap-session.py" "$<TARGET_FILE:protoclj>")
+    set_tests_properties(cli/dap-session PROPERTIES TIMEOUT 300)
 endif()
 # pmap joins every worker it starts (no native thread is left unjoined).
 add_test(NAME cli/pmap-joins-workers

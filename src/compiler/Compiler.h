@@ -119,6 +119,28 @@ public:
 private:
     const SourceInfo* source_ = nullptr;
 
+    // ---- Debug information (docs/debugging.md) -------------------------
+    // Compiled only when the SourceInfo asks for positions (the debugger):
+    // a line mark (Op::LINE) before every list form the reader saw, locals'
+    // names and scopes, and function names, in the modules that have a
+    // DebugInfo. Never inside a defmacro (its body runs at compile time).
+    int noDebug_ = 0;
+    bool debugOn() const { return source_ && source_->recordPositions && noDebug_ == 0; }
+    bool marking(const BytecodeModule& out) const { return debugOn() && out.debugInfo(); }
+    // The line the reader recorded for the list form `form`, or 0.
+    int formLineOf(const proto::ProtoObject* form) const;
+    // What the next compileArity is: the fn's name and line, set by the
+    // fn / defn / def forms and compileAsThunk, consumed by compileArity.
+    std::string pendingFnName_;
+    int pendingFnLine_ = 0;
+    bool pendingThunk_ = false;
+    const proto::ProtoObject* pendingDefExpr_ = nullptr;  // (def name <this>)
+    std::string pendingDefName_;
+    int lastMarkLine_ = 0;  // the line of the last list form seen
+    struct BoundLocal { std::string name; int slot; std::size_t startPc; };
+    // Records `bound` in `out`'s debug information as in scope up to now.
+    void recordLocals(BytecodeModule& out, const std::vector<BoundLocal>& bound) const;
+
     // The entries of a map form, alternating keys and values, in source
     // order when source_ knows it.
     std::vector<const proto::ProtoObject*>

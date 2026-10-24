@@ -193,6 +193,12 @@ const proto::ProtoObject* evalTopLevel(proto::ProtoContext* ctx,
 
     auto modPtr = std::make_unique<BytecodeModule>();
     BytecodeModule& mod = *modPtr;
+    if (info && info->recordPositions) {
+        // Debugging (docs/debugging.md): the form's own module is a frame too.
+        BytecodeModule::DebugInfo& di = mod.ensureDebugInfo();
+        di.source = info->sourceName;
+        di.name = "<top level>";
+    }
     {
         Compiler compiler;
         compiler.setSourceInfo(info);
