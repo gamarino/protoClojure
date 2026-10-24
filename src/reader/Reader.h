@@ -136,11 +136,12 @@ private:
     int noPositions_ = 0;
 
     // Records where the list form `form`, opened by `tok`, starts, when the
-    // SourceInfo asks for positions (debugging).
-    void recordPosition(const proto::ProtoObject* form, const Token& tok) {
-        if (info_ && info_->recordPositions && noPositions_ == 0 && form)
-            info_->formPos.emplace(form, SourceInfo::Position{tok.line, tok.column});
-    }
+    // SourceInfo asks for positions (debugging). Out of line: readFromToken
+    // nests once per level of source nesting, and its frame must not grow.
+    // readNextForm, recording no positions (a syntax-quote's form, a `#_`).
+    const proto::ProtoObject* readUnpositioned(proto::ProtoContext* parent, const Token& tok);
+    // Answers `form`.
+    const proto::ProtoObject* recordPosition(const proto::ProtoObject* form, int line, int column);
 
     // Reads the form after a `#_` token (`tok`) and drops it.
     void discardNextForm(proto::ProtoContext* parent, const Token& tok);

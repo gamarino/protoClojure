@@ -487,23 +487,105 @@ static void clearLastReads(BytecodeModule& mod, int fixedArity, int paramEnd) {
     }
 }
 
-int Compiler::formLineOf(const proto::ProtoObject* form) const {
+#if defined(_MSC_VER)
+#define PROTOCLJ_DEBUG_HELPER __declspec(noinline)
+#else
+#define PROTOCLJ_DEBUG_HELPER __attribute__((noinline, cold))
+#endif
+
+PROTOCLJ_DEBUG_HELPER int Compiler::formLineOf(const proto::ProtoObject* form) const {
     if (!debugOn()) return 0;
     auto it = source_->formPos.find(form);
     return it == source_->formPos.end() ? 0 : it->second.line;
 }
 
-void Compiler::recordLocals(BytecodeModule& out, const std::vector<BoundLocal>& bound) const {
+// A local whose scope has not been closed yet.
+static constexpr std::size_t kOpenScope = static_cast<std::size_t>(-1);
+
+PROTOCLJ_DEBUG_HELPER std::size_t Compiler::localsMark(BytecodeModule& out) const {
+    return marking(out) ? out.ensureDebugInfo().locals.size() : 0;
+}
+
+PROTOCLJ_DEBUG_HELPER void Compiler::bindLocal(BytecodeModule& out, const std::string& name,
+                                               int slot, std::size_t startPc) const {
+    if (marking(out)) out.ensureDebugInfo().locals.push_back({name, slot, startPc, kOpenScope});
+}
+
+PROTOCLJ_DEBUG_HELPER void Compiler::closeLocals(BytecodeModule& out, std::size_t from) const {
     if (!marking(out)) return;
     auto& locals = out.ensureDebugInfo().locals;
-    for (const BoundLocal& b : bound)
-        locals.push_back({b.name, b.slot, b.startPc, out.pos()});
+    for (std::size_t i = from; i < locals.size(); ++i)
+        if (locals[i].endPc == kOpenScope) locals[i].endPc = out.pos();
+}
+
+PROTOCLJ_DEBUG_HELPER void Compiler::markForm(const proto::ProtoObject* form,
+                                              const std::string& headName, BytecodeModule& out) {
+    // A fn is not a step of the code that defines it: its line goes to its
+    // body's entry instead. A top-level let, loop or try runs as a fn of its
+    // own (compileAsThunk), which marks the line.
+    const int line = formLineOf(form);
+    if (line == 0) return;
+    lastMarkLine_ = line;
+    if (headName == "fn" || headName == "defn") {
+        pendingFnLine_ = line;
+    } else if (!(scopes_.empty() &&
+                 (headName == "let" || headName == "loop" || headName == "try"))) {
+        out.emit(Op::LINE, static_cast<std::size_t>(line));
+    }
+}
+
+PROTOCLJ_DEBUG_HELPER void Compiler::setPendingFn(proto::ProtoContext* ctx, const proto::ProtoList* lst,
+                                                  const proto::ProtoObject* nameForm,
+                                                  const proto::ProtoObject* form,
+                                                  const CompilerMarkers& markers, int line) {
+    pendingFnLine_ = line;
+    pendingFnName_.clear();
+    if (!debugOn()) return;
+    if (nameForm) {
+        pendingFnName_ = nameOf(ctx, markers.named, nameForm);                  // (defn name ..)
+    } else if (isNameForm(ctx, markers.named, lst->getAt(ctx, 1))) {
+        pendingFnName_ = nameOf(ctx, markers.named, lst->getAt(ctx, 1));       // (fn name [..] ..)
+    } else if (form == pendingDefExpr_) {
+        pendingFnName_ = pendingDefName_;                                      // (def name (fn ..))
+    }
 }
 
 // The last component of a path, for naming anonymous fns `fn@file:line`.
 static std::string baseName(const std::string& path) {
     const std::size_t at = path.find_last_of("/\\");
     return at == std::string::npos ? path : path.substr(at + 1);
+}
+
+PROTOCLJ_DEBUG_HELPER void Compiler::beginDebugBody(BytecodeModule& body) {
+    // A breakpoint on the line of `(defn f [x]` stops when f is called, with
+    // its arguments in scope: the entry mark.
+    const int fnLine = pendingFnLine_ ? pendingFnLine_ : lastMarkLine_;
+    const bool thunk = pendingThunk_;
+    std::string fnName;
+    fnName.swap(pendingFnName_);
+    pendingFnLine_ = 0;
+    pendingThunk_ = false;
+    if (!debugOn()) return;
+    BytecodeModule::DebugInfo& di = body.ensureDebugInfo();
+    di.source = source_->sourceName;
+    di.line = fnLine;
+    di.topLevelThunk = thunk;
+    di.name = !fnName.empty() ? fnName
+            : "fn@" + baseName(source_->sourceName) + ":" + std::to_string(fnLine);
+    if (fnLine > 0 && !thunk) body.emit(Op::LINE, static_cast<std::size_t>(fnLine));
+}
+
+PROTOCLJ_DEBUG_HELPER void Compiler::bindParams(BytecodeModule& body) const {
+    for (const auto& [name, slot] : scopes_.back().nameToSlot) bindLocal(body, name, slot, 0);
+}
+
+PROTOCLJ_DEBUG_HELPER void Compiler::endDebugBody(BytecodeModule& body) const {
+    // The captures are in scope in the whole body, as the parameters.
+    const Scope& scope = scopes_.back();
+    for (const auto& c : scope.captures)
+        for (const auto& [name, slot] : scope.nameToSlot)
+            if (slot == c.localSlot) bindLocal(body, name, slot, 0);
+    closeLocals(body, 0);
 }
 
 std::unique_ptr<BytecodeModule>
@@ -754,27 +836,9 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     body->setVariadic(isVariadic);
     body->setKwBased(isKwBased);
 
-    // Debugging: the body's name and line, its source, and a line mark at
-    // its entry, so a breakpoint on the line of `(defn f [x]` stops when f
-    // is called, with its arguments in scope.
+    // Debugging: the body's name, source and entry mark.
     const bool debugBody = debugOn();
-    {
-        const std::string fnName = pendingFnName_;
-        const int fnLine = pendingFnLine_ ? pendingFnLine_ : lastMarkLine_;
-        const bool thunk = pendingThunk_;
-        pendingFnName_.clear();
-        pendingFnLine_ = 0;
-        pendingThunk_ = false;
-        if (debugBody) {
-            BytecodeModule::DebugInfo& di = body->ensureDebugInfo();
-            di.source = source_->sourceName;
-            di.line = fnLine;
-            di.topLevelThunk = thunk;
-            di.name = !fnName.empty() ? fnName
-                    : "fn@" + baseName(source_->sourceName) + ":" + std::to_string(fnLine);
-            if (fnLine > 0 && !thunk) body->emit(Op::LINE, static_cast<std::size_t>(fnLine));
-        }
-    }
+    beginDebugBody(*body);
 
     // Push a fresh fn scope. Fixed params go in slots 0..fixedArity-1; the
     // rest-binding (if any) gets slot fixedArity. We never hold a Scope&
@@ -822,11 +886,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     // Slots [fixedArity, paramEnd) are the rest, `:keys` and `:as`
     // parameters, which a `recur` does not rebind (locals clearing).
     const int paramEnd = scopes_.back().nextSlot;
-    std::vector<BoundLocal> paramLocals;
-    if (debugBody) {
-        for (const auto& [pname, pslot] : scopes_.back().nameToSlot)
-            paramLocals.push_back({pname, pslot, 0});
-    }
+    if (debugBody) bindParams(*body);
 
     // Session 14 — `:or` default prologue. For each kw key with a
     // declared default, emit:
@@ -890,13 +950,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     for (const auto& c : scope.captures) {
         body->addCapture(c.parentSlot, c.localSlot);
     }
-    if (debugBody) {
-        // The captures are in scope in the whole body, as the parameters.
-        for (const auto& c : scope.captures)
-            for (const auto& [cname, cslot] : scope.nameToSlot)
-                if (cslot == c.localSlot) paramLocals.push_back({cname, cslot, 0});
-        recordLocals(*body, paramLocals);
-    }
+    if (debugBody) endDebugBody(*body);
     scopes_.pop_back();
     // Under the debugger every local keeps its value until its scope ends,
     // so the Locals view shows it (Clojure's disable-locals-clearing).
@@ -1064,9 +1118,10 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
                 if (it != names.end()) shadowed = it->second;
                 names[c.binding] = exSlot;
             }
-            const std::size_t bodyStart = out.pos();
+            const std::size_t catchLocals = localsMark(out);
+            bindLocal(out, c.binding, exSlot, out.pos());
             compileDo(c.form, 3);
-            recordLocals(out, {{c.binding, exSlot, bodyStart}});
+            closeLocals(out, catchLocals);
             {
                 auto& names = scopes_[scopeIdx].nameToSlot;
                 if (shadowed >= 0) names[c.binding] = shadowed;
@@ -1420,19 +1475,8 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         const bool coreQualified = stripCoreQualifier(headName);
         if (headName == "fn*") headName = "fn";  // what `#(...)` reads as
 
-        // Debugging: the form's line mark. A fn is not a step of the code
-        // that defines it: its line goes to its body's entry instead. A
-        // top-level let, loop or try runs as a fn of its own
-        // (compileAsThunk), which marks the line.
-        if (const int fLine = marking(out) ? formLineOf(form) : 0) {
-            lastMarkLine_ = fLine;
-            if (headName == "fn" || headName == "defn") {
-                pendingFnLine_ = fLine;
-            } else if (!(scopes_.empty() &&
-                         (headName == "let" || headName == "loop" || headName == "try"))) {
-                out.emit(Op::LINE, static_cast<std::size_t>(fLine));
-            }
-        }
+        // Debugging: the form's line mark.
+        if (marking(out)) markForm(form, headName, out);
 
         // ---- Macro calls ---------------------------------------------------
         // A head naming a macro (Macros.h) is expanded here, at compile time,
@@ -1649,19 +1693,9 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                     throw CompileError("defn: name must be a symbol");
                 }
             }
-            // Debugging: the name the body's frames show.
-            std::string fnName;
+            // Debugging: the name and line the body's frames show, set
+            // again before each arity (compiling one consumes them).
             const int fnLine = pendingFnLine_;
-            if (debugOn()) {
-                if (nameForm) {
-                    fnName = nameOf(ctx, markers.named, nameForm);
-                } else if (isNameForm(ctx, markers.named, lst->getAt(ctx, 1))) {
-                    fnName = nameOf(ctx, markers.named, lst->getAt(ctx, 1));  // (fn name [..] ..)
-                } else if (form == pendingDefExpr_) {
-                    fnName = pendingDefName_;                                 // (def name (fn ..))
-                }
-            }
-            auto setPending = [&]() { pendingFnName_ = fnName; pendingFnLine_ = fnLine; };
 
             const proto::ProtoObject* first = lst->getAt(ctx, (int)aritiesStart);
             // Single-arity: the form right after the head/name is a
@@ -1688,7 +1722,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
 
             if (!multiArity) {
                 // Single-arity — the original single-body path.
-                setPending();
+                if (debugOn()) setPendingFn(ctx, lst, nameForm, form, markers, fnLine);
                 std::unique_ptr<BytecodeModule> body =
                     compileFnBody(ctx, lst, markers);
                 std::size_t blockIdx = out.addBlock(std::move(body));
@@ -1716,7 +1750,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                     } else {
                         throw CompileError("multi-arity: params must be a vector");
                     }
-                    setPending();
+                    if (debugOn()) setPendingFn(ctx, lst, nameForm, form, markers, fnLine);
                     std::unique_ptr<BytecodeModule> body =
                         compileArity(ctx, params, alist, 1, markers);
                     std::size_t blockIdx = out.addBlock(std::move(body));
@@ -1786,7 +1820,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             // The names the bindings shadow, restored once the body is
             // compiled: a binding is in scope in the let's body only.
             BindingRestore restore(scopes_);
-            std::vector<BoundLocal> bound;  // debugging: the locals' scopes
+            const std::size_t letLocals = localsMark(out);  // debugging
             for (proto::proto_ulong i = 0; i < bn; i += 2) {
                 const proto::ProtoObject* nameForm = bvec->getAt(ctx, (int)i);
                 const proto::ProtoObject* valForm  = bvec->getAt(ctx, (int)(i + 1));
@@ -1798,7 +1832,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 compileForm(ctx, valForm, out, markers);  // push value
                 int slot = restore.bind(bname);
                 out.emit(Op::STORE_LOCAL, slot);
-                bound.push_back({bname, slot, out.pos()});
+                bindLocal(out, bname, slot, out.pos());
             }
             // Body — last expression's value stays on the stack as `let`'s
             // value.
@@ -1810,7 +1844,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                     if (i + 1 < n) out.emit(Op::POP, 0);
                 }
             }
-            recordLocals(out, bound);
+            closeLocals(out, letLocals);
             return;
         }
 
@@ -1877,7 +1911,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             }
             std::vector<int> recurSlots;
             BindingRestore restore(scopes_);
-            std::vector<BoundLocal> bound;  // debugging: the locals' scopes
+            const std::size_t loopLocals = localsMark(out);  // debugging
             for (proto::proto_ulong i = 0; i < bn; i += 2) {
                 const proto::ProtoObject* nameForm = bvec->getAt(ctx, (int)i);
                 const proto::ProtoObject* valForm  = bvec->getAt(ctx, (int)(i + 1));
@@ -1890,7 +1924,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 int slot = restore.bind(bname);
                 out.emit(Op::STORE_LOCAL, slot);
                 recurSlots.push_back(slot);
-                bound.push_back({bname, slot, out.pos()});
+                bindLocal(out, bname, slot, out.pos());
             }
             // Recur target = current bytecode position. recur jumps BACK here
             // after rebinding.
@@ -1910,7 +1944,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             }
 
             scopes_.back().recurStack.pop_back();
-            recordLocals(out, bound);
+            closeLocals(out, loopLocals);
             return;
         }
 

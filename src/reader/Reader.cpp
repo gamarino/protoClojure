@@ -92,13 +92,28 @@ const proto::ProtoList* Reader::readAllForms() {
     return forms.finishList();
 }
 
+#if defined(_MSC_VER)
+__declspec(noinline)
+#else
+__attribute__((noinline, cold))
+#endif
+const proto::ProtoObject* Reader::recordPosition(const proto::ProtoObject* form, int line, int column) {
+    if (info_ && info_->recordPositions && noPositions_ == 0 && form)
+        info_->formPos.emplace(form, SourceInfo::Position{line, column});
+    return form;
+}
+
+const proto::ProtoObject* Reader::readUnpositioned(proto::ProtoContext* parent, const Token& tok) {
+    ++noPositions_;
+    struct Restore { int& n; ~Restore() { --n; } } restore{noPositions_};
+    return readNextForm(parent, tok);
+}
+
 void Reader::discardNextForm(proto::ProtoContext* parent, const Token& tok) {
     // The discarded form is built like any other (it may hold a nested
     // `#_`), in a scope of its own that drops it.
     proto::ProtoContext scope(parent->space, parent);
-    ++noPositions_;
-    struct Restore { int& n; ~Restore() { --n; } } restore{noPositions_};
-    (void)readNextForm(&scope, tok);
+    (void)readUnpositioned(&scope, tok);
 }
 
 const proto::ProtoObject* Reader::fnLiteralArg(proto::ProtoContext* ctx, const std::string& text) {
@@ -213,18 +228,16 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
                 ->appendLast(&scope, internNamed(&scope, named_, "fn*"))
                 ->appendLast(&scope, scope.getAutomaticLocal(1))
                 ->appendLast(&scope, scope.getAutomaticLocal(0))->asObject(&scope);
-            recordPosition(scope.getAutomaticLocal(0), tok);
-            recordPosition(form, tok);
+            recordPosition(form, tok.line, tok.column);  // the body: readList
             scope.returnValue = form;
             return form;
         }
 
-        case TokenKind::LParen: {
-            const proto::ProtoObject* form = readList(parent, TokenKind::RParen,
-                                                      tok.line, tok.column);
-            recordPosition(form, tok);
-            return form;
-        }
+        case TokenKind::LParen:
+            // readList records where the list starts (debugging); a tail
+            // call, so this frame is not on the stack per level of nesting.
+            return readList(parent, TokenKind::RParen,
+                            tok.line, tok.column);
 
         // The reader macros that stand for a two-element list: `@x` is
         // `(clojure.core/deref x)`, `'x` is `(quote x)`, `~x` is
@@ -246,12 +259,8 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
             // (syntaxQuote below).
             proto::ProtoContext scope(parent->space, parent);
             scope.resizeAutomaticLocals(1);
-            {
-                // The forms read here are replaced by their expansion.
-                ++noPositions_;
-                struct Restore { int& n; ~Restore() { --n; } } restore{noPositions_};
-                scope.setAutomaticLocal(0, readNextForm(&scope, tok));
-            }
+            // The forms read here are replaced by their expansion.
+            scope.setAutomaticLocal(0, readUnpositioned(&scope, tok));
             // Each syntax-quote has its own auto-gensym table; one nested in
             // `form` was expanded, with its own, while `form` was read.
             gensyms_.emplace_back();
@@ -622,6 +631,8 @@ Reader::readList(proto::ProtoContext* parent, TokenKind closeKind,
             throw ReaderError(what, openLine, openColumn);
         }
         if (tok.kind == closeKind) {
+            if (closeKind == TokenKind::RParen && info_)
+                return recordPosition(items.finish(), openLine, openColumn);  // debugging
             return items.finish();
         }
         if (tok.kind == TokenKind::HashUnderscore) {

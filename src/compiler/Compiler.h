@@ -137,9 +137,6 @@ private:
     const proto::ProtoObject* pendingDefExpr_ = nullptr;  // (def name <this>)
     std::string pendingDefName_;
     int lastMarkLine_ = 0;  // the line of the last list form seen
-    struct BoundLocal { std::string name; int slot; std::size_t startPc; };
-    // Records `bound` in `out`'s debug information as in scope up to now.
-    void recordLocals(BytecodeModule& out, const std::vector<BoundLocal>& bound) const;
 
     // The entries of a map form, alternating keys and values, in source
     // order when source_ knows it.
@@ -200,6 +197,27 @@ private:
                                 BytecodeModule& out);
 
     std::vector<Scope> scopes_;
+
+    // Debugging helpers (see debugOn above). Out of line, so the frames of
+    // compileForm and compileArity -- which nest once per level of source
+    // nesting -- do not grow for code compiled without debug information.
+    // A local's scope opens at bindLocal and closes at closeLocals.
+    std::size_t localsMark(BytecodeModule& out) const;
+    void bindLocal(BytecodeModule& out, const std::string& name, int slot,
+                   std::size_t startPc) const;
+    void closeLocals(BytecodeModule& out, std::size_t from) const;
+    // The line mark of the list form `form` whose head is `headName`.
+    void markForm(const proto::ProtoObject* form, const std::string& headName,
+                  BytecodeModule& out);
+    // The name of the fn form `lst` (`nameForm`: defn's name, or nullptr).
+    void setPendingFn(proto::ProtoContext* ctx, const proto::ProtoList* lst,
+                      const proto::ProtoObject* nameForm, const proto::ProtoObject* form,
+                      const CompilerMarkers& markers, int line);
+    // A fn body's debug information and entry mark; its parameters and
+    // captures as locals.
+    void beginDebugBody(BytecodeModule& body);
+    void bindParams(BytecodeModule& body) const;
+    void endDebugBody(BytecodeModule& body) const;
 
     // The bindings a `let` or `loop` introduces in the current scope, undone
     // when the form has been compiled: each name gets a fresh slot, and the
