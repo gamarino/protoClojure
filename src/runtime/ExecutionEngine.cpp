@@ -155,18 +155,15 @@ const proto::ProtoObject* callLookup(proto::ProtoContext* ctx,
     const proto::ProtoObject* key = callableIsMap ? args[0] : callable;
     const proto::ProtoObject* notFound = (argc == 2) ? args[1] : PROTO_NONE;
     bool found = false;
-    // A map first: the common case pays one tag test. A set is a function
-    // of its elements, and a keyword looks itself up in a set, as `get`
-    // does (SetOps.h).
-    if (isMap(m)) {
-        const proto::ProtoObject* v = mapGet(ctx, m, key, &found);
-        return found ? v : notFound;
-    }
+    // A set is a function of its elements, and a keyword looks itself up in
+    // a set, as `get` does (SetOps.h).
     if (isSet(ctx, m)) {
         const proto::ProtoObject* e = setGet(ctx, m, key, &found);
         return found ? e : notFound;
     }
-    return notFound;
+    if (!callableIsMap && !isMap(m)) return notFound;
+    const proto::ProtoObject* v = mapGet(ctx, m, key, &found);
+    return found ? v : notFound;
 }
 
 // A vector called as a function, `([10 20 30] 1)`: the element at that
