@@ -257,12 +257,107 @@ bool hasChildren(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
 }
 
 // ---------------------------------------------------------------------------
+// Conditions, hit conditions, log messages
+// ---------------------------------------------------------------------------
+
+std::string trimmed(std::string s) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
+    std::size_t i = 0;
+    while (i < s.size() && std::isspace(static_cast<unsigned char>(s[i]))) ++i;
+    return s.substr(i);
+}
+
+// A syntax check of an expression the client set, made without running
+// anything: the lexer's errors and unbalanced delimiters. Answers "" when
+// it reads, else what is wrong.
+std::string syntaxProblem(const std::string& expr) {
+    if (trimmed(expr).empty()) return "empty expression";
+    Lexer lexer(expr);
+    std::vector<char> open;
+    for (;;) {
+        const Token t = lexer.next();
+        if (t.kind == TokenKind::EndOfFile) break;
+        if (t.kind == TokenKind::Error) return "read error: " + t.text;
+        switch (t.kind) {
+            case TokenKind::LParen: case TokenKind::HashLParen: open.push_back(')'); break;
+            case TokenKind::LBracket: open.push_back(']'); break;
+            case TokenKind::LBrace: case TokenKind::HashLBrace: open.push_back('}'); break;
+            case TokenKind::RParen: case TokenKind::RBracket: case TokenKind::RBrace: {
+                const char c = t.kind == TokenKind::RParen ? ')' : t.kind == TokenKind::RBracket ? ']' : '}';
+                if (open.empty() || open.back() != c) return std::string("read error: unexpected ") + c;
+                open.pop_back();
+                break;
+            }
+            default: break;
+        }
+    }
+    if (!open.empty()) return std::string("read error: missing ") + open.back();
+    return "";
+}
+
+// A breakpoint's hitCondition, as VS Code sends it: `N` or `== N` (the Nth
+// hit), `>= N`, `> N`, `<= N`, `< N`, `% N` (every Nth hit).
+struct HitCondition {
+    enum class Op { None, Eq, Ge, Gt, Le, Lt, Mod } op = Op::None;
+    long long n = 0;
+
+    // Parses `text`; answers "" or what is wrong with it.
+    std::string parse(const std::string& text) {
+        std::string t = trimmed(text);
+        op = Op::None;
+        if (t.empty()) return "";
+        Op o = Op::Eq;
+        auto starts = [&](const char* p) { return t.rfind(p, 0) == 0; };
+        if (starts("==")) { o = Op::Eq; t = t.substr(2); }
+        else if (starts(">=")) { o = Op::Ge; t = t.substr(2); }
+        else if (starts("<=")) { o = Op::Le; t = t.substr(2); }
+        else if (starts(">")) { o = Op::Gt; t = t.substr(1); }
+        else if (starts("<")) { o = Op::Lt; t = t.substr(1); }
+        else if (starts("%")) { o = Op::Mod; t = t.substr(1); }
+        t = trimmed(t);
+        if (t.empty() || t.size() > 15 ||
+            !std::all_of(t.begin(), t.end(), [](char c) { return c >= '0' && c <= '9'; }))
+            return "hit condition '" + text + "': expected N, == N, >= N, > N, <= N, < N or % N";
+        n = std::stoll(t);
+        if (o == Op::Mod && n == 0) return "hit condition '" + text + "': % 0";
+        op = o;
+        return "";
+    }
+
+    bool passes(long long hits) const {
+        switch (op) {
+            case Op::None: return true;
+            case Op::Eq:   return hits == n;
+            case Op::Ge:   return hits >= n;
+            case Op::Gt:   return hits > n;
+            case Op::Le:   return hits <= n;
+            case Op::Lt:   return hits < n;
+            case Op::Mod:  return hits % n == 0;
+        }
+        return true;
+    }
+};
+
+// A line breakpoint as the client set it.
+struct LineBreakpoint {
+    std::string  condition;    // "" = none
+    HitCondition hit;
+    std::string  logMessage;   // "" = a stopping breakpoint
+    bool         isLog = false;
+    long long    hits = 0;     // hits whose condition passed (guarded by the server's mu_)
+};
+
+// ---------------------------------------------------------------------------
 // The server
 // ---------------------------------------------------------------------------
 
 // Set while a stopped thread evaluates an expression for the client: the
 // code it runs never stops.
 thread_local bool tEvaluating = false;
+
+// The description a stop gets when a breakpoint condition failed (set and
+// taken on the stopping thread).
+thread_local std::string tPendingDescription;
 
 // A frame id or a variablesReference carries the DAP id of the thread that
 // owns it: `threadId * kIdStride + n`. A request about a frame or a value
@@ -417,7 +512,17 @@ public:
                     case StepKind::Out:  if (depth <  ts->stepDepth) reason = "step"; break;
                 }
             }
-            if (!reason && anyBreakpoints_.load() && breakpointAt(frame)) reason = "breakpoint";
+            if (!reason && anyBreakpoints_.load()) {
+                LineBreakpoint bp;
+                if (breakpointAt(frame, bp)) {
+                    if (breakpointHit(ctx, frame, bp)) return;   // a log point, or it does not stop
+                    if (!tPendingDescription.empty()) {
+                        stop(ctx, ts, frame, "breakpoint", nullptr, takeDescription());
+                        return;
+                    }
+                    reason = "breakpoint";
+                }
+            }
         }
         if (reason) stop(ctx, ts, frame, reason, nullptr);
     }
@@ -436,16 +541,39 @@ public:
         proto::ProtoContext scope(ctx->space, ctx);
         scope.resizeAutomaticLocals(1);
         scope.setAutomaticLocal(0, value);
+        std::string raisedCond, uncaughtCond;
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            raisedCond = exRaisedCondition_;
+            uncaughtCond = exUncaughtCondition_;
+        }
         ExceptionStop ex;
-        if (raised) {
+        std::string conditionError;
+        // A filter's condition, evaluated in the throwing frame with the
+        // exception bound to `ex`: true when the filter stops.
+        auto conditionPasses = [&](const std::string& cond) {
+            if (cond.empty()) return true;
+            std::string error;
+            bool truthy = false;
+            if (!evalInFrame(&scope, top, cond, scope.getAutomaticLocal(0), error,
+                             [&](proto::ProtoContext*, const proto::ProtoObject* v) {
+                                 truthy = v != PROTO_NONE && v != PROTO_FALSE && v != nullptr;
+                             })) {
+                conditionError = "exception breakpoint condition `" + cond + "` failed: " + error;
+                return true;   // never skipped silently: the stop shows the error
+            }
+            return truthy;
+        };
+        if (raised && conditionPasses(raisedCond)) {
             ex.breakMode = "always";
-        } else if (!caughtByProgram(&scope, top, value)) {
+        } else if (uncaught && !caughtByProgram(&scope, top, value) && conditionPasses(uncaughtCond)) {
             ex.breakMode = "userUnhandled";
         } else {
             return;
         }
         describeException(&scope, value, site, top, ex);
-        stop(&scope, ts, top, "exception", &ex);
+        if (!conditionError.empty()) sendOutput("console", conditionError + "\n");
+        stop(&scope, ts, top, "exception", &ex, conditionError);
     }
 
     // A thread that ran the program's code ended (ThreadExit).
@@ -465,12 +593,103 @@ private:
         return d;
     }
 
-    bool breakpointAt(const DebugFrame* frame) {
+    // Whether a breakpoint is set on the line `frame` entered; a copy of it.
+    bool breakpointAt(const DebugFrame* frame, LineBreakpoint& out) {
         const BytecodeModule::DebugInfo* di = frame->mod->debugInfo();
         if (!di) return false;
         std::lock_guard<std::mutex> lk(mu_);
         auto it = breakpoints_.find(di->source == launch_.program ? programKey_ : pathKey(di->source));
-        return it != breakpoints_.end() && it->second.count(frame->line) > 0;
+        if (it == breakpoints_.end()) return false;
+        auto at = it->second.find(frame->line);
+        if (at == it->second.end()) return false;
+        out = at->second;
+        return true;
+    }
+
+    // Counts a hit of `bp` (the breakpoint on frame's line) whose condition
+    // passed; answers its new count.
+    long long countHit(const DebugFrame* frame) {
+        const BytecodeModule::DebugInfo* di = frame->mod->debugInfo();
+        std::lock_guard<std::mutex> lk(mu_);
+        auto it = breakpoints_.find(di->source == launch_.program ? programKey_ : pathKey(di->source));
+        if (it == breakpoints_.end()) return 1;
+        auto at = it->second.find(frame->line);
+        return at == it->second.end() ? 1 : ++at->second.hits;
+    }
+
+    // The thread is on a line with breakpoint `bp`: its condition, hit
+    // condition and log message, evaluated on this thread in `frame`.
+    // Answers true when the thread does not stop. A condition that fails
+    // stops, with the failure as the stop's description (tPendingDescription).
+    bool breakpointHit(proto::ProtoContext* ctx, DebugFrame* frame, const LineBreakpoint& bp) {
+        tPendingDescription.clear();
+        if (!bp.condition.empty()) {
+            std::string error;
+            bool truthy = false;
+            if (!evalInFrame(ctx, frame, bp.condition, nullptr, error,
+                             [&](proto::ProtoContext*, const proto::ProtoObject* v) {
+                                 truthy = v != PROTO_NONE && v != PROTO_FALSE && v != nullptr;
+                             })) {
+                tPendingDescription = "breakpoint condition `" + bp.condition + "` failed: " + error;
+                sendOutput("console", tPendingDescription + "\n");
+                return false;
+            }
+            if (!truthy) return true;
+        }
+        const long long hits = countHit(frame);
+        if (!bp.hit.passes(hits)) return true;
+        if (bp.isLog) {
+            sendOutput("console", interpolate(ctx, frame, bp.logMessage) + "\n");
+            return true;
+        }
+        return false;
+    }
+
+    // The log message with each `{expr}` replaced by its value in `frame`;
+    // `{{` and `}}` are literal braces, an expression that fails reads
+    // `<error: message>`.
+    std::string interpolate(proto::ProtoContext* ctx, DebugFrame* frame, const std::string& msg) {
+        std::string out;
+        for (std::size_t i = 0; i < msg.size();) {
+            const char c = msg[i];
+            if (c == '{' && i + 1 < msg.size() && msg[i + 1] == '{') { out += '{'; i += 2; continue; }
+            if (c == '}' && i + 1 < msg.size() && msg[i + 1] == '}') { out += '}'; i += 2; continue; }
+            if (c != '{') { out += c; ++i; continue; }
+            // The expression runs to the matching close brace (a map literal
+            // inside it nests).
+            std::size_t j = i + 1;
+            int depth = 1;
+            bool inString = false;
+            for (; j < msg.size(); ++j) {
+                const char d = msg[j];
+                if (inString) {
+                    if (d == '\\' && j + 1 < msg.size()) ++j;
+                    else if (d == '"') inString = false;
+                    continue;
+                }
+                if (d == '"') inString = true;
+                else if (d == '{') ++depth;
+                else if (d == '}' && --depth == 0) break;
+            }
+            if (j >= msg.size()) { out += msg.substr(i); break; }   // no close: literal text
+            const std::string expr = msg.substr(i + 1, j - i - 1);
+            std::string error;
+            if (!evalInFrame(ctx, frame, expr, nullptr, error,
+                             [&](proto::ProtoContext* c, const proto::ProtoObject* v) {
+                                 if (v && v != PROTO_NONE && proto::ProtoObject::isStringTagFast(v)) printValueTo(c, out, v, /*readable=*/false);
+                                 else out += formatValue(c, v, /*realize=*/true);
+                             }))
+                out += "<error: " + error + ">";
+            i = j + 1;
+        }
+        return out;
+    }
+
+    // The description of a stop a failing condition caused, taken once.
+    std::string takeDescription() {
+        std::string d;
+        d.swap(tPendingDescription);
+        return d;
     }
 
     // --- threads ---------------------------------------------------------------
@@ -561,7 +780,7 @@ private:
     // until the client resumes this thread. The other threads run on. Runs on
     // the stopped thread.
     void stop(proto::ProtoContext* ctx, ThreadState* ts, DebugFrame* frame, const char* reason,
-              const ExceptionStop* ex) {
+              const ExceptionStop* ex, const std::string& description = std::string()) {
         // A line printed without a newline is still in stdio's buffer.
         std::fflush(stdout);
         std::fflush(stderr);
@@ -590,6 +809,10 @@ private:
         if (ex) {
             body["description"] = ex->description;
             body["text"] = ex->typeName;
+        }
+        if (!description.empty()) {
+            body["description"] = description;
+            if (!ex) body["text"] = description;
         }
         sendEvent("stopped", body);
 
@@ -761,52 +984,55 @@ private:
         return false;
     }
 
-    // Evaluates `expression` in the selected frame: the frame's locals the
+    // Evaluates `expr` in frame `f` on this thread: the frame's locals the
     // expression names are bound to their values, as the parameters of
-    // `(fn [locals...] expression)`, compiled and called on this thread.
-    void evaluate(proto::ProtoContext* ctx, ThreadState* ts, const json& req, const json& args) {
-        std::string expr = args.value("expression", "");
-        while (!expr.empty() && std::isspace(static_cast<unsigned char>(expr.back()))) expr.pop_back();
-        while (!expr.empty() && std::isspace(static_cast<unsigned char>(expr.front()))) expr.erase(0, 1);
-        if (expr.empty()) { sendErrorResponse(req, "nothing to evaluate"); return; }
-        DebugFrame* f = frameById(ts, args.value("frameId", 0LL));
+    // `(fn [ex? locals...] expr)`, compiled and called here; `exValue`, when
+    // given, is bound to `ex` (shadowing a local of that name). Breakpoints,
+    // steps and exception stops are off on the thread while it runs
+    // (tEvaluating). On success calls use(ctx, value) with the value rooted
+    // and answers true; else answers false with `error` set.
+    template <class Use>
+    bool evalInFrame(proto::ProtoContext* ctx, DebugFrame* f, const std::string& expression,
+                     const proto::ProtoObject* exValue, std::string& error, Use&& use) {
+        const std::string expr = trimmed(expression);
+        if (expr.empty()) { error = "nothing to evaluate"; return false; }
         const ActiveCallContext* cc = activeCallContext();
-        if (!cc || !cc->engine) { sendErrorResponse(req, "no evaluator on this thread"); return; }
+        if (!cc || !cc->engine) { error = "no evaluator on this thread"; return false; }
 
         std::vector<const BytecodeModule::LocalVar*> used;
         if (f) {
             for (const auto* lv : visibleLocals(f)) {
-                if (lv->name == expr) {       // a local by itself: its value
-                    sendResponse(req, variableBody(ctx, ts, f->ctx->getAutomaticLocal(static_cast<unsigned>(lv->slot)), true));
-                    return;
-                }
+                if (exValue && lv->name == "ex") continue;
                 if (lv->name.find('#') == std::string::npos && lv->name[0] != '&' && mentions(expr, lv->name))
                     used.push_back(lv);
             }
         }
-        if (used.size() > 16) { sendErrorResponse(req, "the expression names more than 16 locals"); return; }
+        const std::size_t extra = exValue ? 1 : 0;
+        if (used.size() + extra > 16) { error = "the expression names more than 16 locals"; return false; }
 
         std::string src = "(fn [";
+        if (exValue) src += "ex ";
         for (const auto* lv : used) src += lv->name + " ";
         src += "]\n" + expr + "\n)";
 
+        const bool wasEvaluating = tEvaluating;
         tEvaluating = true;
-        struct Reset { ~Reset() { tEvaluating = false; } } reset;
+        struct Reset { bool was; ~Reset() { tEvaluating = was; } } reset{wasEvaluating};
         proto::ProtoContext scope(ctx->space, ctx);
         scope.resizeAutomaticLocals(2);
-        std::string error;
         try {
             Reader reader(&scope, src, cc->named);
             reader.setSymbolResolver(&qualifySyntaxQuoteSymbol);
             scope.setAutomaticLocal(0, reader.readOne(&scope));
             scope.setAutomaticLocal(1, evalTopLevel(&scope, scope.getAutomaticLocal(0), nullptr));
             const proto::ProtoObject* argv[16];
+            if (exValue) argv[0] = exValue;
             for (std::size_t i = 0; i < used.size(); ++i)
-                argv[i] = f->ctx->getAutomaticLocal(static_cast<unsigned>(used[i]->slot));
+                argv[extra + i] = f->ctx->getAutomaticLocal(static_cast<unsigned>(used[i]->slot));
             scope.setAutomaticLocal(0, cc->engine->invoke(&scope, scope.getAutomaticLocal(1), argv,
-                                                          static_cast<unsigned>(used.size())));
-            sendResponse(req, variableBody(&scope, ts, scope.getAutomaticLocal(0), false));
-            return;
+                                                          static_cast<unsigned>(used.size() + extra)));
+            use(&scope, scope.getAutomaticLocal(0));
+            return true;
         } catch (const ReaderError& e) {
             error = std::string("read error: ") + e.what();
         } catch (const CompileError& e) {
@@ -816,6 +1042,28 @@ private:
         } catch (const std::exception& e) {
             error = e.what();
         }
+        return false;
+    }
+
+    // Evaluates `expression` in the selected frame (Watch, Debug Console,
+    // hover).
+    void evaluate(proto::ProtoContext* ctx, ThreadState* ts, const json& req, const json& args) {
+        const std::string expr = trimmed(args.value("expression", ""));
+        if (expr.empty()) { sendErrorResponse(req, "nothing to evaluate"); return; }
+        DebugFrame* f = frameById(ts, args.value("frameId", 0LL));
+        if (f) {
+            for (const auto* lv : visibleLocals(f)) {
+                if (lv->name == expr) {       // a local by itself: its value
+                    sendResponse(req, variableBody(ctx, ts, f->ctx->getAutomaticLocal(static_cast<unsigned>(lv->slot)), true));
+                    return;
+                }
+            }
+        }
+        std::string error;
+        if (evalInFrame(ctx, f, expr, nullptr, error, [&](proto::ProtoContext* c, const proto::ProtoObject* v) {
+                sendResponse(req, variableBody(c, ts, v, false));
+            }))
+            return;
         sendErrorResponse(req, error);
     }
 
@@ -871,18 +1119,29 @@ private:
 
         if (command == "initialize") {
             json filters = json::array();
+            const char* condition =
+                "A Clojure form; `ex` is the exception, e.g. (= \"bad\" (ex-message ex)) or "
+                "(contains? (ex-data ex) :id)";
             filters.push_back({{"filter", "raised"},
                                {"label", "All Exceptions"},
                                {"description", "Stop at every throw, caught or not."},
-                               {"default", false}});
+                               {"default", false},
+                               {"supportsCondition", true},
+                               {"conditionDescription", condition}});
             filters.push_back({{"filter", "userUnhandled"},
                                {"label", "Uncaught Exceptions"},
                                {"description", "Stop at a throw no try/catch of the program catches."},
-                               {"default", false}});
+                               {"default", false},
+                               {"supportsCondition", true},
+                               {"conditionDescription", condition}});
             sendResponse(req, {{"supportsConfigurationDoneRequest", true},
                                {"supportsEvaluateForHovers", true},
                                {"supportsTerminateRequest", true},
                                {"supportsExceptionInfoRequest", true},
+                               {"supportsExceptionFilterOptions", true},
+                               {"supportsConditionalBreakpoints", true},
+                               {"supportsHitConditionalBreakpoints", true},
+                               {"supportsLogPoints", true},
                                {"exceptionBreakpointFilters", filters}});
             sendEvent("initialized", json::object());
             return false;
@@ -1044,20 +1303,38 @@ private:
 
     void setExceptionBreakpoints(const json& req, const json& args) {
         bool raised = false, uncaught = false;
+        std::string raisedCond, uncaughtCond;
         json result = json::array();
-        auto take = [&](const std::string& f) {
+        auto take = [&](const std::string& f, const std::string& condition) {
             const bool known = f == "raised" || f == "userUnhandled";
-            if (f == "raised") raised = true;
-            if (f == "userUnhandled") uncaught = true;
-            result.push_back(known ? json{{"verified", true}}
-                                   : json{{"verified", false}, {"message", "unknown filter " + f}});
+            if (f == "raised") { raised = true; raisedCond = trimmed(condition); }
+            if (f == "userUnhandled") { uncaught = true; uncaughtCond = trimmed(condition); }
+            if (!known) {
+                result.push_back({{"verified", false}, {"message", "unknown filter " + f}});
+                return;
+            }
+            const std::string problem = trimmed(condition).empty() ? "" : syntaxProblem(condition);
+            if (!problem.empty()) {
+                // Still set: a stop reports the condition's error when it runs.
+                const std::string text = "exception breakpoint condition `" + trimmed(condition) +
+                                         "` failed: " + problem;
+                sendOutput("console", text + "\n");
+                result.push_back({{"verified", true}, {"message", text}});
+            } else {
+                result.push_back({{"verified", true}});
+            }
         };
         if (args.contains("filters") && args["filters"].is_array())
             for (const auto& f : args["filters"])
-                if (f.is_string()) take(f.get<std::string>());
+                if (f.is_string()) take(f.get<std::string>(), "");
         if (args.contains("filterOptions") && args["filterOptions"].is_array())
             for (const auto& o : args["filterOptions"])
-                if (o.is_object()) take(o.value("filterId", ""));
+                if (o.is_object()) take(o.value("filterId", ""), o.value("condition", ""));
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            exRaisedCondition_ = raisedCond;
+            exUncaughtCondition_ = uncaughtCond;
+        }
         exRaised_.store(raised);
         exUncaught_.store(uncaught);
         sendResponse(req, {{"breakpoints", result}});
@@ -1068,7 +1345,7 @@ private:
         std::string source;
         const bool readable = !path.empty() && readFile(path, source);
         const std::set<int> candidates = readable ? formLines(source) : std::set<int>{};
-        std::set<int> armed;
+        std::map<int, LineBreakpoint> armed;
         json result = json::array();
         if (args.contains("breakpoints") && args["breakpoints"].is_array()) {
             for (const auto& bp : args["breakpoints"]) {
@@ -1081,8 +1358,29 @@ private:
                                       {"message", "no form starts on or after this line"}});
                     continue;
                 }
-                armed.insert(*it);
-                result.push_back({{"verified", true}, {"line", *it}});
+                LineBreakpoint spec;
+                spec.condition = trimmed(bp.value("condition", ""));
+                if (bp.contains("logMessage") && bp["logMessage"].is_string()) {
+                    spec.logMessage = bp["logMessage"].get<std::string>();
+                    spec.isLog = true;
+                }
+                const std::string hitProblem = spec.hit.parse(bp.value("hitCondition", ""));
+                if (!hitProblem.empty()) {
+                    result.push_back({{"verified", false}, {"line", *it}, {"message", hitProblem}});
+                    continue;
+                }
+                json r = {{"verified", true}, {"line", *it}};
+                if (!spec.condition.empty()) {
+                    const std::string problem = syntaxProblem(spec.condition);
+                    if (!problem.empty()) {
+                        // Set anyway: a hit stops and reports the error.
+                        const std::string text = "breakpoint condition `" + spec.condition + "` failed: " + problem;
+                        sendOutput("console", text + "\n");
+                        r["message"] = text;
+                    }
+                }
+                armed[*it] = spec;
+                result.push_back(r);
             }
         }
         {
@@ -1132,7 +1430,8 @@ private:
     std::string programKey_;
     bool launched_ = false, configDone_ = false, running_ = false;
     bool inputClosed_ = false, readerDone_ = false, disconnected_ = false;
-    std::map<std::string, std::set<int>> breakpoints_;   // pathKey -> lines
+    std::map<std::string, std::map<int, LineBreakpoint>> breakpoints_;   // pathKey -> line -> breakpoint
+    std::string exRaisedCondition_, exUncaughtCondition_;
     std::map<int, std::unique_ptr<ThreadState>> threads_;  // the live threads, by DAP id
     bool mainSeen_ = false;
     int nextThreadId_ = 2;

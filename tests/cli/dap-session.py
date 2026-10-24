@@ -32,7 +32,13 @@ them. Covered:
      one leaves the other stopped; each continues on its own;
  11. pause of one busy future thread;
  12. a thread stopped while another allocates through several collections:
-     the other finishes, the stopped one's locals are intact.
+     the other finishes, the stopped one's locals are intact;
+ 13. exception filter conditions (`ex` bound): true stops, false runs on, a
+     condition that throws stops and reports it, a condition calling a fn
+     with a breakpoint does not stop there;
+ 14. line breakpoints with condition, hitCondition (3, >= 2, % 2, with a
+     condition), log points ({i}, {{literal}}, an expression error), an
+     invalid hitCondition; a condition evaluated per thread.
 A watchdog fails a session that hangs instead of hanging the test.
 """
 import json
@@ -77,6 +83,8 @@ EXC = """\
 (defn safe-div [a b]
   (/ a b))
 (println "start")
+(defn probe [e]
+  (some? e))
 (try
   (risky 5)
   (catch Exception e
@@ -148,6 +156,16 @@ GC = """\
 (hold {:a 1 :b [1 2 3]})
 @worker
 (println "gc done")
+"""
+
+
+LOOP = """\
+(defn noop [i] i)
+(loop [i 0]
+  (when (< i 6)
+    (noop i)
+    (recur (inc i))))
+(println "done")
 """
 
 
@@ -234,13 +252,18 @@ class Session:
     def event(self, name):
         return self.wait(lambda m: m.get("type") == "event" and m.get("event") == name)
 
-    def start(self, program, breakpoints=(), stop_on_entry=False, bp_path=None, filters=None):
+    def start(self, program, breakpoints=(), stop_on_entry=False, bp_path=None, filters=None,
+              filter_options=None):
         self.capabilities = self.request("initialize", {"adapterID": "protoclj", "linesStartAt1": True})["body"]
         self.request("launch", {"program": program, "stopOnEntry": stop_on_entry})
         r = self.request("setBreakpoints", {"source": {"path": bp_path or program},
-                                            "breakpoints": [{"line": l} for l in breakpoints]})
-        if filters is not None:
-            self.request("setExceptionBreakpoints", {"filters": list(filters)})
+                                            "breakpoints": [b if isinstance(b, dict) else {"line": b}
+                                                            for b in breakpoints]})
+        if filters is not None or filter_options is not None:
+            args = {"filters": list(filters or [])}
+            if filter_options is not None:
+                args["filterOptions"] = filter_options
+            self.exception_response = self.request("setExceptionBreakpoints", args)
         self.request("configurationDone")
         return r
 
@@ -607,6 +630,137 @@ def session_gc_while_stopped(prog):
     check(cycles >= 2, "gc: collections ran: %r" % s.stderr_text()[-300:])
 
 
+def exception_stops(s):
+    """Continues through every stop; answers [(reason, description, top frame, locals)]."""
+    stops = []
+    while True:
+        st = s.stopped_or_end()
+        if st is None:
+            return stops
+        frames = s.top(st["body"]["threadId"])
+        loc = s.locals(frames[0]["id"])
+        stops.append((st["body"]["reason"], st["body"].get("description", ""), frames[0]["name"], loc))
+        s.request("continue", {"threadId": st["body"]["threadId"]})
+
+
+def session_exception_conditions(prog):
+    s = Session()
+    s.start(prog, [], filter_options=[{"filterId": "raised", "condition": "(= 2 (:y (ex-data ex)))"}])
+    raised = [f for f in s.capabilities["exceptionBreakpointFilters"] if f["filter"] == "raised"][0]
+    check(s.capabilities.get("supportsExceptionFilterOptions") and raised.get("supportsCondition")
+          and "ex" in raised.get("conditionDescription", ""), "conditions advertised: %r" % raised)
+    stops = exception_stops(s)
+    check([(r, n, l.get("x")) for r, d, n, l in stops] == [("exception", "risky", "1")],
+          "condition true stops only there: %r" % stops)
+    code, rc = s.finish()
+    check(code == 0, "condition session exit: %r" % code)
+
+    s = Session()
+    s.start(prog, [], filter_options=[{"filterId": "raised", "condition": "(= 99 (:y (ex-data ex)))"}])
+    stops = exception_stops(s)
+    check(stops == [], "condition false never stops: %r" % stops)
+    code, rc = s.finish()
+    check(code == 0 and "end\n" in s.stdout_text(), "condition false: the program ends: %r" % code)
+
+    s = Session()
+    s.start(prog, [], filter_options=[{"filterId": "raised", "condition": "(nth [] 5)"}])
+    stops = exception_stops(s)
+    check(len(stops) == 3 and all(r == "exception" and "exception breakpoint condition `(nth [] 5)` failed"
+                                  in d for r, d, n, l in stops),
+          "a throwing condition stops and says so: %r" % stops)
+    console = "".join(t for c, t in s.outputs if c == "console")
+    check("exception breakpoint condition `(nth [] 5)` failed: IndexOutOfBoundsException" in console,
+          "the condition's error is reported: %r" % console)
+    s.finish()
+
+    s = Session()
+    s.start(prog, [], filter_options=[{"filterId": "raised", "condition": "(nth [1"}])
+    r = s.exception_response
+    check("read error" in r["body"]["breakpoints"][0].get("message", ""),
+          "a condition that does not read is reported when set: %r" % r)
+    stops = exception_stops(s)
+    check(len(stops) == 3, "and stops at every throw: %r" % stops)
+    s.finish()
+
+    s = Session()
+    probe_line = line_of(EXC, "(some? e)")
+    s.start(prog, [probe_line], filter_options=[{"filterId": "raised", "condition": "(probe ex)"}])
+    stops = exception_stops(s)
+    check([r for r, d, n, l in stops] == ["exception"] * 3,
+          "a condition calling a fn with a breakpoint does not stop there: %r" % stops)
+    s.finish()
+
+
+def loop_stops(prog, bp):
+    """Runs LOOP with breakpoint `bp` on the (noop i) line: the i of each stop, and the session."""
+    s = Session()
+    line = line_of(LOOP, "(noop i)")
+    bp = dict(bp, line=line)
+    r = s.start(prog, [bp])
+    seen = []
+    while True:
+        st = s.stopped_or_end()
+        if st is None:
+            break
+        frames = s.top()
+        seen.append(s.locals(frames[0]["id"]).get("i"))
+        s.request("continue", {"threadId": 1})
+    s.finish()
+    return seen, s, r
+
+
+def session_line_conditions(prog):
+    caps = None
+    seen, s, r = loop_stops(prog, {"condition": "(odd? i)"})
+    caps = s.capabilities
+    check(caps.get("supportsConditionalBreakpoints") and caps.get("supportsHitConditionalBreakpoints")
+          and caps.get("supportsLogPoints"), "line breakpoint features advertised: %r" % caps)
+    check(seen == ["1", "3", "5"], "condition (odd? i): %r" % seen)
+    seen, s, r = loop_stops(prog, {"condition": "(> i 100)"})
+    check(seen == [] and s.stdout_text() == "done\n", "condition false: %r" % seen)
+    seen, s, r = loop_stops(prog, {"hitCondition": "3"})
+    check(seen == ["2"], "hitCondition 3: %r" % seen)
+    seen, s, r = loop_stops(prog, {"hitCondition": ">= 2"})
+    check(seen == ["1", "2", "3", "4", "5"], "hitCondition >= 2: %r" % seen)
+    seen, s, r = loop_stops(prog, {"hitCondition": "% 2"})
+    check(seen == ["1", "3", "5"], "hitCondition %% 2: %r" % seen)
+    seen, s, r = loop_stops(prog, {"condition": "(even? i)", "hitCondition": "2"})
+    check(seen == ["2"], "condition + hitCondition: %r" % seen)
+    seen, s, r = loop_stops(prog, {"hitCondition": "abc"})
+    b = r["body"]["breakpoints"][0]
+    check(not b["verified"] and "hit condition" in b.get("message", "") and seen == [],
+          "invalid hitCondition: %r %r" % (b, seen))
+    seen, s, r = loop_stops(prog, {"logMessage": "i={i} {{lit}} {(* i 10)} {{:k {(str \"x\" i)}}}"})
+    console = "".join(t for c, t in s.outputs if c == "console")
+    expected = "".join("i=%d {lit} %d {:k x%d}\n" % (i, i * 10, i) for i in range(6))
+    check(seen == [] and console == expected, "log point: %r %r" % (seen, console))
+    seen, s, r = loop_stops(prog, {"logMessage": "v={(undefined-x i)}", "hitCondition": "1"})
+    console = "".join(t for c, t in s.outputs if c == "console")
+    check(seen == [] and console.startswith("v=<error: ") and console.count("\n") == 1,
+          "log point expression error: %r" % console)
+    seen, s, r = loop_stops(prog, {"condition": "(odd? i"})
+    console = "".join(t for c, t in s.outputs if c == "console")
+    check(len(seen) == 6 and "breakpoint condition `(odd? i` failed" in console,
+          "a condition that does not read stops and is reported: %r %r" % (seen, console))
+
+
+def session_thread_condition(prog):
+    s = Session()
+    bp = line_of(THREADS, "(let [sq (* n n)]")
+    s.start(prog, [{"line": bp, "condition": "(= n 4)"}])
+    seen = []
+    while True:
+        st = s.stopped_or_end()
+        if st is None:
+            break
+        tid = st["body"]["threadId"]
+        frames = s.top(tid)
+        seen.append((tid != 1, s.locals(frames[0]["id"]).get("n")))
+        s.request("continue", {"threadId": tid})
+    code, rc = s.finish()
+    check(seen == [(True, "4")] and code == 0, "a condition evaluated per thread: %r %r" % (seen, code))
+
+
 def main():
     with tempfile.TemporaryDirectory() as work:
         prog = os.path.join(work, "prog.clj")
@@ -619,7 +773,7 @@ def main():
         throws = vscode_path(throws)
         files = {}
         for name, text in [("exc", EXC), ("internal", INTERNAL), ("uncaught", UNCAUGHT),
-                           ("threads", THREADS), ("spin", SPIN), ("gc", GC)]:
+                           ("threads", THREADS), ("spin", SPIN), ("gc", GC), ("loop", LOOP)]:
             path = os.path.join(work, "prog-%s.clj" % name)
             with open(path, "w", encoding="utf-8", newline="\n") as f:
                 f.write(text)
@@ -636,7 +790,10 @@ def main():
                               ("exceptions uncaught", session_exception_uncaught, files["uncaught"]),
                               ("threads", session_threads, files["threads"]),
                               ("pause a thread", session_pause_thread, files["spin"]),
-                              ("gc while stopped", session_gc_while_stopped, files["gc"])]:
+                              ("gc while stopped", session_gc_while_stopped, files["gc"]),
+                              ("exception conditions", session_exception_conditions, files["exc"]),
+                              ("line conditions", session_line_conditions, files["loop"]),
+                              ("thread condition", session_thread_condition, files["threads"])]:
             if only and only not in name:
                 continue
             started = time.time()
