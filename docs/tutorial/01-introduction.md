@@ -90,6 +90,7 @@ demonstration that uses Python's pandas to load a CSV, processes the
 data functionally in Clojure, and renders a chart with JavaScript's
 D3:
 
+<!-- not run: planned (UMD interop) -->
 ```clojure
 (ns demo.tri-runtime
   (:require [py/pandas :as pd]

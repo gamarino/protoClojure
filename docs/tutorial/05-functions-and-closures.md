@@ -369,8 +369,11 @@ Functions take maps and pull out what they need, without ceremony.
 
 ## 5.11 Pre/post conditions — a fast contract check
 
-A function can declare runtime assertions on its inputs and outputs:
+A function can declare runtime assertions on its inputs and outputs.
+*Not implemented yet:* protoClojure accepts the map and evaluates it as
+an expression, without checking anything.
 
+<!-- not run: planned (pre/post conditions are not checked yet: the map is evaluated as an expression) -->
 ```clojure
 (defn divide [a b]
   {:pre  [(number? a) (number? b) (not= 0 b)]

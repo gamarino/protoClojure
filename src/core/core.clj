@@ -495,6 +495,17 @@
       (recur (assoc m (first ks) (first vs)) (next ks) (next vs))
       m)))
 
+(defn mapv
+  "Returns a vector of the result of applying f to the items of the colls."
+  ([f coll] (vec (map f coll)))
+  ([f c1 c2] (vec (map f c1 c2)))
+  ([f c1 c2 & colls] (vec (apply map f c1 c2 colls))))
+
+(defn filterv
+  "Returns a vector of the items in coll for which (pred item) is true."
+  [pred coll]
+  (vec (filter pred coll)))
+
 (defn group-by
   "Returns a map of the elements of coll keyed by the result of f on each
   element. The value at each key is a vector of the corresponding elements,

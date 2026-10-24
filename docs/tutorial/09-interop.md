@@ -1,4 +1,5 @@
 # 9. Cross-Runtime Interop
+<!-- snippets: not run (a planned feature; see the note below) -->
 
 > **Planned — not yet implemented.** Cross-runtime interop (the `py/`, `js/` and `pst/` UMD providers, `ns` / `:require`, and the `clj->py` / `py->clj` / `clj->js` / `js->clj` conversion functions) is not available in protoClojure 0.0.1; this chapter describes the intended design.
 

@@ -79,6 +79,7 @@ appended. `xs` still points to the original. If you want the new
 vector, you have to keep the return value:
 
 ```clojure
+(def xs [1 2 3])
 (def ys (conj xs 4))   ; ys = [1 2 3 4], xs = [1 2 3]
 ```
 
@@ -231,6 +232,7 @@ Reads inside-out. Clojure has the same problem and solves it with
 **threading macros**:
 
 ```clojure
+(def data [3 -1 2])
 (->> data
      (map #(* % 2))
      (filter pos?)

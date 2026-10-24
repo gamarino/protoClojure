@@ -1,4 +1,5 @@
 # 12. A Worked Example
+<!-- snippets: not run (a planned feature; see the note below) -->
 
 > **Planned — not yet implemented.** The features this example relies on (namespaces, the `py/` and `js/` UMD providers, the conversion functions, `#(...)` and the `->>` threading macro) are not available in protoClojure 0.0.1; this chapter describes the intended design.
 

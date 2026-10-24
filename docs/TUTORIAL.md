@@ -17,8 +17,12 @@ the current `protoclj` binary.
 > **What runs today (protoClojure 0.0.3).** Functions, closures,
 > multi-arity and variadic functions, lists, vectors, maps and strings
 > (chapters 2, 4 and 5, in part); atoms, watches, futures and promises
-> (chapter 6, in part); the local REPL (chapter 10, in part); actors
-> (chapter 13); and input and output (chapter 14). Chapters 7, 8, 9, 11
+> (chapter 6, in part); the local REPL (chapter 10, in part); macros
+> (chapter 11, branch `feature/macros`); actors (chapter 13); input and
+> output (chapter 14); and scripting with regular expressions, JSON, EDN
+> and lazy sequences (chapter 15, branch `feature/macros`). Every snippet
+> that runs is checked by `tests/docs/check_snippets.py`; the ones that
+> cannot run say why in an HTML comment beside them. Chapters 7, 8, 9
 > and 12 describe planned features that are not implemented yet. Each chapter that uses unimplemented
 > features opens with a note listing them; [`STATUS.md`](STATUS.md) is
 > the authoritative list.
@@ -55,6 +59,7 @@ of the underlying object model, the protoCore concurrency primitives.
 | 12 | [A worked example](tutorial/12-worked-example.md)                             | *Planned.* The tri-runtime demo from `INTEROP.md`, walked through one line at a time.                     |
 | 13 | [Actors](tutorial/13-actors.md)                                               | `actor` / `send` / `send-h` / `send-l` / `actor?` / `actor-stats`. Single-method invariant, priority bands, worker pool. |
 | 14 | [Input and output](tutorial/14-input-and-output.md)                           | Files and `with-open`, standard input, `sh`, the environment, an HTTP client and Ring server, TCP and UDP sockets. |
+| 15 | [Scripting](tutorial/15-scripting.md)                                         | The twenty-line script: standard input line by line, regular expressions, `ns` / `require`, JSON and EDN, lazy sequences; the same scripts under Babashka. |
 
 ## A note on running the examples
 

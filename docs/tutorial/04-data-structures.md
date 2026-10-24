@@ -82,7 +82,7 @@ Access is by index, with `nth` or by *calling the vector*:
 ```clojure
 (nth [10 20 30] 1)         ;; => 20
 ([10 20 30] 1)             ;; => 20  — vectors are functions of their indices
-([10 20 30] 5 :not-found)  ;; => :not-found  — with default
+(get [10 20 30] 5 :not-found)  ;; => :not-found  — with a default (a vector called as a function takes one index)
 ```
 
 The core operations:
@@ -149,6 +149,7 @@ The core operations:
 Nested access and update — the deep-`*-in` family:
 
 ```clojure
+(require '[clojure.string :as str])
 (def user {:name "alice"
            :address {:city "Buenos Aires"
                      :zip 1428}})
@@ -346,8 +347,8 @@ defines a cross-type equivalence:
 equivalence for collections:
 
 ```clojure
-(== 1 1.0 1/1)                 ;; => true
-(== [1] [1])                    ;; raises — `==` is for numbers
+(== 1 1.0)                     ;; => true
+;; (== [1] [1]) raises ClassCastException — `==` is for numbers
 ```
 
 `identical?` is pointer equality. You rarely want it; the cases that

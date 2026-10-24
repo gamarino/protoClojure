@@ -165,6 +165,8 @@ The 633 conformance fixtures under `tests/conformance/` are the executable refer
 protoClojure exposes the GIL-free concurrency that protoCore already has underneath. There is no global interpreter lock; threads are real OS threads, tracked by the kernel's garbage collector.
 
 ```clojure
+(defn slow-compute ([] (reduce + (range 100000))) ([x] (* x x)))
+
 ;; --- atoms: CAS-backed shared state ------------------------------------
 (def counter (atom 0))
 (swap! counter inc)               ;; lock-free retry on protoCore CAS

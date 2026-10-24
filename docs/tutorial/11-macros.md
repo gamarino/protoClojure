@@ -163,6 +163,7 @@ shadowed anyway. Macros are hygienic *for known names*.
 What if you need a fresh name inside the expansion that does *not*
 collide with anything the caller defined?
 
+<!-- not run: shows the compile error on purpose -->
 ```clojure
 ;; A bad once: introduces a name `x` that might shadow the caller's x
 (defmacro bad-once [expr]
@@ -206,6 +207,7 @@ symbols. This is the bread-and-butter macro hygiene technique.
 The `with-open` macro ensures a resource is closed even if the body
 throws:
 
+<!-- not run: an illustration: Java interop and undefined functions -->
 ```clojure
 (defmacro with-open [bindings & body]
   `(let ~bindings
@@ -230,6 +232,7 @@ boilerplate. Macros let you express the *shape* you want directly.
 
 Imagine a routing DSL for a web framework:
 
+<!-- not run: an illustration of a DSL nobody defined here -->
 ```clojure
 (defroutes app
   (GET    "/users/:id"    [id]       (show-user id))

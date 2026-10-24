@@ -2,7 +2,8 @@
 // docs/DESIGN.md §10.2, M32-M34): integer division (`quot`, `rem`, `mod`),
 // `compare`, `max`, `min`, `sort`, `sort-by`, `frequencies`,
 // `clojure.string/split-lines`, `require` (namespace aliases), `parse-long`,
-// `parse-double`, `parse-boolean`, and the
+// `parse-double`, `parse-boolean`, `bigint`, the auto-promoting `+'` family,
+// and the
 // `System` object (`(System/exit n)`, `System/getenv`,
 // `System/currentTimeMillis`, `System/nanoTime`). The rest of Part C is
 // Clojure, in core.clj.
@@ -32,6 +33,7 @@
 #include <system_error>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 #include <unordered_map>
@@ -491,6 +493,152 @@ COREPRIM(prim_parse_boolean) {
     return PROTO_NONE;
 }
 
+// ---- bigint / biginteger ---------------------------------------------------------
+
+// (bigint x), (biginteger x): x as an exact integer. Integers are not a
+// separate type below and above 64 bits (D14), so an integer answers itself;
+// a float is truncated toward zero from its shortest decimal digits, as
+// Clojure does through BigDecimal.valueOf ((bigint 1e30) is 10^30); a
+// string of decimal digits (with an optional sign) is parsed, as Java's
+// BigInteger(String) parses it.
+COREPRIM(prim_bigint) {
+    if (argc(ctx, args) != 1) arity(ctx, argc(ctx, args), "bigint");
+    const PO* v = argAt(ctx, args, 0);
+    if (v != PROTO_NONE && v->isInteger(ctx)) return v;
+    if (v != PROTO_NONE && v->isFloat(ctx)) {
+        // As Clojure: BigDecimal.valueOf(x), which reads the shortest
+        // decimal digits of x (Double.toString, formatDouble), truncated
+        // toward zero. So (bigint 1e30) is 10^30, not the double's exact
+        // binary value.
+        const double d = v->asDouble(ctx);
+        if (!std::isfinite(d)) throwClassed(ctx, "NumberFormatException", "Infinite or NaN");
+        const std::string text = formatDouble(d);  // "-1.0E30", "123.45"
+        std::size_t i = 0;
+        const bool neg = text[0] == '-';
+        if (neg) i = 1;
+        std::string digits;
+        long long point = 0;  // digits before the decimal point
+        for (; i < text.size() && text[i] != 'E'; ++i) {
+            if (text[i] == '.') point = static_cast<long long>(digits.size());
+            else digits += text[i];
+        }
+        if (i < text.size()) point += std::stoll(text.substr(i + 1));
+        std::string whole;
+        if (point > 0) {
+            whole = digits.substr(0, static_cast<std::size_t>(std::min<long long>(point, digits.size())));
+            if (point > static_cast<long long>(digits.size()))
+                whole.append(static_cast<std::size_t>(point) - digits.size(), '0');
+        }
+        const std::size_t nz = whole.find_first_not_of('0');
+        if (nz == std::string::npos) return ctx->fromLong(0);
+        whole = (neg ? "-" : "") + whole.substr(nz);
+        return ctx->fromString(whole.c_str(), 10);
+    }
+    if (v != PROTO_NONE && proto::ProtoObject::isStringTagFast(v)) {
+        const std::string s = reinterpret_cast<const proto::ProtoString*>(v)->toStdString(ctx);
+        std::size_t i = (!s.empty() && (s[0] == '+' || s[0] == '-')) ? 1 : 0;
+        bool ok = i < s.size();
+        for (std::size_t j = i; ok && j < s.size(); ++j) ok = s[j] >= '0' && s[j] <= '9';
+        if (!ok) throwClassed(ctx, "NumberFormatException", "For input string: \"" + s + "\"");
+        return ctx->fromString(s[0] == '+' ? s.c_str() + 1 : s.c_str(), 10);
+    }
+    throwClassed(ctx, "ClassCastException",
+                 std::string("bigint expects a number or a string, got ") + valueTypeName(ctx, v));
+}
+
+// ---- number predicates, ==, hash, peek, pop ------------------------------------
+
+bool isListValue(const PO* v) {
+    constexpr proto::proto_ulong kTagMask = 0x3F, kTagList = 2, kTagListSmall = 25;
+    const proto::proto_ulong tag = reinterpret_cast<proto::proto_ulong>(v) & kTagMask;
+    return v != nullptr && (tag == kTagList || tag == kTagListSmall);
+}
+
+const PO* oneArg(proto::ProtoContext* ctx, const proto::ProtoArguments* args, const char* who) {
+    if (argc(ctx, args) != 1) arity(ctx, argc(ctx, args), who);
+    return argAt(ctx, args, 0);
+}
+
+// (number? x), (integer? x) / (int? x), (float? x) / (double? x). Integers
+// are one type at every size (D14), so int? (JVM Clojure: a fixed-width
+// integer) answers true for a big integer too.
+COREPRIM(prim_number_p)  { return isNumber(ctx, oneArg(ctx, args, "number?")) ? PROTO_TRUE : PROTO_FALSE; }
+COREPRIM(prim_integer_p) {
+    const PO* v = oneArg(ctx, args, "integer?");
+    return v != PROTO_NONE && isNumber(ctx, v) && v->isInteger(ctx) ? PROTO_TRUE : PROTO_FALSE;
+}
+COREPRIM(prim_float_p) {
+    const PO* v = oneArg(ctx, args, "float?");
+    return v != PROTO_NONE && isNumber(ctx, v) && v->isFloat(ctx) ? PROTO_TRUE : PROTO_FALSE;
+}
+
+// (== x y & more): numeric equality across number types; a non-number
+// raises ClassCastException, as in Clojure.
+COREPRIM(prim_num_eq) {
+    const proto::proto_ulong n = argc(ctx, args);
+    if (n < 1) arity(ctx, n, "==");
+    for (proto::proto_ulong i = 0; i < n; ++i)
+        if (!isNumber(ctx, argAt(ctx, args, i))) throwNotANumber(ctx, "==", argAt(ctx, args, i));
+    for (proto::proto_ulong i = 1; i < n; ++i) {
+        const PO* a = argAt(ctx, args, i - 1);
+        const PO* b = argAt(ctx, args, i);
+        if ((a->isFloat(ctx) && std::isnan(a->asDouble(ctx))) ||
+            (b->isFloat(ctx) && std::isnan(b->asDouble(ctx))))
+            return PROTO_FALSE;
+        if (numberCompare(ctx, a, b) != 0) return PROTO_FALSE;
+    }
+    return PROTO_TRUE;
+}
+
+// (hash x): the hash map keys use (MapOps.h keyHash), consistent with how
+// maps and sets match keys; the value differs from JVM Clojure's (D59).
+COREPRIM(prim_hash) {
+    const PO* v = oneArg(ctx, args, "hash");
+    const proto::proto_ulong h = keyHash(ctx, v);
+    return ctx->fromLong(static_cast<long long>(h & 0xFFFFFFFFull) - ((h & 0x80000000ull) ? (1ll << 32) : 0));
+}
+
+// (peek coll): the last element of a vector, the first of a list; nil for
+// nil or an empty collection.
+COREPRIM(prim_peek) {
+    const PO* v = oneArg(ctx, args, "peek");
+    if (v == PROTO_NONE) return PROTO_NONE;
+    if (isVector(v)) {
+        const proto::ProtoList* items = vectorItems(ctx, v);
+        return items->getSize(ctx) == 0 ? PROTO_NONE : items->getLast(ctx);
+    }
+    if (isListValue(v)) {
+        const proto::ProtoList* l = v->asList(ctx);
+        return l->getSize(ctx) == 0 ? PROTO_NONE : l->getFirst(ctx);
+    }
+    throwClassed(ctx, "ClassCastException",
+                 std::string("peek expects a vector or a list, got ") + valueTypeName(ctx, v));
+}
+
+// (pop coll): a vector without its last element, a list without its first;
+// nil for nil; IllegalStateException for an empty one, as in Clojure.
+COREPRIM(prim_pop) {
+    const PO* v = oneArg(ctx, args, "pop");
+    if (v == PROTO_NONE) return PROTO_NONE;
+    if (isVector(v)) {
+        const proto::ProtoList* items = vectorItems(ctx, v);
+        if (items->getSize(ctx) == 0) throwClassed(ctx, "IllegalStateException", "Can't pop empty vector");
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(1);
+        scope.setAutomaticLocal(0, items->removeLast(&scope)->asObject(&scope));
+        const PO* r = newVector(&scope, scope.getAutomaticLocal(0)->asList(&scope));
+        scope.returnValue = r;
+        return r;
+    }
+    if (isListValue(v)) {
+        const proto::ProtoList* l = v->asList(ctx);
+        if (l->getSize(ctx) == 0) throwClassed(ctx, "IllegalStateException", "Can't pop empty list");
+        return l->removeFirst(ctx)->asObject(ctx);
+    }
+    throwClassed(ctx, "ClassCastException",
+                 std::string("pop expects a vector or a list, got ") + valueTypeName(ctx, v));
+}
+
 // ---- System ----------------------------------------------------------------------
 
 COREPRIM(prim_current_time_millis) {
@@ -523,6 +671,17 @@ constexpr CorePrim kCorePrims[] = {
     {"parse-long",    &prim_parse_long},
     {"parse-double",  &prim_parse_double},
     {"parse-boolean", &prim_parse_boolean},
+    {"bigint",        &prim_bigint},
+    {"number?",       &prim_number_p},
+    {"integer?",      &prim_integer_p},
+    {"int?",          &prim_integer_p},
+    {"float?",        &prim_float_p},
+    {"double?",       &prim_float_p},
+    {"==",            &prim_num_eq},
+    {"hash",          &prim_hash},
+    {"peek",          &prim_peek},
+    {"pop",           &prim_pop},
+    {"biginteger",    &prim_bigint},
 };
 
 } // namespace
@@ -530,6 +689,13 @@ constexpr CorePrim kCorePrims[] = {
 void installCorePrimitives(proto::ProtoContext* ctx, proto::ProtoObject* globals) {
     for (const CorePrim& p : kCorePrims)
         defineBuiltin(ctx, globals, p.name, ctx->fromMethod(nullptr, p.fn));
+    // `+'`, `-'`, `*'`, `inc'` and `dec'`: Clojure's auto-promoting
+    // arithmetic. protoClojure's `+ - * inc dec` already promote to exact big
+    // integers (D14), so the primed names are the same functions.
+    for (const char* op : {"+", "-", "*", "inc", "dec"}) {
+        const PO* f = globals->getOwnAttributeDirect(ctx, proto::ProtoString::createSymbol(ctx, op));
+        if (f) defineBuiltin(ctx, globals, (std::string(op) + "'").c_str(), f);
+    }
     // `System`, an object whose members stand in for java.lang.System's
     // static methods a script calls: (System/exit n) is `exit`,
     // (System/getenv "X") `getenv`. Installed after the I/O globals.

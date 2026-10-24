@@ -36,6 +36,7 @@ with no ordering guarantee against still-pending messages.
 `actor?` distinguishes actors from anything else:
 
 ```clojure
+(def acc (actor 0))
 (actor? acc)                  ;; => true
 (actor? (atom 0))             ;; => false
 ```
@@ -97,6 +98,7 @@ A worker picking up the next ready actor always drains the **highest
 non-empty queue first**. Within a queue, FIFO.
 
 ```clojure
+(def acc (actor 0))
 (send-h acc inc)              ;; HIGH:   urgent
 (send   acc inc)              ;; MEDIUM: default — same as plain (send …)
 (send-l acc inc)              ;; LOW:    background

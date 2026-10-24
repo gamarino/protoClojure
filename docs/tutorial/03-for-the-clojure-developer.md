@@ -264,6 +264,7 @@ the built-in functions are plain `RuntimeException`s rather than
 
 The whole reason this dialect exists. From a Clojure namespace:
 
+<!-- not run: planned (UMD interop) -->
 ```clojure
 (:require [py/numpy   :as np]
           [js/lodash  :as _]

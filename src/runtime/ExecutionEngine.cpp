@@ -166,6 +166,28 @@ const proto::ProtoObject* callLookup(proto::ProtoContext* ctx,
     return found ? v : notFound;
 }
 
+// A vector called as a function, `([10 20 30] 1)`: the element at that
+// index, as `nth` without a default. As in Clojure it takes exactly one
+// integer argument, and an index out of range raises
+// IndexOutOfBoundsException. Cold: only reached when the callable is not a
+// function.
+[[gnu::cold]] const proto::ProtoObject* callVector(proto::ProtoContext* ctx,
+                                                   const proto::ProtoObject* v,
+                                                   const proto::ProtoObject* const* args,
+                                                   unsigned int argc) {
+    if (argc != 1)
+        throwClassed(ctx, "ArityException",
+                     "Wrong number of args (" + std::to_string(argc) + ") passed to: a vector");
+    const proto::ProtoObject* i = args[0];
+    if (!i || i == PROTO_NONE || !i->isInteger(ctx))
+        throwClassed(ctx, "IllegalArgumentException", "Key must be integer");
+    const proto::ProtoList* items = vectorItems(ctx, v);
+    const long long n = static_cast<long long>(items->getSize(ctx));
+    const long long k = i->asLong(ctx);
+    if (k < 0 || k >= n) throwClassed(ctx, "IndexOutOfBoundsException", std::to_string(k));
+    return items->getAt(ctx, static_cast<int>(k));
+}
+
 // The kwArgs map of a CALL_KW: the `kvItems` key/value arguments in the
 // frame slots starting at `firstPairSlot`, folded in source order (a repeated
 // key keeps its last value). The pairs stay rooted in their slots while the
@@ -535,6 +557,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
     callScope.setAutomaticLocal(0, callable);
     for (unsigned int i = 0; i < argc; ++i) callScope.setAutomaticLocal(i + 1, args[i]);
     proto::ProtoMethod fn = callable->asMethod(&callScope);
+    if (!fn && isVector(callable)) return callVector(ctx, callable, args, argc);
     if (!fn) throwError(ctx, "VM: invoke: value is not callable");
     const proto::ProtoObject* self = callable->asMethodSelf(&callScope);
     const proto::ProtoArguments positional(callScope.getAutomaticLocals() + 1, argc);
@@ -906,6 +929,14 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
         // form), nothing is packed or copied.
         proto::ProtoContext callScope(frame.space, &frame);
         proto::ProtoMethod fn = callable->asMethod(&callScope);
+        if (!fn && isVector(callable)) {
+            const proto::ProtoObject* vargs[1] = {
+                argc >= 1 ? frame.getAutomaticLocal(stackBase + sp - argc) : nullptr};
+            const proto::ProtoObject* result = callVector(&frame, callable, vargs, argc);
+            sp -= (argc + 1);
+            pushVal(result);
+            return;
+        }
         if (!fn)
             throwError(&frame, "VM: value is not callable in CALL");
         const proto::ProtoObject* self = callable->asMethodSelf(&callScope);

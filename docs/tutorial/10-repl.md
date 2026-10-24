@@ -243,6 +243,7 @@ running program.
 
 A small but useful pair:
 
+<!-- not run: planned (tap>) -->
 ```clojure
 (tap> {:user some-user :step :pre-validate})
 ```

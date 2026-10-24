@@ -1,4 +1,5 @@
 # 8. Modules
+<!-- snippets: not run (a planned feature; see the note below) -->
 
 > **Planned — not yet implemented.** Namespaces and modules (`ns`, `:require`, `:as`, `:refer`, `CLOJURE_PATH` loading, vars, `^:dynamic` / `binding`, `defn-`) are not available in protoClojure 0.0.1; this chapter describes the intended design.
 

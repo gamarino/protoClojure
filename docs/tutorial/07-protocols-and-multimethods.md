@@ -1,4 +1,5 @@
 # 7. Protocols and Multimethods
+<!-- snippets: not run (a planned feature; see the note below) -->
 
 > **Planned — not yet implemented.** Protocols and multimethods (`defprotocol`, `extend-type`, `extend-protocol`, `defmulti`, `defmethod`, `derive`, `isa?`) are not available in protoClojure 0.0.1; this chapter describes the intended design.
 

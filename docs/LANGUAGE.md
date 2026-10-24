@@ -126,6 +126,7 @@ available as a namespace (see `ROADMAP.md`).
 
 **Example C — cross-runtime interop, target shape (planned).**
 
+<!-- not run: planned (UMD interop providers) -->
 ```clojure
 (ns demo.numpy-bridge
   (:require [py/numpy :as np]
@@ -856,6 +857,7 @@ error, `Unsupported binding form: 1`.
 `let*`, `loop` into `loop*`, `fn` into `fn*`, etc. User code rarely
 writes the `*` forms directly. (See §3.3 for what 0.0.1 implements.)
 
+<!-- not run: a syntax summary, not a program -->
 ```clojure
 (if test then else)
 (do form1 form2 ...)
@@ -1035,6 +1037,7 @@ REPL once recorded (D52). `ns` ignores its name, `:import`,
 
 A file starts with a `ns` form declaring the namespace and its imports:
 
+<!-- not run: planned (full namespaces and UMD providers) -->
 ```clojure
 (ns my.app
   (:require [clojure.string :as str]
@@ -1065,6 +1068,7 @@ JVM Clojure. `ns-import` (JVM-specific) is not supported.
 `def` interns a *var* in the current namespace. The var is what is
 captured when code references the symbol; redefining it propagates.
 
+<!-- not run: planned (vars and dynamic binding, §8) -->
 ```clojure
 (def ^:dynamic *width* 80)
 
@@ -1248,6 +1252,7 @@ Loaded modules from `py/X`, `js/X`, `pst/X` are protoCore objects.
 Their *attributes* are their members. Function call uses standard
 Clojure invocation.
 
+<!-- not run: planned (UMD interop) -->
 ```clojure
 (:require [py/math :as m])
 
@@ -1262,6 +1267,7 @@ vector are different protoCore objects with different prototypes. To
 hand a Clojure value to a foreign function that expects native
 collection types, convert explicitly:
 
+<!-- not run: planned (UMD interop) -->
 ```clojure
 (clj->py [1 2 3])              ;; protoPython list
 (py->clj (np/array [1 2 3]))   ;; protoClojure vector
@@ -1293,6 +1299,7 @@ all run on 32 MiB stacks, so a recursion reaches the same depth on each
 of them (§17).
 
 ```clojure
+(defn slow-computation [] (reduce + (range 1000000)))
 (def result (future (slow-computation)))
 @result                        ;; blocks until done
 ```
@@ -1447,6 +1454,7 @@ prototypes. A `catch` names them as members of the module, or through a
 var, and selects by the thrown value's prototype chain, so a clause
 naming a module's base type catches its subtypes:
 
+<!-- not run: needs the protoclj_geometry test build (tests/modules) -->
 ```clojure
 (def geometry (import-module "example/geometry"))
 
@@ -1557,6 +1565,7 @@ prompt is a REPL command (`:help`), not a keyword.
 
 This example combines most v0.1 features and does not run on 0.0.1.
 
+<!-- not run: planned (UMD interop) -->
 ```clojure
 ;; A non-trivial example combining most v0.1 features.
 
@@ -1709,6 +1718,7 @@ line is an ordinary comment.
 
 babashka's `http-client` shape:
 
+<!-- not run: needs an HTTP server; `url` is a placeholder -->
 ```clojure
 (http-get url)                         ; also http-post, http-put, http-delete, http-head
 (http-get url {:headers {"accept" "text/plain"} :timeout 5000})
@@ -1924,8 +1934,10 @@ read value by value, and the rest of the line after a value is consumed with
 it (D57). `parse-stream` answers nil at the end of the stream.
 `(json/generate-stream x w)` and `(dj/write x w)` write to a writer.
 
+<!-- not run: reads newline-delimited JSON on standard input (checked by hand: printf '{"count":2}\n{"count":3}\n' | protoclj ndjson.clj prints "total 5") -->
 ```clojure
 ;; Newline-delimited JSON from standard input, one record at a time.
+(require '[cheshire.core :as json])
 (loop [n 0]
   (if-let [rec (json/parse-stream *in* true)]
     (recur (+ n (:count rec)))

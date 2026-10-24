@@ -159,6 +159,13 @@ add_test(NAME cli/repl-data-formats
 add_test(NAME cli/json-under-heap-limit
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/json-under-heap-limit.sh" "$<TARGET_FILE:protoclj>")
 set_tests_properties(cli/json-under-heap-limit PROPERTIES TIMEOUT 300)
+# Every Clojure snippet of README.md, docs/LANGUAGE.md and the tutorial runs
+# (tests/docs/check_snippets.py; a snippet that cannot run says why).
+if(Python3_FOUND)
+    add_test(NAME docs/snippets
+        COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/docs/check_snippets.py" "$<TARGET_FILE:protoclj>")
+    set_tests_properties(docs/snippets PROPERTIES TIMEOUT 300)
+endif()
 # pmap joins every worker it starts (no native thread is left unjoined).
 add_test(NAME cli/pmap-joins-workers
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/pmap-joins-workers.sh" "$<TARGET_FILE:protoclj>")

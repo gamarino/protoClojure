@@ -57,6 +57,7 @@ effects, those side effects fire on every retry, not just the winning
 one.
 
 ```clojure
+(def counter (atom 0))
 ;; Wrong — side effect retried on contention
 (swap! counter (fn [n]
                  (println "computing...")     ;; printed multiple times!
@@ -174,6 +175,7 @@ foreign-language refs via UMD interop.
 Cheaper than `atom` because there is no retry. Use inside an inner
 loop where you have externally guaranteed single-thread access:
 
+<!-- not run: planned (volatiles, LANGUAGE.md §9.4) -->
 ```clojure
 (let [counter (volatile! 0)]
   (dotimes [_ 10]
@@ -203,6 +205,7 @@ concurrency primitive.)
 **`delay`** wraps a computation that runs at most once, the first time
 its value is needed:
 
+<!-- not run: planned (delay, LANGUAGE.md §9.5) -->
 ```clojure
 (def expensive (delay (do (println "computing...") 42)))
 

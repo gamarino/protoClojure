@@ -134,6 +134,7 @@ The arguments after the script's path are in `*command-line-args*`, a list
 of strings (nil when there are none), and `exit` ends the program with a
 status:
 
+<!-- not run: needs a command-line argument (shown below) -->
 ```clojure
 (when (nil? *command-line-args*)
   (println "usage: protoclj greet.clj NAME")
