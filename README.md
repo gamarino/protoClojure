@@ -617,7 +617,7 @@ the extension (Node.js for `npx`):
 ```bash
 cd editor-integration/vscode
 npx @vscode/vsce@3.2.1 package --skip-license
-code --install-extension protoclj-debug-0.3.0.vsix
+code --install-extension protoclj-debug-0.4.0.vsix
 ```
 
 **Start a session.** Open a `.clj` file, click in the gutter to set breakpoints,
@@ -637,7 +637,13 @@ with an optional condition (a Clojure form; the exception is `ex`, e.g.
 (`N`, `>= N`, `% N`...) or a log message (`i={i}`);
 every thread that runs the script (`main`, `future@file.clj:12`,
 `pmap@...`, actor workers) is its own thread, and a stop stops only that
-thread while the others run on. A breakpoint binds to the first line, from
+thread while the others run on; clojure.core's Clojure source, embedded in the
+binary, is served read-only (step into it with `"justMyCode": false`, set
+breakpoints there) and listed in Loaded Scripts; **remote debugging** over
+ssh / WSL / Docker with `remote.command` + `pathMappings` (the adapter maps the
+paths, so any DAP client can use it), or with VS Code's Remote extensions;
+**JetBrains IDEs** through the LSP4IJ plugin (docs/debugging.md, not yet tried
+in an IDE). A breakpoint binds to the first line, from
 its own on, where a form starts, and stops when a frame enters that line
 (every iteration of a loop; the line of a `(defn f [x]` stops at each call of
 `f`).

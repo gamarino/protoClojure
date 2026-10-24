@@ -26,14 +26,14 @@ repository). The extension looks for it in this order:
 ```bash
 cd editor-integration/vscode
 npx @vscode/vsce@3.2.1 package --skip-license
-code --install-extension protoclj-debug-0.3.0.vsix
+code --install-extension protoclj-debug-0.4.0.vsix
 ```
 
 On Linux and macOS you can symlink the folder instead (picks up edits after
 **Developer: Reload Window**):
 
 ```bash
-ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protoclj-debug-0.3.0
+ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protoclj-debug-0.4.0
 ```
 
 ## Use
@@ -77,5 +77,22 @@ runs the script — `main`, `future@file.clj:12`, `pmap@...`, the actor workers 
 appears in the Call Stack view; a stop stops only its thread, the others keep
 running, and Continue / Step / Pause act on the selected thread.
 
-See `docs/debugging.md` for the rules, stepping, exceptions, threads and the
-known limitations.
+clojure.core's Clojure source is embedded in `protoclj`; the call stack and
+**Loaded Scripts** show it read-only (`"justMyCode": false` steps into it).
+
+**Remote debugging.** With VS Code's Remote - SSH / WSL / Dev Containers,
+install `protoclj` and this extension on the remote side (the extension is a
+workspace extension). Or keep VS Code local and add to the configuration
+(snippets "Launch over SSH" and "Launch in WSL"):
+
+```json
+"remote": { "command": ["ssh", "-T", "-o", "BatchMode=yes", "me@host"], "path": "protoclj" },
+"pathMappings": [ { "localRoot": "${workspaceFolder}", "remoteRoot": "/home/me/project" } ]
+```
+
+The extension runs `<command...> <path> --dap`; the adapter maps the paths. The
+remote shell must print nothing when started non-interactively (no motd or
+`echo` in `.bashrc`).
+
+See `docs/debugging.md` for the rules, stepping, exceptions, threads, remote
+debugging, JetBrains IDEs and the known limitations.

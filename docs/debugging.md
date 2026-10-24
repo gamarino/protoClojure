@@ -21,12 +21,12 @@ small VS Code extension, `editor-integration/vscode/`, that registers the
    ```bash
    cd editor-integration/vscode
    npx @vscode/vsce@3.2.1 package --skip-license
-   code --install-extension protoclj-debug-0.3.0.vsix
+   code --install-extension protoclj-debug-0.4.0.vsix
    ```
 
    On Linux and macOS a symlink also works, and picks up edits after
    **Developer: Reload Window**:
-   `ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protoclj-debug-0.3.0`.
+   `ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protoclj-debug-0.4.0`.
 
 Syntax highlighting of `.clj`, `.cljs`, `.cljc` and `.edn` files is VS Code's own
 (language id `clojure`); the extension adds no grammar and no language, only the
@@ -55,6 +55,10 @@ writes one:
 | `program`     | string   | yes      | Path of the script. |
 | `args`        | string[] | no       | The script's arguments, `*command-line-args*`. |
 | `stopOnEntry` | boolean  | no       | Stop before the script's first form runs. |
+| `cwd`         | string   | no       | The script's working directory (default: the adapter's). |
+| `justMyCode`  | boolean  | no       | Default `true`: steps, Pause and exception stops stay in the script's code, and clojure.core is stepped over. `false` steps into clojure.core's Clojure fns. A breakpoint set in clojure.core stops either way. |
+| `pathMappings`| array    | no       | `[{"localRoot": ..., "remoteRoot": ...}]`: the client's paths and the adapter's, for an adapter on another machine (see "Remote debugging"). |
+| `remote`      | object   | no       | VS Code extension only: `{"command": [argv prefix], "path": "protoclj"}` runs the adapter through ssh, wsl, docker... (see "Remote debugging"). |
 
 The script runs exactly as `protoclj program args...` would, with its standard
 output and standard error shown in the Debug Console. Its standard input is
@@ -236,10 +240,147 @@ Clojure forms span lines, and several can start on one line. The rules:
 
 Stepping uses the same notion of entering a line. **Step Into** stops at the
 next line entered anywhere, which goes into the functions the line calls (the
-script's own; clojure.core's functions have no lines and are stepped over).
+script's own; with `"justMyCode": false` also clojure.core's functions written in
+Clojure — `some?`, `update-in`, `merge`... —, while those implemented in C++,
+`map`, `println`, `+`..., have no lines and are always stepped over).
 **Step Over** stops at the next line entered by the same frame or a caller.
 **Step Out** stops at the next line entered by a caller: when the call was the
 last thing on its line, that is the caller's next line.
+
+## Sources without a file
+
+clojure.core's part written in Clojure (`src/core/core.clj`) is embedded in the
+`protoclj` binary; under `--dap` it is compiled with debug information as
+library code. Its frames, breakpoints and its entry in **Loaded Scripts** name
+it as `core.clj` with a `sourceReference` (origin "clojure.core (embedded in
+protoclj)", de-emphasised): VS Code asks the adapter for its text and shows it
+read-only. You can step into its fns (`"justMyCode": false`), and set
+breakpoints in that read-only view; they stop on every thread, also with
+`justMyCode`. Its frames keep locals clearing (a local past its last use reads
+`nil`), so that core never holds the head of a seq the script walks.
+
+**Loaded Scripts** (the `loadedSources` request and `loadedSource` events)
+lists the script and clojure.core: protoClojure loads no other files (there
+is no `load-file`, and `require` only accepts the namespaces it provides).
+
+Code compiled by `evaluate` (Watch, the Debug Console, conditions, log points)
+has no frames of its own in the call stack: it runs with the thread's hooks
+off and never stops.
+
+## Remote debugging
+
+The adapter can run on another machine (a Linux server, a WSL distribution, a
+container) while VS Code runs here. Two ways:
+
+**Option 1 — VS Code's remote extensions** (Remote - SSH, WSL, Dev
+Containers). VS Code itself runs on the remote side; install `protoclj` and the
+`.vsix` there (`code --install-extension` in the remote's terminal) and debug as
+locally. The extension declares `"extensionKind": ["workspace"]`, so VS Code
+runs it next to the workspace. Nothing else is needed: paths are the same on
+both sides.
+
+**Option 2 — `remote` + `pathMappings`.** VS Code stays local and starts the
+adapter through a command that reaches the other machine; the adapter speaks
+the protocol over that command's standard input and output. `pathMappings`
+tells the adapter which local folder is which remote folder:
+
+```json
+{
+  "type": "protoclj",
+  "request": "launch",
+  "name": "Debug over SSH (protoclj)",
+  "program": "${file}",
+  "remote": { "command": ["ssh", "-T", "-o", "BatchMode=yes", "me@build-box"],
+              "path": "/home/me/.local/bin/protoclj" },
+  "pathMappings": [ { "localRoot": "${workspaceFolder}", "remoteRoot": "/home/me/project" } ]
+}
+```
+
+```json
+{
+  "type": "protoclj",
+  "request": "launch",
+  "name": "Debug in WSL (protoclj)",
+  "program": "${file}",
+  "remote": { "command": ["wsl", "-d", "Ubuntu-24.04", "--"], "path": "/home/me/.local/bin/protoclj" },
+  "pathMappings": [ { "localRoot": "${workspaceFolder}", "remoteRoot": "/home/me/project" } ]
+}
+```
+
+`remote.command` is any argv prefix (`["docker", "exec", "-i", "ctr"]` works
+too); the extension runs `<command...> <remote.path> --dap` (`remote.path`
+defaults to `protoclj`). The two folders must hold the same files (a checkout
+on each side, a shared mount). A `remote` launch without `pathMappings` is an
+error. The extension does nothing else: all path handling is in the adapter, so
+any DAP client can send the same `launch` arguments.
+
+**Keep the remote shell quiet.** The protocol is the command's output: a login
+banner, a `motd` or an `echo` in `.bashrc` for non-interactive shells corrupts
+it and VS Code drops the session. Use `ssh -T` (no terminal) and
+`BatchMode=yes` (no password prompt; use a key), and make sure
+`ssh me@host true` prints nothing.
+
+How the adapter maps paths:
+
+- Client to adapter: `program`, `cwd`, the breakpoints' source paths and the
+  `source` request's path. Adapter to client: every source in the call stack,
+  breakpoint responses and Loaded Scripts.
+- The longest matching `localRoot` / `remoteRoot` wins. Separators are
+  converted both ways (`c:\Users\me\proj\a.clj` ↔ `/home/me/proj/a.clj`), and a
+  Windows root matches without regard to case (`C:/USERS/me` matches
+  `c:\Users\me`). A path under no mapping is left as it is.
+- With `pathMappings` set, a file of the adapter's that no mapping covers comes
+  back as a `sourceReference` (name: the file name, origin: the adapter's
+  path), whose text the adapter reads and serves, with breakpoints set through
+  the reference.
+- Each mapping needs a non-empty `localRoot` and `remoteRoot`; otherwise the
+  launch fails with a message naming the entry.
+
+Checked end to end on Windows with the adapter in WSL (`wsl -d Ubuntu-24.04
+-- protoclj --dap`, the same pipe ssh gives): a breakpoint set by the Windows
+path stops, the call stack and Loaded Scripts show Windows paths, stepping
+into clojure.core serves `core.clj` by reference, the program's output arrives,
+and an exception stops in the right frame with its locals.
+
+## JetBrains IDEs (IntelliJ IDEA, PyCharm, CLion, …)
+
+JetBrains IDEs debug through a Debug Adapter Protocol client, the **LSP4IJ**
+plugin (Settings → Plugins → Marketplace → "LSP4IJ"). *This section was written
+from LSP4IJ's documentation and the adapter's protocol behaviour; it has not
+been clicked through in a JetBrains IDE, and menu names may differ between
+versions.*
+
+1. **Run → Edit Configurations… → + → Debug Adapter Protocol.**
+2. **Server** tab: the command that starts the adapter —
+   `protoclj --dap` (the full path, e.g.
+   `%LOCALAPPDATA%\Programs\proto\bin\protoclj.exe --dap`), or the remote
+   form, e.g. `ssh -T -o BatchMode=yes me@host /home/me/.local/bin/protoclj --dap`.
+3. **Mappings** tab: the files the configuration debugs, so the IDE lets you set
+   breakpoints in them — files with the extension `.clj` (and `.cljc`), or the
+   Clojure language if a Clojure plugin provides one.
+4. **Configuration** tab: the launch JSON — the same attributes as VS Code's
+   `launch.json`:
+
+   ```json
+   {
+     "type": "protoclj",
+     "request": "launch",
+     "program": "/home/me/project/hello.clj",
+     "stopOnEntry": false,
+     "justMyCode": true,
+     "pathMappings": [ { "localRoot": "C:\\Users\\me\\project", "remoteRoot": "/home/me/project" } ]
+   }
+   ```
+
+   `pathMappings` only when the adapter runs on another machine; IDE variables
+   such as `${workspaceFolder}` are VS Code's and may not be expanded, so give
+   absolute paths.
+
+Exception breakpoints (All Exceptions, Uncaught Exceptions, with conditions)
+appear once the adapter has started. Syntax: IntelliJ has no Clojure support of
+its own — use a Clojure plugin (Cursive, for example) or a Clojure TextMate
+grammar (Settings → Editor → TextMate Bundles); this repository ships no
+grammar of its own (VS Code's is built in).
 
 ## How it works
 
@@ -253,9 +394,11 @@ last thing on its line, that is the caller's next line.
   `disable-locals-clearing`), so Locals shows every binding in scope.
 - A body with debug information pushes a `DebugFrame` while it runs
   (`src/runtime/DebugHook.h`); `LINE` calls the debugger's hook when the frame
-  enters a line. Code compiled without debug information — clojure.core, and
-  every program not run under `--dap` — has no `LINE` instructions and costs one
-  test per call.
+  enters a line. Code compiled without debug information — every program not
+  run under `--dap` — has no `LINE` instructions and costs one test per call.
+  Under `--dap` clojure.core's `core.clj` is compiled with debug information
+  too, marked as library code (`DebugInfo::library`), with locals clearing
+  kept.
 - The adapter (`src/dap/`) reads the protocol on a plain thread. A thread that
   stops stays inside the hook, parked in a protoCore unmanaged region, and
   answers the requests that read the program (stack, scopes, variables,
@@ -288,6 +431,10 @@ last thing on its line, that is the caller's next line.
   exception raised as a C++ exception (StackOverflowError, a module's
   defect) never stops.
 - No data breakpoints, function breakpoints, `setVariable`, restart or attach.
+- clojure.core's fns implemented in C++ (`map`, `reduce`, `println`, ...) have no
+  source to step into; only its part written in Clojure (`core.clj`) does.
+- `remote` is an attribute of the VS Code extension; another client starts the
+  remote command itself (the adapter only sees `pathMappings`).
 - A condition or log form is compiled each time it runs (there is no cache):
   a breakpoint with a condition costs a compilation per hit.
 - Forms a macro builds have no lines: a breakpoint binds to the forms of the
@@ -317,6 +464,9 @@ while `main` runs on, stepping one while the other stays stopped, pausing one
 busy future, and a thread stopped while another allocates through several
 collections; exception filter conditions (true, false, one that throws, one
 that does not read, one calling a fn with a breakpoint), line conditions, hit
-counts (`3`, `>= 2`, `% 2`, with a condition, an invalid one), log points
+counts (`3`, `>= 2`, `% 2`, with a condition, an invalid one), path mappings
+(a fake client root, the stack and Loaded Scripts in client paths, stepping
+into clojure.core by reference and a breakpoint on it, `justMyCode`, an
+unmapped script served by reference, a malformed mapping), log points
 (`{i}`, `{{literal}}`, an expression error), and a condition evaluated per
 thread. A watchdog fails a session that hangs.

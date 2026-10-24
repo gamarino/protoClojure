@@ -9,6 +9,24 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — debugger: sources, path mappings, remote launch (2026-10-24)
+
+- clojure.core's Clojure part, embedded in the binary, is compiled with debug
+  information under `--dap` as library code: its fns can be stepped into
+  (`justMyCode: false`; the default `true` keeps steps, pause and exception
+  stops in the program) and take breakpoints. Frames, breakpoints and
+  Loaded Scripts name it by `sourceReference`; the `source` request serves
+  its text. `loadedSources` / `loadedSource` events.
+- `launch` takes `pathMappings` (`[{localRoot, remoteRoot}]`), translated by
+  the adapter both ways (longest prefix, either separator, Windows roots
+  without case); an unmapped file comes back as a `sourceReference` served
+  by the adapter. Also `cwd`.
+- VS Code extension 0.4.0: `remote: {command, path}` runs the adapter through
+  ssh / wsl / docker (`<command...> <path> --dap`), snippets "Launch over
+  SSH" and "Launch in WSL", `extensionKind: ["workspace"]`.
+- docs/debugging.md: remote debugging, sources without a file, JetBrains IDEs
+  through LSP4IJ.
+
 ### Added — debugger: conditions, hit counts and log points (2026-10-24)
 
 - Exception filters take a condition (`supportsExceptionFilterOptions`): a

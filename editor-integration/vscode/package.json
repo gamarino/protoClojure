@@ -1,8 +1,8 @@
 {
   "name": "protoclj-debug",
   "displayName": "protoClojure Debugger",
-  "description": "Debug Clojure scripts with protoClojure (protoclj --dap): breakpoints, exception breakpoints, stepping, threads, call stack, locals and the Debug Console. Uses VS Code's own Clojure syntax support; coexists with Calva.",
-  "version": "0.3.0",
+  "description": "Debug Clojure scripts with protoClojure (protoclj --dap): breakpoints (conditions, hit counts, log points), exception breakpoints, stepping (into clojure.core too), threads, call stack, locals, the Debug Console, path mappings and remote launch over ssh / wsl / docker. Uses VS Code's own Clojure syntax support; coexists with Calva.",
+  "version": "0.4.0",
   "publisher": "protoclojure-placeholder",
   "engines": {
     "vscode": "^1.66.0"
@@ -66,6 +66,63 @@
                 "type": "boolean",
                 "description": "Stop before the script's first form runs.",
                 "default": false
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory of the script (a client path when pathMappings apply). Default: the adapter's own."
+              },
+              "justMyCode": {
+                "type": "boolean",
+                "default": true,
+                "description": "Step and pause only in the script's own code; clojure.core (embedded, read-only) is stepped over. Breakpoints set in clojure.core still stop. Set false to step into clojure.core's Clojure fns."
+              },
+              "pathMappings": {
+                "type": "array",
+                "description": "Maps the client's paths (localRoot) to the adapter's (remoteRoot), for a remote adapter. Longest prefix wins; separators and Windows drive-letter case are handled by the adapter.",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "localRoot",
+                    "remoteRoot"
+                  ],
+                  "properties": {
+                    "localRoot": {
+                      "type": "string",
+                      "description": "A directory on this machine, e.g. ${workspaceFolder}."
+                    },
+                    "remoteRoot": {
+                      "type": "string",
+                      "description": "The same directory where protoclj --dap runs."
+                    }
+                  }
+                },
+                "default": [
+                  {
+                    "localRoot": "${workspaceFolder}",
+                    "remoteRoot": "/home/me/project"
+                  }
+                ]
+              },
+              "remote": {
+                "type": "object",
+                "description": "Run the adapter elsewhere: `command` is the argv prefix that reaches the other machine (ssh, wsl, docker exec -i); the extension runs <command...> <path> --dap. Needs pathMappings.",
+                "required": [
+                  "command"
+                ],
+                "properties": {
+                  "command": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "For example [\"ssh\", \"-T\", \"-o\", \"BatchMode=yes\", \"me@host\"], [\"wsl\", \"-d\", \"Ubuntu-24.04\", \"--\"], [\"docker\", \"exec\", \"-i\", \"ctr\"]."
+                  },
+                  "path": {
+                    "type": "string",
+                    "default": "protoclj",
+                    "description": "protoclj on the remote side (default: protoclj on its PATH)."
+                  }
+                }
               }
             }
           }
@@ -90,6 +147,57 @@
               "program": "^\"\\${file}\"",
               "stopOnEntry": false
             }
+          },
+          {
+            "label": "protoClojure: Launch over SSH",
+            "description": "Run protoclj --dap on another machine through ssh; the workspace is mapped to the remote checkout.",
+            "body": {
+              "type": "protoclj",
+              "request": "launch",
+              "name": "Debug over SSH (protoclj)",
+              "program": "^\"\\${file}\"",
+              "remote": {
+                "command": [
+                  "ssh",
+                  "-T",
+                  "-o",
+                  "BatchMode=yes",
+                  "user@host"
+                ],
+                "path": "protoclj"
+              },
+              "pathMappings": [
+                {
+                  "localRoot": "^\"\\${workspaceFolder}\"",
+                  "remoteRoot": "/home/user/project"
+                }
+              ]
+            }
+          },
+          {
+            "label": "protoClojure: Launch in WSL",
+            "description": "Run protoclj --dap inside a WSL distribution; the Windows workspace is mapped to the Linux checkout.",
+            "body": {
+              "type": "protoclj",
+              "request": "launch",
+              "name": "Debug in WSL (protoclj)",
+              "program": "^\"\\${file}\"",
+              "remote": {
+                "command": [
+                  "wsl",
+                  "-d",
+                  "Ubuntu-24.04",
+                  "--"
+                ],
+                "path": "protoclj"
+              },
+              "pathMappings": [
+                {
+                  "localRoot": "^\"\\${workspaceFolder}\"",
+                  "remoteRoot": "/home/user/project"
+                }
+              ]
+            }
           }
         ]
       }
@@ -99,5 +207,8 @@
     "type": "git",
     "url": "https://github.com/gamarino/protoClojure"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "extensionKind": [
+    "workspace"
+  ]
 }

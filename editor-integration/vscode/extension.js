@@ -8,6 +8,12 @@
 //
 // `protoclj` is taken from the `protoclj.path` setting if set, else from the
 // default install location (when present), else from PATH.
+//
+// Remote launch: a configuration with `remote.command` (an argv prefix such as
+// ["ssh", "-T", "me@host"] or ["wsl", "-d", "Ubuntu-24.04", "--"]) runs
+// `<command...> <remote.path> --dap` instead; everything about paths
+// (pathMappings) is done by the adapter itself, so this file only chooses the
+// command.
 const vscode = require("vscode");
 const fs = require("fs");
 const path = require("path");
@@ -46,13 +52,39 @@ const configurationProvider = {
         .showInformationMessage("protoClojure: open a .clj file or set 'program' in launch.json.")
         .then(() => undefined);
     }
+    if (config.remote !== undefined) {
+      const cmd = config.remote && config.remote.command;
+      if (!Array.isArray(cmd) || cmd.length === 0 || !cmd.every((a) => typeof a === "string")) {
+        return vscode.window
+          .showErrorMessage('protoClojure: "remote.command" must be a non-empty array of strings, e.g. ["ssh", "-T", "me@host"].')
+          .then(() => undefined);
+      }
+      if (!Array.isArray(config.pathMappings) || config.pathMappings.length === 0) {
+        return vscode.window
+          .showErrorMessage(
+            'protoClojure: a "remote" launch needs "pathMappings": [{"localRoot": "${workspaceFolder}", ' +
+              '"remoteRoot": "<the same folder on the remote machine>"}], so that breakpoints and the ' +
+              "call stack name the same files on both sides."
+          )
+          .then(() => undefined);
+      }
+    }
     return config;
   },
 };
 
 function activate(context) {
   const factory = {
-    createDebugAdapterDescriptor(/* session */) {
+    createDebugAdapterDescriptor(session) {
+      const remote = session && session.configuration && session.configuration.remote;
+      if (remote && Array.isArray(remote.command) && remote.command.length > 0) {
+        const remotePath = remote.path || "protoclj";
+        return new vscode.DebugAdapterExecutable(remote.command[0], [
+          ...remote.command.slice(1),
+          remotePath,
+          "--dap",
+        ]);
+      }
       return new vscode.DebugAdapterExecutable(protocljCommand(), ["--dap"]);
     },
   };
