@@ -236,6 +236,7 @@ outputs. A non-zero exit is an answer, not an exception:
 `:in` feeds the program's standard input, `:dir` sets its working
 directory and `:env` its environment:
 
+<!-- not run on Windows: POSIX commands and the /tmp directory -->
 ```clojure
 (println (:out (sh "tr" "a-z" "A-Z" :in "shout\n")))   ;; SHOUT
 (println (:out (sh "pwd" :dir "/tmp")))                ;; /tmp

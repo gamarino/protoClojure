@@ -68,8 +68,9 @@ struct CompiledPattern {
     // subject; a pattern with back-references runs on the recursive one.
     // libc++ (macOS) backtracks on a heap vector of states, never on the
     // native stack (basic_regex::__match_at_start_ecma), so no pattern is
-    // recursive there. Every other standard library (MSVC) counts as
-    // recursive.
+    // recursive there. MSVC's engine recurses but bounds its own depth
+    // (_REGEX_MAX_STACK_COUNT) and throws regex_error(error_stack) first
+    // (runRegex), so none is recursive there either.
     bool        recursive;
 };
 
@@ -84,6 +85,27 @@ std::regex_constants::match_flag_type continuationFlags(const CompiledPattern* c
                                                        const std::string& subject,
                                                        std::size_t pos);
 
+// Raises StackOverflowError for a match of `cp` that the engine gave up
+// (Regex.cpp).
+[[noreturn]] void throwRegexGaveUp(const CompiledPattern* cp, const std::regex_error& e);
+
+// Runs one std::regex search or match, `f()`. MSVC's engine bounds its own
+// recursion and work and throws regex_error(error_stack /
+// error_complexity) instead of overflowing the native stack: that is raised
+// as StackOverflowError, as Java's engine overflows on such a match. Any
+// other regex_error propagates.
+template <typename F>
+auto runRegex(const CompiledPattern* cp, F&& f) -> decltype(f()) {
+    try {
+        return f();
+    } catch (const std::regex_error& e) {
+        if (e.code() == std::regex_constants::error_stack ||
+            e.code() == std::regex_constants::error_complexity)
+            throwRegexGaveUp(cp, e);
+        throw;
+    }
+}
+
 // Calls `f(m)` for each successive match of `cp` in `s`, as
 // std::sregex_iterator walks them (after an empty match, a non-empty match
 // at the same place first, else the search moves one byte on), but with
@@ -95,8 +117,10 @@ void forEachMatch(const std::string& s, const CompiledPattern* cp, F&& f) {
     namespace rc = std::regex_constants;
     std::smatch m;
     auto search = [&](std::size_t from, rc::match_flag_type extra) {
-        return std::regex_search(s.cbegin() + static_cast<std::ptrdiff_t>(from), s.cend(), m,
-                                 cp->regex, continuationFlags(cp, s, from) | extra);
+        return runRegex(cp, [&] {
+            return std::regex_search(s.cbegin() + static_cast<std::ptrdiff_t>(from), s.cend(), m,
+                                     cp->regex, continuationFlags(cp, s, from) | extra);
+        });
     };
     if (!search(0, rc::match_default)) return;
     for (;;) {

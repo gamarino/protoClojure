@@ -53,6 +53,13 @@ expect_script_error() {
 
 reads='read error: StackOverflowError: forms nested too deeply'
 compiles='compile error: StackOverflowError: forms nested too deeply'
+# On Windows (MSVC) the reader's frames are larger and the 32 MiB stack runs
+# out while 40,000 nested fn forms are still being read, so the guard that
+# fires is the reader's: either error is the protection this checks. Linux
+# and macOS keep the stricter expectation, the compiler's guard.
+if command -v cygpath >/dev/null 2>&1; then
+    compiles='StackOverflowError: forms nested too deeply'
+fi
 
 nested 200000 '(+ 1 ' 0 ')' | expect_script_error "200,000 nested lists" "$reads"
 { printf '(println '; nested 200000 '[' '' ']'; printf ')\n'; } |

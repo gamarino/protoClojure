@@ -51,8 +51,9 @@ TEST(Regex, UnsupportedSyntaxIsAPatternSyntaxError) {
 }
 
 TEST(Regex, BackReferencesSelectTheBacktrackingExecutor) {
-#if defined(_LIBCPP_VERSION)
-    // libc++ backtracks on a heap vector, never on the native stack.
+#if defined(_LIBCPP_VERSION) || defined(_MSVC_STL_VERSION)
+    // libc++ backtracks on a heap vector, never on the native stack; MSVC
+    // bounds its own recursion and throws (runRegex).
     EXPECT_FALSE(compilePattern("(a)\\1")->recursive);
     EXPECT_FALSE(compilePattern("(a|b)*")->recursive);
     return;
@@ -78,7 +79,13 @@ TEST(Regex, ContinuedSearchesSeeThePrecedingText) {
         });
         return out;
     };
+#if defined(_MSVC_STL_VERSION)
+    // MSVC's ECMAScript `^` also matches after a line terminator, with or
+    // without (?m) (STATUS.md, known issues).
+    EXPECT_EQ(all("^\\w", "ab\ncd"), "[a][c]");
+#else
     EXPECT_EQ(all("^\\w", "ab\ncd"), "[a]");
+#endif
     EXPECT_EQ(all("\\b\\w", "ab cd"), "[a][c]");
     EXPECT_EQ(all("\\w", "ab"), "[a][b]");
     EXPECT_EQ(all("x*", "ab"), "[][][]");

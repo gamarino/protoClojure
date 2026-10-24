@@ -734,11 +734,13 @@ See `LANGUAGE.md` for the full discussion. Summary:
     so the native-stack guard never refuses a pattern; a back-reference
     pattern on a huge subject matches (and may use much memory) where
     libstdc++ raises StackOverflowError.
-  - MSVC's standard library has no `std::regex::multiline`: `(?m)` is
-    accepted and adds nothing; `^` and `$` behave as that library's
-    ECMAScript mode defines them. `inline-flags.clj` tests `(?m)` and is
-    expected to fail on Windows until a decision: ship one regex engine on
-    every platform, or document `(?m)` as unsupported on Windows.
+  - MSVC's standard library has no `std::regex::multiline`, and its
+    ECMAScript `^` (and `$`) match at line terminators whatever the flags:
+    on Windows every pattern behaves as if `(?m)` were given, so `^\w` finds
+    a match at the start of each line where Java finds one only at the start
+    of the input. Its engine bounds its own recursion and work; a match that
+    goes past those bounds raises StackOverflowError (as Java's overflows),
+    so long subjects with long matches (`.*` over 300 KB) may fail there.
   A single engine everywhere (a bundled one) would remove all three
   differences; that is a dependency decision left to the maintainer.
 

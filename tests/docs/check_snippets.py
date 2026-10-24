@@ -9,13 +9,14 @@ script, in a fresh temporary directory, with a small text on standard input.
 A block passes when protoclj exits 0. Blocks are skipped when they are REPL
 transcripts (`user=>`), or when the line just before the fence is the HTML
 comment `<!-- not run: reason -->` (planned features, fragments, programs
-that need a network or run forever), or when one of the first lines of the
+that need a network or run forever), or `<!-- not run on Windows: reason -->`
+on Windows only (POSIX paths and commands), or when one of the first lines of the
 file is `<!-- snippets: not run (reason) -->` (a chapter about a planned
 feature); every skip is listed with its reason.
 
 Exit status 0 when every block that is run passes.
 """
-import pathlib, re, subprocess, sys, tempfile
+import os, pathlib, re, subprocess, sys, tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 SAMPLE = "the quick brown fox\njumps over the lazy dog\nERROR latency=1200ms\nthe end\n"
@@ -39,8 +40,11 @@ def blocks(path):
         body = "\n".join(l[len(indent):] if l.startswith(indent) else l for l in lines[start:j])
         skip = whole
         n = re.match(r"<!--\s*not run:\s*(.*?)\s*-->", prev)
+        w = re.match(r"<!--\s*not run on Windows:\s*(.*?)\s*-->", prev)
         if n:
             skip = n.group(1)
+        elif w and os.name == "nt":
+            skip = "Windows: " + w.group(1)
         elif skip is None and "user=>" in body:
             skip = "REPL transcript"
         yield start + 1, body, skip

@@ -14,6 +14,12 @@ PROTOCLJ="${1:?usage: core-embedded.sh <protoclj>}"
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
 cp "$PROTOCLJ" "$dir/protoclj"
+# On Windows the copy still needs the DLLs beside the original (protoCore and
+# its dependencies); the loader searches PATH. What this checks is that no
+# core.clj file is looked up, which PATH does not affect.
+if command -v cygpath >/dev/null 2>&1; then
+    PATH="$(dirname "$PROTOCLJ"):$PATH"; export PATH
+fi
 printf '(println (when-let [x 2] (-> x inc (* 10))) (case :b :a 1 :b 2))\n' > "$dir/p.clj"
 out=$(cd "$dir" && env -u PROTOCLJ_HOME ./protoclj p.clj 2>&1)
 rc=$?

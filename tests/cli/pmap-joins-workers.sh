@@ -17,8 +17,10 @@
 # Usage: pmap-joins-workers.sh <path-to-protoclj>
 set -u
 PROTOCLJ="${1:?usage: pmap-joins-workers.sh <protoclj>}"
-if [[ ! -r /proc/self/status ]]; then
-    echo "SKIP: no /proc/self/status"
+# Under MSYS2 / Git Bash the shell has a /proc of its own, which the native
+# Windows protoclj cannot read.
+if [[ ! -r /proc/self/status ]] || command -v cygpath >/dev/null 2>&1; then
+    echo "SKIP: protoclj cannot read /proc/self/status here"
     exit 0
 fi
 TMP=$(mktemp -d)

@@ -142,8 +142,8 @@ const CompiledPattern* compilePattern(const std::string& source) {
     const std::string ecma = translate(source, flags);
     auto compiled = std::make_unique<CompiledPattern>();
     compiled->source = source;
-#if defined(_LIBCPP_VERSION)
-    compiled->recursive = false;  // libc++ backtracks on the heap (Regex.h)
+#if defined(_LIBCPP_VERSION) || defined(_MSVC_STL_VERSION)
+    compiled->recursive = false;  // heap backtracking / self-bounded (Regex.h)
 #else
     compiled->recursive = true;
 #endif
@@ -194,6 +194,12 @@ std::regex_constants::match_flag_type continuationFlags(const CompiledPattern* c
     (void)cp;
     return std::regex_constants::match_prev_avail;
 #endif
+}
+
+void throwRegexGaveUp(const CompiledPattern* cp, const std::regex_error& e) {
+    throw StackOverflowError("StackOverflowError: matching the pattern " + cp->source +
+                             " went past the regular-expression engine's own limit (" +
+                             e.what() + ")");
 }
 
 void guardRecursiveMatch(const CompiledPattern* cp, std::size_t subjectBytes) {

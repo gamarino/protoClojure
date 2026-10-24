@@ -1699,7 +1699,8 @@ const proto::ProtoObject* matcherFind(proto::ProtoContext* ctx, const proto::Pro
     std::smatch match;
     const auto flags = continuationFlags(cp, subject, static_cast<std::size_t>(pos));
     guardRecursiveMatch(cp, subject.size() - static_cast<std::size_t>(pos));
-    if (!std::regex_search(subject.begin() + pos, subject.end(), match, cp->regex, flags)) {
+    if (!runRegex(cp, [&] { return std::regex_search(subject.begin() + pos, subject.end(), match,
+                                                     cp->regex, flags); })) {
         m->setAttribute(ctx, mPosKey(ctx), ctx->fromLong(static_cast<long long>(subject.size()) + 1));
         return PROTO_NONE;
     }
@@ -1734,7 +1735,7 @@ const proto::ProtoObject* prim_re_find(proto::ProtoContext* ctx,
     const std::string subject = stringArgOf(ctx, args, 1, "re-find");
     std::smatch match;
     guardRecursiveMatch(cp, subject.size());
-    if (!std::regex_search(subject, match, cp->regex)) return PROTO_NONE;
+    if (!runRegex(cp, [&] { return std::regex_search(subject, match, cp->regex); })) return PROTO_NONE;
     return matchValue(ctx, match, cp->groups);
 }
 
@@ -1749,7 +1750,7 @@ const proto::ProtoObject* prim_re_matches(proto::ProtoContext* ctx,
     const std::string subject = stringArgOf(ctx, args, 1, "re-matches");
     std::smatch match;
     guardRecursiveMatch(cp, subject.size());
-    if (!std::regex_match(subject, match, cp->regex)) return PROTO_NONE;
+    if (!runRegex(cp, [&] { return std::regex_match(subject, match, cp->regex); })) return PROTO_NONE;
     return matchValue(ctx, match, cp->groups);
 }
 
@@ -1767,8 +1768,8 @@ const proto::ProtoObject* reSeqFrom(proto::ProtoContext* ctx, const proto::Proto
     if (pos > subject->size()) return PROTO_NONE;
     std::smatch m;
     const auto flags = continuationFlags(cp, *subject, pos);
-    if (!std::regex_search(subject->cbegin() + static_cast<std::ptrdiff_t>(pos), subject->cend(),
-                           m, cp->regex, flags))
+    if (!runRegex(cp, [&] { return std::regex_search(subject->cbegin() + static_cast<std::ptrdiff_t>(pos),
+                                                     subject->cend(), m, cp->regex, flags); }))
         return PROTO_NONE;
     const std::size_t start = static_cast<std::size_t>(m[0].first - subject->cbegin());
     const std::size_t end = start + static_cast<std::size_t>(m.length(0));
