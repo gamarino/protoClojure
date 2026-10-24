@@ -125,6 +125,16 @@ const PO* lazy5(proto::ProtoContext* ctx, StepKind kind, const PO* a, const PO* 
     return s.ret(newLazySeq(s.ctx(), s.get(0)));
 }
 
+// lazy5 for a step function that stores the new seq in its own scope's
+// slot `slot`: the step is rooted in that slot until the lazy seq holds it,
+// so no scope of its own is opened. One context fewer per element walked.
+const PO* lazy5At(Scope& s, unsigned slot, StepKind kind, const PO* a, const PO* b,
+                  const PO* c, const PO* d, const PO* e) {
+    const PO* step = newStep(s.ctx(), kind, a, b, c, d, e);
+    s.set(slot, step);
+    return newLazySeq(s.ctx(), s.get(slot));
+}
+
 bool isStep(proto::ProtoContext*, const PO* v) { return isListTag(v); }
 
 // Chunk fields.
@@ -199,6 +209,19 @@ ChunkSlice sliceOf(proto::ProtoContext* ctx, const PO* chunk, const ChunkView& c
     return sl;
 }
 
+// The rest of `s` for a lazy step that keeps it to itself, as the source it
+// reads next (map, filter, take, ...): seqMore, except that the rest of a
+// list is an unchunked view of the same list one element on, as
+// SeqWalk::remaining makes. Taking the rest of a list with removeFirst
+// rebuilds part of its tree, so a lazy step over a list of n elements paid
+// O(log n) allocations per element; the view costs one object. The view is
+// a seq like the list it reads and never reaches the program: what a step
+// hands out is its own cons or chunk.
+const PO* walkMore(proto::ProtoContext* ctx, const PO* s);
+inline const PO* walkNext(proto::ProtoContext* ctx, const PO* s) {
+    return seqOf(ctx, walkMore(ctx, s));
+}
+
 const PO* stepMap1(proto::ProtoContext* ctx, const PO*, const StepOperands& o) {
     Scope s(ctx, 4);
     s.set(0, seqOf(s.ctx(), o.b));
@@ -223,8 +246,8 @@ const PO* stepMap1(proto::ProtoContext* ctx, const PO*, const StepOperands& o) {
         }
     }
     s.set(1, call1(s.ctx(), o.a, seqFirst(s.ctx(), src)));
-    s.set(2, seqMore(s.ctx(), src));
-    s.set(3, lazy5(s.ctx(), StepKind::Map1, o.a, s.get(2), nullptr, nullptr, nullptr));
+    s.set(2, walkMore(s.ctx(), src));
+    s.set(3, lazy5At(s, 3, StepKind::Map1, o.a, s.get(2), nullptr, nullptr, nullptr));
     return s.ret(newCons(s.ctx(), s.get(1), s.get(3)));
 }
 
@@ -240,13 +263,13 @@ const PO* stepMapN(proto::ProtoContext* ctx, const PO*, const StepOperands& o) {
         if (sq == PROTO_NONE) return PROTO_NONE;
         s.set(2, sq);
         s.set(0, s.get(0)->asList(s.ctx())->appendLast(s.ctx(), seqFirst(s.ctx(), sq))->asObject(s.ctx()));
-        s.set(1, s.get(1)->asList(s.ctx())->appendLast(s.ctx(), seqMore(s.ctx(), s.get(2)))->asObject(s.ctx()));
+        s.set(1, s.get(1)->asList(s.ctx())->appendLast(s.ctx(), walkMore(s.ctx(), s.get(2)))->asObject(s.ctx()));
     }
     const proto::ProtoList* firsts = s.get(0)->asList(s.ctx());
     std::vector<const PO*> argv(n);
     for (proto::proto_ulong i = 0; i < n; ++i) argv[i] = firsts->getAt(s.ctx(), static_cast<int>(i));
     s.set(2, call(s.ctx(), o.a, argv.data(), static_cast<unsigned>(n)));
-    s.set(3, lazy5(s.ctx(), StepKind::MapN, o.a, s.get(1), nullptr, nullptr, nullptr));
+    s.set(3, lazy5At(s, 3, StepKind::MapN, o.a, s.get(1), nullptr, nullptr, nullptr));
     return s.ret(newCons(s.ctx(), s.get(2), s.get(3)));
 }
 
@@ -284,10 +307,10 @@ const PO* stepFilter(proto::ProtoContext* ctx, const PO*, const StepOperands& o)
         const PO* x = seqFirst(s.ctx(), src);
         s.set(1, x);
         if (truthy(call1(s.ctx(), o.a, x)) != negate) {
-            s.set(2, lazy5(s.ctx(), StepKind::Filter, o.a, seqMore(s.ctx(), s.get(0)), o.c, nullptr, nullptr));
+            s.set(2, lazy5At(s, 2, StepKind::Filter, o.a, walkMore(s.ctx(), s.get(0)), o.c, nullptr, nullptr));
             return s.ret(newCons(s.ctx(), s.get(1), s.get(2)));
         }
-        s.set(0, seqNext(s.ctx(), s.get(0)));
+        s.set(0, walkNext(s.ctx(), s.get(0)));
         s.tick();
     }
 }
@@ -305,8 +328,8 @@ const PO* stepTake(proto::ProtoContext* ctx, const PO*, const StepOperands& o) {
     s.set(0, seqOf(s.ctx(), o.b));
     if (s.get(0) == PROTO_NONE) return PROTO_NONE;
     if (n == 1) return s.ret(newCons(s.ctx(), seqFirst(s.ctx(), s.get(0)), PROTO_NONE));
-    s.set(1, seqMore(s.ctx(), s.get(0)));
-    s.set(2, lazy5(s.ctx(), StepKind::Take, s.ctx()->fromLong(n - 1), s.get(1), nullptr, nullptr, nullptr));
+    s.set(1, walkMore(s.ctx(), s.get(0)));
+    s.set(2, lazy5At(s, 2, StepKind::Take, s.ctx()->fromLong(n - 1), s.get(1), nullptr, nullptr, nullptr));
     return s.ret(newCons(s.ctx(), seqFirst(s.ctx(), s.get(0)), s.get(2)));
 }
 
@@ -317,7 +340,7 @@ const PO* stepTakeWhile(proto::ProtoContext* ctx, const PO*, const StepOperands&
     const PO* x = seqFirst(s.ctx(), s.get(0));
     s.set(1, x);
     if (!truthy(call1(s.ctx(), o.a, x))) return PROTO_NONE;
-    s.set(2, lazy5(s.ctx(), StepKind::TakeWhile, o.a, seqMore(s.ctx(), s.get(0)), nullptr, nullptr, nullptr));
+    s.set(2, lazy5At(s, 2, StepKind::TakeWhile, o.a, walkMore(s.ctx(), s.get(0)), nullptr, nullptr, nullptr));
     return s.ret(newCons(s.ctx(), s.get(1), s.get(2)));
 }
 
@@ -343,14 +366,14 @@ const PO* stepDropWhile(proto::ProtoContext* ctx, const PO*, const StepOperands&
 // second element is read.
 const PO* stepIterate(proto::ProtoContext* ctx, const PO*, const StepOperands& o) {
     Scope s(ctx, 1);
-    s.set(0, lazy5(s.ctx(), StepKind::IterateNext, o.a, o.b, nullptr, nullptr, nullptr));
+    s.set(0, lazy5At(s, 0, StepKind::IterateNext, o.a, o.b, nullptr, nullptr, nullptr));
     return s.ret(newCons(s.ctx(), o.b, s.get(0)));
 }
 
 const PO* stepIterateNext(proto::ProtoContext* ctx, const PO*, const StepOperands& o) {
     Scope s(ctx, 2);
     s.set(0, call1(s.ctx(), o.a, o.b));
-    s.set(1, lazy5(s.ctx(), StepKind::IterateNext, o.a, s.get(0), nullptr, nullptr, nullptr));
+    s.set(1, lazy5At(s, 1, StepKind::IterateNext, o.a, s.get(0), nullptr, nullptr, nullptr));
     return s.ret(newCons(s.ctx(), s.get(0), s.get(1)));
 }
 
@@ -387,8 +410,8 @@ const PO* stepCycle(proto::ProtoContext* ctx, const PO*, const StepOperands& o) 
     s.set(0, seqOf(s.ctx(), o.b));
     if (s.get(0) == PROTO_NONE) s.set(0, seqOf(s.ctx(), o.a));
     if (s.get(0) == PROTO_NONE) return PROTO_NONE;
-    s.set(1, seqMore(s.ctx(), s.get(0)));
-    s.set(2, lazy5(s.ctx(), StepKind::Cycle, o.a, s.get(1), nullptr, nullptr, nullptr));
+    s.set(1, walkMore(s.ctx(), s.get(0)));
+    s.set(2, lazy5At(s, 2, StepKind::Cycle, o.a, s.get(1), nullptr, nullptr, nullptr));
     return s.ret(newCons(s.ctx(), seqFirst(s.ctx(), s.get(0)), s.get(2)));
 }
 
@@ -435,7 +458,7 @@ const PO* stepRange(proto::ProtoContext* ctx, const PO*, const StepOperands& o) 
 const PO* stepRangeInf(proto::ProtoContext* ctx, const PO*, const StepOperands& o) {
     Scope s(ctx, 2);
     s.set(0, numberAdd(s.ctx(), o.a, o.b));
-    s.set(1, lazy5(s.ctx(), StepKind::RangeInf, s.get(0), o.b, nullptr, nullptr, nullptr));
+    s.set(1, lazy5At(s, 1, StepKind::RangeInf, s.get(0), o.b, nullptr, nullptr, nullptr));
     return s.ret(newCons(s.ctx(), o.a, s.get(1)));
 }
 
@@ -448,7 +471,7 @@ const PO* stepConcat(proto::ProtoContext* ctx, const PO*, const StepOperands& o)
     while (s.get(0) == PROTO_NONE) {
         s.set(2, seqOf(s.ctx(), s.get(1)));
         if (s.get(2) == PROTO_NONE) return PROTO_NONE;
-        s.set(1, seqMore(s.ctx(), s.get(2)));
+        s.set(1, walkMore(s.ctx(), s.get(2)));
         s.set(0, seqOf(s.ctx(), seqFirst(s.ctx(), s.get(2))));
         s.tick();
     }
@@ -461,16 +484,16 @@ const PO* prependSeq(proto::ProtoContext* ctx, const PO* sq, const PO* restColls
         return sq;
     Scope s(ctx, 2);
     if (isListTag(sq)) {
-        s.set(0, lazy5(s.ctx(), StepKind::Concat, PROTO_NONE, restColls, nullptr, nullptr, nullptr));
+        s.set(0, lazy5At(s, 0, StepKind::Concat, PROTO_NONE, restColls, nullptr, nullptr, nullptr));
         const proto::ProtoList* l = sq->asList(s.ctx());
         return s.ret(newChunk(s.ctx(), l, 0, static_cast<long long>(l->getSize(s.ctx())), s.get(0), false));
     }
     if (seqObjectKind(s.ctx(), sq) == SeqObject::Chunk) {
         const ChunkView cv = chunkOf(s.ctx(), sq);
-        s.set(0, lazy5(s.ctx(), StepKind::Concat, cv.more, restColls, nullptr, nullptr, nullptr));
+        s.set(0, lazy5At(s, 0, StepKind::Concat, cv.more, restColls, nullptr, nullptr, nullptr));
         return s.ret(newChunk(s.ctx(), cv.items, cv.off, cv.end, s.get(0), cv.chunked));
     }
-    s.set(0, lazy5(s.ctx(), StepKind::Concat, consMore(s.ctx(), sq), restColls,
+    s.set(0, lazy5At(s, 0, StepKind::Concat, consMore(s.ctx(), sq), restColls,
                    nullptr, nullptr, nullptr));
     return s.ret(newCons(s.ctx(), consFirst(s.ctx(), sq), s.get(0)));
 }
@@ -527,9 +550,9 @@ const PO* stepInterleave(proto::ProtoContext* ctx, const PO*, const StepOperands
         s.set(2, seqOf(s.ctx(), colls->getAt(s.ctx(), static_cast<int>(i))));
         if (s.get(2) == PROTO_NONE) return PROTO_NONE;
         s.set(0, s.get(0)->asList(s.ctx())->appendLast(s.ctx(), seqFirst(s.ctx(), s.get(2)))->asObject(s.ctx()));
-        s.set(1, s.get(1)->asList(s.ctx())->appendLast(s.ctx(), seqMore(s.ctx(), s.get(2)))->asObject(s.ctx()));
+        s.set(1, s.get(1)->asList(s.ctx())->appendLast(s.ctx(), walkMore(s.ctx(), s.get(2)))->asObject(s.ctx()));
     }
-    s.set(3, lazy5(s.ctx(), StepKind::Interleave, s.get(1), nullptr, nullptr, nullptr, nullptr));
+    s.set(3, lazy5At(s, 3, StepKind::Interleave, s.get(1), nullptr, nullptr, nullptr, nullptr));
     const proto::ProtoList* firsts = s.get(0)->asList(s.ctx());
     return s.ret(newChunk(s.ctx(), firsts, 0, static_cast<long long>(n), s.get(3), false));
 }
@@ -583,11 +606,11 @@ const PO* stepFor(proto::ProtoContext* ctx, const PO*, const StepOperands& o) {
         s.set(1, r);
         s.set(2, seqOf(s.ctx(), s.get(1)));
         if (s.get(2) != PROTO_NONE) {
-            s.set(3, lazy5(s.ctx(), StepKind::For, seqMore(s.ctx(), s.get(0)), o.b, o.c, o.d, nullptr));
+            s.set(3, lazy5At(s, 3, StepKind::For, walkMore(s.ctx(), s.get(0)), o.b, o.c, o.d, nullptr));
             s.set(1, s.ctx()->newList()->appendLast(s.ctx(), s.get(3))->asObject(s.ctx()));
             return s.ret(prependSeq(s.ctx(), s.get(2), s.get(1)));
         }
-        s.set(0, seqNext(s.ctx(), s.get(0)));
+        s.set(0, walkNext(s.ctx(), s.get(0)));
         s.tick();
     }
 }
@@ -605,11 +628,11 @@ const PO* stepDistinct(proto::ProtoContext* ctx, const PO*, const StepOperands& 
         if (!seen) {
             s.set(2, x);
             s.set(1, setConj(s.ctx(), s.get(1), &x, 1));
-            s.set(1, lazy5(s.ctx(), StepKind::Distinct, seqMore(s.ctx(), s.get(0)), s.get(1),
+            s.set(1, lazy5At(s, 1, StepKind::Distinct, walkMore(s.ctx(), s.get(0)), s.get(1),
                            nullptr, nullptr, nullptr));
             return s.ret(newCons(s.ctx(), s.get(2), s.get(1)));
         }
-        s.set(0, seqNext(s.ctx(), s.get(0)));
+        s.set(0, walkNext(s.ctx(), s.get(0)));
         s.tick();
     }
 }
@@ -769,6 +792,17 @@ const PO* seqFirst(proto::ProtoContext* ctx, const PO* s) {
     const ChunkView cv = chunkOf(ctx, s);
     return cv.items->getAt(ctx, static_cast<int>(cv.off));
 }
+
+namespace {
+const PO* walkMore(proto::ProtoContext* ctx, const PO* s) {
+    if (isListTag(s)) {
+        const proto::ProtoList* l = s->asList(ctx);
+        const long long n = static_cast<long long>(l->getSize(ctx));
+        return n <= 1 ? emptyList(ctx) : newChunk(ctx, l, 1, n, PROTO_NONE, false);
+    }
+    return seqMore(ctx, s);
+}
+} // namespace
 
 const PO* seqMore(proto::ProtoContext* ctx, const PO* s) {
     if (isListTag(s)) {

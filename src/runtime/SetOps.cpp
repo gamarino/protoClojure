@@ -37,13 +37,6 @@ const proto::ProtoObject* initSetOps(proto::ProtoContext* ctx) {
 }
 
 
-bool isSet(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    if (!v || !g_setPrototype) return false;
-    // Only object cells (pointer tag 0) have a prototype worth reading.
-    if ((reinterpret_cast<proto::proto_ulong>(v) & 0x3F) != 0) return false;
-    return v->getPrototype(ctx) == g_setPrototype;
-}
-
 const proto::ProtoObject* setElements(proto::ProtoContext* ctx, const proto::ProtoObject* s) {
     if (!s || s == PROTO_NONE) return nullptr;
     const proto::ProtoObject* m = s->getOwnAttributeDirect(ctx, elementsKey(ctx));

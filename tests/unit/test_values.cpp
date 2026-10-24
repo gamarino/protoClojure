@@ -305,3 +305,30 @@ TEST_F(ValuesFixture, ValueTypeNamesForErrorMessages) {
 }
 
 } // namespace
+
+// The per-thread caches of internNamed, internSymbol and namedSpellingText
+// (Named.h) hold values of one run. Each run builds its own NamedLayout, and
+// a fresh layout must never be answered from a cache filled under another
+// space: the values of a space that is gone would be dangling pointers. Two
+// spaces in turn, the second likely at the first one's addresses.
+TEST(NamedCaches, AFreshLayoutIsNeverAnsweredWithAnotherRunsValues) {
+    for (int run = 0; run < 3; ++run) {
+        proto::ProtoSpace space;
+        proto::ProtoContext* ctx = space.rootContext;
+        const protoClojure::NamedLayout named{
+            space.objectPrototype->newChild(ctx),
+            space.objectPrototype->newChild(ctx, /*isMutable=*/true),
+            proto::ProtoString::createSymbol(ctx, "__spelling__")};
+        const proto::ProtoObject* v = protoClojure::internNamed(ctx, named, ":cache-epoch-keyword");
+        EXPECT_EQ(v->getPrototype(ctx), named.marker) << "run " << run;
+        EXPECT_EQ(protoClojure::internNamed(ctx, named, ":cache-epoch-keyword"), v);
+        EXPECT_EQ(protoClojure::namedSpellingText(ctx, named, v), ":cache-epoch-keyword");
+        const char* text = "a-symbol-longer-than-seven-bytes";
+        EXPECT_EQ(protoClojure::internSymbol(ctx, named, text),
+                  proto::ProtoString::createSymbol(ctx, text));
+        // A copy of the layout is the same run: same cache, same values.
+        const protoClojure::NamedLayout copy = named;
+        EXPECT_EQ(copy.epoch, named.epoch);
+        EXPECT_EQ(protoClojure::internNamed(ctx, copy, ":cache-epoch-keyword"), v);
+    }
+}

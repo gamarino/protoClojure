@@ -78,7 +78,7 @@ const proto::ProtoObject* globalMacro(proto::ProtoContext* ctx,
                                       const ActiveCallContext& cc,
                                       const std::string& key) {
     if (!cc.globals) return nullptr;
-    const proto::ProtoString* k = proto::ProtoString::createSymbol(ctx, key.c_str());
+    const proto::ProtoString* k = internSymbol(ctx, cc.named, key);
     if (cc.globals->hasOwnAttribute(ctx, k) != PROTO_TRUE) return nullptr;
     const proto::ProtoObject* v = cc.globals->getAttribute(ctx, k);
     return isMacroValue(ctx, cc, v) ? v : nullptr;
@@ -116,7 +116,7 @@ const proto::ProtoObject* macroexpandOnce(proto::ProtoContext* ctx,
     if (lst->getSize(ctx) == 0) return form;
     const proto::ProtoObject* head = lst->getAt(ctx, 0);
     if (!isNamed(ctx, cc.named, head)) return form;
-    const std::string spelling = namedSpelling(ctx, cc.named, head)->toStdString(ctx);
+    const std::string spelling = namedSpellingText(ctx, cc.named, head);
     std::string key;
     if (!globalKeyForSymbol(spelling, key) || isSpecialFormName(key)) return form;
     const proto::ProtoObject* macro = globalMacro(ctx, cc, key);

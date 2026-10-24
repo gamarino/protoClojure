@@ -1,4 +1,6 @@
 #include "BytecodeModule.h"
+#include "Named.h"
+#include "Primitives.h"
 #include "protoCore.h"
 
 #include <algorithm>
@@ -109,9 +111,14 @@ std::size_t BytecodeModule::addString(const std::string& s) {
 }
 
 std::size_t BytecodeModule::addSymbol(proto::ProtoContext* ctx, const std::string& s) {
-    // Interned once here, not on every PUSH_VAR / STORE_GLOBAL execution.
+    // Interned once here, not on every PUSH_VAR / STORE_GLOBAL execution;
+    // a symbol this module already holds is not interned again, and the
+    // run's per-thread symbol cache (Named.h) serves the others.
+    const auto known = symbolIndex_.find(s);
+    if (known != symbolIndex_.end()) return known->second;
+    const ActiveCallContext* cc = activeCallContext();
     const auto* key = reinterpret_cast<const proto::ProtoObject*>(
-        proto::ProtoString::createSymbol(ctx, s.c_str()));
+        cc ? internSymbol(ctx, cc->named, s) : proto::ProtoString::createSymbol(ctx, s.c_str()));
     return findOrAdd(symbolIndex_, s, consts_, Const{ConstKind::Symbol, 0, 0.0, s, key});
 }
 

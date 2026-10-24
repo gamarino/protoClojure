@@ -32,6 +32,8 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
+#include <string>
 
 namespace proto {
 class ProtoContext;
@@ -41,10 +43,19 @@ class ProtoString;
 
 namespace protoClojure {
 
+// A fresh number for each NamedLayout built (see NamedLayout::epoch).
+std::uint64_t newNamedEpoch();
+
 struct NamedLayout {
     const proto::ProtoObject* marker = nullptr;       // prototype of every named value
     const proto::ProtoObject* table = nullptr;        // mutable: spelling -> named value
     const proto::ProtoString* spellingKey = nullptr;  // own attribute holding the spelling
+    // Identifies the run this layout belongs to, for the per-thread caches
+    // below: a cache filled under another epoch is emptied before use, so
+    // a process that builds several spaces one after the other (the unit
+    // tests) never sees a value of a space that is gone. Copies of a layout
+    // share its epoch; every layout built anew gets a new one.
+    std::uint64_t epoch = newNamedEpoch();
 };
 
 // The interned named value spelled `spelling` (":a" for the keyword :a, "a"
@@ -60,6 +71,17 @@ const proto::ProtoObject* internNamed(proto::ProtoContext* ctx,
                                       const NamedLayout& layout,
                                       const char* spelling);
 
+// The protoCore symbol spelled `text`, as ProtoString::createSymbol, cached
+// per thread for the layout's run. createSymbol hashes the text and, on a
+// collision in protoCore's symbol table, converts the candidates back to
+// text to compare them; the reader and the compiler ask for the same few
+// hundred spellings over and over (core.clj alone at every start-up).
+// Symbols are strong, never collected, so a cached pointer stays valid for
+// the run.
+const proto::ProtoString* internSymbol(proto::ProtoContext* ctx,
+                                       const NamedLayout& layout,
+                                       const std::string& text);
+
 // True when `v` is a named value (a keyword or a symbol).
 bool isNamed(proto::ProtoContext* ctx, const NamedLayout& layout,
              const proto::ProtoObject* v);
@@ -68,6 +90,17 @@ bool isNamed(proto::ProtoContext* ctx, const NamedLayout& layout,
 const proto::ProtoString* namedSpelling(proto::ProtoContext* ctx,
                                         const NamedLayout& layout,
                                         const proto::ProtoObject* v);
+
+// The spelling of the named value `v` (`isNamed` must hold) as UTF-8 text,
+// cached per thread for the layout's run by the value's address: named
+// values are never collected, so within a run an address names one
+// spelling. Saves the compiler and the reader a walk of the spelling string
+// every time they read a symbol's name.
+// The reference is valid until the next call on this thread (a full cache
+// is emptied); callers that keep the text across other work copy it.
+const std::string& namedSpellingText(proto::ProtoContext* ctx,
+                                     const NamedLayout& layout,
+                                     const proto::ProtoObject* v);
 
 // The fast "is this an interned named value?" test of the map key semantics
 // (MapOps.cpp, keyIsIdentity), which sits on every keyword `get` / `assoc`.

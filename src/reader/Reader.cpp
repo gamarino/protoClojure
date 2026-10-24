@@ -441,7 +441,7 @@ const proto::ProtoObject* Reader::syntaxQuote(proto::ProtoContext* parent,
         return form;
     }
     if (isNamed(parent, named_, form)) {
-        const std::string spelling = namedSpelling(parent, named_, form)->toStdString(parent);
+        const std::string spelling = namedSpellingText(parent, named_, form);
         if (!spelling.empty() && spelling[0] == ':') return form;  // a keyword
         const proto::ProtoObject* symbol = form;
         if (spelling.size() > 1 && spelling.back() == '#' &&

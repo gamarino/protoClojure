@@ -994,13 +994,16 @@ const proto::ProtoObject* prim_get(proto::ProtoContext* ctx,
     const proto::ProtoObject* k = args->getAt(ctx, 1);
     const proto::ProtoObject* nf = (n == 3) ? args->getAt(ctx, 2) : PROTO_NONE;
     bool found = false;
+    // A map first: the common case pays one tag test.
+    if (isMap(m)) {
+        const proto::ProtoObject* v = mapGet(ctx, m, k, &found);
+        return found ? v : nf;
+    }
     if (isSet(ctx, m)) {
         const proto::ProtoObject* e = setGet(ctx, m, k, &found);
         return found ? e : nf;
     }
-    if (!isMap(m)) return nf;
-    const proto::ProtoObject* v = mapGet(ctx, m, k, &found);
-    return found ? v : nf;
+    return nf;
 }
 
 const proto::ProtoObject* prim_contains_p(proto::ProtoContext* ctx,
@@ -1015,13 +1018,15 @@ const proto::ProtoObject* prim_contains_p(proto::ProtoContext* ctx,
     const proto::ProtoObject* m = args->getAt(ctx, 0);
     const proto::ProtoObject* k = args->getAt(ctx, 1);
     bool found = false;
+    if (isMap(m)) {
+        mapGet(ctx, m, k, &found);
+        return found ? PROTO_TRUE : PROTO_FALSE;
+    }
     if (isSet(ctx, m)) {
         setGet(ctx, m, k, &found);
         return found ? PROTO_TRUE : PROTO_FALSE;
     }
-    if (!isMap(m)) return PROTO_FALSE;
-    mapGet(ctx, m, k, &found);
-    return found ? PROTO_TRUE : PROTO_FALSE;
+    return PROTO_FALSE;
 }
 
 // Return a fresh ProtoList of the original keys or of the values of `m`, in

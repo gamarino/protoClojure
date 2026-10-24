@@ -57,7 +57,7 @@ bool isNameForm(proto::ProtoContext* ctx, const NamedLayout& named,
 // (P3).
 std::string nameOf(proto::ProtoContext* ctx, const NamedLayout& named,
                    const proto::ProtoObject* form) {
-    return namedSpelling(ctx, named, form)->toStdString(ctx);
+    return namedSpellingText(ctx, named, form);
 }
 
 // Strips a leading `clojure.core/` from `name` and returns true when there

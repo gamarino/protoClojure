@@ -139,10 +139,10 @@ std::string qualifySyntaxQuoteSymbol(proto::ProtoContext* ctx, const std::string
     const ActiveCallContext* cc = activeCallContext();
     if (!cc || !cc->globals) return name;
     const std::string core = "clojure.core/" + name;
-    const proto::ProtoString* coreKey = proto::ProtoString::createSymbol(ctx, core.c_str());
+    const proto::ProtoString* coreKey = internSymbol(ctx, cc->named, core);
     if (cc->globals->hasOwnAttribute(ctx, coreKey) == PROTO_TRUE) {
         // A built-in, unless the program has defined the name itself.
-        const proto::ProtoString* userKey = proto::ProtoString::createSymbol(ctx, name.c_str());
+        const proto::ProtoString* userKey = internSymbol(ctx, cc->named, name);
         if (cc->globals->hasOwnAttribute(ctx, userKey) != PROTO_TRUE ||
             cc->globals->getAttribute(ctx, userKey) == cc->globals->getAttribute(ctx, coreKey))
             return core;
