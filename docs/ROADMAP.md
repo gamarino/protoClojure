@@ -139,6 +139,11 @@ Part B of the macros brief, the scripting vocabulary, on the same branch:
     (DESIGN.md §10.2, M27; D47).
 11. [x] Lazy sequences (DESIGN.md §7, §10.2, M28-M31; D48-D51), on
     protoCore 3.1.0's lazy objects (protoCore branch `feature/lazy-object`).
+    - [x] The everyday vocabulary of a 20-line script, between stages 11
+      and 12: `#(...)`, `ns` / `require` with library aliases, `letfn`, and
+      `quot rem mod compare sort sort-by frequencies group-by update
+      update-in assoc-in get-in merge merge-with select-keys zipmap partial
+      comp juxt some every? max-key min-key ...` (M32-M34; D52-D54).
 12. [ ] JSON and EDN.
 13. [ ] Showcase against Babashka.
 

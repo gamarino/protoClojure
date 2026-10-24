@@ -1,5 +1,9 @@
 #include "Macros.h"
 
+#include <unordered_map>
+
+#include <mutex>
+
 #include "Exceptions.h"
 #include "ExecutionEngine.h"
 #include "Named.h"
@@ -117,6 +121,29 @@ const proto::ProtoObject* macroexpandOnce(proto::ProtoContext* ctx,
     const proto::ProtoObject* macro = globalMacro(ctx, cc, key);
     if (!macro) return form;
     return expandMacroCall(ctx, cc, macro, spelling, form, PROTO_NONE);
+}
+
+namespace {
+std::mutex gAliasMutex;
+std::unordered_map<std::string, std::string> gAliases;
+}
+
+void addNamespaceAlias(const std::string& alias, const std::string& ns) {
+    std::lock_guard<std::mutex> lock(gAliasMutex);
+    gAliases[alias] = ns;
+}
+
+bool namespaceAlias(const std::string& alias, std::string& ns) {
+    std::lock_guard<std::mutex> lock(gAliasMutex);
+    auto it = gAliases.find(alias);
+    if (it == gAliases.end()) return false;
+    ns = it->second;
+    return true;
+}
+
+bool isKnownNamespace(const std::string& ns) {
+    return ns == "clojure.core" || ns == "clojure.string" || ns == "clojure.set" ||
+           ns == "clojure.java.io" || ns == "clojure.java.shell";
 }
 
 bool coreNamespaceActive() { return gCoreNamespace.load(std::memory_order_relaxed); }

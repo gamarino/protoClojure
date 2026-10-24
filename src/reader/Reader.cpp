@@ -2,6 +2,7 @@
 
 #include "runtime/ListBuilder.h"
 #include "runtime/MapOps.h"
+#include "runtime/Named.h"
 #include "runtime/SetOps.h"
 #include "runtime/Regex.h"
 #include "runtime/StackGuard.h"
@@ -82,6 +83,29 @@ const proto::ProtoList* Reader::readAllForms() {
     return forms.finishList();
 }
 
+const proto::ProtoObject* Reader::fnLiteralArg(proto::ProtoContext* ctx, const std::string& text) {
+    auto gen = [&](const std::string& stem) {
+        return internNamed(ctx, named_, (stem + "__" + std::to_string(nextGensymId()) + "#").c_str());
+    };
+    if (text == "%&") {
+        if (!fnLiteral_->rest) fnLiteral_->rest = gen("rest");
+        return fnLiteral_->rest;
+    }
+    std::size_t n = 1;
+    if (text.size() > 1) {
+        n = 0;
+        for (std::size_t i = 1; i < text.size(); ++i) {
+            if (text[i] < '0' || text[i] > '9') return nullptr;
+            n = n * 10 + static_cast<std::size_t>(text[i] - '0');
+            if (n > 20) throw ReaderError("Arg literal must be %, %& or %integer (at most %20)", 0, 0);
+        }
+        if (n == 0) throw ReaderError("Arg literal must be %, %& or %integer", 0, 0);
+    }
+    if (fnLiteral_->params.size() < n) fnLiteral_->params.resize(n, nullptr);
+    if (!fnLiteral_->params[n - 1]) fnLiteral_->params[n - 1] = gen("p" + std::to_string(n));
+    return fnLiteral_->params[n - 1];
+}
+
 const proto::ProtoObject*
 Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
     // Every nested form recurses through here (readList, `@`).
@@ -115,7 +139,42 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
             if (tok.text == "nil")   return PROTO_NONE;
             if (tok.text == "true")  return PROTO_TRUE;
             if (tok.text == "false") return PROTO_FALSE;
+            if (fnLiteral_ && !tok.text.empty() && tok.text[0] == '%') {
+                if (const proto::ProtoObject* p = fnLiteralArg(parent, tok.text)) return p;
+            }
             return internNamed(parent, named_, tok.text.c_str());
+        }
+
+        case TokenKind::HashLParen: {
+            // `#(body)`: `(fn* [p1 ... pN & rest] (body))`, where `%` and
+            // `%1` .. `%N` name the positional parameters, N the largest
+            // index used, and `%&` the rest, as Clojure's reader writes it.
+            // The parameters are generated symbols, `p1__N#`, interned like
+            // every symbol.
+            if (fnLiteral_) throw ReaderError("Nested #()s are not allowed", tok.line, tok.column);
+            FnLiteral lit;
+            fnLiteral_ = &lit;
+            struct Reset { FnLiteral*& f; ~Reset() { f = nullptr; } } reset{fnLiteral_};
+            proto::ProtoContext scope(parent->space, parent);
+            scope.resizeAutomaticLocals(2);
+            scope.setAutomaticLocal(0, readList(&scope, TokenKind::RParen, tok.line, tok.column));
+            const proto::ProtoList* params = scope.newList();
+            for (std::size_t i = 0; i < lit.params.size(); ++i) {
+                if (!lit.params[i])
+                    lit.params[i] = internNamed(&scope, named_,
+                        ("p" + std::to_string(i + 1) + "__" + std::to_string(nextGensymId()) + "#").c_str());
+                params = params->appendLast(&scope, lit.params[i]);
+            }
+            if (lit.rest)
+                params = params->appendLast(&scope, internNamed(&scope, named_, "&"))
+                               ->appendLast(&scope, lit.rest);
+            scope.setAutomaticLocal(1, newVector(&scope, params));
+            const proto::ProtoObject* form = scope.newList()
+                ->appendLast(&scope, internNamed(&scope, named_, "fn*"))
+                ->appendLast(&scope, scope.getAutomaticLocal(1))
+                ->appendLast(&scope, scope.getAutomaticLocal(0))->asObject(&scope);
+            scope.returnValue = form;
+            return form;
         }
 
         case TokenKind::LParen:

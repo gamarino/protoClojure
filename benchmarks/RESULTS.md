@@ -41,6 +41,26 @@ runs the script through each interpreter 3 times and reports the
 minimum wall-clock (cold-start + execution). No JVM warmup phase.
 Result strings are compared across runtimes for correctness.
 
+## Scripting vocabulary (Part C) against stage 11 (`8d72602`), 2026-10-23
+
+What the Part C additions to `core.clj` (DESIGN.md M34) cost at start-up.
+Script and raw output: [`reports/2026-10-23-vocabulary/`](reports/2026-10-23-vocabulary/),
+quiet gate (`QUIET_CORES=4.0`), fresh copies of the same protoCore 3.1.0
+library, interleaved.
+
+Start-up, an empty file, `perf stat -r 20`, three passes: stage 11 63.6 /
+62.7 / 62.8 M cycles (16-17 ms), Part C 69.7 / 67.2 / 67.9 M cycles (17-19
+ms): **+4.5 to 6 M cycles, about 1.2-1.6 ms**, for the 28 functions and two
+macros `core.clj` gained. With the stage-6 load measured at 3.4 ms, `core.clj`
+now costs about 5 ms of every start, under the brief's 10 ms; moving the
+functions to C++ or precompiling `core.clj` would recover it.
+
+`bench.sh`, two rounds (ms, start-up included): stage 11 fib 356 / 363, tak
+36 / 37, sum-loop 66 / 66, reduce-list 32 / 32, sum-squares 27 / 27; Part C
+fib 344 / 340, tak 38 / 38, sum-loop 69 / 69, reduce-list 33 / 33,
+sum-squares 28 / 29. The 1-3 ms on the short workloads is the start-up
+above; no run-time path changed.
+
 ## Lazy sequences (stage 11) against Part A (`ed3cf5a`), 2026-10-23
 
 Whether making `map`, `filter`, `for`, `range` and `seq` lazy (DESIGN.md

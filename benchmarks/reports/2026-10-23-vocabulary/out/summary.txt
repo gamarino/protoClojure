@@ -1,0 +1,8 @@
+startup B (Mcycles, ms): 63.6/17 62.7/16 62.8/16 
+startup C (Mcycles, ms): 69.7/18 67.2/17 67.9/19 
+bench B:
+  fib 356 ✓   tak 36 ✓   sum-loop 66 ✓   reduce-list 32 ✓   sum-squares 27 ✓ 
+  fib 363 ✓   tak 37 ✓   sum-loop 66 ✓   reduce-list 32 ✓   sum-squares 27 ✓ 
+bench C:
+  fib 344 ✓   tak 38 ✓   sum-loop 69 ✓   reduce-list 33 ✓   sum-squares 28 ✓ 
+  fib 340 ✓   tak 38 ✓   sum-loop 69 ✓   reduce-list 33 ✓   sum-squares 29 ✓ 

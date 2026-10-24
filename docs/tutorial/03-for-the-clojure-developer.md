@@ -33,9 +33,13 @@ under a `Dnn` id.
 >   `filter`, `take`, `range`, `iterate`, `concat`, `for`, `line-seq`,
 >   ..., `doall`, `dorun`); `format` and
 >   `printf`; sets `#{...}` with `clojure.set`'s `union`,
->   `intersection` and `difference` as globals. Other reader macros, most
->   collection functions, the higher-order combinators,
->   namespaces, vars and `binding`, volatiles and delays are
+>   `intersection` and `difference` as globals; `#(...)`; `ns` and
+>   `require` with `:as` aliases for `clojure.string`, `clojure.set`,
+>   `clojure.java.io` and `clojure.java.shell` (D52); `letfn`; and the
+>   everyday functions (`sort-by`, `frequencies`, `group-by`, `update-in`,
+>   `merge-with`, `partial`, `comp`, `juxt`, `some`, `every?`, `quot`,
+>   `mod`, ...). The other reader macros, full namespaces, vars and
+>   `binding`, volatiles and delays are
 >   not implemented yet. Exceptions are implemented: `try` / `catch` /
 >   `finally`, `throw`, `ex-info`, `ex-data`, `ex-message`, `ex-cause`
 >   (§3.3.6 lists the differences).

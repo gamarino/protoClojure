@@ -76,12 +76,29 @@ bool stripCoreQualifier(std::string& name) {
 // provides, as `clojure.core/x`: without namespaces (D28) those functions are
 // built-ins, and this lets a program name them as Clojure code does, with
 // no `require` (DESIGN.md §10.2, M26). Returns true when it rewrote `name`.
+//
+// A namespace alias recorded by `require` / `ns` (Macros.h, M33) is replaced
+// by its namespace first: `str/join` is `clojure.string/join` once
+// `[clojure.string :as str]` is required. A name in one of those namespaces
+// that protoClojure does not provide is the compile error JVM Clojure
+// reports, `No such var: str/foo`.
 bool aliasLibraryNamespace(std::string& name) {
     static const char* const kString[] = {
         "blank?", "ends-with?", "includes?", "index-of", "join", "lower-case", "replace",
-        "replace-first", "reverse", "split", "starts-with?", "trim", "triml", "trimr",
-        "upper-case"};
+        "replace-first", "reverse", "split", "split-lines", "starts-with?", "trim", "triml",
+        "trimr", "upper-case"};
     static const char* const kSet[] = {"union", "intersection", "difference", "subset?", "superset?"};
+    static const char* const kIo[] = {"reader", "writer", "file", "copy", "delete-file",
+                                      "make-parents"};
+    static const char* const kShell[] = {"sh"};
+    if (name.empty() || name[0] == ':') return false;  // a keyword is never rewritten
+    const std::string written = name;
+    const std::size_t slash = name.find('/');
+    if (slash != std::string::npos && slash > 0 && slash + 1 < name.size()) {
+        std::string ns;
+        if (namespaceAlias(name.substr(0, slash), ns)) name = ns + name.substr(slash);
+    }
+    if (name.compare(0, 13, "clojure.core/") == 0) return name != written;
     auto tryPrefix = [&](const std::string& prefix, const char* const* names, std::size_t count) {
         if (name.compare(0, prefix.size(), prefix) != 0) return false;
         const std::string bare = name.substr(prefix.size());
@@ -90,8 +107,14 @@ bool aliasLibraryNamespace(std::string& name) {
         }
         return false;
     };
-    return tryPrefix("clojure.string/", kString, sizeof kString / sizeof *kString) ||
-           tryPrefix("clojure.set/", kSet, sizeof kSet / sizeof *kSet);
+    if (tryPrefix("clojure.string/", kString, sizeof kString / sizeof *kString) ||
+        tryPrefix("clojure.set/", kSet, sizeof kSet / sizeof *kSet) ||
+        tryPrefix("clojure.java.io/", kIo, sizeof kIo / sizeof *kIo) ||
+        tryPrefix("clojure.java.shell/", kShell, sizeof kShell / sizeof *kShell))
+        return true;
+    if (slash != std::string::npos && isKnownNamespace(name.substr(0, name.find('/'))))
+        throw CompileError("No such var: " + written);
+    return name != written;
 }
 
 // Stores the value on top of the stack in the global `key`, leaving it
@@ -457,6 +480,7 @@ Compiler::compileFnBody(proto::ProtoContext* ctx,
     const proto::ProtoObject* head = fnForm->getAt(ctx, 0);
     std::string headName = nameOf(ctx, markers.named, head);
     stripCoreQualifier(headName);  // `clojure.core/fn`, from a syntax-quote
+    if (headName == "fn*") headName = "fn";
     proto::proto_ulong paramsAt = 0;
     if (headName == "fn")        paramsAt = 1;
     else if (headName == "defn") paramsAt = 2;
@@ -1311,6 +1335,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // `clojure.core/x` names the built-in x (what syntax-quote and the
         // reader macros produce): dispatched as x, never shadowed by a local.
         const bool coreQualified = stripCoreQualifier(headName);
+        if (headName == "fn*") headName = "fn";  // what `#(...)` reads as
 
         // ---- Macro calls ---------------------------------------------------
         // A head naming a macro (Macros.h) is expanded here, at compile time,

@@ -485,7 +485,8 @@ work since macros stage 4.)
 
 - [ ] `let*` / `fn*` raw forms
 - [ ] `var` form
-- [ ] `letfn` (needs a `letfn*` form; DESIGN.md §10.1, M22)
+- [x] `letfn` (a `core.clj` macro over atoms; DESIGN.md §10.2, M34; D53)
+- [x] `#(...)` with `%`, `%N`, `%&` (M32)
 
 ### Data structures (not yet)
 
@@ -495,8 +496,9 @@ work since macros stage 4.)
 
 ### Namespaces & vars (not yet)
 
-- [ ] `ns` form
-- [ ] `:require :as :refer`
+- [x] `ns` form, for the `:require` of the library namespaces (M33, D52)
+- [x] `:require :as :refer` and a top-level `require`, for clojure.core,
+      clojure.string, clojure.set, clojure.java.io, clojure.java.shell
 - [ ] Namespaced symbol resolution
 - [ ] `in-ns`, `create-ns`, `find-ns`, `the-ns`, `all-ns`
 - [ ] `^:dynamic` vars + `binding`
@@ -557,14 +559,17 @@ for the rationale.
 
 ### Core library extensions (not yet)
 
-- [ ] `quot rem mod`
+- [x] `quot rem mod` (M34)
 - [ ] More collection: `interpose` (`into mapcat interleave next conj
       second last seq concat` exist)
-- [ ] Map operations: `update merge select-keys get-in update-in assoc-in`
-- [ ] More higher-order: `comp partial juxt`
-- [ ] More predicates: `every? some not-any? not-every?`
+- [x] Map operations: `update merge merge-with select-keys get-in update-in
+      assoc-in zipmap key val`
+- [x] More higher-order: `comp partial juxt complement constantly fnil`
+- [x] More predicates: `every? some not-any? not-every?`
+- [x] `compare max min max-key min-key`, `clojure.string/split-lines`,
+      `(System/exit n)` (D54)
 - [x] Range / sequence: `iterate repeat cycle take drop take-while drop-while partition partition-all`, and `(range)` with no end (stage 11)
-- [ ] `frequencies group-by sort sort-by`
+- [x] `frequencies group-by sort sort-by`
 
 ### REPL and command line (not yet)
 
@@ -681,6 +686,9 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D49 | Lazy sequences, as built (DESIGN.md M29): no transducers (`(map f)`, `(filter p)`, `(mapcat f)`, `(partition n)` with no collection raise `UnsupportedOperationException`), no chunk API beyond `chunked-seq?` (`chunk-first`, `chunk-rest`, `chunk-cons`, `chunk-buffer`); a vector's chunks start where its seq starts (JVM Clojure: at its 32-element tree leaves, so `(rest v)` begins with a 31-element chunk there and a 32-element one here); `realized?` answers true for a cons or a chunk (JVM Clojure: ClassCastException for a Cons) and false for any other non-pending value; `apply` and `pmap` realise their sequence argument to its end (JVM Clojure's `apply` passes an endless seq to a variadic fn lazily); a seq read while its own body computes it raises `StackOverflowError` at once (JVM Clojure recurses until the stack overflows) | (perm) |
 | D50 | Locals clearing is conservative (DESIGN.md M30): a local is cleared at its read only when it is read exactly once in its fn and outside any loop it is not rebound in. A local read in both branches of an `if`, or twice, keeps what it holds until its scope ends (JVM Clojure clears it at the last use on every path), so `(let [s (line-seq r)] (if (seq s) (count s) 0))` holds the head while `count` walks | v0.2 |
 | D51 | At the REPL a definition echoes as its var, `#'user/x` (M31), but `*1` holds the defined value: there are no vars (D28) | (perm until vars) |
+| D52 | `require` and `ns` know only the library namespaces protoClojure provides as built-ins (clojure.core, clojure.string, clojure.set, clojure.java.io, clojure.java.shell; any other raises `FileNotFoundException`), and `:as` aliases live in one table for the process: an alias recorded by any file or at the REPL holds for every form compiled afterwards (JVM Clojure: per namespace). `:refer` changes nothing, every function being a global; `ns` ignores its name and has no `*ns*` (D28) | (perm until namespaces) |
+| D53 | `letfn` binds each name to a fn that calls its definition through an atom, so every call through a `letfn` name costs an `apply` and a `deref` more than a direct call (JVM Clojure: `letfn*` binds the fns themselves); `(fn name ...)` still cannot call itself by name (D18) | v0.2 |
+| D54 | `System` is an object standing in for `java.lang.System` with the members `exit`, `getenv`, `currentTimeMillis` and `nanoTime` only; a map entry is a `[k v]` vector, which `key` and `val` read (JVM Clojure: a `MapEntry`, also a vector) | (perm) |
 | D47 | `format` / `printf` implement Java's `String.format` conversions `%s %S %d %x %X %o %f %e %E %g %G %b %B %c %C %n %%` with argument indexes, flags, width and precision, but not `%h`, `%a`, the date/time `%t` conversions, nor locale-specific output. Errors are `IllegalArgumentException`s whose message starts with Java's exception name and names a protoClojure type (`IllegalFormatConversionException: d != a float`; Java: `d != java.lang.Double`). `%g` rounds an exact tie to even (Java: half up; `%f` and `%e` round half up, as Java). Widths count bytes, so a multi-byte UTF-8 character counts as several (D17) | (perm) |
 | D34 | A `catch` naming no built-in class names a type looked up at run time, when an exception reaches the clause (a var, a local, or a module member `alias/Type`), and is matched by the thrown value's prototype chain; JVM Clojure resolves the class at compile time. So `(try 1 (catch NoSuchException e 2))` compiles and answers 1, and the error `Unable to resolve classname: NoSuchException` is a `RuntimeException` raised when an exception reaches the clause (JVM Clojure: a compile error). A type that resolves to a value that is not a prototype object raises `IllegalArgumentException`. A module's error (a foreign value) is caught by `Exception`, `Throwable` and `Object`, by its own types, and by no other built-in class | (perm: the platform is late-binding) |
 

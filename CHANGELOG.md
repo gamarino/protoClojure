@@ -9,6 +9,32 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — the everyday vocabulary of a script (macros brief, Part C)
+
+- **`#(...)`** with `%`, `%1`..`%20` and `%&`, read as Clojure reads it,
+  `(fn* [p1__N#] ...)` (DESIGN.md §10.2, M32); a nested `#()` is a read error.
+- **`ns`** with `(:require [clojure.string :as str] [clojure.set :as set])`
+  and a top-level **`require`**: the aliases of clojure.core, clojure.string,
+  clojure.set, clojure.java.io and clojure.java.shell resolve (`str/join`,
+  `io/reader`, `sh`), `:refer` is accepted, and `No such var: str/foo` /
+  `FileNotFoundException` report what does not exist (M33, D52).
+- **`letfn`**, mutually recursive local functions (M34, D53).
+- C++ built-ins: `quot`, `rem`, `mod` (exact for integers of any size),
+  `compare`, `max`, `min`, `sort` and `sort-by` (stable, with a comparator or
+  a boolean predicate), `frequencies`, `clojure.string/split-lines`, and a
+  `System` object for `(System/exit n)`, `System/getenv`,
+  `System/currentTimeMillis` and `System/nanoTime` (D54).
+- In `core.clj`: `key`, `val`, `constantly`, `complement`, `partial`, `comp`,
+  `juxt`, `fnil`, `some`, `every?`, `not-any?`, `not-every?`, `max-key`,
+  `min-key`, `get-in`, `assoc-in`, `update`, `update-in`, `merge`,
+  `merge-with`, `select-keys`, `zipmap`, `group-by`. They add about 1.2 ms
+  to start-up (`core.clj` costs about 5 ms in all).
+- `assoc` takes `nil` (the empty map) and a vector (by index), as in Clojure.
+- `examples/15-top-words.clj`, the tutorial's twenty-line script.
+- New tests: 22 fixtures in `tests/conformance/38-vocabulary/` and
+  `37-lazy-seqs/tutorial-ch05-lazy.clj`, and the CLI check
+  `cli/script-top-words`.
+
 ### Added — scripting vocabulary, stage 11: lazy sequences
 
 - **Lazy sequences** (DESIGN.md §7 and §10.2, M28-M31; LANGUAGE.md §10):

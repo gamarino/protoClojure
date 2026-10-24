@@ -131,6 +131,20 @@ private:
     // are interned (never collected), so the raw pointers stay valid.
     std::vector<std::unordered_map<std::string, const proto::ProtoObject*>> gensyms_;
 
+    // The `#(...)` literal being read, if any (Clojure forbids nesting
+    // them): the generated parameter of each `%N` used so far, by N (`%` is
+    // `%1`), and the one `%&` stands for.
+    struct FnLiteral {
+        std::vector<const proto::ProtoObject*> params;  // index N-1
+        const proto::ProtoObject* rest = nullptr;
+    };
+    FnLiteral* fnLiteral_ = nullptr;
+
+    // The parameter `%`, `%N` or `%&` (`text`) stands for inside the
+    // `#(...)` being read, generated on first use; nullptr for any other
+    // symbol, or outside a `#(...)`.
+    const proto::ProtoObject* fnLiteralArg(proto::ProtoContext* ctx, const std::string& text);
+
     // readAll without the conversion of StackOverflowError to ReaderError.
     const proto::ProtoList* readAllForms();
 

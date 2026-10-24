@@ -181,6 +181,43 @@ The second pipeline shows the exit status at work: no line matched, so the
 filter exits with 1 and `||` runs. `/usr/bin/env` looks `protoclj` up on
 `PATH`, so the script runs with whichever `protoclj` comes first there.
 
+### A script in twenty lines
+
+The words a text uses most, read from standard input however large it is,
+written the way a Clojure programmer writes it -- `ns` with a library
+alias, `#(...)`, a lazy pipeline, `frequencies` and `sort-by`:
+
+```clojure
+(ns top-words
+  (:require [clojure.string :as str]))
+
+(defn words [line]
+  (->> (str/split (str/lower-case line) #"[^a-z']+")
+       (remove str/blank?)))
+
+(defn top [n counts]
+  (->> counts
+       (sort-by (juxt (comp - val) key))   ; most frequent first, then by word
+       (take n)))
+
+(doseq [[word k] (top 3 (frequencies (mapcat words (line-seq *in*))))]
+  (println (format "%-6s %d" word k)))
+(when (some #(= "--total" %) *command-line-args*)
+  (println "done"))
+```
+
+```bash
+$ printf 'The fox and the dog.
+The end.
+' | protoclj top-words.clj
+the    3
+and    1
+dog    1
+```
+
+`mapcat` and `line-seq` are lazy, so the lines are read as `frequencies`
+walks them and only the table of counts stays in memory.
+
 ## 14.4 Other programs
 
 `sh` runs a program and answers a map with its exit status and both

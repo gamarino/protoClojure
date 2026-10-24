@@ -143,6 +143,9 @@ add_test(NAME cli/lazy-grep-under-heap-limit
 add_test(NAME cli/repl-lazy-seqs
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/repl-lazy-seqs.sh" "$<TARGET_FILE:protoclj>")
 set_tests_properties(cli/lazy-head-retention cli/lazy-grep-under-heap-limit PROPERTIES TIMEOUT 300)
+# The tutorial's twenty-line script (examples/15-top-words.clj) in a pipeline.
+add_test(NAME cli/script-top-words
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/script-top-words.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/repl-scripting
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/repl-scripting.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/file-form-by-form

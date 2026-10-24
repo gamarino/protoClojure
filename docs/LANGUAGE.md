@@ -52,7 +52,8 @@ tell at a glance which parts of the surface are runnable today. The
 | Strings — `clojure.string`-shaped ops (`split`, `join`, `upper-case`, …) | Implemented, in the global namespace |
 | Symbols, keywords, booleans, nil literals | Implemented |
 | Reader macros `'`, `` ` ``, `~`, `~@` | Implemented (syntax-quote qualifies symbols and auto-gensyms `foo#`, as in Clojure) |
-| Reader macros `#(...)`, `#'`, `#_`, `^` | Planned |
+| Reader macro `#(...)` with `%`, `%1`..`%20`, `%&` | Implemented (§2.8) |
+| Reader macros `#'`, `#_`, `^` | Planned |
 | Lists `(...)` | Implemented |
 | Vectors `[...]` | Implemented (a `ProtoList` in a one-entry sparse-list box, distinct from list) |
 | Maps `{...}` | Implemented (`hash-map`, `assoc`, `dissoc`, `get`, `contains?`, `keys`, `vals`; `count` and `empty?` accept maps) |
@@ -70,7 +71,8 @@ tell at a glance which parts of the surface are runnable today. The
 | Closures with N-level lexical capture | Implemented |
 | Named arguments `& {:keys [...] :or {...} :as m}` | Implemented |
 | Destructuring in `let`, `loop`, `fn`, `defn`, `defmacro` and the binding macros (`[a b & r :as all]`, `{x :x :keys [...] :strs [...] :syms [...] :or {...} :as m}`, nested) | Implemented (§5.4) |
-| Namespaces (`ns`, `:require`, `:as`, `:refer`) | Planned |
+| `ns` with `(:require [clojure.string :as str] ...)`, `require` with `:as` / `:refer` | Implemented for the library namespaces protoClojure provides (clojure.core, clojure.string, clojure.set, clojure.java.io, clojure.java.shell): their aliases resolve, `:refer` names are globals (§7.1, D52) |
+| Full namespaces (`in-ns`, vars per namespace, loading `.clj` files by namespace) | Planned |
 | State (`atom`, `swap!`, `reset!`, `compare-and-set!`, `@`, watches) | Implemented |
 | `future`, `promise`, `deliver`, `pmap` | Implemented |
 | Actors (`actor`, `send`, `send-h`, `send-l`) | Implemented (see tutorial chapter 13) |
@@ -327,8 +329,16 @@ truthy).
   name does not change `clojure.core/x`. `~@` outside a list is a read
   error; `~` or `~@` outside a syntax-quote is a compile error (D36).
 - `~x` → `(clojure.core/unquote x)`, `~@x` → `(clojure.core/unquote-splicing x)`.
-- `#(...)` → anonymous function: `#(+ 1 %)` is `(fn [%] (+ 1 %))`.
-  Args are `%`, `%1`..`%9`, `%&` (rest).
+- `#(...)` → anonymous function (implemented): `#(+ 1 %)` reads as
+  `(fn* [p1__N#] (+ 1 p1__N#))`, as Clojure's reader writes it. The
+  arguments are `%` (the same as `%1`), `%1`..`%20` and `%&` (the rest); the
+  arity is the largest index used. A `#()` inside another is a read error
+  (`Nested #()s are not allowed`), as in Clojure.
+
+  ```clojure
+  (map #(* % %) [1 2 3])        ;; => (1 4 9)
+  (#(apply + %&) 1 2 3)         ;; => 6
+  ```
 - `#{...}` → set literal (implemented; §4.4). A repeated element is a read
   error (`Duplicate key: :a`), as in Clojure.
 - `#'sym` → var-quote: produces the var, not the value (`@#'my-fn`
@@ -944,15 +954,69 @@ and stop as in Clojure (`:while` stops the binding just before it):
 as Clojure's `for` does.
 
 It also defines the functions `identity`, `some?`, `true?`, `false?`,
-`zero?`, `pos?`, `neg?`, `nnext`, `ffirst`, `nthnext`, `butlast`, `into`
-and `range`. A
-program may redefine any of these names; its later forms then use its own
-definition, while code from `core.clj` keeps calling `clojure.core/x`. Names
-starting with `__` are internal. `letfn` is not available yet.
+`zero?`, `pos?`, `neg?`, `nnext`, `ffirst`, `nthnext`, `butlast`, `into`,
+`key`, `val`, `constantly`, `complement`, `partial`, `comp`, `juxt`,
+`fnil`, `some`, `every?`, `not-any?`, `not-every?`, `max-key`, `min-key`,
+`get-in`, `assoc-in`, `update`, `update-in`, `merge`, `merge-with`,
+`select-keys`, `zipmap` and `group-by`, and the macros `lazy-seq`,
+`lazy-cat`, `letfn` and `ns`. A program may redefine any of these names; its
+later forms then use its own definition, while code from `core.clj` keeps
+calling `clojure.core/x`. Names starting with `__` are internal. `letfn`
+binds each name to a function that calls its definition through an atom, so
+the definitions can call one another (D53).
+
+```clojure
+(letfn [(ev? [n] (if (= n 0) true (od? (dec n))))
+        (od? [n] (if (= n 0) false (ev? (dec n))))]
+  (ev? 10))                                     ;; => true
+(update-in {:a {:b 1}} [:a :b] + 10)            ;; => {:a {:b 11}}
+(->> "a b a" (re-seq #"\w") frequencies)        ;; => {"a" 2, "b" 1}
+(sort-by count ["ccc" "a" "bb"])                ;; => ("a" "bb" "ccc")
+```
+
+`quot`, `rem`, `mod`, `compare`, `max`, `min`, `sort`, `sort-by`,
+`frequencies` and `clojure.string/split-lines` are C++ built-ins: `quot`
+truncates toward zero, `rem` takes the dividend's sign and `mod` the
+divisor's, exactly for integers of any size; `sort` and `sort-by` are
+stable and take `compare`, a comparator fn, or a boolean predicate such as
+`>`, as Clojure's do. `(System/exit n)`, `(System/getenv "X")`,
+`(System/currentTimeMillis)` and `(System/nanoTime)` call members of a
+`System` object that stands in for `java.lang.System` (D54).
 
 ---
 
-## 7. Namespaces (planned)
+## 7. Namespaces
+
+### 7.1 As built: library aliases (macros branch, Part C)
+
+There are no namespaces yet (D28): every definition is a global. What a
+script needs from `ns` and `require` works for the library namespaces
+protoClojure provides as built-ins -- `clojure.core`, `clojure.string`,
+`clojure.set`, `clojure.java.io` and `clojure.java.shell`:
+
+```clojure
+(ns my.script
+  (:require [clojure.string :as str]
+            [clojure.set :as set]))
+
+(str/join ", " (sort (set/union #{"b"} #{"a"})))   ;; => "a, b"
+
+(require '[clojure.java.io :as io])               ;; at the top level too
+(io/file "a" "b")                                 ;; => #<file a/b>
+```
+
+`(:require [ns :as alias])` and `(require '[ns :as alias])` record that
+`alias/x` means `ns/x` for every form compiled afterwards, and the compiler
+reads `clojure.string/x` as the built-in `x` (DESIGN.md §10.2, M26, M33).
+`:refer` is accepted and changes nothing, the functions being globals
+already. A name the namespace does not have is the compile error `No such
+var: str/foo`; requiring any other namespace raises
+`FileNotFoundException`, as JVM Clojure does when it cannot load one. The
+alias table is one for the process: an alias holds in every file and at the
+REPL once recorded (D52). `ns` ignores its name, `:import`,
+`:refer-clojure` and `:gen-class`.
+
+### 7.2 Planned: full namespaces
 
 A file starts with a `ns` form declaring the namespace and its imports:
 

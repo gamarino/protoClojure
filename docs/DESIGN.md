@@ -1106,7 +1106,8 @@ number of clauses (D44), and its constants are compared with protoClojure's
 `=` (numbers across types, D15); `letfn` is not provided, because mutually
 recursive local functions need a `letfn*` that binds names before the
 functions exist, and closures here capture locals by value when they are
-created (with D18, no fn can name itself).
+created (with D18, no fn can name itself). Since Part C `letfn` is a
+`core.clj` macro that goes through atoms (M34, D53).
 
 ### 10.2 Decisions of the scripting vocabulary (macros brief, Part B)
 
@@ -1341,6 +1342,63 @@ streaming test needs it.
 the old echo printed the value, which realised it (and never finished for
 `(def nat (iterate inc 0))`). `*1` still holds the value, there being no
 vars (D28, D51).
+
+**M32. `#(...)` is read as Clojure's reader reads it** (*agent, pending
+review*). The lexer yields `#(` and the reader reads the body as a list,
+replacing `%` and `%1`..`%20` with generated symbols `p1__N#` (`%` is `%1`)
+and `%&` with `rest__N#`, then answers `(fn* [p1 ... pN & rest] (body))`
+with N the largest index used (`src/reader/Reader.cpp`). The compiler treats
+`fn*` as `fn` (it already counted as a special form). A `#()` inside another
+is the read error `Nested #()s are not allowed`, Clojure's. Alternative:
+expand `#()` to `fn` with the symbols `%`, `%1` as parameter names, rejected
+because `'#(inc %)` would then not print what Clojure prints, and a `%`
+inside a nested quoted form would differ.
+
+**M33. Library aliases: `require` records, the compiler rewrites**
+(*agent, pending review*). `require` is a C++ built-in
+(`src/runtime/CorePrims.cpp`): for each spec it checks that the namespace is
+one protoClojure provides as built-ins (`clojure.core`, `clojure.string`,
+`clojure.set`, `clojure.java.io`, `clojure.java.shell`) and records each
+`:as` alias in a process-wide table (`addNamespaceAlias`,
+`src/runtime/Macros.h`); `:refer` is accepted and does nothing, every
+function being a global. `ns` is a `core.clj` macro that expands its
+`(:require ...)` clauses into `(do (require 'spec) ... nil)`, which a top
+level `do` runs form by form (M12), so the aliases hold for the next forms.
+The compiler's `aliasLibraryNamespace` replaces a recorded alias by its
+namespace before M26's rewrite of `clojure.string/x` to the built-in `x`, at
+the two places a qualified name is compiled (a call's head, a symbol); a
+name the namespace does not have is the compile error `No such var: str/foo`
+(Clojure's). Any other namespace raises `FileNotFoundException` with
+Clojure's "Could not locate ..." message. Alternatives: (a) `ns` as a
+compiler special form, rejected: a macro needs no C++ and `macroexpand`
+shows what it does; (b) aliases per file, rejected while there are no
+namespaces to hang them on (D52); (c) a module object per namespace read
+through `alias/member` (`import-module`'s path), rejected because the
+compile-time rewrite keeps a call to `str/join` as fast as a call to `join`.
+
+**M34. The Part C vocabulary: where each function lives** (*agent, pending
+review*). C++ where the work is per element or the semantics need
+protoCore's exact integers: `quot`, `rem`, `mod`, `compare`, `max`, `min`,
+`sort` and `sort-by` (a stable sort, `std::stable_sort`, over a comparator
+that is `compare`, a number-returning fn or a boolean predicate, as
+Clojure's AFunction.compare), `frequencies` (one pass with a C++ hash table
+on the map key semantics, the distinct elements rooted in a list), and
+`clojure.string/split-lines`; `(System/exit n)` and its siblings are members
+of a `System` object read by `CALL_MEMBER`. Clojure in `core.clj`, from
+clojure.core's own definitions, for the rest: `key`, `val`, `constantly`,
+`complement`, `partial`, `comp`, `juxt`, `fnil`, `some`, `every?`,
+`not-any?`, `not-every?`, `max-key`, `min-key`, `get-in`, `assoc-in`,
+`update`, `update-in`, `merge`, `merge-with`, `select-keys`, `zipmap`,
+`group-by`, `letfn` and `ns`. They add about 4.5 M cycles (1.2 ms) to
+start-up (benchmarks/RESULTS.md); `core.clj` now costs about 5 ms in all,
+under the brief's 10 ms. `assoc` now takes `nil` (the empty map) and a
+vector (by index), which `assoc-in` and `update-in` need. `letfn` binds
+each name to a small fn that calls its definition through an atom, reset
+once every definition exists: a closure captures a local's value when it is
+made (D18), so two definitions cannot otherwise see each other. Each call
+through the name costs an `apply` and a `deref` (D53). Alternative: a
+`letfn*` special form with a frame slot per name filled after the closures
+are made, rejected for now as compiler work the brief did not require.
 ## 11. The standard library
 
 Two phases:

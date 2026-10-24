@@ -521,7 +521,17 @@ Token Lexer::lexSymbolOrPunct() {
             return t;
         }
         if (la == '"') return lexRegex();
-        if (la == '(' || la == '_' || la == '\'' ) {
+        if (la == '(') {
+            // `#(...)`: the anonymous function literal (Reader.cpp).
+            Token t;
+            t.kind = TokenKind::HashLParen;
+            t.text = "#(";
+            t.line = startLine;
+            t.column = startCol;
+            advance(); advance();
+            return t;
+        }
+        if (la == '_' || la == '\'' ) {
             std::string s = std::string("#") + la;
             advance(); advance();
             return reserved(s);

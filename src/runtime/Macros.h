@@ -61,6 +61,20 @@ bool globalKeyForSymbol(const std::string& spelling, std::string& key);
 void defineBuiltin(proto::ProtoContext* ctx, proto::ProtoObject* globals,
                    const char* name, const proto::ProtoObject* value);
 
+// Namespace aliases (docs/DESIGN.md §10.2, M33): `(require '[clojure.string
+// :as str])`, and `ns` with `(:require ...)`, record that `str` stands for
+// `clojure.string`, so the compiler reads `str/join` as `clojure.string/join`
+// in the forms compiled afterwards. There are no namespaces (D28): the table
+// is one, for the process, shared by every file, the REPL and eval.
+// Thread-safe.
+void addNamespaceAlias(const std::string& alias, const std::string& ns);
+// The namespace `alias` stands for, with true; false when it names none.
+bool namespaceAlias(const std::string& alias, std::string& ns);
+// True for a library namespace protoClojure provides the functions of as
+// built-ins: clojure.core, clojure.string, clojure.set, clojure.java.io,
+// clojure.java.shell.
+bool isKnownNamespace(const std::string& ns);
+
 // True while core.clj loads (Eval.h, loadCore): the current namespace is
 // then clojure.core, so a definition is installed under both `x` and
 // `clojure.core/x` and syntax-quote qualifies unknown names as

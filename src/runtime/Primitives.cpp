@@ -1,6 +1,7 @@
 #include "Primitives.h"
 #include "Exceptions.h"
 #include "IO.h"
+#include "CorePrims.h"
 #include "LazySeq.h"
 #include "ExecutionEngine.h"
 #include "ActorScheduler.h"
@@ -912,8 +913,36 @@ const proto::ProtoObject* prim_assoc(proto::ProtoContext* ctx,
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throwError(ctx, "assoc: no active VM context");
     const proto::ProtoObject* m = args->getAt(ctx, 0);
+    // nil is the empty map, as in Clojure: (assoc nil :a 1) is {:a 1}, which
+    // assoc-in and update-in rely on.
+    if (!m || m == PROTO_NONE) return mapAssocPairs(ctx, nullptr, args->values() + 1, n - 1);
+    if (isVector(m)) {
+        // A vector by index, 0 to its count (the count appends), as in
+        // Clojure; any other index raises IndexOutOfBoundsException.
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(1);
+        scope.setAutomaticLocal(0, vectorItems(&scope, m)->asObject(&scope));
+        for (proto::proto_ulong i = 1; i + 1 < n; i += 2) {
+            const proto::ProtoList* items = scope.getAutomaticLocal(0)->asList(&scope);
+            const proto::ProtoObject* k = args->getAt(&scope, static_cast<int>(i));
+            const long long size = static_cast<long long>(items->getSize(&scope));
+            if (!proto::isSmallInt(k) || proto::asSmallInt(k) < 0 || proto::asSmallInt(k) > size)
+                throwClassed(&scope, "IndexOutOfBoundsException",
+                             "assoc index " + printedValue(&scope, k) + " is out of bounds (count " +
+                             std::to_string(size) + ")");
+            const long long idx = proto::asSmallInt(k);
+            const proto::ProtoObject* v = args->getAt(&scope, static_cast<int>(i + 1));
+            items = idx == size ? items->appendLast(&scope, v)
+                                : items->setAt(&scope, static_cast<int>(idx), v);
+            scope.setAutomaticLocal(0, items->asObject(&scope));
+        }
+        const proto::ProtoObject* r = newVector(&scope, scope.getAutomaticLocal(0)->asList(&scope));
+        scope.returnValue = r;
+        return r;
+    }
     if (!isMap(m))
-        throwError(ctx, "assoc: first arg must be a map");
+        throwClassed(ctx, "ClassCastException",
+                     std::string("assoc expects a map, a vector or nil, got ") + valueTypeName(ctx, m));
     return mapAssocPairs(ctx, m, args->values() + 1, n - 1);
 }
 
@@ -4295,6 +4324,7 @@ const char* primitiveName(proto::ProtoMethod fn) {
         if (p.fn == fn) return p.name;
     }
     if (const char* lazy = lazySeqPrimitiveName(fn)) return lazy;
+    if (const char* core = corePrimitiveName(fn)) return core;
     return ioPrimitiveName(reinterpret_cast<const void*>(fn));
 }
 
@@ -4626,6 +4656,9 @@ void installPrimitives(proto::ProtoContext* ctx,
     }
     // Input and output (IO.h).
     installIO(ctx, globals);
+    // The Part C vocabulary in C++ (CorePrims.h), after the I/O globals,
+    // which its `System` object reads.
+    installCorePrimitives(ctx, globals);
 }
 
 } // namespace protoClojure

@@ -343,6 +343,192 @@
   (__check-seq-bindings "for" seq-exprs)
   (__for-emit (__binding-groups "for" seq-exprs) body-expr))
 
+;; ---- Functions of functions, collections and maps (Part C) ---------------
+;; Clojure's definitions, without their transducer and chunked fast paths.
+;; quot, rem, mod, compare, max, min, sort, sort-by, frequencies and
+;; clojure.string/split-lines are C++ (src/runtime/CorePrims.cpp).
+
+(defn key
+  "Returns the key of the map entry."
+  [e] (nth e 0))
+
+(defn val
+  "Returns the value in the map entry."
+  [e] (nth e 1))
+
+(defn constantly
+  "Returns a function that takes any number of arguments and returns x."
+  [x] (fn [& args] x))
+
+(defn complement
+  "Takes a fn f and returns a fn that takes the same arguments as f, has the
+  same effects, if any, and returns the opposite truth value."
+  [f] (fn [& args] (not (apply f args))))
+
+(defn partial
+  "Takes a function f and fewer than the normal arguments to f, and returns a
+  fn that takes a variable number of additional args."
+  ([f] f)
+  ([f a] (fn [& args] (apply f a args)))
+  ([f a b] (fn [& args] (apply f a b args)))
+  ([f a b & more] (fn [& args] (apply f a b (concat more args)))))
+
+(defn comp
+  "Takes a set of functions and returns a fn that is the composition of
+  those fns, applied right to left."
+  ([] identity)
+  ([f] f)
+  ([f g] (fn [& args] (f (apply g args))))
+  ([f g & fs] (reduce comp (list* f g fs))))
+
+(defn juxt
+  "Takes a set of functions and returns a fn that returns a vector of the
+  result of applying each fn to the args."
+  [& fs] (fn [& args] (vec (map (fn [f] (apply f args)) fs))))
+
+(defn fnil
+  "Takes a function f, and returns a function that calls f, replacing a nil
+  first argument with the supplied value x."
+  [f x] (fn [a & args] (apply f (if (nil? a) x a) args)))
+
+(defn some
+  "Returns the first logical true value of (pred x) for any x in coll, else
+  nil."
+  [pred coll]
+  (loop [s (seq coll)]
+    (when s
+      (let [r (pred (first s))]
+        (if r r (recur (next s)))))))
+
+(defn every?
+  "Returns true if (pred x) is logical true for every x in coll, else false."
+  [pred coll]
+  (loop [s (seq coll)]
+    (if s (if (pred (first s)) (recur (next s)) false) true)))
+
+(defn not-any?
+  "Returns false if (pred x) is logical true for any x in coll, else true."
+  [pred coll] (not (some pred coll)))
+
+(defn not-every?
+  "Returns false if (pred x) is logical true for every x in coll, else true."
+  [pred coll] (not (every? pred coll)))
+
+(defn max-key
+  "Returns the x for which (k x), a number, is greatest; the last one of
+  those that tie."
+  ([k x] x)
+  ([k x y] (if (> (k x) (k y)) x y))
+  ([k x y & more] (reduce (fn [a b] (max-key k a b)) (max-key k x y) more)))
+
+(defn min-key
+  "Returns the x for which (k x), a number, is least; the last one of those
+  that tie."
+  ([k x] x)
+  ([k x y] (if (< (k x) (k y)) x y))
+  ([k x y & more] (reduce (fn [a b] (min-key k a b)) (min-key k x y) more)))
+
+(defn get-in
+  "Returns the value in a nested associative structure, where ks is a
+  sequence of keys; nil (or not-found) when a key is not present."
+  ([m ks] (reduce get m ks))
+  ([m ks not-found]
+   (loop [m m ks (seq ks)]
+     (if ks
+       (if (contains? m (first ks)) (recur (get m (first ks)) (next ks)) not-found)
+       m))))
+
+(defn assoc-in
+  "Associates a value in a nested associative structure, where ks is a
+  sequence of keys; creates the maps that do not exist."
+  [m [k & ks] v]
+  (if ks (assoc m k (assoc-in (get m k) ks v)) (assoc m k v)))
+
+(defn update
+  "'Updates' a value in an associative structure: (f old-value & args)."
+  ([m k f] (assoc m k (f (get m k))))
+  ([m k f x] (assoc m k (f (get m k) x)))
+  ([m k f x y] (assoc m k (f (get m k) x y)))
+  ([m k f x y & more] (assoc m k (apply f (get m k) x y more))))
+
+(defn update-in
+  "'Updates' a value in a nested associative structure, where ks is a
+  sequence of keys: (f old-value & args); creates the maps that do not
+  exist."
+  [m [k & ks] f & args]
+  (if ks
+    (assoc m k (apply update-in (get m k) ks f args))
+    (assoc m k (apply f (get m k) args))))
+
+(defn merge
+  "Returns a map that consists of the rest of the maps conj-ed onto the
+  first. If a key occurs in more than one map, the mapping from the latter
+  will be the mapping in the result."
+  [& maps]
+  (when (some identity maps)
+    (reduce (fn [acc m] (if m (conj (if acc acc {}) m) acc)) nil maps)))
+
+(defn merge-with
+  "Returns a map that consists of the rest of the maps conj-ed onto the
+  first. If a key occurs in more than one map, the mapping(s) from the latter
+  will be combined with the mapping in the result by calling (f val-in-result
+  val-in-latter)."
+  [f & maps]
+  (when (some identity maps)
+    (reduce (fn [acc m]
+              (if m
+                (reduce (fn [a [k v]] (if (contains? a k) (assoc a k (f (get a k) v)) (assoc a k v)))
+                        (if acc acc {}) m)
+                acc))
+            nil maps)))
+
+(defn select-keys
+  "Returns a map containing only those entries in map whose key is in keys."
+  [m ks]
+  (reduce (fn [acc k] (if (contains? m k) (assoc acc k (get m k)) acc)) {} ks))
+
+(defn zipmap
+  "Returns a map with the keys mapped to the corresponding vals."
+  [ks vs]
+  (loop [m {} ks (seq ks) vs (seq vs)]
+    (if (if ks vs false)
+      (recur (assoc m (first ks) (first vs)) (next ks) (next vs))
+      m)))
+
+(defn group-by
+  "Returns a map of the elements of coll keyed by the result of f on each
+  element. The value at each key is a vector of the corresponding elements,
+  in the order they appeared in coll."
+  [f coll]
+  (reduce (fn [m x] (let [k (f x)] (assoc m k (conj (get m k []) x)))) {} coll))
+
+;; ---- letfn and ns ---------------------------------------------------------
+
+(defmacro letfn
+  "fnspec ==> (fname [params*] exprs) or (fname ([params*] exprs)+)
+  Takes a vector of function specs and a body, and generates a set of
+  bindings of functions to their names. All of the names are available in
+  all of the definitions of the functions, as well as the body.
+  Each name is bound to a fn that calls the definition through an atom
+  filled once every definition exists, since a closure captures a local's
+  value when it is made (D53)."
+  [fnspecs & body]
+  (let [names (map first fnspecs)
+        boxes (map (fn [n] (gensym (str (name n) "-box__"))) names)]
+    `(let [~@(interleave boxes (repeat '(clojure.core/atom nil)))
+           ~@(interleave names (map (fn [b] `(fn [& args#] (apply (deref ~b) args#))) boxes))]
+       ~@(map (fn [b spec] `(reset! ~b (fn ~@(rest spec)))) boxes fnspecs)
+       ~@body)))
+
+(defmacro ns
+  "Sets *ns* to the namespace named by name. There are no namespaces in
+  protoClojure (D28): the name is ignored, and each (:require spec ...)
+  clause requires its specs, which records their :as aliases (M33). Other
+  clauses (:import, :refer-clojure, :gen-class) are ignored."
+  [name & references]
+  (let [reqs (mapcat (fn [r] (if (seq? r) (if (= :require (first r)) (rest r) nil) nil)) references)]
+    `(do ~@(map (fn [spec] `(require '~spec)) reqs) nil)))
+
 ;; ---- Dispatch ------------------------------------------------------------
 
 (defn __case-test [g constant]
