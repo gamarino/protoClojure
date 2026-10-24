@@ -5,6 +5,7 @@
 #include "CorePrims.h"
 #include "DataFormats.h"
 #include "LazySeq.h"
+#include "DebugHook.h"
 #include "ExecutionEngine.h"
 #include "ActorScheduler.h"
 #include "ListBuilder.h"
@@ -2351,6 +2352,7 @@ static void fireWatches(proto::ProtoContext* ctx,
             newV ? newV : PROTO_NONE
         };
         try {
+            DebugCatchBarrier swallowed;   // nothing the watch throws reaches the caller
             cc->engine->invoke(&scope,
                                watches->getAt(&scope, static_cast<int>(i + 1)),
                                four, 4);
@@ -2497,6 +2499,7 @@ const proto::ProtoObject* futureThreadMain(
     const proto::ProtoObject* blobObj =
         fut->getAttribute(ctx, ccBlobKey);
     if (!thunk || !blobObj || !blobObj->isInteger(ctx)) return PROTO_NONE;
+    setDebugThreadKind("future");
 
     // The spawning thread's ActiveCallContext, copied for this worker at
     // spawn time (buildFuture), which this worker owns. Not the spawner's
@@ -2707,6 +2710,7 @@ const proto::ProtoObject* pmapWorkerMain(
     const proto::ProtoObject* x = fut->getAttribute(ctx, xKey);
     const proto::ProtoObject* blobObj = fut->getAttribute(ctx, ccBlobKey);
     if (!f || !blobObj || !blobObj->isInteger(ctx)) return PROTO_NONE;
+    setDebugThreadKind("pmap");
     const ActiveCallContext* parentCc =
         reinterpret_cast<const ActiveCallContext*>(blobObj->asLong(ctx));
     if (!parentCc) return PROTO_NONE;
@@ -3996,7 +4000,10 @@ std::string formatValue(proto::ProtoContext* ctx, const std::string& flags, long
             const int base = lower == 'd' ? 10 : lower == 'x' ? 16 : 8;
             bool small = true;
             long long v = 0;
-            try { v = arg->asLong(ctx); } catch (const proto::ProtoException&) { small = false; }
+            try {
+                DebugQuietScope probe;   // a probe, not the program's exception
+                v = arg->asLong(ctx);
+            } catch (const proto::ProtoException&) { small = false; }
             if (small && base != 10) {
                 // A long prints in two's complement, as Java's %x of a Long.
                 char buf[32];

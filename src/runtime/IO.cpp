@@ -2,6 +2,7 @@
 #include "Macros.h"
 
 #include "Exceptions.h"
+#include "DebugHook.h"
 #include "ExecutionEngine.h"
 #include "LazySeq.h"
 #include "ListBuilder.h"
@@ -742,6 +743,7 @@ const PO* connectionMain(proto::ProtoContext* ctx, const PO*, const proto::Paren
     auto* s = reinterpret_cast<HttpServer*>(args->getAt(ctx, 0)->asLong(ctx));
     auto* c = reinterpret_cast<Connection*>(args->getAt(ctx, 1)->asLong(ctx));
     setActiveCallContext(s->cc);
+    setDebugThreadKind("http");
     t_servingFor = s;
     try {
         serveConnection(ctx, s, c);

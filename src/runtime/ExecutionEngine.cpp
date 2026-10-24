@@ -970,6 +970,10 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
     // TRY_END). Plain C++ data: a code position and a stack depth. Empty,
     // and never allocated, in a frame that runs no `try`.
     std::vector<TryHandler> handlers;
+    if constexpr (kHandlers) {
+        // The debugger asks a throw's frames whether they catch it.
+        if (debugScope.active()) [[unlikely]] debugScope.frame().handlers = &handlers;
+    }
 
     // The C++ exception each catch slot holds (STORE_CAUGHT / RETHROW),
     // indexed by local slot, and the one just caught, waiting for the
@@ -1587,6 +1591,105 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
             if (passOn) std::rethrow_exception(passOn);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// The debugger's question: does a frame catch this? (DebugHook.h)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// The next instruction from `ip` that is not a line mark or a NOP.
+const Instr* skipMarks(const Instr* ip, const Instr* end) {
+    while (ip < end) {
+        const Op op = static_cast<Op>(*ip & 0xFF);
+        if (op != Op::LINE && op != Op::NOP) break;
+        ++ip;
+    }
+    return ip;
+}
+
+// Whether the handler code at `target` (compileTry's layout: STORE_CAUGHT ex,
+// then per clause PUSH_LOCAL ex, a type test, JUMP_IF_FALSE next, ...,
+// RETHROW ex) has a clause selecting `v`. A finally handler (STORE_CAUGHT,
+// the finally forms, RETHROW) selects nothing. A shape it does not know, or
+// a type it cannot work out, counts as catching.
+bool handlerCatches(proto::ProtoContext* ctx, const DebugFrame& f, const Instr* target,
+                    const proto::ProtoObject* v) {
+    const BytecodeModule& mod = *f.mod;
+    const Instr* const end = mod.code().data() + mod.code().size();
+    auto opAt = [](const Instr* p) { return static_cast<Op>(*p & 0xFF); };
+    auto operandAt = [](const Instr* p) { return static_cast<std::uint32_t>(*p >> kOperandShift); };
+    auto isPushLocal = [&](const Instr* p) {
+        return opAt(p) == Op::PUSH_LOCAL || opAt(p) == Op::PUSH_LOCAL_CLEAR;
+    };
+
+    const Instr* ip = skipMarks(target, end);
+    if (ip >= end || opAt(ip) != Op::STORE_CAUGHT) return true;
+    const std::uint32_t ex = operandAt(ip++);
+    const ActiveCallContext* cc = activeCallContext();
+    for (int clauses = 0; clauses < 4096; ++clauses) {
+        ip = skipMarks(ip, end);
+        if (ip >= end) return true;
+        if (opAt(ip) == Op::RETHROW) return false;               // no clause selected it
+        if (!isPushLocal(ip) || operandAt(ip) != ex)  // a finally's forms
+            return false;
+        ++ip;
+        bool match = true;
+        if (ip < end && opAt(ip) == Op::EXC_MATCH) {
+            match = exceptionMatches(ctx, v, static_cast<int>(operandAt(ip)));
+            ++ip;
+        } else {
+            const proto::ProtoObject* type = nullptr;
+            if (ip < end && opAt(ip) == Op::RESOLVE_CLASS) {
+                if (!cc) return true;
+                type = resolveCatchType(ctx, cc->globals, mod.constAt(operandAt(ip)).sval);
+                ++ip;
+            } else if (ip < end && isPushLocal(ip)) {
+                type = f.ctx->getAutomaticLocal(operandAt(ip));
+                ++ip;
+                if (ip < end && opAt(ip) == Op::GET_MEMBER) {
+                    const auto& c = mod.constAt(operandAt(ip));
+                    const proto::ProtoObject* member = nullptr;
+                    if (!readMember(ctx, type, reinterpret_cast<const proto::ProtoString*>(c.named), member))
+                        return true;   // the clause itself raises
+                    type = member;
+                    ++ip;
+                }
+            } else {
+                return true;
+            }
+            if (ip >= end || opAt(ip) != Op::EXC_MATCH_TYPE) return true;
+            ++ip;
+            if (!isForeignObject(ctx, type) && !isException(ctx, type)) return true;  // raises
+            match = valueIsInstanceOf(ctx, v, type);
+        }
+        if (ip >= end || opAt(ip) != Op::JUMP_IF_FALSE) return true;
+        if (match) return true;
+        ip = ip + 1 + operandAt(ip);                             // the next clause
+    }
+    return true;
+}
+
+} // namespace
+
+bool debugFrameCatches(proto::ProtoContext* ctx, const DebugFrame* f,
+                       const proto::ProtoObject* value) {
+    if (!f || !f->handlers || !f->mod) return false;
+    const auto& handlers = *static_cast<const std::vector<TryHandler>*>(f->handlers);
+    if (handlers.empty()) return false;
+    DebugQuietScope quiet;
+    // The type lookups may allocate: the value stays rooted in this scope.
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    scope.setAutomaticLocal(0, value);
+    try {
+        for (auto it = handlers.rbegin(); it != handlers.rend(); ++it)
+            if (handlerCatches(&scope, *f, it->target, value)) return true;
+    } catch (...) {
+        return true;   // a type lookup failed: the clause would raise, not pass it on
+    }
+    return false;
 }
 
 template const proto::ProtoObject* ExecutionEngine::executeFrame<false>(

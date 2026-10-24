@@ -31,6 +31,7 @@
 #include <fstream>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -263,9 +264,81 @@ bool hasChildren(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
 // code it runs never stops.
 thread_local bool tEvaluating = false;
 
+// A frame id or a variablesReference carries the DAP id of the thread that
+// owns it: `threadId * kIdStride + n`. A request about a frame or a value
+// reaches the stopped thread whose stack holds it.
+constexpr long long kIdStride = 1LL << 24;
+
+enum class StepKind { None, In, Over, Out };
+enum class Resume { Continue, StepIn, StepOver, StepOut };
+
+// Why a thread stopped on an exception (exceptionInfo).
+struct ExceptionStop {
+    std::string typeName;      // the class: ExceptionInfo, ArithmeticException...
+    std::string message;       // ex-message, or "" when it has none
+    std::string description;   // the exception as the top level reports it
+    std::string breakMode;     // "always" (raised) or "userUnhandled"
+    std::string stackTrace;    // "  at f (file.clj:12)" lines
+};
+
+// What the debugger knows about one thread that runs the program's code.
+struct ThreadState {
+    int         id = 0;
+    std::string name;
+    bool        isMain = false;
+    std::atomic<bool> pauseRequested{false};
+
+    // The thread's own: read and written only by the thread itself.
+    StepKind stepKind = StepKind::None;
+    int      stepDepth = 0;
+
+    // Guarded by the server's mu_.
+    bool             stopped = false, resumeReady = false;
+    Resume           resume = Resume::Continue;
+    std::deque<json> requests;           // inspection requests for the thread
+    bool             hasException = false;
+    ExceptionStop    exception;
+
+    // The thread's own while it is stopped: frame ids and variable
+    // references index these.
+    struct Ref {
+        DebugFrame* frame;                   // the Locals of this frame...
+        const proto::ProtoObject* value;     // ...or this value's children
+    };
+    DebugFrame*              stopFrame = nullptr;
+    std::vector<DebugFrame*> frames;     // id % kIdStride - 1 -> frame
+    std::vector<Ref>         refs;       // reference % kIdStride - 1 -> what
+};
+
+class DapServer;
+
+// The server threads report their end to, guarded by serverMu() (never
+// destroyed: a thread may end after the server).
+std::mutex& serverMu() {
+    static std::mutex* mu = new std::mutex;
+    return *mu;
+}
+DapServer* gServer = nullptr;
+
+// The calling thread's registration with the server, and the report of its
+// end: the destructor of a thread_local runs when the thread ends.
+thread_local ThreadState* tState = nullptr;
+struct ThreadExit {
+    int id = 0;
+    ~ThreadExit();
+};
+thread_local ThreadExit tExit;
+
 class DapServer final : public DebugHook {
 public:
-    DapServer() : transport_(stdio_.protocolIn(), stdio_.protocolOut()) {}
+    DapServer() : transport_(stdio_.protocolIn(), stdio_.protocolOut()) {
+        std::lock_guard<std::mutex> lk(serverMu());
+        gServer = this;
+    }
+    ~DapServer() override {
+        std::lock_guard<std::mutex> lk(serverMu());
+        gServer = nullptr;
+    }
 
     int run(int (*runProgram)(const DapLaunch&, void*), void* arg) {
         // What the program prints reaches the client as `output` events
@@ -322,38 +395,70 @@ public:
     // --- DebugHook -----------------------------------------------------------
     void onLine(proto::ProtoContext* ctx, DebugFrame* frame) override {
         if (tEvaluating) return;
-        if (!anyBreakpoints_.load(std::memory_order_relaxed) &&
-            !stepping_.load(std::memory_order_relaxed) &&
-            !pauseRequested_.load(std::memory_order_relaxed) &&
-            !entryPending_.load(std::memory_order_relaxed))
+        ThreadState* ts = tState;
+        if (!ts) [[unlikely]] ts = registerThread(frame);
+        const bool entry = ts->isMain && entryPending_.load(std::memory_order_relaxed);
+        if (!anyBreakpoints_.load(std::memory_order_relaxed) && ts->stepKind == StepKind::None &&
+            !ts->pauseRequested.load(std::memory_order_relaxed) && !entry)
             return;
 
         const char* reason = nullptr;
-        if (entryPending_.exchange(false)) {
+        if (entry && entryPending_.exchange(false)) {
             reason = "entry";
-        } else if (pauseRequested_.exchange(false)) {
+        } else if (ts->pauseRequested.exchange(false)) {
             reason = "pause";
         } else {
-            if (stepping_.load()) {
-                std::lock_guard<std::mutex> lk(mu_);
-                if (stepping_.load() && std::this_thread::get_id() == stepThread_) {
-                    const int depth = depthOf(frame);
-                    switch (stepKind_) {
-                        case StepKind::In:   reason = "step"; break;
-                        case StepKind::Over: if (depth <= stepDepth_) reason = "step"; break;
-                        case StepKind::Out:  if (depth <  stepDepth_) reason = "step"; break;
-                    }
+            if (ts->stepKind != StepKind::None) {
+                const int depth = depthOf(frame);
+                switch (ts->stepKind) {
+                    case StepKind::None: break;
+                    case StepKind::In:   reason = "step"; break;
+                    case StepKind::Over: if (depth <= ts->stepDepth) reason = "step"; break;
+                    case StepKind::Out:  if (depth <  ts->stepDepth) reason = "step"; break;
                 }
             }
             if (!reason && anyBreakpoints_.load() && breakpointAt(frame)) reason = "breakpoint";
         }
-        if (reason) stop(ctx, frame, reason);
+        if (reason) stop(ctx, ts, frame, reason, nullptr);
+    }
+
+    void onThrow(proto::ProtoContext* ctx, const proto::ProtoObject* value, ThrowSite site) override {
+        if (tEvaluating) return;
+        const bool raised = exRaised_.load(std::memory_order_relaxed);
+        const bool uncaught = exUncaught_.load(std::memory_order_relaxed);
+        if (!raised && !uncaught) return;
+        DebugFrame* top = debugTop();
+        if (!top) return;
+        ThreadState* ts = tState;
+        if (!ts) ts = registerThread(top);
+
+        // The value stays rooted here while the thread is stopped.
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(1);
+        scope.setAutomaticLocal(0, value);
+        ExceptionStop ex;
+        if (raised) {
+            ex.breakMode = "always";
+        } else if (!caughtByProgram(&scope, top, value)) {
+            ex.breakMode = "userUnhandled";
+        } else {
+            return;
+        }
+        describeException(&scope, value, site, top, ex);
+        stop(&scope, ts, top, "exception", &ex);
+    }
+
+    // A thread that ran the program's code ended (ThreadExit).
+    void threadExited(int id) {
+        bool known = false;
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            known = threads_.erase(id) > 0;
+        }
+        if (known) sendEvent("thread", {{"reason", "exited"}, {"threadId", id}});
     }
 
 private:
-    enum class StepKind { In, Over, Out };
-    enum class Resume { Continue, StepIn, StepOver, StepOut };
-
     static int depthOf(const DebugFrame* f) {
         int d = 0;
         for (; f; f = f->parent) ++d;
@@ -368,32 +473,125 @@ private:
         return it != breakpoints_.end() && it->second.count(frame->line) > 0;
     }
 
+    // --- threads ---------------------------------------------------------------
+
+    // The calling thread's first line (or throw): it gets an id and a name,
+    // and the client a `thread` event. The evaluator thread is "main", id 1.
+    ThreadState* registerThread(const DebugFrame* frame) {
+        auto ts = std::make_unique<ThreadState>();
+        const char* kind = debugThreadKind();
+        ThreadState* raw = ts.get();
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            if (!kind && !mainSeen_) {
+                mainSeen_ = true;
+                ts->id = 1;
+                ts->isMain = true;
+                ts->name = "main";
+            } else {
+                ts->id = nextThreadId_++;
+                if (!kind) {
+                    ts->name = "thread-" + std::to_string(ts->id);
+                } else if (std::string(kind) == "actor") {
+                    // A worker runs the turns of every actor in turn.
+                    ts->name = "actor worker " + std::to_string(++actorWorkers_);
+                } else {
+                    const BytecodeModule::DebugInfo* di = frame->mod->debugInfo();
+                    const int line = frame->line ? frame->line : (di ? di->line : 0);
+                    ts->name = std::string(kind) + "@" + (di ? baseName(di->source) : std::string("?")) +
+                               ":" + std::to_string(line);
+                }
+            }
+            threads_[ts->id] = std::move(ts);
+        }
+        tState = raw;
+        tExit.id = raw->id;
+        sendEvent("thread", {{"reason", "started"}, {"threadId", raw->id}});
+        return raw;
+    }
+
+    // Under mu_.
+    ThreadState* threadById(long long id) {
+        auto it = threads_.find(static_cast<int>(id));
+        return it == threads_.end() ? nullptr : it->second.get();
+    }
+
+    // --- exceptions --------------------------------------------------------------
+
+    // Whether a try of the program's frames, from the innermost out, catches
+    // `value`. The walk ends at a native site that swallows what it calls
+    // throws (DebugCatchBarrier): the program never sees the exception.
+    static bool caughtByProgram(proto::ProtoContext* ctx, const DebugFrame* top,
+                                const proto::ProtoObject* value) {
+        const DebugFrame* barrierTop = nullptr;
+        const bool barrier = debugCatchBarrier(barrierTop);
+        for (const DebugFrame* f = top; f; f = f->parent) {
+            if (barrier && f == barrierTop) return false;
+            if (debugFrameCatches(ctx, f, value)) return true;
+        }
+        return false;
+    }
+
+    static void describeException(proto::ProtoContext* ctx, const proto::ProtoObject* v,
+                                  ThrowSite site, const DebugFrame* top, ExceptionStop& ex) {
+        try {
+            if (isException(ctx, v)) ex.typeName = exceptionClassName(exceptionClassOf(ctx, v));
+            else ex.typeName = valueTypeName(ctx, v);
+            const proto::ProtoObject* m = thrownMessage(ctx, v);
+            if (m && m != PROTO_NONE) printValueTo(ctx, ex.message, m, /*readable=*/false);
+            ex.description = describeThrown(ctx, v);
+        } catch (...) {
+            if (ex.typeName.empty()) ex.typeName = "Throwable";
+            if (ex.description.empty()) ex.description = ex.typeName;
+        }
+        if (site != ThrowSite::Throw)
+            ex.description += site == ThrowSite::Kernel
+                ? " (raised by protoCore in a call on this line)"
+                : " (raised by the runtime in a call on this line)";
+        for (const DebugFrame* f = top; f; f = f->parent) {
+            const BytecodeModule::DebugInfo* di = f->mod->debugInfo();
+            ex.stackTrace += "  at " + di->name + " (" + baseName(di->source) + ":" +
+                             std::to_string(f->shownLine) + ")\n";
+        }
+    }
+
+    // --- stopping ------------------------------------------------------------------
+
     // The thread stops: tell the client, then answer its inspection requests
-    // until it resumes the program. Runs on the stopped thread.
-    void stop(proto::ProtoContext* ctx, DebugFrame* frame, const char* reason) {
+    // until the client resumes this thread. The other threads run on. Runs on
+    // the stopped thread.
+    void stop(proto::ProtoContext* ctx, ThreadState* ts, DebugFrame* frame, const char* reason,
+              const ExceptionStop* ex) {
         // A line printed without a newline is still in stdio's buffer.
         std::fflush(stdout);
         std::fflush(stderr);
         std::cout.flush();
         {
-            // One stop at a time; another thread waits here, unmanaged, so a
-            // collection never waits for it.
-            proto::ProtoContext::UnmanagedScope unmanaged(ctx);
-            stopMu_.lock();
             // What the program printed before the stop reaches the client
-            // before the `stopped` event.
+            // before the `stopped` event. Unmanaged: a collection never
+            // waits for this thread.
+            proto::ProtoContext::UnmanagedScope unmanaged(ctx);
             stdio_.waitForwarded();
         }
         {
             std::lock_guard<std::mutex> lk(mu_);
-            stopped_ = true;
-            resumeReady_ = false;
-            stepping_.store(false);
-            stopFrame_ = frame;
-            frames_.clear();
-            refs_.clear();
+            if (disconnected_) return;
+            ts->stopped = true;
+            ts->resumeReady = false;
+            ts->stepKind = StepKind::None;
+            ts->stopFrame = frame;
+            ts->frames.clear();
+            ts->refs.clear();
+            ts->hasException = ex != nullptr;
+            if (ex) ts->exception = *ex;
+            lastStopped_ = ts->id;
         }
-        sendEvent("stopped", {{"reason", reason}, {"threadId", 1}, {"allThreadsStopped", true}});
+        json body = {{"reason", reason}, {"threadId", ts->id}, {"allThreadsStopped", false}};
+        if (ex) {
+            body["description"] = ex->description;
+            body["text"] = ex->typeName;
+        }
+        sendEvent("stopped", body);
 
         for (;;) {
             json req;
@@ -401,40 +599,37 @@ private:
             {
                 proto::ProtoContext::UnmanagedScope unmanaged(ctx);
                 std::unique_lock<std::mutex> lk(mu_);
-                cv_.wait(lk, [&] { return resumeReady_ || !requests_.empty(); });
-                if (!requests_.empty()) {
-                    req = std::move(requests_.front());
-                    requests_.pop_front();
+                cv_.wait(lk, [&] { return ts->resumeReady || !ts->requests.empty() || disconnected_; });
+                if (!ts->requests.empty()) {
+                    req = std::move(ts->requests.front());
+                    ts->requests.pop_front();
                 } else {
                     resume = true;
                 }
             }
             if (resume) break;
-            answerStopped(ctx, req);
+            answerStopped(ctx, ts, req);
         }
 
         std::deque<json> late;
         {
             std::lock_guard<std::mutex> lk(mu_);
-            stopped_ = false;
-            late.swap(requests_);
-            frames_.clear();
-            refs_.clear();
-            stopFrame_ = nullptr;
-            switch (resume_) {
-                case Resume::Continue: break;
-                case Resume::StepIn:   stepKind_ = StepKind::In;   break;
-                case Resume::StepOver: stepKind_ = StepKind::Over; break;
-                case Resume::StepOut:  stepKind_ = StepKind::Out;  break;
+            ts->stopped = false;
+            ts->hasException = false;
+            late.swap(ts->requests);
+            ts->frames.clear();
+            ts->refs.clear();
+            ts->stopFrame = nullptr;
+            const Resume r = disconnected_ ? Resume::Continue : ts->resume;
+            switch (r) {
+                case Resume::Continue: ts->stepKind = StepKind::None; break;
+                case Resume::StepIn:   ts->stepKind = StepKind::In;   break;
+                case Resume::StepOver: ts->stepKind = StepKind::Over; break;
+                case Resume::StepOut:  ts->stepKind = StepKind::Out;  break;
             }
-            if (resume_ != Resume::Continue) {
-                stepThread_ = std::this_thread::get_id();
-                stepDepth_ = depthOf(frame);
-                stepping_.store(true);
-            }
+            ts->stepDepth = depthOf(frame);
         }
-        for (const json& r : late) sendErrorResponse(r, "the program is running");
-        stopMu_.unlock();
+        for (const json& r : late) sendErrorResponse(r, "the thread is running");
     }
 
     // --- inspection, on the stopped thread -----------------------------------
@@ -456,25 +651,25 @@ private:
         return out;
     }
 
-    void answerStopped(proto::ProtoContext* ctx, const json& req) {
+    void answerStopped(proto::ProtoContext* ctx, ThreadState* ts, const json& req) {
         const std::string command = req.value("command", "");
         const json args = req.value("arguments", json::object());
         try {
-            if (command == "stackTrace")     stackTrace(req, args);
-            else if (command == "scopes")    scopes(req, args);
-            else if (command == "variables") variables(ctx, req, args);
-            else if (command == "evaluate")  evaluate(ctx, req, args);
+            if (command == "stackTrace")     stackTrace(ts, req, args);
+            else if (command == "scopes")    scopes(ts, req, args);
+            else if (command == "variables") variables(ctx, ts, req, args);
+            else if (command == "evaluate")  evaluate(ctx, ts, req, args);
             else sendResponse(req, json::object());
         } catch (const std::exception& e) {
             sendErrorResponse(req, e.what());
         }
     }
 
-    void stackTrace(const json& req, const json& args) {
+    void stackTrace(ThreadState* ts, const json& req, const json& args) {
         const int start = args.value("startFrame", 0);
         const int levels = args.value("levels", 0);
         std::vector<DebugFrame*> stack;
-        for (DebugFrame* f = stopFrame_; f; f = f->parent) {
+        for (DebugFrame* f = ts->stopFrame; f; f = f->parent) {
             // A top-level let, loop or try runs as a fn of its own; the
             // form's module that calls it is not shown again.
             if (f->parent && f->mod->debugInfo()->topLevelThunk) {
@@ -489,8 +684,8 @@ private:
         for (int i = start; i < total; ++i) {
             if (levels > 0 && static_cast<int>(frames.size()) >= levels) break;
             DebugFrame* f = stack[static_cast<std::size_t>(i)];
-            const int id = static_cast<int>(frames_.size()) + 1;
-            frames_.push_back(f);
+            ts->frames.push_back(f);
+            const long long id = ts->id * kIdStride + static_cast<long long>(ts->frames.size());
             const BytecodeModule::DebugInfo* di = f->mod->debugInfo();
             frames.push_back({{"id", id},
                               {"name", di->name},
@@ -501,51 +696,50 @@ private:
         sendResponse(req, {{"stackFrames", frames}, {"totalFrames", total}});
     }
 
-    DebugFrame* frameById(int id) {
-        if (id >= 1 && static_cast<std::size_t>(id) <= frames_.size()) return frames_[static_cast<std::size_t>(id) - 1];
-        return stopFrame_;
+    static DebugFrame* frameById(ThreadState* ts, long long id) {
+        const long long n = id % kIdStride;
+        if (id / kIdStride == ts->id && n >= 1 && static_cast<std::size_t>(n) <= ts->frames.size())
+            return ts->frames[static_cast<std::size_t>(n) - 1];
+        return ts->stopFrame;
     }
 
-    struct Ref {
-        DebugFrame* frame;                   // the Locals of this frame...
-        const proto::ProtoObject* value;     // ...or this value's children
-    };
-
-    int newRef(Ref r) {
-        refs_.push_back(r);
-        return static_cast<int>(refs_.size());
+    static long long newRef(ThreadState* ts, ThreadState::Ref r) {
+        ts->refs.push_back(r);
+        return ts->id * kIdStride + static_cast<long long>(ts->refs.size());
     }
 
-    void scopes(const json& req, const json& args) {
-        DebugFrame* f = frameById(args.value("frameId", 0));
+    void scopes(ThreadState* ts, const json& req, const json& args) {
+        DebugFrame* f = frameById(ts, args.value("frameId", 0LL));
         json list = json::array();
         if (f) {
             list.push_back({{"name", "Locals"},
                             {"presentationHint", "locals"},
-                            {"variablesReference", newRef({f, nullptr})},
+                            {"variablesReference", newRef(ts, {f, nullptr})},
                             {"expensive", false}});
         }
         sendResponse(req, {{"scopes", list}});
     }
 
-    json variable(proto::ProtoContext* ctx, const std::string& name, const proto::ProtoObject* v) {
+    json variable(proto::ProtoContext* ctx, ThreadState* ts, const std::string& name,
+                  const proto::ProtoObject* v) {
         // A value reachable from a stopped frame's local stays alive while
         // the thread is stopped, so its children can be listed later.
-        const int ref = hasChildren(ctx, v) ? newRef({nullptr, v}) : 0;
+        const long long ref = hasChildren(ctx, v) ? newRef(ts, {nullptr, v}) : 0;
         return {{"name", name}, {"value", formatValue(ctx, v)}, {"variablesReference", ref}};
     }
 
-    void variables(proto::ProtoContext* ctx, const json& req, const json& args) {
-        const int ref = args.value("variablesReference", 0);
+    void variables(proto::ProtoContext* ctx, ThreadState* ts, const json& req, const json& args) {
+        const long long ref = args.value("variablesReference", 0LL);
+        const long long n = ref % kIdStride;
         json list = json::array();
-        if (ref >= 1 && static_cast<std::size_t>(ref) <= refs_.size()) {
-            const Ref r = refs_[static_cast<std::size_t>(ref) - 1];
+        if (ref / kIdStride == ts->id && n >= 1 && static_cast<std::size_t>(n) <= ts->refs.size()) {
+            const ThreadState::Ref r = ts->refs[static_cast<std::size_t>(n) - 1];
             if (r.frame) {
                 for (const auto* lv : visibleLocals(r.frame))
-                    list.push_back(variable(ctx, lv->name,
+                    list.push_back(variable(ctx, ts, lv->name,
                                             r.frame->ctx->getAutomaticLocal(static_cast<unsigned>(lv->slot))));
             } else if (r.value) {
-                for (const auto& [name, v] : childrenOf(ctx, r.value)) list.push_back(variable(ctx, name, v));
+                for (const auto& [name, v] : childrenOf(ctx, r.value)) list.push_back(variable(ctx, ts, name, v));
             }
         }
         sendResponse(req, {{"variables", list}});
@@ -570,12 +764,12 @@ private:
     // Evaluates `expression` in the selected frame: the frame's locals the
     // expression names are bound to their values, as the parameters of
     // `(fn [locals...] expression)`, compiled and called on this thread.
-    void evaluate(proto::ProtoContext* ctx, const json& req, const json& args) {
+    void evaluate(proto::ProtoContext* ctx, ThreadState* ts, const json& req, const json& args) {
         std::string expr = args.value("expression", "");
         while (!expr.empty() && std::isspace(static_cast<unsigned char>(expr.back()))) expr.pop_back();
         while (!expr.empty() && std::isspace(static_cast<unsigned char>(expr.front()))) expr.erase(0, 1);
         if (expr.empty()) { sendErrorResponse(req, "nothing to evaluate"); return; }
-        DebugFrame* f = frameById(args.value("frameId", 0));
+        DebugFrame* f = frameById(ts, args.value("frameId", 0LL));
         const ActiveCallContext* cc = activeCallContext();
         if (!cc || !cc->engine) { sendErrorResponse(req, "no evaluator on this thread"); return; }
 
@@ -583,7 +777,7 @@ private:
         if (f) {
             for (const auto* lv : visibleLocals(f)) {
                 if (lv->name == expr) {       // a local by itself: its value
-                    sendResponse(req, variableBody(ctx, f->ctx->getAutomaticLocal(static_cast<unsigned>(lv->slot)), true));
+                    sendResponse(req, variableBody(ctx, ts, f->ctx->getAutomaticLocal(static_cast<unsigned>(lv->slot)), true));
                     return;
                 }
                 if (lv->name.find('#') == std::string::npos && lv->name[0] != '&' && mentions(expr, lv->name))
@@ -611,7 +805,7 @@ private:
                 argv[i] = f->ctx->getAutomaticLocal(static_cast<unsigned>(used[i]->slot));
             scope.setAutomaticLocal(0, cc->engine->invoke(&scope, scope.getAutomaticLocal(1), argv,
                                                           static_cast<unsigned>(used.size())));
-            sendResponse(req, variableBody(&scope, scope.getAutomaticLocal(0), false));
+            sendResponse(req, variableBody(&scope, ts, scope.getAutomaticLocal(0), false));
             return;
         } catch (const ReaderError& e) {
             error = std::string("read error: ") + e.what();
@@ -627,8 +821,8 @@ private:
 
     // An evaluate response's body. Only a value that stays alive while the
     // thread is stopped -- a local, or part of one -- can be expanded.
-    json variableBody(proto::ProtoContext* ctx, const proto::ProtoObject* v, bool rooted) {
-        const int ref = rooted && hasChildren(ctx, v) ? newRef({nullptr, v}) : 0;
+    json variableBody(proto::ProtoContext* ctx, ThreadState* ts, const proto::ProtoObject* v, bool rooted) {
+        const long long ref = rooted && hasChildren(ctx, v) ? newRef(ts, {nullptr, v}) : 0;
         return {{"result", formatValue(ctx, v, !rooted)}, {"variablesReference", ref}};
     }
 
@@ -657,15 +851,39 @@ private:
         }
     }
 
+    // Queues `req` for the thread `threadId` if it is stopped (it answers it
+    // itself); false if it is not.
+    bool queueFor(long long threadId, const json& req) {
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            ThreadState* ts = threadById(threadId);
+            if (!ts || !ts->stopped || ts->resumeReady) return false;
+            ts->requests.push_back(req);
+        }
+        cv_.notify_all();
+        return true;
+    }
+
     // Answers true when the session is over.
     bool handle(const json& req) {
         const std::string command = req.value("command", "");
         const json args = req.value("arguments", json::object());
 
         if (command == "initialize") {
+            json filters = json::array();
+            filters.push_back({{"filter", "raised"},
+                               {"label", "All Exceptions"},
+                               {"description", "Stop at every throw, caught or not."},
+                               {"default", false}});
+            filters.push_back({{"filter", "userUnhandled"},
+                               {"label", "Uncaught Exceptions"},
+                               {"description", "Stop at a throw no try/catch of the program catches."},
+                               {"default", false}});
             sendResponse(req, {{"supportsConfigurationDoneRequest", true},
                                {"supportsEvaluateForHovers", true},
-                               {"supportsTerminateRequest", true}});
+                               {"supportsTerminateRequest", true},
+                               {"supportsExceptionInfoRequest", true},
+                               {"exceptionBreakpointFilters", filters}});
             sendEvent("initialized", json::object());
             return false;
         }
@@ -700,6 +918,10 @@ private:
             setBreakpoints(req, args);
             return false;
         }
+        if (command == "setExceptionBreakpoints") {
+            setExceptionBreakpoints(req, args);
+            return false;
+        }
         if (command == "configurationDone") {
             sendResponse(req, json::object());
             {
@@ -710,45 +932,97 @@ private:
             return false;
         }
         if (command == "threads") {
-            sendResponse(req, {{"threads", json::array({{{"id", 1}, {"name", "main"}}})}});
+            json list = json::array();
+            {
+                std::lock_guard<std::mutex> lk(mu_);
+                for (const auto& [id, ts] : threads_) list.push_back({{"id", id}, {"name", ts->name}});
+            }
+            if (list.empty()) list.push_back({{"id", 1}, {"name", "main"}});
+            sendResponse(req, {{"threads", list}});
             return false;
         }
         if (command == "continue" || command == "next" || command == "stepIn" || command == "stepOut") {
+            const long long threadId = args.value("threadId", 0LL);
             {
                 std::lock_guard<std::mutex> lk(mu_);
-                if (stopped_ && !resumeReady_) {
-                    resume_ = command == "continue" ? Resume::Continue
-                            : command == "next"     ? Resume::StepOver
-                            : command == "stepIn"   ? Resume::StepIn
-                                                    : Resume::StepOut;
-                    resumeReady_ = true;
+                ThreadState* ts = threadById(threadId);
+                if (ts && ts->stopped && !ts->resumeReady) {
+                    ts->resume = command == "continue" ? Resume::Continue
+                               : command == "next"     ? Resume::StepOver
+                               : command == "stepIn"   ? Resume::StepIn
+                                                       : Resume::StepOut;
+                    ts->resumeReady = true;
                 }
             }
             cv_.notify_all();
-            sendResponse(req, command == "continue" ? json{{"allThreadsContinued", true}} : json::object());
+            sendResponse(req, command == "continue" ? json{{"allThreadsContinued", false}} : json::object());
             return false;
         }
         if (command == "pause") {
-            pauseRequested_.store(true);
+            const long long threadId = args.value("threadId", 0LL);
+            bool any = false;
+            {
+                std::lock_guard<std::mutex> lk(mu_);
+                if (ThreadState* ts = threadById(threadId)) {
+                    ts->pauseRequested.store(true);
+                    any = true;
+                } else {
+                    for (auto& [id, t] : threads_) { t->pauseRequested.store(true); any = true; }
+                }
+            }
+            if (!any) entryPending_.store(true);   // nothing ran yet: stop main on its first line
             sendResponse(req, json::object());
+            return false;
+        }
+        if (command == "exceptionInfo") {
+            json body;
+            bool found = false;
+            {
+                std::lock_guard<std::mutex> lk(mu_);
+                ThreadState* ts = threadById(args.value("threadId", 0LL));
+                if (ts && ts->stopped && ts->hasException) {
+                    const ExceptionStop& ex = ts->exception;
+                    body = {{"exceptionId", ex.typeName},
+                            {"description", ex.description},
+                            {"breakMode", ex.breakMode},
+                            {"details", {{"typeName", ex.typeName},
+                                         {"message", ex.message},
+                                         {"stackTrace", ex.stackTrace}}}};
+                    found = true;
+                }
+            }
+            if (found) sendResponse(req, body);
+            else sendErrorResponse(req, "exceptionInfo: the thread is not stopped on an exception");
             return false;
         }
         if (command == "stackTrace" || command == "scopes" || command == "variables" ||
             command == "evaluate") {
-            bool queued = false;
-            {
-                std::lock_guard<std::mutex> lk(mu_);
-                if (stopped_ && !resumeReady_) {
-                    requests_.push_back(req);
-                    queued = true;
+            long long threadId = 0;
+            if (command == "stackTrace") {
+                threadId = args.value("threadId", 0LL);
+            } else if (command == "variables") {
+                threadId = args.value("variablesReference", 0LL) / kIdStride;
+            } else {
+                const long long frameId = args.value("frameId", 0LL);
+                threadId = frameId / kIdStride;
+                if (frameId == 0) {
+                    // No frame selected (the Debug Console before a stop is
+                    // inspected): the thread that stopped last, if it still is.
+                    std::lock_guard<std::mutex> lk(mu_);
+                    threadId = lastStopped_;
+                    ThreadState* ts = threadById(threadId);
+                    if (!ts || !ts->stopped) {
+                        for (const auto& [id, t] : threads_)
+                            if (t->stopped) { threadId = id; break; }
+                    }
                 }
             }
-            if (queued) {
-                cv_.notify_all();
+            if (queueFor(threadId, req)) {
+                // The stopped thread answers it.
             } else if (command == "stackTrace") {
                 sendResponse(req, {{"stackFrames", json::array()}, {"totalFrames", 0}});
             } else if (command == "evaluate") {
-                sendErrorResponse(req, "evaluate: the program is not stopped");
+                sendErrorResponse(req, "evaluate: the thread is not stopped");
             } else {
                 sendResponse(req, {{command == "scopes" ? "scopes" : "variables", json::array()}});
             }
@@ -763,9 +1037,30 @@ private:
             cv_.notify_all();
             return true;
         }
-        // Anything else (setExceptionBreakpoints, ...): nothing to do.
+        // Anything else: nothing to do.
         sendResponse(req, json::object());
         return false;
+    }
+
+    void setExceptionBreakpoints(const json& req, const json& args) {
+        bool raised = false, uncaught = false;
+        json result = json::array();
+        auto take = [&](const std::string& f) {
+            const bool known = f == "raised" || f == "userUnhandled";
+            if (f == "raised") raised = true;
+            if (f == "userUnhandled") uncaught = true;
+            result.push_back(known ? json{{"verified", true}}
+                                   : json{{"verified", false}, {"message", "unknown filter " + f}});
+        };
+        if (args.contains("filters") && args["filters"].is_array())
+            for (const auto& f : args["filters"])
+                if (f.is_string()) take(f.get<std::string>());
+        if (args.contains("filterOptions") && args["filterOptions"].is_array())
+            for (const auto& o : args["filterOptions"])
+                if (o.is_object()) take(o.value("filterId", ""));
+        exRaised_.store(raised);
+        exUncaught_.store(uncaught);
+        sendResponse(req, {{"breakpoints", result}});
     }
 
     void setBreakpoints(const json& req, const json& args) {
@@ -838,22 +1133,21 @@ private:
     bool launched_ = false, configDone_ = false, running_ = false;
     bool inputClosed_ = false, readerDone_ = false, disconnected_ = false;
     std::map<std::string, std::set<int>> breakpoints_;   // pathKey -> lines
-    bool stopped_ = false, resumeReady_ = false;
-    Resume resume_ = Resume::Continue;
-    std::deque<json> requests_;                          // for the stopped thread
-    StepKind stepKind_ = StepKind::In;
-    std::thread::id stepThread_;
-    int stepDepth_ = 0;
+    std::map<int, std::unique_ptr<ThreadState>> threads_;  // the live threads, by DAP id
+    bool mainSeen_ = false;
+    int nextThreadId_ = 2;
+    int actorWorkers_ = 0;
+    int lastStopped_ = 0;
 
-    std::atomic<bool> anyBreakpoints_{false}, stepping_{false};
-    std::atomic<bool> pauseRequested_{false}, entryPending_{false};
-
-    // Owned by the stopped thread (stopMu_ held) while it is stopped.
-    std::mutex                stopMu_;
-    DebugFrame*               stopFrame_ = nullptr;
-    std::vector<DebugFrame*>  frames_;   // frameId - 1 -> frame
-    std::vector<Ref>          refs_;     // variablesReference - 1 -> what
+    std::atomic<bool> anyBreakpoints_{false}, entryPending_{false};
+    std::atomic<bool> exRaised_{false}, exUncaught_{false};
 };
+
+ThreadExit::~ThreadExit() {
+    if (!id) return;
+    std::lock_guard<std::mutex> lk(serverMu());
+    if (gServer) gServer->threadExited(id);
+}
 
 } // namespace
 

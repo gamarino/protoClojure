@@ -1,6 +1,7 @@
 #include "Compiler.h"
 #include "runtime/LazySeq.h"
 
+#include "runtime/DebugHook.h"
 #include "runtime/Exceptions.h"
 #include "runtime/Macros.h"
 #include "runtime/MapOps.h"
@@ -170,6 +171,7 @@ std::size_t addIntegerConst(proto::ProtoContext* ctx,
                             const proto::ProtoObject* value,
                             BytecodeModule& out) {
     try {
+        DebugQuietScope probe;   // an overflow here is no exception of the program
         return out.addLong(value->asLong(ctx));
     } catch (const proto::ProtoException&) {
         // protoCore's Overflow error: the integer does not fit a long long.

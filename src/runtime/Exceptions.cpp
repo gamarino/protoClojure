@@ -1,5 +1,6 @@
 #include "Exceptions.h"
 
+#include "DebugHook.h"
 #include "MapOps.h"
 #include "Primitives.h"
 
@@ -155,7 +156,10 @@ const proto::ProtoObject* clojureErrorFactory(proto::ProtoContext* ctx,
         const char* text = kind == proto::ProtoErrorKind::DivisionByZero
             ? "Divide by zero" : (message ? message : "");
         // Young cells of the raising context, alive while it is.
-        return makeException(ctx, cls, ctx->fromUTF8String(text), nullptr, nullptr);
+        const proto::ProtoObject* e = makeException(ctx, cls, ctx->fromUTF8String(text), nullptr, nullptr);
+        // Raised next, by protoCore: a debugger may stop here first.
+        if (debugHook()) [[unlikely]] debugNotifyThrow(ctx, e, ThrowSite::Kernel);
+        return e;
     } catch (...) {
         return g_classPrototypes[cls];
     }
@@ -326,6 +330,7 @@ const proto::ProtoObject* thrownMessage(proto::ProtoContext* ctx,
 // ---- Throwing and catching --------------------------------------------------
 
 void throwException(proto::ProtoContext* ctx, const proto::ProtoObject* e) {
+    if (debugHook()) [[unlikely]] debugNotifyThrow(ctx, e, ThrowSite::Throw);
     throw ClojureThrow(ctx, e);
 }
 
@@ -345,6 +350,8 @@ void throwClassed(proto::ProtoContext* ctx, const char* className,
     scope.setAutomaticLocal(0, scope.fromUTF8String(message.c_str()));
     scope.setAutomaticLocal(1, makeException(&scope, cls,
         scope.getAutomaticLocal(0), data, cause));
+    if (debugHook()) [[unlikely]]
+        debugNotifyThrow(&scope, scope.getAutomaticLocal(1), ThrowSite::Runtime);
     ClojureThrow pending(&scope, scope.getAutomaticLocal(1));
     throw pending;
 }

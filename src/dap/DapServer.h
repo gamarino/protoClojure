@@ -8,7 +8,11 @@
  * server is its DebugHook. A thread that stops stays in the hook, parked in
  * an unmanaged region, and answers the requests that read the program's
  * state (stackTrace, scopes, variables, evaluate) itself, on its own
- * context, between waits.
+ * context, between waits. Every thread that runs the program's code (main,
+ * futures, pmap, actor workers, HTTP connections) stops on its own: the
+ * others run on, and each stopped thread has its own requests, frame ids
+ * and resume command. Exception breakpoints (raised, userUnhandled) stop a
+ * thread in the hook's onThrow, before the exception propagates.
  */
 #pragma once
 

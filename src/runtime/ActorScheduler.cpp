@@ -1,5 +1,6 @@
 #include "ActorScheduler.h"
 #include "Primitives.h"
+#include "DebugHook.h"
 #include "ExecutionEngine.h"
 
 #include "protoCore.h"
@@ -42,6 +43,7 @@ static const proto::ProtoObject* actorWorkerEntry(
     if (!sched || !sched->isInteger(ctx)) return PROTO_NONE;
     ActorScheduler* s =
         reinterpret_cast<ActorScheduler*>(sched->asLong(ctx));
+    setDebugThreadKind("actor");
     s->workerLoop(ctx);
     return PROTO_NONE;
 }
