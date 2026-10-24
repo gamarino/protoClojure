@@ -153,6 +153,15 @@ enum class Op : uint8_t {
                            //           the slot, and keep the caught C++
                            //           exception (std::exception_ptr) as
                            //           frame state for that slot's RETHROW.
+
+    // Lazy sequences (docs/DESIGN.md §10.2, M30).
+    PUSH_LOCAL_CLEAR = 39, // operand = local slot. As PUSH_LOCAL, then clears
+                           //           the slot: the compiler emits it for
+                           //           the one read of a local that no later
+                           //           instruction reads again (locals
+                           //           clearing), so a local bound to a lazy
+                           //           seq does not hold its head while the
+                           //           seq is walked.
 };
 
 // One instruction word: opcode in the low byte, operand in the high 24 bits.

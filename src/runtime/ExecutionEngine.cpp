@@ -813,9 +813,18 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 throwError(&frame, 
                     "VM: a call may bind at most 17 parameters "
                     "(a variadic fn binds its rest arguments as one)");
+            // Each argument moves from its stack slot to callArgs, which the
+            // callee binds into its own frame before anything allocates (the
+            // frame constructor takes slots, not cells); the slot is cleared
+            // as it is read, so a lazy seq passed down is held by the callee
+            // alone, which locals clearing may then release (docs/DESIGN.md
+            // §10.2, M30). The rest arguments are cleared once they are in
+            // the rest list, after the kw map has been read.
+            const proto::ProtoObject** argSlots =
+                frame.getAutomaticLocals() + stackBase + sp - argc;
             for (int i = 0; i < fixed; ++i) {
-                callArgs[i] = frame.getAutomaticLocal(
-                    stackBase + sp - argc + i);
+                callArgs[i] = argSlots[i];
+                argSlots[i] = nullptr;
             }
             if (variadic) {
                 // No rest arguments binds the rest parameter to nil, as in
@@ -829,11 +838,13 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                         ->appendLast(&frame, v)->asObject(&frame);
                 }
                 callArgs[fixed] = rest;
+                for (unsigned int i = static_cast<unsigned int>(fixed); i < posArgc; ++i)
+                    argSlots[i] = nullptr;
             } else if (!kwBased) {
                 for (unsigned int i = static_cast<unsigned int>(fixed);
                      i < posArgc; ++i) {
-                    callArgs[i] = frame.getAutomaticLocal(
-                        stackBase + sp - argc + i);
+                    callArgs[i] = argSlots[i];
+                    argSlots[i] = nullptr;
                 }
             }
 
@@ -846,6 +857,11 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 extractKwVals(&frame, subMod, kwArgsMap, kwVals);
             }
 
+            // The arguments now live in callArgs / kwVals, which the callee
+            // binds into its own frame before anything allocates (the frame
+            // constructor takes slots, not cells). Clearing the caller's
+            // copies means a lazy seq passed down is held by the callee
+            // alone, which may then let its head go (locals clearing, M30).
             sp -= (argc + 1);
             // The callable's slot (now the top of the stack) receives the
             // result before the callee's frame ends; pushVal then writes the
@@ -892,6 +908,13 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
             frame.getAutomaticLocals() + stackBase + sp - argc, argc);
         const proto::ProtoObject* result =
             fn(&callScope, self, nullptr, &positional, nullptr);
+        // The argument slots are dead now; clear them so they do not keep a
+        // value (the head of a lazy seq the primitive walked) alive until
+        // the stack grows back over them.
+        {
+            const proto::ProtoObject** argSlots = frame.getAutomaticLocals() + stackBase + sp - argc;
+            for (unsigned int i = 0; i < argc; ++i) argSlots[i] = nullptr;
+        }
         sp -= (argc + 1);
         pushVal(result);
     };
@@ -957,6 +980,14 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
 
             case Op::PUSH_LOCAL: {
                 pushVal(frame.getAutomaticLocal(locBase + operand));
+                break;
+            }
+
+            case Op::PUSH_LOCAL_CLEAR: {
+                // The last read of a local (locals clearing, M30): the value
+                // moves to the stack and the slot no longer holds it.
+                pushVal(frame.getAutomaticLocal(locBase + operand));
+                frame.setAutomaticLocal(locBase + operand, nullptr);
                 break;
             }
 

@@ -11,7 +11,7 @@
 ;; Names that start with `__` are internal helpers, not part of Clojure.
 ;;
 ;; The macros follow clojure.core's definitions, without what protoClojure
-;; does not have yet (metadata, lazy seqs). Binding forms destructure: the
+;; does not have yet (metadata). Binding forms destructure: the
 ;; binding macros expand into `let`, which the compiler destructures.
 ;; `and`, `or`, `fn`, `let`, `loop`, `defn` and `defmacro` stay in the C++
 ;; compiler (decision M21).
@@ -216,6 +216,24 @@
        ~@(map (fn [f] (if (seq? f) `(~(first f) ~g ~@(next f)) `(~f ~g))) forms)
        ~g)))
 
+;; ---- Lazy sequences ------------------------------------------------------
+;; The lazy functions themselves (map, filter, take, range, iterate, ...)
+;; are C++ primitives over the lazy seq type (src/runtime/LazySeq.h).
+
+(defmacro lazy-seq
+  "Takes a body of expressions that returns an ISeq or nil, and yields a
+  Seqable object that will invoke the body only the first time seq is
+  called, and will cache the result and return it on all subsequent seq
+  calls."
+  [& body]
+  `(__lazy-seq (fn [] ~@body)))
+
+(defmacro lazy-cat
+  "Expands to code which yields a lazy sequence of the concatenation of the
+  supplied colls. Each coll expr is not evaluated until it is needed."
+  [& colls]
+  `(concat ~@(map (fn [c] `(lazy-seq ~c)) colls)))
+
 ;; ---- Iteration -----------------------------------------------------------
 
 (defmacro dotimes
@@ -288,19 +306,13 @@
   (__check-seq-bindings "doseq" bindings)
   (list 'do (__doseq-step (__binding-groups "doseq" bindings) body) nil))
 
-;; for builds its result through __for-step, one call per binding: today an
-;; eager walk that concatenates the inner results into a list; with lazy
-;; sequences (stage 11) only __for-step changes, to a lazy-seq walk that
-;; stops at the same __for-stop marker.
+;; for builds its result through __for-step, one call per binding: a lazy
+;; concatenation of the body's results (a C++ primitive, LazySeq.cpp) that
+;; stops at the __for-stop marker. The innermost binding passes `true`, which
+;; lets __for-step walk a chunked collection a chunk at a time, as Clojure's
+;; for does.
 
 (def __for-stop (gensym "for-stop__"))
-
-(defn __for-step [coll f]
-  (loop [s (seq coll) acc []]
-    (if s
-      (let [r (f (first s))]
-        (if (identical? r __for-stop) (or (seq acc) ()) (recur (next s) (into acc r))))
-      (or (seq acc) ()))))
 
 (defn __for-wrap
   "Wraps the inner code of one for binding in its modifiers: :when fails
@@ -315,9 +327,10 @@
 
 (defn __for-emit [groups body]
   (if (seq groups)
-    (let [[b coll & mods] (first groups)]
-      (list 'clojure.core/__for-step coll
-            (list 'fn [b] (__for-wrap mods (__for-emit (next groups) body)))))
+    (let [[b coll & mods] (first groups)
+          step (list 'clojure.core/__for-step coll
+                     (list 'fn [b] (__for-wrap mods (__for-emit (next groups) body))))]
+      (if (next groups) step (concat step '(true))))
     (list 'clojure.core/list body)))
 
 (defmacro for
@@ -325,26 +338,10 @@
   collection-expr pairs, each followed by zero or more modifiers, and yields
   a sequence of evaluations of expr. Collections are iterated in a nested
   fashion, rightmost fastest. Supported modifiers are :let [binding-form
-  expr ...], :while test, :when test. The sequence is built eagerly until
-  lazy sequences exist."
+  expr ...], :while test, :when test. The sequence is lazy."
   [seq-exprs body-expr]
   (__check-seq-bindings "for" seq-exprs)
   (__for-emit (__binding-groups "for" seq-exprs) body-expr))
-
-(defn range
-  "Returns a list of nums from start (inclusive, default 0) to end
-  (exclusive), by step (default 1). Eager and finite until lazy sequences
-  exist: (range) with no end is an error."
-  ([] (__raise-illegal-argument "(range) with no end needs lazy sequences, which are not implemented yet"))
-  ([end] (range 0 end 1))
-  ([start end] (range start end 1))
-  ([start end step]
-   (when (= step 0)
-     (__raise-illegal-argument "(range start end 0) is infinite; lazy sequences are not implemented yet"))
-   (loop [i start acc []]
-     (if (if (> step 0) (< i end) (> i end))
-       (recur (+ i step) (conj acc i))
-       (or (seq acc) ())))))
 
 ;; ---- Dispatch ------------------------------------------------------------
 

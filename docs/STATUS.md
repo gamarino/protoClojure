@@ -93,8 +93,16 @@ The design specifications written during development are archived under
 - [x] Vectors `[...]`
 - [x] `format` and `printf` (Java's `String.format` conversions, D47);
       `for` with `:let` / `:when` / `:while` and `doseq` with the same
-      modifiers (DESIGN.md §10.2, M27); a finite, eager `range`; `apply`
-      with leading arguments, `(apply f x y coll)`
+      modifiers (DESIGN.md §10.2, M27; `for` is lazy since stage 11);
+      `apply` with leading arguments, `(apply f x y coll)`
+- [x] Lazy sequences (DESIGN.md §7, §10.2, M28-M31): `lazy-seq`,
+      `lazy-cat`, and lazy `map` (several collections too) `filter`
+      `remove` `take` `take-while` `drop` `drop-while` `iterate` `repeat`
+      `repeatedly` `cycle` `range` (with no end too) `concat` `mapcat`
+      `partition` `partition-all` `interleave` `distinct` `for` `line-seq`
+      `re-seq`; `doall` `dorun` `run!` `realized?` `chunked-seq?`; chunked
+      as in Clojure; `seq?` true for every seq; walks hold only their
+      position (locals clearing, M30)
 - [x] Regular expressions `#"..."` (compiled when read; DESIGN.md §10.2,
       M25), `re-pattern`, `re-find`, `re-matches`, `re-seq`, `re-matcher`,
       `re-groups`, and `replace`, `replace-first`, `split` with a pattern,
@@ -323,9 +331,10 @@ first and its result built after.
       `#<fn>` and a built-in function as `#<fn NAME>` (`(str println)` is
       `"#<fn println>"`)
 - [x] Lists and vectors: `list vector vec nth first rest cons count empty? reverse`
-- [x] Sequences: `seq` (nil for an empty collection; a map's entries as
-      `[k v]` vectors; a string's characters) and `concat`, both answering
-      lists, eagerly (D29's reason: no lazy seqs yet)
+- [x] Sequences: `seq` (nil for an empty collection; a vector's chunked
+      seq; a lazy seq's realised seq; a map's entries as `[k v]` vectors; a
+      string's characters) and `concat` (lazy when an argument is a lazy
+      seq, M29)
 - [x] `second next last conj seq?` (`next` is nil past the last element;
       `conj` adds at the front of a list, at the end of a vector, an entry
       to a map) and the printers `pr-str prn pr print` (readable or not, as
@@ -480,7 +489,7 @@ work since macros stage 4.)
 
 ### Data structures (not yet)
 
-- [ ] Lazy seqs — `LazySeq` wrapper
+- [x] Lazy seqs — protoCore lazy objects (M28)
 - [ ] `hash` as a function
 - [ ] Vectors as functions (`(v 0)`)
 
@@ -549,12 +558,12 @@ for the rationale.
 ### Core library extensions (not yet)
 
 - [ ] `quot rem mod`
-- [ ] More collection: `into mapcat interleave interpose` (`next conj
+- [ ] More collection: `interpose` (`into mapcat interleave next conj
       second last seq concat` exist)
 - [ ] Map operations: `update merge select-keys get-in update-in assoc-in`
 - [ ] More higher-order: `comp partial juxt`
 - [ ] More predicates: `every? some not-any? not-every?`
-- [ ] Range / sequence: `iterate repeat cycle take drop take-while drop-while partition partition-all`, and `(range)` with no end (a finite `range` exists, eager: D46)
+- [x] Range / sequence: `iterate repeat cycle take drop take-while drop-while partition partition-all`, and `(range)` with no end (stage 11)
 - [ ] `frequencies group-by sort sort-by`
 
 ### REPL and command line (not yet)
@@ -605,7 +614,8 @@ On branch `feature/macros` (DESIGN.md §10.2, ROADMAP.md).
 - [x] Stage 10: `format`, `printf`, `for` and `doseq` with `:let` /
       `:when` / `:while`, a finite `range`, `apply` with leading arguments
       (M27, D46, D47)
-- [ ] Stage 11: lazy sequences (closes D29 and D46)
+- [x] Stage 11: lazy sequences (M28-M31; closes D29 and D46; D48-D51);
+      protoCore 3.1.0's lazy objects
 - [ ] Stage 12: JSON and EDN
 - [ ] Stage 13: showcase against Babashka
 
@@ -650,7 +660,7 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D26 | A runtime error whose message names no class is a `RuntimeException` carrying the whole message: most arity and argument-type errors raised by primitives (`(inc 1 2)`: `inc: expects 1 arg`, where JVM Clojure raises `ArityException`; `(upper-case 1)`: `upper-case: arg must be a string`, where it raises `ClassCastException`), and an unresolved global, which is caught at run time as a `RuntimeException` where JVM Clojure reports it at compile time. The class-naming errors (`ArithmeticException`, `ClassCastException` for arithmetic on non-numbers, `IndexOutOfBoundsException`, `StringIndexOutOfBoundsException`, `UnsupportedOperationException`, `StackOverflowError`) have JVM Clojure's classes | v0.x |
 | D27 | Exceptions are not Java objects: there are no stack traces, no user-defined exception classes, no `class` / `instance?` and no `.getMessage`-style interop; `catch` names one of 24 built-in classes, `Object`, or a type held by a var or a module member (D34, `DESIGN.md` §4.1). An exception prints on one line as `#error {:type C, :message "m", :data {...}, :cause #error {...}}` (JVM Clojure: a multi-line `#error` map with `:via`, `:trace` and a root-cause `:cause` string), and its toString and the uncaught-error report use the simple class name, `ArithmeticException: Divide by zero` (JVM Clojure: `java.lang.ArithmeticException: Divide by zero`). `throw` of a value that is neither an exception nor a foreign (module) object raises `ClassCastException: throw expects an exception, got an integer` | (perm) |
 | D28 | The I/O functions are globals, not in `clojure.java.io`, `clojure.java.shell` or babashka's `babashka.http-client` (there are no namespaces yet), and so are `clojure.set`'s `union`, `intersection`, `difference`, `subset?` and `superset?`, and small functions stand in for Java interop: `close` / `write` / `(read-line r)` for `.close` / `.write` / `.readLine`, `exists?` / `directory?` for `.exists` / `.isDirectory`, `getenv` / `exit` for `System/getenv` / `System/exit`. `file` answers a protoClojure file handle, not a `java.io.File` (`str` gives its path; `file-seq` answers such handles); readers and writers are UTF-8 only, with no InputStream / Reader stack | (perm while there are no namespaces) |
-| D29 | `line-seq` is eager: it reads the reader to its end and answers a list (nil when empty), because there are no lazy sequences yet (JVM Clojure: a lazy seq read as it is consumed). On an endless stream, such as a socket that never closes, use `read-line` in a loop | v0.2 (lazy seqs) |
+| ~~D29~~ | *Closed in Part B stage 11*: `line-seq` is a lazy seq read one line at a time as it is consumed, as in JVM Clojure (and, as there, reading it after its reader closed raises `IOException: Stream closed`) | closed |
 | D30 | Sockets are protoClojure's own functions (`tcp-connect`, `tcp-listen`, `tcp-accept`, `socket-read-line`, `socket-write`, `socket-close`, `udp-socket`, `udp-send`, `udp-receive`, `server-port`): Clojure has only Java interop (`java.net.Socket`) | (perm) |
 | D31 | The Ring request `:body` is a string (nil when empty), not an InputStream, and a response `:body` may be a string, nil, a list or vector of strings or a file, not an InputStream; `run-server` answers a server handle (http-kit answers a stop fn), serves one request per connection (`connection: close`, no keep-alive), each on its own thread, and a server still running when the script ends is stopped (the JVM keeps running while a server thread lives) | v0.x |
 | D32 | `sh` does not support `:in-enc` / `:out-enc` (output is always decoded as UTF-8). (`:dir` and `:env` no longer deviate: since protoIO 0.2.1 the spawn call sets them itself, with no `/bin/sh` or `env -i` in between, on every platform; the program is searched in protoclj's own `PATH`, as the JVM searches it) | v0.x |
@@ -666,7 +676,11 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D43 | Symbols are interned and never collected, generated ones included: a program that calls `gensym` or `symbol` on fresh names without end grows by one symbol per name (JVM Clojure collects unreferenced symbols) | (perm) |
 | D44 | `case` tests its constants in order with `=` (O(n) in the number of clauses; JVM Clojure dispatches on a hash in constant time), so numbers of different types match (D15); the result is otherwise Clojure's, including `IllegalArgumentException: No matching clause: x` | (perm) |
 | D45 | Regular expressions run on the C++ standard library's `std::regex`, ECMAScript grammar, over the UTF-8 bytes of the string (JVM Clojure: `java.util.regex` over UTF-16). Translated from Java: the leading inline flags `(?i)` `(?m)` `(?s)` (`(?u)` `(?U)` accepted, no effect), named groups `(?<n>X)` (numbered; `\k<n>` is not supported), `\Q...\E`, `\A` / `\z` / `\Z` outside multiline mode. Not supported, a `PatternSyntaxException`: lookbehind `(?<=` `(?<!`, possessive quantifiers `*+`, atomic groups `(?>`, `\p{...}` / `\P{...}` classes, class intersection `[a&&b]`, flags in mid-pattern, `(?x)` comments, `(?d)`. Different: `.`, `\w`, `\s` and character classes see bytes, so a multi-byte UTF-8 character is several (D17); `$` in non-multiline mode matches only at the very end (Java also before a final line terminator); case folding is ASCII; the captures of a group repeated by `*` that matched empty may differ (`(a*)*b`). Every distinct pattern source is compiled once and kept for the process (like interned symbols, D43). A pattern with back-references backtracks on the native stack, so a match that could exhaust it raises `StackOverflowError` beforehand (about 32 KB of subject); others are not limited. No `Matcher` interop beyond `re-matcher` / `re-find` / `re-groups` | (perm: engine) |
-| D46 | `for`, `range` and `re-seq` answer lists built eagerly, and `(range)` with no end is an error (JVM Clojure: lazy seqs). Until lazy sequences land (Part B, stage 11) a `for` over an infinite or huge sequence cannot stop early except through `:while` | stage 11 |
+| ~~D46~~ | *Closed in Part B stage 11*: `for`, `range` and `re-seq` are lazy, and `(range)` counts without end | closed |
+| D48 | `(str lazy-seq)` is `clojure.lang.LazySeq@` followed by a hash of the elements in hexadecimal, as JVM Clojure renders it, but the digits differ from the JVM's (protoClojure's hash, D25). `pr-str`, `println` and the REPL print the elements, as in Clojure | (perm) |
+| D49 | Lazy sequences, as built (DESIGN.md M29): no transducers (`(map f)`, `(filter p)`, `(mapcat f)`, `(partition n)` with no collection raise `UnsupportedOperationException`), no chunk API beyond `chunked-seq?` (`chunk-first`, `chunk-rest`, `chunk-cons`, `chunk-buffer`); a vector's chunks start where its seq starts (JVM Clojure: at its 32-element tree leaves, so `(rest v)` begins with a 31-element chunk there and a 32-element one here); `realized?` answers true for a cons or a chunk (JVM Clojure: ClassCastException for a Cons) and false for any other non-pending value; `apply` and `pmap` realise their sequence argument to its end (JVM Clojure's `apply` passes an endless seq to a variadic fn lazily); a seq read while its own body computes it raises `StackOverflowError` at once (JVM Clojure recurses until the stack overflows) | (perm) |
+| D50 | Locals clearing is conservative (DESIGN.md M30): a local is cleared at its read only when it is read exactly once in its fn and outside any loop it is not rebound in. A local read in both branches of an `if`, or twice, keeps what it holds until its scope ends (JVM Clojure clears it at the last use on every path), so `(let [s (line-seq r)] (if (seq s) (count s) 0))` holds the head while `count` walks | v0.2 |
+| D51 | At the REPL a definition echoes as its var, `#'user/x` (M31), but `*1` holds the defined value: there are no vars (D28) | (perm until vars) |
 | D47 | `format` / `printf` implement Java's `String.format` conversions `%s %S %d %x %X %o %f %e %E %g %G %b %B %c %C %n %%` with argument indexes, flags, width and precision, but not `%h`, `%a`, the date/time `%t` conversions, nor locale-specific output. Errors are `IllegalArgumentException`s whose message starts with Java's exception name and names a protoClojure type (`IllegalFormatConversionException: d != a float`; Java: `d != java.lang.Double`). `%g` rounds an exact tie to even (Java: half up; `%f` and `%e` round half up, as Java). Widths count bytes, so a multi-byte UTF-8 character counts as several (D17) | (perm) |
 | D34 | A `catch` naming no built-in class names a type looked up at run time, when an exception reaches the clause (a var, a local, or a module member `alias/Type`), and is matched by the thrown value's prototype chain; JVM Clojure resolves the class at compile time. So `(try 1 (catch NoSuchException e 2))` compiles and answers 1, and the error `Unable to resolve classname: NoSuchException` is a `RuntimeException` raised when an exception reaches the clause (JVM Clojure: a compile error). A type that resolves to a value that is not a prototype object raises `IllegalArgumentException`. A module's error (a foreign value) is caught by `Exception`, `Throwable` and `Object`, by its own types, and by no other built-in class | (perm: the platform is late-binding) |
 

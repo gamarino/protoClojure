@@ -8,6 +8,6 @@
              (if (>= i 100)
                acc
                (recur (+ i 1) (cons (send counter inc) acc))))]
-    (map deref fs)
+    (doall (map deref fs))
     @counter))
 (println (run))

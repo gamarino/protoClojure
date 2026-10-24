@@ -1,5 +1,6 @@
 #include "MapOps.h"
 #include "Named.h"
+#include "SeqTypes.h"
 #include "SetOps.h"
 #include "StackGuard.h"
 #include "VectorOps.h"
@@ -250,7 +251,14 @@ bool keyIsIdentity(proto::ProtoContext* ctx, const proto::ProtoObject* key) {
             // looks up is found in the named-value cache (Named.h) without
             // reading its prototype, so the set test costs nothing on the
             // common path.
-            return isKnownNamed(key) || !isSet(ctx, key);
+            // A lazy seq, a cons or a chunk (SeqTypes.h) is sequential and
+            // matched by its elements too.
+            if (isKnownNamed(key)) return true;
+            {
+                const proto::ProtoObject* p = key->getPrototype(ctx);
+                return p != g_setPrototype && p != g_seqProtos.lazy &&
+                       p != g_seqProtos.cons && p != g_seqProtos.chunk;
+            }
         default:
             // A map and a vector are matched by value; anything else
             // protoCore may hand out (a method, a thread, a byte buffer) is
@@ -297,6 +305,18 @@ proto::proto_ulong keyHash(proto::ProtoContext* ctx, const proto::ProtoObject* k
                 checkNativeStack();
                 return setHash(ctx, key);
             }
+            if (isSeqObject(ctx, key)) {
+                // A seq hashes as the list of its elements, so it is the same
+                // key as an equal list or vector. Realises it (Clojure's
+                // hasheq walks it too).
+                checkNativeStack();
+                proto::ProtoContext scope(ctx->space, ctx);
+                scope.resizeAutomaticLocals(1);
+                const proto::ProtoList* lst = seqObjectToList(&scope, key);
+                if (!lst) lst = scope.newList();
+                scope.setAutomaticLocal(0, lst->asObject(&scope));
+                return sequenceHash(&scope, scope.getAutomaticLocal(0));
+            }
             return combine(kSaltIdentity, reinterpret_cast<proto::proto_ulong>(key));
     }
 }
@@ -312,6 +332,23 @@ bool keyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
     const bool aString = proto::ProtoObject::isStringTagFast(a);
     const bool bString = proto::ProtoObject::isStringTagFast(b);
     if (aString || bString) return aString && bString && a->partialCompare(ctx, b) == 0;
+
+    // A lazy seq, a cons or a chunk is compared as the list of its elements
+    // (SeqTypes.h), each realised in a scope of its own.
+    if (isSeqObject(ctx, a) || isSeqObject(ctx, b)) {
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(2);
+        const proto::ProtoObject* both[2] = {a, b};
+        for (int i = 0; i < 2; ++i) {
+            const proto::ProtoObject* v = both[i];
+            if (isSeqObject(&scope, v)) {
+                const proto::ProtoList* lst = seqObjectToList(&scope, v);
+                v = (lst ? lst : scope.newList())->asObject(&scope);
+            }
+            scope.setAutomaticLocal(i, v);
+        }
+        return keyEquals(&scope, scope.getAutomaticLocal(0), scope.getAutomaticLocal(1));
+    }
 
     // A list and a vector with equal elements are one key.
     const bool aSeq = isSequential(a);

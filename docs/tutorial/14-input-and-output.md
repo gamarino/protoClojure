@@ -45,10 +45,19 @@ ends, also when the body throws:
 (println (count-lines "notes.txt"))   ;; 3
 ```
 
-`line-seq` reads to the end of the reader and answers a list. In Clojure it
-is lazy; here it is eager, because protoClojure has no lazy sequences yet
-(D29). For a stream that never ends, read one line at a time with
-`read-line`, which answers nil at the end.
+`line-seq` answers a lazy seq of the lines, read one at a time as it is
+consumed, as in Clojure: `count` walks it inside `with-open`, and nothing
+it has passed stays in memory, so a file or a stream of any size can be
+read this way. Like Clojure's, it must be consumed before its reader
+closes: a `(line-seq r)` returned out of `with-open` raises `IOException:
+Stream closed` when it is read; `doall` it inside. `*in*` is a reader on
+the standard input, so a grep is three lines:
+
+```clojure
+(doseq [line (line-seq *in*)]
+  (when (re-find #"ERROR" line)
+    (println line)))
+```
 
 Writers work the same way; `write` stands in for Java's `.write`:
 
@@ -283,7 +292,7 @@ protoClojure's own (D30). An echo server on a future and a client:
 ## 14.7 Summary
 
 - Files: `slurp`, `spit` (`:append`), `reader`, `writer`, `with-open`,
-  `read-line`, `write`, `close`, `line-seq` (eager), `file`, `file-seq`,
+  `read-line`, `write`, `close`, `line-seq` (lazy), `*in*`, `file`, `file-seq`,
   `exists?`, `directory?`, `delete-file`, `make-parents`, `copy`.
 - Programs: `sh` (`:in`, `:dir`, `:env`) → `{:exit :out :err}`; `getenv`,
   `exit`, `*command-line-args*`.

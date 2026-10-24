@@ -299,16 +299,22 @@ Two consequences worth knowing:
      (println x))
    ```
 
-2. **A lazy seq holds onto its head.** If you take the first element
-   and store the seq in an atom, the whole tail you have realised so
-   far is retained. For long-running streams, `take` early and discard
-   the original.
+2. **A lazy seq holds onto its head.** If you keep a reference to the
+   seq (in a var, an atom, or a local you read again later), every
+   element realised so far is retained. A walk that holds nothing else
+   lets them go as it passes them:
 
-A v0.1 note: protoClojure's lazy seqs are element-at-a-time. JVM Clojure
-realises 32 elements at a time for performance ("chunked sequences").
-Functionally identical; protoClojure is just slower per-element on
-sequence-heavy code in v0.1. Chunked seqs land in v0.2. See
-[`STATUS.md`](../STATUS.md) D4.
+   ```clojure
+   (dorun (map inc (range 1000000)))           ;; constant memory
+   (let [s (map inc (range 1000000))]
+     (dorun s) (count s))                      ;; keeps all million
+   ```
+
+As in JVM Clojure, a vector's seq and a finite `range` are *chunked*: `map`
+and `filter` realise them 32 elements at a time, so a side effect inside
+`map` over `(range 100)` runs 32 times when the first element is read. Over
+a list it runs once per element read. See [LANGUAGE.md §10](../LANGUAGE.md)
+and [`STATUS.md`](../STATUS.md) D49.
 
 ## 5.10 Destructuring
 

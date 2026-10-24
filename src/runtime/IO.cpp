@@ -3,6 +3,7 @@
 
 #include "Exceptions.h"
 #include "ExecutionEngine.h"
+#include "LazySeq.h"
 #include "ListBuilder.h"
 #include "MapOps.h"
 #include "Named.h"
@@ -178,15 +179,6 @@ std::string strOf(proto::ProtoContext* ctx, const PO* v) {
     if (appendIOFilePath(ctx, out, v)) return out;
     printValueTo(ctx, out, v, /*readable=*/true);
     return out;
-}
-
-// A list of strings, nil when `items` is empty and `nilWhenEmpty` holds.
-const PO* stringList(proto::ProtoContext* ctx, const std::vector<std::string>& items,
-                     bool nilWhenEmpty) {
-    if (items.empty() && nilWhenEmpty) return PROTO_NONE;
-    ListBuilder out(ctx);
-    for (const std::string& s : items) out.push(makeString(out.context(), s));
-    return out.finish();
 }
 
 // ============================================================== errors
@@ -1029,18 +1021,39 @@ IOPRIM(prim_writer) {
     return newHandle(ctx, HandleKind::Writer, fd, path);
 }
 
-// (line-seq rdr): the remaining lines of a reader or a socket, read to the
-// end (eager: deviation D29); nil when there are none.
+// The next line of a reader or a socket handle, or nil at its end.
+const PO* nextLine(proto::ProtoContext* ctx, const PO* h) {
+    const int fd = openFd(ctx, h, "line-seq", {HandleKind::Reader, HandleKind::Socket});
+    const std::optional<std::string> line = blocking(ctx, [&] { return protoio::readLine(fd); });
+    return line ? makeString(ctx, *line) : PROTO_NONE;
+}
+
+// The line, then a lazy seq that reads the next one when it is first read:
+// (cons line (lazy-seq (line-seq rdr))); nil at the end.
+const PO* lineCons(proto::ProtoContext* ctx, const PO* h) {
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(2);
+    scope.setAutomaticLocal(0, nextLine(&scope, h));
+    if (scope.getAutomaticLocal(0) == PROTO_NONE) return PROTO_NONE;
+    scope.setAutomaticLocal(1, lazyStep(&scope, StepKind::Line, h));
+    const PO* r = newCons(&scope, scope.getAutomaticLocal(0), scope.getAutomaticLocal(1));
+    scope.returnValue = r;
+    return r;
+}
+
+// The Line step of a lazy line seq (LazySeq.h): o.a is the handle.
+const PO* stepLine(proto::ProtoContext* ctx, const PO*, const StepOperands& o) {
+    return lineCons(ctx, o.a);
+}
+
+// (line-seq rdr): the lines of a reader or a socket as a lazy seq, read one
+// at a time as the seq is consumed; the first line is read now, as Clojure's
+// line-seq does, and nil answers an empty stream. A program that walks it
+// without holding its head reads a stream of any length in constant memory.
 IOPRIM(prim_line_seq) {
     const proto::proto_ulong n = argCount(ctx, args);
     if (n != 1) arity(ctx, n, "line-seq");
-    const int fd = openFd(ctx, arg(ctx, args, 0), "line-seq", {HandleKind::Reader, HandleKind::Socket});
-    const std::vector<std::string> lines = blocking(ctx, [&] {
-        std::vector<std::string> out;
-        while (auto line = protoio::readLine(fd)) out.push_back(std::move(*line));
-        return out;
-    });
-    return stringList(ctx, lines, /*nilWhenEmpty=*/true);
+    return lineCons(ctx, arg(ctx, args, 0));
 }
 
 // (file path & more): a file handle naming `path`, each further argument a
@@ -1647,6 +1660,10 @@ void installIO(proto::ProtoContext* ctx, proto::ProtoObject* globals) {
         defineBuiltin(ctx, globals, p.name, ctx->fromMethod(nullptr, p.fn));
     }
     defineBuiltin(ctx, globals, "*command-line-args*", PROTO_NONE);
+    // *in*: a reader on the standard input, for (line-seq *in*),
+    // (line-seq (reader *in*)), (read-line *in*) and slurp.
+    defineBuiltin(ctx, globals, "*in*", newHandle(ctx, HandleKind::Reader, 0, "<stdin>"));
+    registerStep(StepKind::Line, &stepLine, /*pure=*/false);
 }
 
 void setCommandLineArgs(proto::ProtoContext* ctx, proto::ProtoObject* globals,

@@ -28,10 +28,11 @@ rc=$?
 err=$(cat "$work/err")
 fail() { echo "FAIL: $1"; echo "stdout:"; sed 's/^/  /' <<<"$out"; echo "stderr:"; sed 's/^/  /' <<<"$err"; exit 1; }
 [[ $rc -eq 0 ]] || fail "REPL exited $rc"
-# Three results from the first line, one per form, in order.
-grep -qE '^user=> 1$' <<<"$out" || fail "first form's result"
-grep -qx '2' <<<"$out" || fail "second form's result"
-[[ $(grep -cx '2' <<<"$out") -ge 2 ]] || fail "third form's result"
+# Three results from the first line, one per form, in order: a definition
+# echoes as its var, as in Clojure's REPL (M31).
+grep -qE "^user=> #'user/a$" <<<"$out" || fail "first form's result"
+grep -qx "#'user/b" <<<"$out" || fail "second form's result"
+grep -qx '2' <<<"$out" || fail "third form's result"
 # The error in the middle of the second line: c was defined, d was not.
 grep -qF 'compile error: def: expects (def name expr)' <<<"$err" || fail "no compile error"
 grep -qE '^user=> 3$' <<<"$out" || fail "c was not defined before the error"

@@ -23,6 +23,7 @@ const char* opName(Op op) {
         case Op::PUSH_TRUE:     return "PUSH_TRUE";
         case Op::PUSH_FALSE:    return "PUSH_FALSE";
         case Op::PUSH_LOCAL:    return "PUSH_LOCAL";
+        case Op::PUSH_LOCAL_CLEAR: return "PUSH_LOCAL_CLEAR";
         case Op::STORE_LOCAL:   return "STORE_LOCAL";
         case Op::MAKE_FN:       return "MAKE_FN";
         case Op::JUMP_BACK:     return "JUMP_BACK";
@@ -161,7 +162,8 @@ void BytecodeModule::patchOperand(std::size_t at, std::size_t operand) {
 // two paths meet with different depths the larger one is kept, so the bound
 // stays an upper bound.  Each instruction's effect mirrors
 // ExecutionEngine::executeFrame:
-//   +1  PUSH_CONST PUSH_VAR PUSH_NIL PUSH_TRUE PUSH_FALSE PUSH_LOCAL DUP
+//   +1  PUSH_CONST PUSH_VAR PUSH_NIL PUSH_TRUE PUSH_FALSE PUSH_LOCAL
+//       PUSH_LOCAL_CLEAR DUP
 //       RESOLVE_CLASS
 //   -1  POP STORE_LOCAL STORE_CAUGHT JUMP_IF_FALSE JUMP_IF_TRUE, ADD .. EQ (two in, one out)
 //       EXC_MATCH_TYPE
@@ -199,7 +201,7 @@ unsigned int BytecodeModule::computeMaxStack() const {
         int after = d;
         switch (op) {
             case Op::PUSH_CONST: case Op::PUSH_VAR: case Op::PUSH_NIL: case Op::PUSH_TRUE:
-            case Op::PUSH_FALSE: case Op::PUSH_LOCAL: case Op::DUP:
+            case Op::PUSH_FALSE: case Op::PUSH_LOCAL: case Op::PUSH_LOCAL_CLEAR: case Op::DUP:
             case Op::RESOLVE_CLASS:
                 after = d + 1; break;
             case Op::POP: case Op::STORE_LOCAL: case Op::STORE_CAUGHT:

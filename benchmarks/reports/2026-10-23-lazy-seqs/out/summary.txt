@@ -1,0 +1,24 @@
+doseq-vec        A median   3737 Mcycles (min   3586 max   4003)
+doseq-vec        B median   3376 Mcycles (min   3312 max   3838)
+for-nested       A median   1224 Mcycles (min   1065 max   1248)
+for-nested       B median    406 Mcycles (min    394 max    422)
+loop-next        A median   3144 Mcycles (min   3037 max   3422)
+loop-next        B median   2843 Mcycles (min   2814 max   2929)
+macro-loop       A median   5504 Mcycles (min   5425 max   5561)
+macro-loop       B median   5641 Mcycles (min   5552 max   5677)
+map-list         A median   1840 Mcycles (min   1836 max   1892)
+map-list         B median   1819 Mcycles (min   1749 max   1874)
+map-loop         A median   3691 Mcycles (min   3639 max   3747)
+map-loop         B median   3805 Mcycles (min   3687 max   4397)
+reduce-map-vec   A median   4532 Mcycles (min   4009 max   4712)
+reduce-map-vec   B median   2979 Mcycles (min   2945 max   3529)
+bench A:
+  fib 334   tak 37   sum-loop 66   reduce-list 32   sum-squares 27 
+  fib 347   tak 38   sum-loop 66   reduce-list 31   sum-squares 25 
+  fib 345   tak 37   sum-loop 66   reduce-list 31   sum-squares 27 
+bench B:
+  fib 345   tak 37   sum-loop 65   reduce-list 30   sum-squares 27 
+  fib 346   tak 40   sum-loop 65   reduce-list 31   sum-squares 26 
+  fib 344   tak 36   sum-loop 66   reduce-list 31   sum-squares 27 
+startup A: 61073434 16 61074035 16 
+startup B: 61883035 16 62532084 17 

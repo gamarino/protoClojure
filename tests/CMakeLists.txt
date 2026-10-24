@@ -132,6 +132,17 @@ add_test(NAME cli/regex-survives-gc
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/regex-survives-gc.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/for-format-survive-gc
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/for-format-survive-gc.sh" "$<TARGET_FILE:protoclj>")
+# Lazy sequences (src/runtime/LazySeq.h): collection, head retention, a grep
+# over a stream larger than the heap ceiling, and the REPL.
+add_test(NAME cli/lazy-seqs-survive-gc
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/lazy-seqs-survive-gc.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/lazy-head-retention
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/lazy-head-retention.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/lazy-grep-under-heap-limit
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/lazy-grep-under-heap-limit.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/repl-lazy-seqs
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/repl-lazy-seqs.sh" "$<TARGET_FILE:protoclj>")
+set_tests_properties(cli/lazy-head-retention cli/lazy-grep-under-heap-limit PROPERTIES TIMEOUT 300)
 add_test(NAME cli/repl-scripting
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/repl-scripting.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/file-form-by-form

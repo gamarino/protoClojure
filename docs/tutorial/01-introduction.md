@@ -53,7 +53,8 @@ The v0.1 target:
 - The core evaluator: `def`, `if`, `let`, `fn`, `loop`, `recur`,
   `quote`, `try`/`catch`.
 - The four persistent collections: list, vector, map, set.
-- Lazy sequences.
+- Lazy sequences (implemented: chunked as in Clojure, walked in constant
+  memory).
 - The minimum `clojure.core`: ~80 functions covering arithmetic,
   collections, predicates, higher-order, threading, string basics.
 - Atoms (one-line on top of protoCore's CAS primitive).

@@ -17,7 +17,10 @@ dependency on protoCore's own package instead of shipping a copy.
   REPL needs history, arrow-key editing and the multi-line continuation prompt,
   and configuration fails with a `FATAL_ERROR` when it is missing (except on
   Windows, where the REPL uses the console's own line editing).
-- **protoCore 2.7.0 or newer** (where `proto::proto_long` first exists), installed, with its CMake package
+- **protoCore 3.1.0 or newer, below 4.0.0** (3.1.0 adds the lazy objects lazy
+  sequences are built on; until it is released, build protoCore's branch
+  `feature/lazy-object` and install it, or name its install prefix with
+  `-DPROTO_CORE_PREFIX=<prefix>`), installed, with its CMake package
   configuration. See protoCore's `docs/INSTALLATION.md`.
 - **protoIO 0.2.2 or a later 0.2** (the input and output library shared by the protoCore
   runtimes), either installed (the `protoio-dev` package, or any prefix
@@ -229,8 +232,8 @@ dependency on protoCore's own package:
 
 | Format | Relation |
 |--------|----------|
-| DEB | `Depends: protocore (>= 2.6.1), protocore (<< 3.0.0)` |
-| RPM | `Requires: protoCore >= 2.6.1, protoCore < 3.0.0` |
+| DEB | `Depends: protocore (>= 3.1.0), protocore (<< 4.0.0)` |
+| RPM | `Requires: protoCore >= 3.1.0, protoCore < 4.0.0` |
 
 `CPACK_DEBIAN_PACKAGE_SHLIBDEPS` is enabled, so `dpkg-shlibdeps` adds the
 shared libraries `protoclj` links to the DEB's `Depends`: `libc6`,

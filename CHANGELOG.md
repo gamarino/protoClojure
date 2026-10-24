@@ -9,6 +9,56 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — scripting vocabulary, stage 11: lazy sequences
+
+- **Lazy sequences** (DESIGN.md §7 and §10.2, M28-M31; LANGUAGE.md §10):
+  `lazy-seq` and `lazy-cat`; lazy `map` (over several collections too),
+  `filter`, `remove`, `take`, `take-while`, `drop`, `drop-while`,
+  `iterate`, `repeat`, `repeatedly`, `cycle`, `range` (with no end too),
+  `concat`, `mapcat`, `partition`, `partition-all`, `interleave`,
+  `distinct`, `for`, `line-seq` and `re-seq`; `doall`, `dorun` (with an
+  optional count), `run!`, `realized?` of a lazy seq and `chunked-seq?`.
+  Chunked as in Clojure: a vector's seq and a finite `range` are realised
+  32 elements at a time by `map`, `filter` and `for`. Each element is
+  computed once, also when futures share the seq.
+- **`*in*`**: a reader on the standard input; `(line-seq *in*)` reads it a
+  line at a time, in constant memory (closes D29).
+- **Requires protoCore 3.1.0** (protoCore branch `feature/lazy-object`): a
+  lazy seq is a protoCore lazy object, `ProtoObject::newLazyChild`. As a
+  mutable object, a realised chain of lazy seqs was freed one link per
+  collection cycle (M28).
+- **Locals clearing**: the last read of a local that is read once becomes
+  the new opcode `PUSH_LOCAL_CLEAR`, and the VM clears an argument's slot
+  once a call has taken it, so a walk does not hold the head of a lazy seq
+  it was handed (M30; D50 for the conservative rule).
+- New tests: 31 fixtures in `tests/conformance/37-lazy-seqs/` and
+  `27-io/tutorial-ch14-line-seq-lazy.clj`, and the CLI checks
+  `cli/lazy-seqs-survive-gc`, `cli/lazy-head-retention`,
+  `cli/lazy-grep-under-heap-limit` (500,000 lines under a 300,000-cell
+  ceiling) and `cli/repl-lazy-seqs`.
+
+### Changed — stage 11 (behaviour changes against stage 10)
+
+- **`map` and `filter` are lazy**: a `(map f coll)` whose result is never
+  read no longer calls `f`, as in Clojure (`25-actors/many-actors.clj` and
+  `concurrent-sends-no-race.clj` now `doall` it).
+- **`line-seq` is lazy**: read after its reader closed, it raises
+  `IOException: Stream closed`, as in Clojure; `doall` it inside
+  `with-open` (the `27-io` fixtures that returned it do so now).
+- `seq`, `rest` and `next` of a vector answer its chunked seq, not a list:
+  `(list? (rest [1 2]))` is false, as in Clojure. `seq?` is true for every
+  seq, not only for lists.
+- `(range)` with no end works (`36-format-for/range-infinite.clj` became
+  `range-endless.clj`); multi-collection `map` works
+  (`09-higher-order/map-multi-coll-error.clj` became `map-multi-coll.clj`).
+- `for`'s expansion passes `true` as a third argument of the innermost
+  `__for-step` (`for-macroexpand.clj`).
+- The REPL echoes a definition as its var, `#'user/x`, as Clojure's REPL
+  does (M31, D51), instead of printing the value (which realised a lazy seq).
+- `(str lazy-seq)` is `clojure.lang.LazySeq@...`, as in JVM Clojure (D48).
+- `cli/for-format-survive-gc` runs 4,000 rounds instead of 1,500: lazy
+  `for` allocates less, and the REPL run saw fewer than three cycles.
+
 ### Fixed — keyword `get` / `assoc` speed
 
 - The 7 % slowdown stage 10 brought to keyword-keyed map reads and `assoc`

@@ -73,8 +73,10 @@ endif()
 # proto::proto_long / proto_ulong, which first exist there.
 # 3.0.0: methods receive their arguments as ProtoArguments /
 # ProtoKeywordArguments descriptors (protoCore docs/CALLING_CONVENTION.md).
-set(PROTOCORE_MIN_VERSION      "3.0.0")
-set(PROTOCORE_MIN_VERSION_FULL "3.0.0")
+# 3.1.0: lazy objects (ProtoObject::newLazyChild), which lazy sequences are
+# (src/runtime/LazySeq.h, docs/DESIGN.md M28).
+set(PROTOCORE_MIN_VERSION      "3.1.0")
+set(PROTOCORE_MIN_VERSION_FULL "3.1.0")
 set(PROTOCORE_NEXT_MAJOR       "4.0.0")
 set(PROTOCORE_ABI_SOVERSION    "4")
 option(PROTOCORE_REQUIRE_PACKAGE
@@ -206,6 +208,7 @@ add_library(protoclj_support STATIC
     src/runtime/MapOps.cpp
     src/runtime/Named.cpp
     src/runtime/Regex.cpp
+    src/runtime/SeqTypes.cpp
     src/runtime/SetOps.cpp
     src/runtime/StackGuard.cpp
     src/runtime/VectorOps.cpp
@@ -229,6 +232,7 @@ add_library(protoclj_runtime STATIC
     src/runtime/ExecutionEngine.cpp
     src/runtime/GCCensus.cpp
     src/runtime/IO.cpp
+    src/runtime/LazySeq.cpp
     src/runtime/Macros.cpp
     src/runtime/Primitives.cpp
 )

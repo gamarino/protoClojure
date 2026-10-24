@@ -134,7 +134,20 @@ Comprehensions and formatted output:
 (println (for [x (range 10) :when (odd? x) :let [y (* x x)] :while (< y 30)] y))  ;; => (1 9 25)
 ```
 
-The 578 conformance fixtures under `tests/conformance/` are the executable reference for what the language accepts today (this README's examples among them: `tests/conformance/28-quote/readme-code-is-data.clj`, `tests/conformance/30-macros/readme-macros.clj`, `tests/conformance/32-core-macros/readme-core-macros.clj`, `tests/conformance/33-destructuring/readme-destructuring.clj`, `tests/conformance/34-sets/readme-sets.clj`, `tests/conformance/35-regex/readme-regex.clj`, `tests/conformance/36-format-for/readme-format-for.clj`).
+Lazy sequences, computed once, chunked as in Clojure, and walked in constant memory when nothing holds their head:
+
+```clojure
+(defn fib-seq
+  ([] (fib-seq 0 1))
+  ([a b] (lazy-seq (cons a (fib-seq b (+ a b))))))
+(println (take 10 (fib-seq)))                              ;; => (0 1 1 2 3 5 8 13 21 34)
+(println (->> (range) (filter odd?) (map (fn [x] (* x x))) (take 5)))  ;; => (1 9 25 49 81)
+;; a grep over the standard input, however large it is:
+(doseq [line (line-seq *in*)]
+  (when (re-find #"ERROR" line) (println line)))
+```
+
+The 607 conformance fixtures under `tests/conformance/` are the executable reference for what the language accepts today (this README's examples among them: `tests/conformance/28-quote/readme-code-is-data.clj`, `tests/conformance/30-macros/readme-macros.clj`, `tests/conformance/32-core-macros/readme-core-macros.clj`, `tests/conformance/33-destructuring/readme-destructuring.clj`, `tests/conformance/34-sets/readme-sets.clj`, `tests/conformance/35-regex/readme-regex.clj`, `tests/conformance/36-format-for/readme-format-for.clj`, `tests/conformance/37-lazy-seqs/readme-lazy-seqs.clj`; the grep is `tests/cli/lazy-grep-under-heap-limit.sh`).
 
 ## Concurrency — atoms, futures, actors
 
@@ -340,25 +353,26 @@ protoClojure runs scripts and an interactive REPL, both one top-level form at a 
 | Destructuring (`[a b & r :as all]`, `{x :x :keys [...] :strs [...] :syms [...] :or {...} :as m}`, nested) in `let`, `loop`, `fn`, `defn`, `defmacro` and the binding macros | Implemented (branch `feature/macros`) |
 | Sets `#{...}`, `hash-set`, `set`, `disj`, `into`, `union` / `intersection` / `difference` | Implemented (branch `feature/macros`; `clojure.set` functions are globals) |
 | Regular expressions `#"..."`, `re-find`, `re-matches`, `re-seq`, `re-matcher`, `re-groups`, `replace` / `split` with a pattern | Implemented (branch `feature/macros`; `std::regex` ECMAScript with Java's inline flags translated, D45) |
-| `format`, `printf`, `for` and `doseq` with `:let` / `:when` / `:while`, `range` | Implemented (branch `feature/macros`; `for` and `range` are eager until lazy sequences, D46) |
-| Lazy sequences | Planned |
+| `format`, `printf`, `for` and `doseq` with `:let` / `:when` / `:while`, `range` | Implemented (branch `feature/macros`) |
+| Lazy sequences: `lazy-seq`, lazy `map` `filter` `take` `range` `iterate` `concat` `mapcat` `partition` `for` `line-seq` `re-seq` ..., `doall` / `dorun` / `realized?`, chunked as in Clojure; walks that do not hold the head run in constant memory | Implemented (branch `feature/macros`; needs protoCore 3.1.0's lazy objects, branch `feature/lazy-object`; [LANGUAGE.md §10](docs/LANGUAGE.md)) |
 | Namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **746 test cases: 578 conformance fixtures, 133 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics, value lifetime, the vector representation, value equality and hashing, native stack guard, double printer, exception values, rethrow) **and 35 CLI checks** (`--help`, three checks of the adaptive heap controller -- on by default, off with `PROTOCORE_ADAPTIVE_HEAP=0`, peak RSS bounded under a small budget --, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, the reader's values under a heap limit, the garbage a `loop` makes under a heap limit, joins that park for the collector, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, literals and quote in the REPL, several forms per REPL line and `:load`, quoted data under a heap limit, macros at the REPL, macro expansion under a heap limit, destructuring under a heap limit, sets under a heap limit, regular expressions under a heap limit, `for` / `doseq` / `format` under a heap limit, the scripting vocabulary at the REPL, the embedded core.clj, scripts run form by form, deeply nested source, an uncaught exception, exceptions under a heap limit, `read-line` in pipelines, `*command-line-args*`, exit statuses, `sh` with `:dir` and `:env` and no shell on `PATH`, `localhost` requests to a server started without a host, an HTTP server under a heap limit, and scripts run as commands through a `#!` line). All 746 pass locally on Linux against protoCore 3.0.0 (2026-10-23, branch `feature/macros`). The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **780 test cases: 607 conformance fixtures, 134 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics, value lifetime, the vector representation, value equality and hashing, native stack guard, double printer, exception values, rethrow) **and 39 CLI checks** (`--help`, three checks of the adaptive heap controller -- on by default, off with `PROTOCORE_ADAPTIVE_HEAP=0`, peak RSS bounded under a small budget --, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, the reader's values under a heap limit, the garbage a `loop` makes under a heap limit, joins that park for the collector, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, literals and quote in the REPL, several forms per REPL line and `:load`, quoted data under a heap limit, macros at the REPL, macro expansion under a heap limit, destructuring under a heap limit, sets under a heap limit, regular expressions under a heap limit, `for` / `doseq` / `format` under a heap limit, the scripting vocabulary at the REPL, the embedded core.clj, scripts run form by form, deeply nested source, an uncaught exception, exceptions under a heap limit, `read-line` in pipelines, `*command-line-args*`, exit statuses, `sh` with `:dir` and `:env` and no shell on `PATH`, `localhost` requests to a server started without a host, an HTTP server under a heap limit, scripts run as commands through a `#!` line, lazy sequences under a heap limit, holding and not holding the head of a lazy seq, a grep over a stream larger than the heap ceiling, and lazy seqs at the REPL). All 780 pass locally on Linux against protoCore 3.1.0 (2026-10-23, branch `feature/macros`, protoCore branch `feature/lazy-object`). The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 
 - Reader: integers of any size (`12345678901234567890`, `42N`), floats (`3.14`, `1e6`), strings, symbols, keywords (`:foo`), `true` / `false` / `nil`, lists `(...)`, vectors `[...]`, maps `{...}` and sets `#{...}` (a repeated key or element is a read error, as in Clojure), regular expressions `#"..."`, `@form` as `(clojure.core/deref form)`, quote `'form`, syntax-quote `` `form `` with `~` and `~@` (expanded when read, as in Clojure, with symbols qualified as `clojure.core/x` or `user/x` and `foo#` auto-gensyms), line comments (`;`), commas as whitespace. The reader yields the values the program manipulates at run time — a symbol value, a string, a vector, a map — which is the base for quote and macros ([DESIGN.md §10](docs/DESIGN.md)).
 - Special forms: `def`, `defn` and `fn` (single- and multi-arity, variadic, destructuring parameters, named arguments, docstrings), `defmacro` (expanded when a form is compiled, `&form` and `&env`), `let`, `loop` (also at the top level; both destructure), `recur` (in `loop` and as the implicit function-body target), `if`, `do`, `quote` (of any datum: a quoted list is a list value), `apply` (over a list, a vector or nil), `and`, `or`, `try` / `catch` / `finally`, `throw`.
-- Macros from `core.clj` (written in Clojure, embedded in the binary): `when`, `when-not`, `if-not`, `cond`, `comment`, `while`, `if-let`, `when-let`, `if-some`, `when-some`, `->`, `->>`, `as->`, `some->`, `some->>`, `cond->`, `cond->>`, `doto`, `dotimes`, `doseq`, `case`, `condp`, `with-open`, `future`, `for` (with `:let` / `:when` / `:while`, as `doseq` has); and the functions `identity some? true? false? zero? pos? neg? nnext ffirst nthnext butlast into range`.
+- Macros from `core.clj` (written in Clojure, embedded in the binary): `when`, `when-not`, `if-not`, `cond`, `comment`, `while`, `if-let`, `when-let`, `if-some`, `when-some`, `->`, `->>`, `as->`, `some->`, `some->>`, `cond->`, `cond->>`, `doto`, `dotimes`, `doseq`, `case`, `condp`, `with-open`, `future`, `for` (lazy, with `:let` / `:when` / `:while`, as `doseq` has), `lazy-seq`, `lazy-cat`; and the functions `identity some? true? false? zero? pos? neg? nnext ffirst nthnext butlast into`.
 - Closures: full N-level capture, including chained closures across `(fn ... (fn ... (fn ...)))`.
-- Primitives (126 registered at startup):
+- Primitives (147 registered at startup):
   - arithmetic and comparison: `+ - * / inc dec < <= > >= = not=` (`=` compares maps, vectors and lists by value; a vector and a list with equal elements are `=`)
   - output: `println print prn pr pr-str str format printf`
   - macros and symbols: `macroexpand-1 macroexpand eval gensym symbol keyword name list*`
-  - lists and vectors: `list vector vec nth first second next last rest cons conj count empty? reverse`, and `seq concat` (eager, answering lists). A vector is a protoCore `ProtoList` of its elements in a one-entry `ProtoSparseList` box, which is what carries its type; `nth` is O(log n), `vector` / `vec` are O(1), and a vector is collected like any other value (it used to be an interned `ProtoTuple`, which protoCore never frees — decision R2)
-  - higher-order: `map filter reduce pmap`
+  - lists and vectors: `list vector vec nth first second next last rest cons conj count empty? reverse`, and `seq concat` (`seq` of a vector is its chunked seq, as in Clojure). A vector is a protoCore `ProtoList` of its elements in a one-entry `ProtoSparseList` box, which is what carries its type; `nth` is O(log n), `vector` / `vec` are O(1), and a vector is collected like any other value (it used to be an interned `ProtoTuple`, which protoCore never frees — decision R2)
+  - higher-order: `reduce pmap`
+  - lazy sequences ([LANGUAGE.md §10](docs/LANGUAGE.md)): `map` (over several collections too) `filter remove take take-while drop drop-while iterate repeat repeatedly cycle range mapcat partition partition-all interleave distinct`, lazy `concat`, `line-seq`, `re-seq`, `doall dorun run! chunked-seq?`, and `realized?` of a lazy seq. A lazy seq is a protoCore lazy object, computed once and shared safely by threads (decision M28)
   - predicates: `nil? not vector? list? seq? map? string? symbol? keyword? even? odd?`
   - sets: `hash-set set set? disj union intersection difference subset? superset?`, and `conj` / `contains?` / `get` / `count` / `empty?` / a set as a function; a set is an immutable object holding a `ProtoMap` from each element to itself ([LANGUAGE.md §4.4](docs/LANGUAGE.md))
   - maps: `hash-map assoc dissoc get contains? keys vals`, and `count` / `empty?` on maps. A map is an immutable protoCore `ProtoMap` driven through protoCore's shared hashed-collection helper: keys match by value (a map or vector key is found with an equal map, vector or list, a string key with an equal string built at run time), numbers of different types are different keys, iteration order is unspecified, keys are ordinary garbage, and `count` is O(n) ([LANGUAGE.md §4.3](docs/LANGUAGE.md))
@@ -376,14 +390,14 @@ What is implemented:
   - sockets: `tcp-connect` (with `:tls`), `tcp-listen`, `tcp-accept`, `socket-read-line`, `socket-write`, `socket-close`, `udp-socket`, `udp-send`, `udp-receive`
   - failures are `FileNotFoundException`, `ConnectException`, `SocketTimeoutException`, `UnknownHostException`, ... with ex-data `{:type :file-not-found :errno 2}`
 - Exceptions: `catch` by class over a built-in hierarchy mirroring the Java classes (`Exception`, `ExceptionInfo`, `ArithmeticException`, `IOException`, `StackOverflowError`, …, simple or qualified names); errors raised by built-in functions are catchable exceptions of the class their message names; `deref` of a failed future raises `ExecutionException` with the original as its cause ([LANGUAGE.md §14](docs/LANGUAGE.md#14-exceptions)).
-- VM: 33 opcodes, including SmallInteger fast-path binary opcodes (`ADD SUB MUL LT LE GT GE EQ`), arity dispatch (`MAKE_FN` / `MAKE_FN_MULTI`), `CALL_APPLY` for spread arguments, `CALL_KW` for trailing keyword arguments, `DUP` / `JUMP_IF_TRUE` for short-circuit forms, and `TRY_BEGIN` / `TRY_END` / `THROW` / `EXC_MATCH` for exceptions.
+- VM: 40 opcodes, including SmallInteger fast-path binary opcodes (`ADD SUB MUL LT LE GT GE EQ`), arity dispatch (`MAKE_FN` / `MAKE_FN_MULTI`), `CALL_APPLY` for spread arguments, `CALL_KW` for trailing keyword arguments, `DUP` / `JUMP_IF_TRUE` for short-circuit forms, `TRY_BEGIN` / `TRY_END` / `THROW` / `EXC_MATCH` for exceptions, and `PUSH_LOCAL_CLEAR` for the last read of a local (locals clearing, so a walk does not hold the head of a lazy seq).
 - Numeric semantics: SmallInteger for values that fit a tagged pointer, automatic promotion to LargeInteger on overflow (no integer operation wraps around, whether compiled to an opcode or called through `apply` / `reduce`), automatic promotion to double when any operand is a float.
 
 What is **not yet** implemented:
 
 - **Clojure-style `agent`** with its send/await semantics (the in-tree `actor` is the protoCore-native variant — different surface, see [docs/tutorial/13-actors.md](docs/tutorial/13-actors.md)).
 - **`delay` / `force`** and `volatile!` / `vreset!` / `vswap!`.
-- **`letfn`, lazy sequences** and most of `clojure.core` beyond the primitives and `core.clj` above.
+- **`letfn`, transducers** and most of `clojure.core` beyond the primitives and `core.clj` above.
 - **The UMD module system**: `ns`, `(:require [py/numpy :as np])` and the foreign-dispatch protocol layer.
 - **An nREPL server** for CIDER / Calva / Conjure. It is planned for v0.1; the local interactive REPL on libreadline ships today (see [docs/tutorial/10-repl.md](docs/tutorial/10-repl.md)).
 - **JIT or threaded dispatch.** The bytecode VM is a switch loop; both are possible upgrade paths, neither is scheduled.
@@ -440,7 +454,7 @@ Before this default (2026-10-10), protoclj set no limit and protoCore never
 started a collection by itself: a program grew its heap with every allocation
 (with six allocating tasks, `coll_alloc` was killed at 16 GB). A protoclj built
 against a protoCore older than 2.10.0 had no controller and kept that old
-behaviour (the declared minimum is now 3.0.0).
+behaviour (the declared minimum is now 3.1.0).
 
 ### Packaging
 

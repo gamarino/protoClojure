@@ -1,0 +1,4 @@
+A:
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/protoClojure/benchmarks/reports/2026-10-23-lazy-seqs/out/libs/A/libprotoCore.so.4 (0x000073d820ad4000)
+B:
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/protoClojure/benchmarks/reports/2026-10-23-lazy-seqs/out/libs/B/libprotoCore.so.4 (0x000079566cb66000)

@@ -56,7 +56,7 @@ tell at a glance which parts of the surface are runnable today. The
 | Lists `(...)` | Implemented |
 | Vectors `[...]` | Implemented (a `ProtoList` in a one-entry sparse-list box, distinct from list) |
 | Maps `{...}` | Implemented (`hash-map`, `assoc`, `dissoc`, `get`, `contains?`, `keys`, `vals`; `count` and `empty?` accept maps) |
-| `format`, `printf`, `for`, a finite `range` | Implemented (`format` follows Java's `String.format`, D47; `for` and `range` are eager, D46) |
+| `format`, `printf`, `for`, `range` | Implemented (`format` follows Java's `String.format`, D47; `for` and `range` are lazy, §10) |
 | Regular expressions `#"..."`, `re-pattern`, `re-find`, `re-matches`, `re-seq`, `re-matcher`, `re-groups`; `replace`, `replace-first` and `split` with a pattern | Implemented on `std::regex` ECMAScript, with Java's inline flags translated (§2.10, D45) |
 | Sets `#{...}` | Implemented (`hash-set`, `set`, `set?`, `conj`, `disj`, `contains?`, `get`, a set as a function; `union`, `intersection`, `difference`, `subset?`, `superset?` as globals; §4.4) |
 | `def`, `defn`, `fn`, `let`, `loop`, `recur` | Implemented (`let` and `loop` also at the top level; docstrings accepted) |
@@ -74,7 +74,7 @@ tell at a glance which parts of the surface are runnable today. The
 | State (`atom`, `swap!`, `reset!`, `compare-and-set!`, `@`, watches) | Implemented |
 | `future`, `promise`, `deliver`, `pmap` | Implemented |
 | Actors (`actor`, `send`, `send-h`, `send-l`) | Implemented (see tutorial chapter 13) |
-| Lazy seqs (`lazy-seq`, `range`, `iterate`) | Planned |
+| Lazy seqs (`lazy-seq`, `lazy-cat`, lazy `map` `filter` `take` `range` `iterate` `concat` `for` `line-seq` ..., `doall`, `dorun`, `realized?`) | Implemented, chunked as in Clojure (§10) |
 | User-defined macros: `defmacro`, `macroexpand-1`, `macroexpand`, `eval` | Implemented (§6.1; syntax-quote hygiene and the `clojure.core` macros in progress) |
 | Local interactive REPL | Implemented |
 | nREPL server | Planned for v0.1 |
@@ -363,8 +363,9 @@ patterns compare by identity.
 ```
 
 - `re-pattern` compiles a string; `re-find` answers the first match,
-  `re-matches` a match of the whole string, `re-seq` every match (a list,
-  built eagerly, until lazy sequences land), `nil` when there is none. A
+  `re-matches` a match of the whole string, `re-seq` every match (a lazy
+  seq: the first match is found at once, the next ones as it is read),
+  `nil` when there is none. A
   match is the matched string when the pattern has no groups, else a vector
   of the match and its groups (`nil` for a group that took no part).
 - `re-matcher` makes a matcher: each `(re-find m)` answers the next match
@@ -916,7 +917,7 @@ in Clojure, with Clojure's definitions and expansions:
 | `when` `when-not` `if-not` `cond` `comment` `while` | `cond` with an odd number of forms is an expansion error |
 | `if-let` `when-let` `if-some` `when-some` | the binding vector holds one binding form (a symbol or a destructuring form, §5.4) and a test |
 | `->` `->>` `as->` `some->` `some->>` `cond->` `cond->>` `doto` | |
-| `dotimes` `doseq` `for` | nested bindings, each a binding form (§5.4), with the modifiers `:let [...]`, `:when test` and `:while test`; `for` answers a list, built eagerly for now (D46) |
+| `dotimes` `doseq` `for` | nested bindings, each a binding form (§5.4), with the modifiers `:let [...]`, `:when test` and `:while test`; `for` answers a lazy seq (§10) |
 | `case` `condp` | `case` constants are not evaluated, a list groups alternatives; no match and no default raises `IllegalArgumentException: No matching clause: x` (D44) |
 | `with-open` `future` | |
 
@@ -938,9 +939,9 @@ and stop as in Clojure (`:while` stops the binding just before it):
 (doseq [[k v] {:a 1} :when v] (println k v))  ;; prints :a 1
 ```
 
-Until lazy sequences land, `for` and `range` answer lists built eagerly
-(D46): `(range)` with no end is an error, and a `for` over a huge
-collection builds its whole result.
+`for` is lazy (§10): `(take 3 (for [x (range) :when (odd? x)] x))` is
+`(1 3 5)`, and over a range or a vector it realises 32 elements at a time,
+as Clojure's `for` does.
 
 It also defines the functions `identity`, `some?`, `true?`, `false?`,
 `zero?`, `pos?`, `neg?`, `nnext`, `ffirst`, `nthnext`, `butlast`, `into`
@@ -1054,52 +1055,111 @@ Useful for the implementation of transducers.
 
 ---
 
-## 10. Sequences and lazy evaluation (planned)
+## 10. Sequences and lazy evaluation
 
-In 0.0.1, `first`, `rest`, `cons`, `map`, `filter` and `reduce` work
-over lists and vectors and return fully realised lists; `seq`, `next`,
-laziness and the functions below are planned.
+The design is in DESIGN.md §7 and §10.2 (M28-M31); the differences from JVM
+Clojure are D48-D51.
 
 ### 10.1 The seq abstraction
 
-`seq` returns a sequence view of a collection. `first`, `rest`, `next`,
-`cons` operate on seqs. Most collection-walking functions (`map`,
-`filter`, `take`, etc.) consume any seqable and return a seq.
+`seq` answers a seq over any collection, or `nil` when it is empty: a list
+is its own seq, a vector answers a chunked seq over its elements, a map its
+`[k v]` entries, a set its elements, a string its characters, a lazy seq the
+seq it realises to. `first`, `rest`, `next`, `second`, `nth`, `last`,
+`count`, `empty?`, `cons`, `conj` and destructuring read every kind of seq;
+`seq?` is true for all of them (lists, lazy seqs, cons cells, a vector's
+seq) and false for a vector; `list?` only for lists.
+
+```clojure
+(seq [1 2 3])                    ;; => (1 2 3)
+(seq? (map inc [1]))             ;; => true
+(list? (map inc [1]))            ;; => false
+(rest (map inc (range 5)))       ;; => (2 3 4 5)
+```
 
 ### 10.2 Laziness
 
-`map`, `filter`, `take`, `drop`, `range`, `iterate`, `repeat`, `cycle`,
-`partition`, `interleave`, `concat`, `mapcat` return **lazy
-sequences**. Elements are produced on demand and memoised.
+`map` (over one or several collections), `filter`, `remove`, `take`,
+`take-while`, `drop`, `drop-while`, `iterate`, `repeat`, `repeatedly`,
+`cycle`, `range`, `concat`, `mapcat`, `partition`, `partition-all`,
+`interleave`, `distinct`, `for`, `line-seq` and `re-seq` return **lazy
+sequences**: elements are produced when they are read, and cached.
+`lazy-seq` wraps any body that returns a seq; `lazy-cat` concatenates
+lazily evaluated collections.
 
 ```clojure
-(take 5 (iterate inc 0))         ;; => (0 1 2 3 4)
+(take 5 (iterate inc 0))          ;; => (0 1 2 3 4)
 
 (def odd-squares
   (->> (range)
        (filter odd?)
-       (map #(* % %))))
+       (map (fn [x] (* x x)))))
 
-(take 5 odd-squares)             ;; => (1 9 25 49 81)
+(take 5 odd-squares)              ;; => (1 9 25 49 81)
+
+(defn fib-seq
+  ([] (fib-seq 0 1))
+  ([a b] (lazy-seq (cons a (fib-seq b (+ a b))))))
+
+(take 10 (fib-seq))               ;; => (0 1 1 2 3 5 8 13 21 34)
+(take 5 (lazy-cat [1 2] (range))) ;; => (1 2 0 1 2)
 ```
 
-**v0.1: element-at-a-time.** No chunked-seq optimisation — every step
-produces one element. v0.2 will add 32-element chunking transparently.
+Laziness is visible through side effects, as in Clojure: defining
+`(map f coll)` calls `f` on nothing, reading the first element calls it,
+and reading it again does not.
 
-### 10.3 Forcing realisation
+### 10.3 Chunked seqs
 
-`doall` realises (and returns) a lazy seq fully. `dorun` realises but
-discards. `doseq` is the side-effect-friendly iteration macro.
+As in Clojure, the seq of a vector and a finite `range` are chunked
+(`chunked-seq?`): `map`, `filter` and `for` realise them 32 elements at a
+time. Over a list, or an endless `(range)`, they realise one element at a
+time.
+
+```clojure
+(def calls (atom 0))
+(first (map (fn [x] (swap! calls inc) x) (range 100)))
+@calls                            ;; => 32
+```
+
+### 10.4 Forcing realisation
+
+`doall` realises a lazy seq and returns it; `dorun` realises it for its side
+effects and returns `nil`; both take an optional count. `run!` calls a fn on
+each element; `doseq` is the side-effect iteration macro. A lazy seq read
+after the resource it reads has closed fails, as in Clojure: `doall` it
+inside `with-open`.
 
 ```clojure
 (doseq [x [1 2 3]] (println x))
+(dorun (map println [1 2]))       ;; prints 1 and 2, answers nil
+(realized? (lazy-seq [1]))        ;; => false
 ```
 
-### 10.4 Transducers — **[v0.2]**
+### 10.5 Holding the head
 
-`(map f)`, `(filter pred)`, etc. with no collection arg currently
-return a clear "transducers not yet supported (v0.2)" error in v0.1.
-The arity that takes a collection works.
+A walk keeps only its current position, so a lazy seq nobody else holds
+is collected as it is read: `(count (line-seq r))`, `(doseq [l (line-seq
+r)] ...)` and `(reduce + (map f (range 100000000)))` run in constant memory.
+A local read for the last time is cleared (locals clearing, M30), so
+`(let [lines (line-seq r)] (doseq [l lines] ...))` does not hold the head
+either. A seq that is still referenced afterwards holds every element it has
+realised, as in Clojure: `(let [s (map f xs)] (dorun s) (count s))` keeps
+them all. The clearing is conservative (D50): a local read in both branches
+of an `if` is not cleared.
+
+### 10.6 Threads
+
+A lazy seq may be shared by threads: each element is computed once,
+whatever the number of readers (a reader that finds an element being
+computed waits for it). A body that throws leaves the seq unrealised; the
+next read runs it again.
+
+### 10.7 Transducers — **[not supported]**
+
+`(map f)`, `(filter pred)`, `(mapcat f)` and `(partition n)` with no
+collection raise `UnsupportedOperationException` (D49). The arities that
+take a collection work.
 
 ---
 
@@ -1508,7 +1568,7 @@ call. An option a function does not know is an `IllegalArgumentException`
 | `(read-line r)` | The same from a reader or a socket (Java: `.readLine`). |
 | `(write w x)` | Writes `(str x)` to a writer or a socket (Java: `.write`). nil. |
 | `(close h)` | Closes a reader, writer or socket, or stops an HTTP server; closing twice is harmless (Java: `.close`). |
-| `(line-seq r)` | The remaining lines of a reader or socket, as a list; nil when there are none. |
+| `(line-seq r)` | The remaining lines of a reader or socket as a lazy seq, read one at a time as it is consumed (the first now, as in Clojure); nil when there are none. `(line-seq *in*)` reads the standard input. |
 | `(with-open [name init ...] body...)` | Binds each name, evaluates the body and closes the names in reverse order, whether the body returns or throws. |
 | `(file path & children)` | A file naming `path`, each further argument a child of the one before. `str` of a file is its path. |
 | `(file-seq dir)` | The file itself and, for a directory, every file below it, depth first, each directory's entries in name order; a list of files. |
@@ -1522,6 +1582,9 @@ call. An option a function does not know is an `IllegalArgumentException`
 (spit "notes.txt" "second\n" :append true)
 (with-open [r (reader "notes.txt")]
   (println (line-seq r)))            ; (first second)
+(doseq [line (line-seq *in*)]        ; a grep over the standard input,
+  (when (re-find #"error" line)      ; in constant memory
+    (println line)))
 ```
 
 A handle holds an operating-system descriptor until it is closed: there is
@@ -1648,7 +1711,7 @@ are protoClojure's (D30).
 | `(tcp-connect host port)` / `(tcp-connect host port {:tls true :timeout ms :verify false})` | A connected socket. `:timeout` bounds the connect and every later wait on the socket (`SocketTimeoutException`); `:tls true` upgrades it to TLS, verifying the certificate unless `:verify false`. |
 | `(tcp-listen port)` / `(tcp-listen host port)` | A listening socket; port 0 picks a free port. |
 | `(tcp-accept server)` / `(tcp-accept server timeout-ms)` | The next connection, or nil when the timeout elapsed first or the socket was closed. |
-| `(socket-read-line s)`, `(socket-write s x)`, `(socket-close s)` | A line (nil at the end), a write of `(str x)`, a close; the same as `read-line`, `write` and `close`, which also accept sockets. `line-seq` and `slurp` read a socket to its end. |
+| `(socket-read-line s)`, `(socket-write s x)`, `(socket-close s)` | A line (nil at the end), a write of `(str x)`, a close; the same as `read-line`, `write` and `close`, which also accept sockets. `slurp` reads a socket to its end; `line-seq` reads it a line at a time. |
 | `(udp-socket)` / `(udp-socket port)` / `(udp-socket host port)` | A bound UDP socket. |
 | `(udp-send sock host port data)` | Sends one datagram of `(str data)`. |
 | `(udp-receive sock)` / `(udp-receive sock timeout-ms)` | `{:data "..." :host "..." :port n}`, or nil when the timeout elapsed first. |
@@ -1691,7 +1754,9 @@ independently of each other, and closing a socket wakes a thread blocked
 on it. An actor whose handler blocks in I/O keeps its worker busy until
 the call returns; long blocking work belongs in a `future`.
 
-Not implemented: `*in*`, `*out*` and `binding` (§8), `input-stream` /
+`*in*` is a reader on the standard input (`(line-seq *in*)`, `(read-line
+*in*)`, `(slurp *in*)`; `reader` answers it unchanged), not rebindable.
+Not implemented: `*out*` and `binding` (§8), `input-stream` /
 `output-stream` and byte arrays, `as-file` / `as-url`, `resource`, `sh`'s
 `:in-enc` / `:out-enc`, HTTP keep-alive, an HTTPS server, and streaming
 request or response bodies.

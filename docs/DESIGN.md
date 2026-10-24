@@ -676,23 +676,27 @@ object, so the collector traces every queued message. The Clojure `send` / `send
 scheduling semantics we want to align with that actor model
 thoughtfully.
 
-## 7. Lazy sequences (planned)
+## 7. Lazy sequences
 
-Lazy seqs are thunks with memoised first / rest. A `LazySeq` is a small
-protoCore object with `__thunk__` (the unrealised computation),
-`__realized__` (a boolean), and `__first__` / `__rest__` (filled on
-first deref). `lazy-seq` macro expands to a constructor; `seq`, `first`,
-`rest`, `next` are the access path.
+Built in the macros branch, Part B stage 11; the decisions are M28-M31
+(§10.2). In short:
 
-The interaction with protoCore's GC is straightforward: a lazy seq node
-is just another object; the GC traces the rest pointer; an unrealised
-thunk holds its captured locals through a normal closure.
-
-The one subtlety is **chunked seqs**. JVM Clojure realises 32 elements at
-a time for performance. v0.1 will skip chunking — element-at-a-time — and
-add it in v0.2 if benchmarks demand it. (The whole point of "idiom over
-performance" is that idiom-visible behaviour stays the same; chunking is
-invisible until you watch closely.)
+- A lazy seq is a protoCore **lazy object** (`ProtoObject::newLazyChild`,
+  protoCore 3.1.0): an immutable object whose lazy slot holds the thunk and,
+  once realised by compare-and-set, the seq it produced. A cons and a chunk
+  are lazy objects published at birth (`src/runtime/SeqTypes.h`,
+  `src/runtime/LazySeq.h`).
+- `map`, `filter`, `remove`, `take`, `take-while`, `drop`, `drop-while`,
+  `iterate`, `repeat`, `repeatedly`, `cycle`, `range`, `concat`, `mapcat`,
+  `partition`, `partition-all`, `interleave`, `distinct`, `for`, `line-seq`
+  and `re-seq` are lazy, as in Clojure, and chunked where Clojure chunks
+  (the seq of a vector, a finite range, and what map, filter and for make of
+  those).
+- Every sequence function reads through one protocol (`seqOf`, `seqFirst`,
+  `seqMore`) and walks with a cursor that holds only its position
+  (`SeqWalk`), so a walk over a seq nobody else holds keeps nothing it has
+  passed; locals clearing and argument-slot clearing make "not holding the
+  head" work as Clojure programmers expect (M30).
 
 ## 8. Protocols and multimethods (planned)
 
@@ -860,8 +864,11 @@ a form no Clojure programmer recognises. Stage 5 added the qualification of
 symbols and the auto-gensyms (M17, M18). `~`, `~@` and `@` read as
 `clojure.core/unquote`, `clojure.core/unquote-splicing` and
 `clojure.core/deref`, as in Clojure. `seq` and `concat`, which the expansion
-calls, were planned for stage 5 and were added here; both answer lists,
-eagerly (there are no lazy seqs). `apply` now spreads a vector or `nil`,
+calls, were planned for stage 5 and were added here; both answered lists,
+eagerly. Since stage 11 (M29) `seq` answers Clojure's seq of its argument and
+`concat` is lazy when an argument is a lazy seq, and builds the list at once
+when every argument is an already realised collection, so the expansions
+above cost what they did. `apply` now spreads a vector or `nil`,
 which a vector template needs (`` `[] `` is `(apply vector (seq (concat)))`).
 
 **M7. `clojure.core/x` names the built-in `x`** (*agent, pending review*).
@@ -1187,8 +1194,8 @@ match 5,000,000 bytes on an 8 MiB stack with the same results as the
 backtracking one except the captures of empty iterations (`(a*)*b`), and a
 pattern with back-references (or any pattern on another standard library)
 is refused with `StackOverflowError` before a match that could exhaust the
-stack. `re-seq` is eager until stage 11. The differences against Java are
-D45.
+stack. Since stage 11 `re-seq` is lazy (M29). The differences against Java
+are D45.
 
 **M26. `clojure.string/x` and `clojure.set/x` name the built-ins** (*agent,
 pending review*). Without namespaces (D28) the string and set functions are
@@ -1209,13 +1216,16 @@ clojure.core's `doseq` does without its chunked-seq path. `for` expands
 into one `(clojure.core/__for-step coll (fn [binding] ...))` per binding;
 the innermost body is `(list expr)`, `:when` false is `()` and `:while`
 false is the marker `__for-stop`, which makes `__for-step` stop iterating
-that binding. `__for-step` is today an eager walk that concatenates the
-inner results into a list (D46), so stage 11 changes only that function
-into a lazy walk to make `for` lazy; the expansion stays. Alternatives: (a)
+that binding. `__for-step` was an eager walk that concatenated the inner
+results into a list (D46); stage 11 made it a lazy walk (a C++ step,
+`LazySeq.cpp`), and the expansion changed in one detail: the innermost
+binding passes a third argument, `true`, which lets `__for-step` walk a
+chunked collection a chunk at a time, as Clojure's `for` does (M29). Alternatives: (a)
 Clojure's own `for`, built on `lazy-seq` and chunked seqs, not possible
 before stage 11; (b) `for` as a `doseq` that conjoins onto an accumulator,
 rejected because it would have to be rewritten for laziness. A finite,
-eager `range` (in `core.clj`) came with it, since `for` without `range` is
+eager `range` (in `core.clj`, replaced in stage 11 by the lazy primitive)
+came with it, since `for` without `range` is
 not how Clojure programmers write it; `(range)` with no end is an error
 until stage 11. `format` and `printf` are C++ (`formatString` in
 `Primitives.cpp`), implementing the conversions of Java's `Formatter` a
@@ -1224,6 +1234,113 @@ rounds an exact tie to even), `%s` rendering a value as `str` does and nil
 as `null`, as Clojure's format does; the differences are D47. `(apply f x y
 coll)` now compiles as `(apply f (list* x y coll))`.
 
+
+**M28. A lazy seq is a protoCore lazy object, a new protoCore type**
+(*agent, pending review*; the protoCore type itself needs the maintainer's
+review: protoCore branch `feature/lazy-object`, 3.1.0). A lazy seq must
+cache its realisation and be shared safely by threads (futures can read one
+seq), with compare-and-set and no mutex. The first build made it a protoCore
+**mutable** object whose one attribute moved from the thunk to the realised
+seq by `setAttributeIfEqual`, as atoms do. It was correct and leaked: every
+state in protoCore's global mutable table is a collector root until the
+object's handle has been swept, so in a realised chain -- each lazy seq's
+state is a cons pointing at the next lazy seq -- the next handle is marked
+through the dead entry and survives, and the chain is freed one link per
+cycle. Measured: `(count (range 3000000))` under a 1,000,000-cell ceiling
+did not finish in 60 s (429 cycles, the live set climbing to 975,000
+cells), and 300,000 plain atoms each pointing at the next took 278 cycles
+and 55 s on the stage-6 binary too: the property predates the lazy seqs and
+affects every runtime's linked mutable structures (protoCore
+`docs/GLOBAL_MUTABLE_TABLE.md`, Limitations, now records it). Following the
+platform rule (extend protoCore by a new type, do not change an existing
+model), protoCore 3.1.0 adds **lazy objects**: `newLazyChild(ctx, producer)`
+makes an immutable object cell with a write-once slot (`claimLazy`,
+`unclaimLazy`, `publishLazy`, `getLazyValue`, `getLazyProducer`), traced
+only through the cell like any field, so an unreachable chain is freed in
+the cycle that finds it unreachable; the producer stops being traced from
+the cycle after publication, so what the thunk captured is released. It
+needs no pointer tag (the cell derives from the object cell) and keeps the
+ABI (SOVERSION 4). Measured after the change: the same `count` takes 0.8 s
+with a last live set of 6,884 cells.
+Layouts (`src/runtime/LazySeq.cpp`): a lazy seq is a lazy child of the
+lazy-seq prototype whose producer is the thunk; a cons and a chunk are lazy
+objects of their own prototypes published at birth with a small list of
+their fields (`[first more]`, `[items off end more]`); a native step (the
+thunk of a lazy `map`, `filter`, `range`, ...) is a list `[kind operands]`.
+A cons costs four cells and leaves no garbage. Realisation: a thunk that runs
+Clojure code is claimed first, so it runs once whatever the number of
+readers (a reader that finds the seq claimed waits, parked for the
+collector); a native step that runs none is computed without claiming and
+the first publication wins. A body that raises leaves the seq unrealised, so
+the next read runs it again, as in Clojure. A seq read while its own body
+computes it raises `StackOverflowError` at once (JVM Clojure recurses until
+the stack overflows). Alternatives: (a) the mutable object, rejected for the
+leak above; (b) changing protoCore's collector to treat the mutable table as
+ephemerons (an entry's state traced only when its handle is reachable),
+which would also fix other runtimes' linked mutable structures but changes
+an existing model and its proof; recorded in protoCore's docs for the
+maintainer; (c) one mutable cache per sequence (a buffer of realised
+elements), rejected because it keeps every element of a stream; (d)
+recomputing pure steps instead of caching them, rejected because user code
+(`map`'s f) must run once.
+
+**M29. What is lazy, and how it is chunked** (*agent, pending review*).
+The lazy functions are C++ steps (`LazySeq.cpp`), not `core.clj` code: a
+step realises in one native call what Clojure's `lazy-seq` body does, without
+a Clojure frame per element. As in Clojure: `map` (one or several
+collections), `filter`, `remove`, `take`, `take-while`, `drop`,
+`drop-while`, `iterate`, `repeat`, `repeatedly`, `cycle`, `range`, `concat`,
+`mapcat`, `partition`, `partition-all`, `interleave`, `distinct` and `for`
+answer lazy seqs; `lazy-seq` and `lazy-cat` are macros in `core.clj`;
+`line-seq` and `re-seq` read their first line or match at once and the rest
+as the seq is read, as Clojure's do; `doall`, `dorun` (both with an optional
+count) and `run!` walk; `realized?` tells a lazy seq's state. Chunking
+follows Clojure: the seq of a vector and a finite `range` are chunked seqs
+(`chunked-seq?`), and `map`, `filter` and the innermost binding of `for`
+realise 32 elements of a chunked seq at a time, so `(first (map f (range
+100)))` calls f 32 times, as in Clojure, and once over a list. `(range)` with
+no end counts one at a time, as Clojure's `(iterate inc' 0)`. `concat` keeps
+the chunks of what it concatenates; when every argument is an already
+realised collection (lists, vectors, maps, strings), `concat` builds the
+list at once, since nothing could observe the difference and syntax-quote
+calls it on lists. `seq` of a vector answers the vector's chunked seq (it
+answered the vector's list before), and so do `rest` and `next` of a vector:
+`(list? (rest [1 2]))` is false, as in Clojure. A form that is a seq object
+(what a macro builds with `map`, `cons` or a lazy `concat`) is compiled as
+the list of its elements, as Clojure compiles any ISeq. Differences: D49.
+
+**M30. Not holding the head: locals clearing and released arguments**
+(*agent, pending review*). JVM Clojure lets a walk drop the head of a seq
+because its compiler clears a local at its last use and the JVM drops
+arguments it no longer needs. protoClojure does three things, measured by
+`cli/lazy-head-retention` and `cli/lazy-grep-under-heap-limit`:
+(a) **locals clearing** (`clearLastReads`, `src/compiler/Compiler.cpp`):
+after a fn body is compiled, a local read by exactly one `PUSH_LOCAL`, where
+that read cannot run twice on the same binding (it is outside every loop
+the binding is not rebound in), has the read turned into the new opcode
+`PUSH_LOCAL_CLEAR`, which empties the slot; fixed parameters and `let` /
+`loop` locals qualify, rest, `:keys` and `:as` parameters, closure
+captures and catch slots never do; (b) the VM clears an argument's stack
+slot once a call has taken it: a fn's arguments as they are copied into the
+callee's frame, a primitive's when it returns; (c) the walking primitives
+(`dorun`, `count`, `reduce`, `last`, `run!`) clear their sequence argument
+once their cursor holds it (`releaseArg`, `LazySeq.h`). Together:
+`(let [s (line-seq rdr)] (doseq [l s] ...))`, `(defn walk [s] (dorun s))`
+and `(count (filter p (line-seq rdr)))` run in constant memory, and a local
+read twice after the walk holds the head, as in Clojure. The cost on calls:
+`fib` executes 0.5 % fewer instructions than before (benchmarks/RESULTS.md).
+Alternatives: (i) Clojure's full analysis (clear on the last use along each
+path, both branches of an `if` included), rejected for now as a larger
+compiler change; the conservative rule leaves a local read in both branches
+of an `if` uncleared (D50); (ii) no clearing, rejected: the brief's
+streaming test needs it.
+
+**M31. The REPL echoes a definition as its var** (*agent, pending review*).
+`(def x ...)`, `(defn f ...)` and `(defmacro m ...)` at the REPL print
+`#'user/x`, as JVM Clojure's REPL does, instead of the value. With lazy seqs
+the old echo printed the value, which realised it (and never finished for
+`(def nat (iterate inc 0))`). `*1` still holds the value, there being no
+vars (D28, D51).
 ## 11. The standard library
 
 Two phases:

@@ -28,11 +28,13 @@ under a `Dnn` id.
 >   `clojure.core` macros (`when-let`, `if-let`, the threading macros,
 >   `doto`, `doseq`, `dotimes`, `case`, `condp`, ...) from `core.clj`, with
 >   no `letfn`; destructuring in `let`, `loop`, parameter vectors and the
->   binding macros; `for` and `doseq` with `:let` / `:when` / `:while`
->   (`for` and `range` are eager until lazy sequences land); `format` and
+>   binding macros; `for` and `doseq` with `:let` / `:when` / `:while`;
+>   lazy sequences, chunked as in Clojure (`lazy-seq`, lazy `map`,
+>   `filter`, `take`, `range`, `iterate`, `concat`, `for`, `line-seq`,
+>   ..., `doall`, `dorun`); `format` and
 >   `printf`; sets `#{...}` with `clojure.set`'s `union`,
 >   `intersection` and `difference` as globals. Other reader macros, most
->   collection functions, lazy sequences, the higher-order combinators,
+>   collection functions, the higher-order combinators,
 >   namespaces, vars and `binding`, volatiles and delays are
 >   not implemented yet. Exceptions are implemented: `try` / `catch` /
 >   `finally`, `throw`, `ex-info`, `ex-data`, `ex-message`, `ex-cause`
@@ -64,8 +66,12 @@ In the v0.1 design, these match Clojure-JVM:
 - The `=` semantics. Structural value equality on collections, numeric
   equality across number types via `==`, identity via `identical?`.
 - Lazy sequences. `map`, `filter`, `take`, `range`, `iterate`,
-  `repeat`, `cycle`, `partition`, `concat`, `mapcat` are all lazy.
-  (See §3.4 for one performance caveat.)
+  `repeat`, `cycle`, `partition`, `concat`, `mapcat`, `for`, `line-seq`
+  and `re-seq` are all lazy, cached once realised, and chunked where
+  Clojure chunks (a vector's seq and a finite `range`: 32 elements at a
+  time). A walk that does not hold the head runs in constant memory; a
+  local read for the last time is cleared, as Clojure's compiler does,
+  though more conservatively (D50).
 - Higher-order vocabulary. `comp`, `partial`, `juxt`, `complement`,
   `every-pred`, `some-fn`, `apply`, `reduce`.
 - Threading macros. `->`, `->>`, `as->`, `some->`, `some->>`.
@@ -173,10 +179,12 @@ HTTP client, a Ring server and protoClojure's own sockets (chapter 14,
 D28-D33). For JDBC, use a Python-or-JS UMD substitute (`py/sqlite3`,
 `js/better-sqlite3`).
 
-### 3.2.7 `clojure.spec`, BigDecimal `M`, transducers, chunked seqs
+### 3.2.7 `clojure.spec`, BigDecimal `M`, transducers, the chunk API
 
 All scheduled (`STATUS.md`) but not in v0.1. The 2-arg seq forms of
-`map`/`filter`/etc. work; the 1-arg transducer arity raises.
+`map`/`filter`/etc. work; the 1-arg transducer arity raises. Chunked seqs
+exist and behave as in Clojure, but only `chunked-seq?` of the chunk API is
+provided (D49).
 
 ## 3.3 What is different but compatible
 

@@ -6,7 +6,7 @@
 (defn raw-lines []
   (let [c (tcp-connect "127.0.0.1" (server-port s) {:timeout 5000})]
     (socket-write c "GET / HTTP/1.1\r\nhost: x\r\n\r\n")
-    (let [lines (line-seq c)] (socket-close c) lines)))
+    (let [lines (doall (line-seq c))] (socket-close c) lines)))
 (def lines (raw-lines))
 (stop-server s)
 (def cookies (filter (fn [l] (starts-with? (lower-case l) "set-cookie")) lines))

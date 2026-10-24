@@ -18,12 +18,12 @@ program() {
     printf '(defn rounds [n] (loop [i 0 acc 0] (if (< i n) (recur (+ i 1) (+ acc (grid 12))) acc)))\n'
     printf '(def total (atom 0))\n'
     printf '(doseq [i (range 20000) :let [s (format "%%05d|%%.2f" i 1.5)] :when (even? i) [a b] [(split s #"\\|")]] (swap! total + (count a) (count b)))\n'
-    printf '(println (rounds 1500) @total)\n'
+    printf '(println (rounds 4000) @total)\n'
 }
 
 # grid 12: the pairs y < x of 0..11 = 66 per round; doseq: 10000 even i,
 # each "00000" and "1.50" = 9 characters.
-expected="99000 90000"
+expected="264000 90000"
 check() {
     local mode="$1" out="$2" rc="$3"
     if [[ $rc -ne 0 ]]; then

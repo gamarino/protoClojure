@@ -1,4 +1,5 @@
 #include "Compiler.h"
+#include "runtime/LazySeq.h"
 
 #include "runtime/Exceptions.h"
 #include "runtime/Macros.h"
@@ -392,6 +393,59 @@ const proto::ProtoObject* Compiler::destructureBindings(proto::ProtoContext* ctx
     return newVector(ctx, l);
 }
 
+// Locals clearing (docs/DESIGN.md §10.2, M30), Clojure's compiler's
+// "clear on last use" in its simplest safe form: a local read by exactly one
+// PUSH_LOCAL in its function body, where that read cannot run twice on the
+// same binding, has the read turned into PUSH_LOCAL_CLEAR, which empties the
+// slot. So `(let [lines (line-seq rdr)] (doseq [l lines] ...))` and
+// `(defn walk [s] (dorun s))` do not hold the head of the seq they walk.
+//
+// The read runs again on the same binding only inside a loop (a JUMP_BACK
+// range) that does not also store the slot: a `loop` or a fn-level `recur`
+// rebinds its own locals, and a `let` inside the loop binds afresh on every
+// iteration, but a local bound outside the loop keeps its value across
+// iterations. Eligible slots are the fixed parameters (bound at the call,
+// rebound by `recur`) and the `let` / `loop` locals (stored by STORE_LOCAL);
+// never the rest, `:keys` and `:as` parameters [fixedArity, paramEnd), the
+// closure captures, nor a catch slot.
+static void clearLastReads(BytecodeModule& mod, int fixedArity, int paramEnd) {
+    const std::vector<Instr>& code = mod.code();
+    struct Use { int reads = 0; std::size_t readAt = 0; std::vector<std::size_t> stores; bool banned = false; };
+    std::unordered_map<std::uint32_t, Use> uses;
+    std::vector<std::pair<std::size_t, std::size_t>> loops;
+    for (std::size_t i = 0; i < code.size(); ++i) {
+        const Op op = static_cast<Op>(code[i] & 0xFF);
+        const std::uint32_t operand = code[i] >> kOperandShift;
+        switch (op) {
+            case Op::PUSH_LOCAL: { Use& u = uses[operand]; ++u.reads; u.readAt = i; break; }
+            case Op::STORE_LOCAL: uses[operand].stores.push_back(i); break;
+            case Op::STORE_CAUGHT: case Op::RETHROW: uses[operand].banned = true; break;
+            case Op::JUMP_BACK:
+                if (operand <= i + 1) loops.emplace_back(i + 1 - operand, i);
+                break;
+            case Op::CALL_MEMBER:
+                ++i;  // its data word is a NOP carrying a constant index
+                break;
+            default: break;
+        }
+    }
+    for (const auto& c : mod.captureSpecs()) uses[static_cast<std::uint32_t>(c.localSlot)].banned = true;
+    for (auto& [slot, u] : uses) {
+        if (u.banned || u.reads != 1) continue;
+        const int sl = static_cast<int>(slot);
+        if (sl >= fixedArity && sl < paramEnd) continue;
+        if (sl >= paramEnd && u.stores.empty()) continue;
+        bool once = true;
+        for (const auto& [from, to] : loops) {
+            if (u.readAt < from || u.readAt > to) continue;
+            bool rebound = false;
+            for (std::size_t st : u.stores) rebound = rebound || (st >= from && st <= to);
+            if (!rebound) { once = false; break; }
+        }
+        if (once) mod.patchOp(u.readAt, Op::PUSH_LOCAL_CLEAR);
+    }
+}
+
 std::unique_ptr<BytecodeModule>
 Compiler::compileFnBody(proto::ProtoContext* ctx,
                         const proto::ProtoList* fnForm,
@@ -682,6 +736,9 @@ Compiler::compileArity(proto::ProtoContext* ctx,
             }
         }
     }
+    // Slots [fixedArity, paramEnd) are the rest, `:keys` and `:as`
+    // parameters, which a `recur` does not rebind (locals clearing).
+    const int paramEnd = scopes_.back().nextSlot;
 
     // Session 14 — `:or` default prologue. For each kw key with a
     // declared default, emit:
@@ -746,6 +803,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
         body->addCapture(c.parentSlot, c.localSlot);
     }
     scopes_.pop_back();
+    clearLastReads(*body, static_cast<int>(fixedArity), paramEnd);
     return body;
 }
 
@@ -1081,6 +1139,12 @@ const proto::ProtoObject* Compiler::macroexpandTopLevel(proto::ProtoContext* ctx
     // Recursive, as Clojure's Compiler.macroexpand is: a macro that always
     // expands into another call of itself ends in StackOverflowError.
     checkNativeStack(StackUse::Source);
+    // A seq object is a list form (see compileForm); the list is anchored in
+    // `ctx`, as the expansions are.
+    if (isSeqObject(ctx, form)) {
+        const proto::ProtoList* l = seqToList(ctx, form);
+        form = (l ? l : ctx->newList())->asObject(ctx);
+    }
     if (!isList(form)) return form;
     const proto::ProtoList* lst = form->asList(ctx);
     if (lst->getSize(ctx) == 0) return form;
@@ -1198,6 +1262,19 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
     if (form == PROTO_NONE)  { out.emit(Op::PUSH_NIL,   0); return; }
     if (form == PROTO_TRUE)  { out.emit(Op::PUSH_TRUE,  0); return; }
     if (form == PROTO_FALSE) { out.emit(Op::PUSH_FALSE, 0); return; }
+
+    // A lazy seq, a cons or a chunk is a list form, as any ISeq is to
+    // Clojure's compiler: what a macro builds with map, cons or concat over
+    // a lazy seq. It is compiled as the list of its elements, rooted in a
+    // scope of its own.
+    if (isSeqObject(ctx, form)) {
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(1);
+        const proto::ProtoList* lst = seqToList(&scope, form);
+        scope.setAutomaticLocal(0, (lst ? lst : scope.newList())->asObject(&scope));
+        compileForm(&scope, scope.getAutomaticLocal(0), out, markers);
+        return;
+    }
 
     // Integer literal — emit PUSH_CONST <addLong>.
     if (form->isInteger(ctx)) {

@@ -117,6 +117,12 @@ public:
     // std::out_of_range when `at` is not an emitted instruction.
     void patchOperand(std::size_t at, std::size_t operand);
 
+    // Replaces the opcode at `at`, keeping its operand (locals clearing
+    // turns a PUSH_LOCAL into a PUSH_LOCAL_CLEAR).
+    void patchOp(std::size_t at, Op op) {
+        code_[at] = (code_[at] & ~static_cast<Instr>(0xFF)) | static_cast<Instr>(op);
+    }
+
     // The position of the next instruction — the "now" point for computing
     // a jump's offset, in instruction words.
     std::size_t pos() const { return code_.size(); }

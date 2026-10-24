@@ -41,6 +41,64 @@ runs the script through each interpreter 3 times and reports the
 minimum wall-clock (cold-start + execution). No JVM warmup phase.
 Result strings are compared across runtimes for correctness.
 
+## Lazy sequences (stage 11) against Part A (`ed3cf5a`), 2026-10-23
+
+Whether making `map`, `filter`, `for`, `range` and `seq` lazy (DESIGN.md
+M28-M30), and the VM's locals and argument clearing, slowed the eager
+workloads. Script, programs and raw output:
+[`reports/2026-10-23-lazy-seqs/`](reports/2026-10-23-lazy-seqs/). Both
+binaries on their own fresh copy of the same `libprotoCore.so.4` (protoCore
+3.1.0, branch `feature/lazy-object`; Part A's binary, built against 3.0.0,
+runs on it unchanged), behind the quiet gate (`QUIET_CORES=4.0`), order
+alternated; every program prints its result and both binaries printed the
+same.
+
+`bench.sh`, best-of-3 per round, the three rounds (ms, start-up included):
+
+| workload | Part A | stage 11 |
+|---|---|---|
+| fib | 334 / 347 / 345 | 345 / 346 / 344 |
+| tak | 37 / 38 / 37 | 37 / 40 / 36 |
+| sum-loop | 66 / 66 / 66 | 65 / 65 / 66 |
+| reduce-list | 32 / 31 / 31 | 30 / 31 / 31 |
+| sum-squares (lazy `map` over a list now) | 27 / 25 / 27 | 27 / 26 / 27 |
+
+Unchanged within the rounds' spread.
+
+Five interleaved rounds of `perf stat` cycles, medians (Mcycles, min-max):
+
+| program | Part A | stage 11 | |
+|---|---|---|---|
+| `macro-loop.clj` (5 M user-fn calls) | 5504 (5425-5561) | 5641 (5552-5677) | **+2.5 %** |
+| `map-loop.clj` (keyword `get` / `assoc`) | 3691 (3639-3747) | 3805 (3687-4397) | **+3.1 %** |
+| `doseq` over a 300,000-element vector | 3737 (3586-4003) | 3376 (3312-3838) | -9.7 % |
+| `loop` / `next` over the same vector | 3144 (3037-3422) | 2843 (2814-2929) | -9.6 % |
+| `reduce` of `map` and `count` of `filter` over it | 4532 (4009-4712) | 2979 (2945-3529) | -34 % |
+| `map` over a 100,000-element list | 1840 (1836-1892) | 1819 (1749-1874) | -1.1 % |
+| nested `for` with `:when`, 90,000 pairs | 1224 (1065-1248) | 406 (394-422) | -67 % |
+
+The two loops that make no sequence at all are 2.5-3 % slower, with
+overlapping ranges for the map loop. Not explained further: the VM now
+clears each argument slot as a call copies it (one store per argument) and
+has one more opcode in its dispatch switch; on `fib` an A/B build measured
+0.5 % fewer instructions than Part A at equal or higher cycles, the pattern
+of a code-layout change rather than of work added. The sequence idioms are
+faster: chunked `map` / `filter` over vectors and ranges, and a `for` that no
+longer concatenates its inner results into a vector.
+
+Start-up, an empty file, `perf stat -r 20`, two passes: Part A 61.07 M /
+61.07 M cycles (16 ms), stage 11 61.88 M / 62.53 M cycles (16-17 ms): +0.8 M
+cycles, about 0.2 ms; `core.clj` lost the eager `range` and `__for-step`
+and gained `lazy-seq` and `lazy-cat`.
+
+A grep over the standard input (`doseq` over `(line-seq *in*)` with
+`re-find`, 300,000 lines of 60 bytes): 3.0 s, against 2.2 s for the same
+match in a `read-line` loop; the difference, about 3 µs per line, is the lazy
+seq and `doseq`'s `seq` / `first` / `next` calls, and the rest is mostly
+`std::regex` and string conversion (perf). Under a 1,000,000-cell ceiling a
+3,000,000-line (182 MB) stream ran in 74 MB of resident memory with a last
+live set of 6,719 cells.
+
 ## Keyword `get` / `assoc`: the stage-10 regression fixed, 2026-10-23
 
 Stage 10's `map-loop.clj` ran 7 % slower than stage 6 because the map key

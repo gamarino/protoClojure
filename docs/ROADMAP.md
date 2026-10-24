@@ -97,8 +97,9 @@ follow-ups below.
 - TCP, UDP and TLS sockets under protoClojure's own names (D30).
 - Follow-ups: move the functions into `clojure.java.io`,
   `clojure.java.shell` and `babashka.http-client` once namespaces exist
-  (D28); a lazy `line-seq` once lazy seqs exist (D29); a connection limit
-  for the HTTP server; `*in*` / `*out*` with `binding`; byte streams.
+  (D28); a connection limit for the HTTP server; `*out*` and rebinding
+  `*in*` with `binding`; byte streams. (A lazy `line-seq` and `*in*` came
+  with stage 11 of the macros branch, closing D29.)
 
 ### Local REPL and packaging
 
@@ -134,9 +135,10 @@ Part B of the macros brief, the scripting vocabulary, on the same branch:
    binding macros (DESIGN.md §10.2, M23).
 8. [x] Sets and `clojure.set` (DESIGN.md §10.2, M24).
 9. [x] Regular expressions (DESIGN.md §10.2, M25, M26; D45).
-10. [x] `format` / `printf`, `doseq` modifiers, `for` (eager until stage
-    11), a finite `range` (DESIGN.md §10.2, M27; D46, D47).
-11. [ ] Lazy sequences.
+10. [x] `format` / `printf`, `doseq` modifiers, `for`, `range`
+    (DESIGN.md §10.2, M27; D47).
+11. [x] Lazy sequences (DESIGN.md §7, §10.2, M28-M31; D48-D51), on
+    protoCore 3.1.0's lazy objects (protoCore branch `feature/lazy-object`).
 12. [ ] JSON and EDN.
 13. [ ] Showcase against Babashka.
 
@@ -157,7 +159,7 @@ Part B of the macros brief, the scripting vocabulary, on the same branch:
 - `update`, `merge`, `select-keys`, `get-in`, `assoc-in`,
   `update-in`, `merge-with`, `zipmap`.
 - Lazy sequences and the sequence library (`range`, `iterate`, `take`,
-  `drop`, ...).
+  `drop`, ...) -- done in the macros branch, stage 11.
 - `format` (printf-style via the host) and characters as 1-codepoint
   strings (D3).
 

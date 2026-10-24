@@ -34,13 +34,13 @@ Type a form, press enter, see the result:
 user=> (+ 1 2)
 3
 user=> (defn square [n] (* n n))
-#<fn>
+#'user/square
 user=> (square 7)
 49
 user=> (map square [1 2 3 4 5])
 (1 4 9 16 25)
 user=> (def acc (atom 0))
-#<atom 0>
+#'user/acc
 user=> (swap! acc inc)
 1
 user=> @(future (* 100 100))

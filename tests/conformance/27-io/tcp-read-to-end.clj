@@ -8,7 +8,7 @@
       (socket-close c))))
 (defn client []
   (let [s (tcp-connect "127.0.0.1" (server-port srv))
-        lines (line-seq s)
+        lines (doall (line-seq s))
         after (socket-read-line s)]
     (socket-close s)
     [lines after]))

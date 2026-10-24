@@ -1,6 +1,7 @@
 #include "Primitives.h"
 #include "Exceptions.h"
 #include "IO.h"
+#include "LazySeq.h"
 #include "ExecutionEngine.h"
 #include "ActorScheduler.h"
 #include "ListBuilder.h"
@@ -222,6 +223,21 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
         out += ')';
         return;
     }
+    if (isSeqObject(ctx, v)) {
+        // A lazy seq, a cons or a chunk prints as a list, realised as it is
+        // printed (an endless one never finishes, as in Clojure without
+        // *print-length*). The walk's position is the only thing it holds.
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(1);
+        SeqWalk w(&scope, 0, &scope, v);
+        out += '(';
+        for (bool firstEl = true; !w.done(); w.advance(&scope), firstEl = false) {
+            if (!firstEl) out += ' ';
+            printTo(&scope, out, w.first(&scope), readable);
+        }
+        out += ')';
+        return;
+    }
     if (isVector(v)) {
         const proto::ProtoList* items = vectorItems(ctx, v);
         out += '[';
@@ -386,6 +402,18 @@ void appendStr(proto::ProtoContext* ctx, std::string& out,
     if (appendIOFilePath(ctx, out, v)) return;
     // A pattern renders as its source, as Pattern.toString does.
     if (isPattern(ctx, v)) { out += patternSource(ctx, v); return; }
+    // A lazy seq renders as JVM Clojure's LazySeq.toString, the class name
+    // and the hash of its elements (which realises it): `(str (map inc [1]))`
+    // is "clojure.lang.LazySeq@..." there too. The hash digits differ from
+    // the JVM's (D48).
+    if (seqObjectKind(ctx, v) == SeqObject::Lazy) {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "%x",
+                      static_cast<unsigned>(keyHash(ctx, v) & 0xFFFFFFFFu));
+        out += "clojure.lang.LazySeq@";
+        out += buf;
+        return;
+    }
     printTo(ctx, out, v, /*readable=*/true);
 }
 
@@ -678,6 +706,14 @@ const proto::ProtoList* asSeqOrNull(proto::ProtoContext* ctx,
     if (!v || v == PROTO_NONE) return nullptr;
     if (isListTag(v)) return v->asList(ctx);
     if (isVector(v)) return vectorItems(ctx, v);
+    // A lazy seq, a cons or a chunk: realised to its end (LazySeq.h). The
+    // functions that need only a prefix (first, next, nth, take, ...) and
+    // those that walk without keeping the elements (count, reduce, dorun)
+    // read it through the seq protocol instead.
+    if (isSeqObject(ctx, v)) {
+        const proto::ProtoList* lst = seqToList(ctx, v);
+        return lst ? lst : ctx->newList();
+    }
     ListBuilder out(ctx);
     if (!pushSeqElements(out, v))
         throwClassed(ctx, "IllegalArgumentException",
@@ -778,6 +814,23 @@ const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
     }
 
     const bool vector = isVector(coll);
+    if (isSeqObject(ctx, coll)) {
+        // A lazy seq, a cons or a chunk: walked to the index, O(i).
+        if (idx < 0) {
+            if (notFound) return notFound;
+            throwNthOutOfBounds(ctx, args->getAt(ctx, 1), 0);
+        }
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(1);
+        SeqWalk w(&scope, 0, &scope, coll);
+        long long i = 0;
+        for (; i < idx && !w.done(); ++i) w.advance(&scope);
+        if (w.done()) {
+            if (notFound) return notFound;
+            throwNthOutOfBounds(ctx, args->getAt(ctx, 1), i);
+        }
+        return w.first(&scope);
+    }
     if (!vector && !isListTag(coll)) {
         throwClassed(ctx, "UnsupportedOperationException",
             std::string("nth not supported on ") +
@@ -994,9 +1047,13 @@ const proto::ProtoObject* prim_first(proto::ProtoContext* ctx,
                                      const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throwError(ctx, "first: expects 1 arg");
-    const proto::ProtoList* lst = asSeqOrNull(ctx, args->getAt(ctx, 0));
-    if (!lst || lst->getSize(ctx) == 0) return PROTO_NONE;
-    return lst->getFirst(ctx);
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (isListTag(v) || isVector(v)) {
+        const proto::ProtoList* lst = isVector(v) ? vectorItems(ctx, v) : v->asList(ctx);
+        return lst->getSize(ctx) == 0 ? PROTO_NONE : lst->getFirst(ctx);
+    }
+    const proto::ProtoObject* s = seqOf(ctx, v);
+    return s == PROTO_NONE ? PROTO_NONE : seqFirst(ctx, s);
 }
 
 const proto::ProtoObject* prim_rest(proto::ProtoContext* ctx,
@@ -1006,11 +1063,11 @@ const proto::ProtoObject* prim_rest(proto::ProtoContext* ctx,
                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throwError(ctx, "rest: expects 1 arg");
-    const proto::ProtoList* lst = asSeqOrNull(ctx, args->getAt(ctx, 0));
-    if (!lst || lst->getSize(ctx) == 0) {
-        return ctx->newList()->asObject(ctx);
-    }
-    return lst->removeFirst(ctx)->asObject(ctx);
+    // Clojure's rest: what follows the first element, `()` when nothing
+    // does (seqMore); a vector's is a chunked seq, as Clojure's ChunkedSeq.
+    const proto::ProtoObject* s = seqOf(ctx, args->getAt(ctx, 0));
+    if (s == PROTO_NONE) return ctx->newList()->asObject(ctx);
+    return seqMore(ctx, s);
 }
 
 const proto::ProtoObject* prim_cons(proto::ProtoContext* ctx,
@@ -1022,6 +1079,10 @@ const proto::ProtoObject* prim_cons(proto::ProtoContext* ctx,
         throwError(ctx, "cons: expects (cons x coll)");
     const proto::ProtoObject* x    = args->getAt(ctx, 0);
     const proto::ProtoObject* coll = args->getAt(ctx, 1);
+    // Onto a lazy seq, a cons or a chunk: a cons cell, which realises
+    // nothing, as in Clojure. Onto a list (or any other collection, seq'd
+    // into one): the list one longer.
+    if (isSeqObject(ctx, coll)) return newCons(ctx, x, coll);
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
     if (!lst) lst = ctx->newList();
     return lst->appendFirst(ctx, x)->asObject(ctx);
@@ -1052,6 +1113,17 @@ const proto::ProtoObject* prim_count(proto::ProtoContext* ctx,
     // A map: its number of entries; a set: its number of elements (O(n), D25).
     if (isMap(v)) return ctx->fromLong(static_cast<long long>(mapCount(ctx, v)));
     if (isSet(ctx, v)) return ctx->fromLong(static_cast<long long>(setCount(ctx, v)));
+    if (isSeqObject(ctx, v)) {
+        // Walked, not built: the count of a lazy seq nobody else holds
+        // keeps none of its elements (releaseArg, SeqWalk).
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(1);
+        SeqWalk w(&scope, 0, &scope, v);
+        releaseArg(args, 0);
+        long long n = 0;
+        for (; !w.done(); w.advance(&scope)) ++n;
+        return ctx->fromLong(n);
+    }
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     return ctx->fromLong(lst ? static_cast<long long>(lst->getSize(ctx)) : 0);
 }
@@ -1070,6 +1142,7 @@ const proto::ProtoObject* prim_empty_p(proto::ProtoContext* ctx,
     }
     if (isMap(v)) return mapIsEmpty(ctx, v) ? PROTO_TRUE : PROTO_FALSE;
     if (isSet(ctx, v)) return setIsEmpty(ctx, v) ? PROTO_TRUE : PROTO_FALSE;
+    if (isSeqObject(ctx, v)) return seqOf(ctx, v) == PROTO_NONE ? PROTO_TRUE : PROTO_FALSE;
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     return (!lst || lst->getSize(ctx) == 0) ? PROTO_TRUE : PROTO_FALSE;
 }
@@ -1134,6 +1207,16 @@ const proto::ProtoObject* prim_reverse(proto::ProtoContext* ctx,
 bool pushSeqElements(ListBuilder& out, const proto::ProtoObject* v) {
     proto::ProtoContext* c = out.context();
     if (!v || v == PROTO_NONE) return true;
+    if (isSeqObject(c, v)) {
+        // Realised to its end in contexts of its own (seqToList), then
+        // pushed; the list stays anchored in the builder's context.
+        if (const proto::ProtoList* lst = seqToList(c, v)) {
+            const proto::proto_ulong n = lst->getSize(c);
+            for (proto::proto_ulong i = 0; i < n; ++i)
+                out.push(lst->getAt(out.context(), static_cast<int>(i)));
+        }
+        return true;
+    }
     if (isListTag(v) || isVector(v)) {
         const proto::ProtoList* lst = isVector(v) ? vectorItems(c, v) : v->asList(c);
         const proto::proto_ulong n = lst->getSize(c);
@@ -1189,17 +1272,9 @@ const proto::ProtoObject* prim_seq(proto::ProtoContext* ctx,
                                    const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throwError(ctx, "seq: expects 1 arg");
-    const proto::ProtoObject* v = args->getAt(ctx, 0);
-    if (isListTag(v)) return v->asList(ctx)->getSize(ctx) == 0 ? PROTO_NONE : v;
-    if (isVector(v)) {
-        const proto::ProtoList* items = vectorItems(ctx, v);
-        return items->getSize(ctx) == 0 ? PROTO_NONE : items->asObject(ctx);
-    }
-    ListBuilder out(ctx);
-    if (!pushSeqElements(out, v))
-        throwError(ctx, "Don't know how to create ISeq from: " + printedValue(ctx, v));
-    if (out.size() == 0) return PROTO_NONE;
-    return out.finish();
+    // RT.seq (LazySeq.h): a list itself, a vector's chunked seq, a lazy seq's
+    // realised seq, a map's / set's / string's list.
+    return seqOf(ctx, args->getAt(ctx, 0));
 }
 
 // (concat coll ...) — one list of the elements of every argument in order
@@ -1211,6 +1286,22 @@ const proto::ProtoObject* prim_concat(proto::ProtoContext* ctx,
                                       const proto::ProtoArguments* args,
                                       const proto::ProtoKeywordArguments*) {
     const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
+    // With a lazy seq among the arguments, a lazy concatenation (LazySeq.h),
+    // which realises nothing now. When every argument is an already realised
+    // collection there is nothing laziness could defer, so the list is built
+    // at once: the same elements in the same order, and syntax-quote's
+    // expansions, which call concat on lists, stay as cheap as before.
+    for (proto::proto_ulong i = 0; i < n; ++i) {
+        if (isSeqObject(ctx, args->getAt(ctx, static_cast<int>(i)))) {
+            proto::ProtoContext scope(ctx->space, ctx);
+            scope.resizeAutomaticLocals(1);
+            scope.setAutomaticLocal(0, args->asList(&scope)->asObject(&scope));
+            const proto::ProtoObject* r =
+                lazyStep(&scope, StepKind::Concat, PROTO_NONE, scope.getAutomaticLocal(0));
+            scope.returnValue = r;
+            return r;
+        }
+    }
     ListBuilder out(ctx);
     for (proto::proto_ulong i = 0; i < n; ++i) {
         const proto::ProtoObject* v = args->getAt(out.context(), static_cast<int>(i));
@@ -1257,60 +1348,6 @@ const proto::ProtoObject* prim_keyword_p(proto::ProtoContext* ctx,
 
 // Higher-order primitives --------------------------------------
 
-const proto::ProtoObject* prim_map(proto::ProtoContext* ctx,
-                                   const proto::ProtoObject*,
-                                   const proto::ParentLink*,
-                                   const proto::ProtoArguments* args,
-                                   const proto::ProtoKeywordArguments*) {
-    if (!args || args->getSize(ctx) != 2)
-        throwError(ctx,
-            "map: only (map f coll) is supported; multi-collection map is not implemented yet");
-    const proto::ProtoObject* f    = args->getAt(ctx, 0);
-    const proto::ProtoObject* coll = args->getAt(ctx, 1);
-    const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
-    if (!lst) return ctx->newList()->asObject(ctx);
-    const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throwError(ctx, "map: no active VM context");
-    proto::proto_ulong n = lst->getSize(ctx);
-    // The result grows with the input, so it is built in chunks: `invoke` runs
-    // in the builder's context (it pushes frames, and the context stack is
-    // LIFO — see ListBuilder.h).
-    ListBuilder out(ctx);
-    for (proto::proto_ulong i = 0; i < n; ++i) {
-        const proto::ProtoObject* one[1] = {
-            lst->getAt(out.context(), static_cast<int>(i)) };
-        out.push(cc->engine->invoke(out.context(), f, one, 1));
-    }
-    return out.finish();
-}
-
-const proto::ProtoObject* prim_filter(proto::ProtoContext* ctx,
-                                      const proto::ProtoObject*,
-                                      const proto::ParentLink*,
-                                      const proto::ProtoArguments* args,
-                                      const proto::ProtoKeywordArguments*) {
-    if (!args || args->getSize(ctx) != 2)
-        throwError(ctx, "filter: expects (filter pred coll)");
-    const proto::ProtoObject* pred = args->getAt(ctx, 0);
-    const proto::ProtoObject* coll = args->getAt(ctx, 1);
-    const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
-    if (!lst) return ctx->newList()->asObject(ctx);
-    const ActiveCallContext* cc = activeCallContext();
-    if (!cc) throwError(ctx, "filter: no active VM context");
-    proto::proto_ulong n = lst->getSize(ctx);
-    ListBuilder out(ctx);
-    for (proto::proto_ulong i = 0; i < n; ++i) {
-        const proto::ProtoObject* x = lst->getAt(out.context(), static_cast<int>(i));
-        const proto::ProtoObject* one[1] = { x };
-        const proto::ProtoObject* keep =
-            cc->engine->invoke(out.context(), pred, one, 1);
-        if (keep && keep != PROTO_NONE && keep != PROTO_FALSE) {
-            out.push(x);
-        }
-    }
-    return out.finish();
-}
-
 const proto::ProtoObject* prim_reduce(proto::ProtoContext* ctx,
                                       const proto::ProtoObject*,
                                       const proto::ParentLink*,
@@ -1323,6 +1360,37 @@ const proto::ProtoObject* prim_reduce(proto::ProtoContext* ctx,
         throwError(ctx, "reduce: expects (reduce f coll) or (reduce f init coll)");
     const proto::ProtoObject* f = args->getAt(ctx, 0);
     const proto::ProtoObject* coll = args->getAt(ctx, ac == 2 ? 1 : 2);
+    if (isSeqObject(ctx, coll)) {
+        // Walked: the head is released (releaseArg), so reducing a lazy seq
+        // nobody else holds runs in constant memory; the accumulator lives
+        // in a slot and the walk's garbage is handed over every 64 steps.
+        const ActiveCallContext* cc = activeCallContext();
+        if (!cc) throwError(ctx, "reduce: no active VM context");
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(2);
+        SeqWalk w(&scope, 0, &scope, coll);
+        releaseArg(args, ac == 2 ? 1 : 2);
+        if (ac == 3) {
+            scope.setAutomaticLocal(1, args->getAt(ctx, 1));
+        } else {
+            if (w.done()) {
+                const proto::ProtoObject* r = cc->engine->invoke(&scope, f, nullptr, 0);
+                scope.returnValue = r;
+                return r;
+            }
+            scope.setAutomaticLocal(1, w.first(&scope));
+            w.advance(&scope);
+        }
+        unsigned steps = 0;
+        for (; !w.done(); w.advance(&scope)) {
+            const proto::ProtoObject* two[2] = {scope.getAutomaticLocal(1), w.first(&scope)};
+            scope.setAutomaticLocal(1, cc->engine->invoke(&scope, f, two, 2));
+            if (++steps % 64 == 0) scope.safepoint();
+        }
+        const proto::ProtoObject* acc = scope.getAutomaticLocal(1);
+        scope.returnValue = acc;
+        return acc ? acc : PROTO_NONE;
+    }
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
     proto::proto_ulong n = lst ? lst->getSize(ctx) : 0;
     const ActiveCallContext* cc = activeCallContext();
@@ -1652,6 +1720,46 @@ const proto::ProtoObject* prim_re_matches(proto::ProtoContext* ctx,
 
 // (re-seq re s) — every successive match of `re` in `s`, or nil when there is
 // none. Clojure answers a lazy seq; here it is a list, built eagerly.
+// One find of re-seq from byte `pos` of `subject`, as Java's Matcher.find:
+// the next match and where the following search starts (after an empty
+// match, one byte further on, so the walk always advances). The match value
+// and the next lazy seq are consed; nil when nothing more matches.
+const proto::ProtoObject* reSeqFrom(proto::ProtoContext* ctx, const proto::ProtoObject* pattern,
+                                    const proto::ProtoObject* subjectBox, std::size_t pos) {
+    const CompiledPattern* cp = patternOf(ctx, pattern);
+    const auto* subject = static_cast<const std::string*>(
+        subjectBox->asExternalPointer(ctx)->getPointer(ctx));
+    if (pos > subject->size()) return PROTO_NONE;
+    std::smatch m;
+    const auto flags = pos > 0 ? std::regex_constants::match_prev_avail
+                               : std::regex_constants::match_default;
+    if (!std::regex_search(subject->cbegin() + static_cast<std::ptrdiff_t>(pos), subject->cend(),
+                           m, cp->regex, flags))
+        return PROTO_NONE;
+    const std::size_t start = static_cast<std::size_t>(m[0].first - subject->cbegin());
+    const std::size_t end = start + static_cast<std::size_t>(m.length(0));
+    const std::size_t next = m.length(0) == 0 ? end + 1 : end;
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(2);
+    scope.setAutomaticLocal(0, matchValue(&scope, m, cp->groups));
+    scope.setAutomaticLocal(1, lazyStep(&scope, StepKind::ReSeq, pattern, subjectBox,
+                                        scope.fromLong(static_cast<long long>(next))));
+    const proto::ProtoObject* r = newCons(&scope, scope.getAutomaticLocal(0), scope.getAutomaticLocal(1));
+    scope.returnValue = r;
+    return r;
+}
+
+// The ReSeq step (LazySeq.h): o.a = the pattern, o.b = the subject's bytes
+// (an external pointer to a std::string, freed with it), o.c = the position.
+const proto::ProtoObject* stepReSeq(proto::ProtoContext* ctx, const proto::ProtoObject*,
+                                    const StepOperands& o) {
+    return reSeqFrom(ctx, o.a, o.b, static_cast<std::size_t>(o.c->asLong(ctx)));
+}
+
+// (re-seq re s) — the successive matches of `re` in `s` as a lazy seq, each
+// as re-find answers it; nil when nothing matches. The first match is found
+// now and the next ones as the seq is read, as in Clojure. The subject is
+// copied once into a buffer the seq shares.
 const proto::ProtoObject* prim_re_seq(proto::ProtoContext* ctx,
                                       const proto::ProtoObject*,
                                       const proto::ParentLink*,
@@ -1659,13 +1767,16 @@ const proto::ProtoObject* prim_re_seq(proto::ProtoContext* ctx,
                                       const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2) throwError(ctx, "re-seq: expects (re-seq re s)");
     const CompiledPattern* cp = patternArg(ctx, args, 0, "re-seq");
-    const std::string subject = stringArgOf(ctx, args, 1, "re-seq");
+    std::string subject = stringArgOf(ctx, args, 1, "re-seq");
     guardRecursiveMatch(cp, subject.size());
-    ListBuilder out(ctx);
-    for (std::sregex_iterator it(subject.begin(), subject.end(), cp->regex), end; it != end; ++it)
-        out.push(matchValue(out.context(), *it, cp->groups));
-    if (out.size() == 0) return PROTO_NONE;
-    return out.finish();
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    scope.setAutomaticLocal(0, scope.fromExternalPointer(
+        new std::string(std::move(subject)),
+        [](void* p) { delete static_cast<std::string*>(p); }));
+    const proto::ProtoObject* r = reSeqFrom(&scope, args->getAt(&scope, 0), scope.getAutomaticLocal(0), 0);
+    scope.returnValue = r;
+    return r;
 }
 
 // (re-groups m) — the groups of the matcher's last successful find.
@@ -2501,6 +2612,14 @@ const proto::ProtoObject* prim_realized_p(proto::ProtoContext* ctx,
     if (!cc) throwError(ctx, "realized?: no active VM context");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (!v) return PROTO_FALSE;
+    // A lazy seq: its body has run (LazySeq.h); a cons or a chunk is a seq
+    // already computed.
+    switch (seqObjectKind(ctx, v)) {
+        case SeqObject::Lazy:  return lazyIsRealized(ctx, v) ? PROTO_TRUE : PROTO_FALSE;
+        case SeqObject::Cons:
+        case SeqObject::Chunk: return PROTO_TRUE;
+        case SeqObject::None:  break;
+    }
     const proto::ProtoObject* proto = v->getPrototype(ctx);
     if (proto == cc->promiseMarkerProto) {
         bool delivered = false;
@@ -3231,6 +3350,19 @@ const proto::ProtoObject* prim_list_star(proto::ProtoContext* ctx,
                                          const proto::ProtoKeywordArguments*) {
     const proto::proto_ulong n = args ? args->getSize(ctx) : 0;
     if (n == 0) arityError(ctx, args, "list*");
+    if (isSeqObject(ctx, args->getAt(ctx, static_cast<int>(n - 1)))) {
+        // (list* x y lazy): cons cells in front of the lazy tail, which stays
+        // unrealised, as in Clojure.
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(1);
+        scope.setAutomaticLocal(0, args->getAt(&scope, static_cast<int>(n - 1)));
+        for (proto::proto_ulong i = n - 1; i-- > 0;)
+            scope.setAutomaticLocal(0, newCons(&scope, args->getAt(&scope, static_cast<int>(i)),
+                                               scope.getAutomaticLocal(0)));
+        const proto::ProtoObject* r = scope.getAutomaticLocal(0);
+        scope.returnValue = r;
+        return r;
+    }
     ListBuilder out(ctx);
     for (proto::proto_ulong i = 0; i + 1 < n; ++i)
         out.push(args->getAt(out.context(), static_cast<int>(i)));
@@ -3294,8 +3426,8 @@ const proto::ProtoObject* prim_destructure_map(proto::ProtoContext* ctx,
                                                const proto::ProtoArguments* args,
                                                const proto::ProtoKeywordArguments*) {
     const proto::ProtoObject* v = (args && args->getSize(ctx) == 1) ? args->getAt(ctx, 0) : PROTO_NONE;
-    if (!isListTag(v)) return v;
-    const proto::ProtoList* lst = v->asList(ctx);
+    if (!isSeqValue(ctx, v)) return v;
+    const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     const proto::proto_ulong n = lst->getSize(ctx);
     if (n == 1) return lst->getFirst(ctx);
     if (n % 2 != 0)
@@ -3501,7 +3633,15 @@ const proto::ProtoObject* prim_second(proto::ProtoContext* ctx,
                                       const proto::ProtoArguments* args,
                                       const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1) arityError(ctx, args, "second");
-    const proto::ProtoList* lst = asSeqOrNull(ctx, args->getAt(ctx, 0));
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (isSeqObject(ctx, v)) {
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(1);
+        SeqWalk w(&scope, 0, &scope, v);
+        if (!w.done()) w.advance(&scope);
+        return w.done() ? PROTO_NONE : w.first(&scope);
+    }
+    const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     if (!lst || lst->getSize(ctx) < 2) return PROTO_NONE;
     return lst->getAt(ctx, 1);
 }
@@ -3514,9 +3654,9 @@ const proto::ProtoObject* prim_next(proto::ProtoContext* ctx,
                                     const proto::ProtoArguments* args,
                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1) arityError(ctx, args, "next");
-    const proto::ProtoList* lst = asSeqOrNull(ctx, args->getAt(ctx, 0));
-    if (!lst || lst->getSize(ctx) < 2) return PROTO_NONE;
-    return lst->removeFirst(ctx)->asObject(ctx);
+    const proto::ProtoObject* s = seqOf(ctx, args->getAt(ctx, 0));
+    if (s == PROTO_NONE) return PROTO_NONE;
+    return seqNext(ctx, s);
 }
 
 // (last coll) — the last element, or nil.
@@ -3526,20 +3666,33 @@ const proto::ProtoObject* prim_last(proto::ProtoContext* ctx,
                                     const proto::ProtoArguments* args,
                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1) arityError(ctx, args, "last");
-    const proto::ProtoList* lst = asSeqOrNull(ctx, args->getAt(ctx, 0));
+    const proto::ProtoObject* v = args->getAt(ctx, 0);
+    if (isSeqObject(ctx, v)) {
+        // Walked to the end, keeping only the current element.
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(2);
+        SeqWalk w(&scope, 0, &scope, v);
+        releaseArg(args, 0);
+        scope.setAutomaticLocal(1, PROTO_NONE);
+        for (; !w.done(); w.advance(&scope)) scope.setAutomaticLocal(1, w.first(&scope));
+        const proto::ProtoObject* r = scope.getAutomaticLocal(1);
+        scope.returnValue = r;
+        return r;
+    }
+    const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     if (!lst || lst->getSize(ctx) == 0) return PROTO_NONE;
     return lst->getLast(ctx);
 }
 
-// (seq? x) — true for a list, the only seq type protoClojure has (every seq
-// function answers a list).
+// (seq? x) — true for a list, a lazy seq, a cons and a chunk (LazySeq.h):
+// what Clojure's ISeq covers. A vector, a map or a set is not a seq.
 const proto::ProtoObject* prim_seq_p(proto::ProtoContext* ctx,
                                      const proto::ProtoObject*,
                                      const proto::ParentLink*,
                                      const proto::ProtoArguments* args,
                                      const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1) arityError(ctx, args, "seq?");
-    return isListTag(args->getAt(ctx, 0)) ? PROTO_TRUE : PROTO_FALSE;
+    return isSeqValue(ctx, args->getAt(ctx, 0)) ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // (conj coll x ...) — adds each x where the collection grows: at the front
@@ -3587,6 +3740,18 @@ const proto::ProtoObject* prim_conj(proto::ProtoContext* ctx,
         for (proto::proto_ulong i = 1; i < n; ++i)
             items = items->appendLast(ctx, args->getAt(ctx, static_cast<int>(i)));
         return newVector(ctx, items);
+    }
+    if (isSeqObject(ctx, coll)) {
+        // A seq grows at the front, one cons per element, as in Clojure.
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(1);
+        scope.setAutomaticLocal(0, coll);
+        for (proto::proto_ulong i = 1; i < n; ++i)
+            scope.setAutomaticLocal(0, newCons(&scope, args->getAt(&scope, static_cast<int>(i)),
+                                               scope.getAutomaticLocal(0)));
+        const proto::ProtoObject* r = scope.getAutomaticLocal(0);
+        scope.returnValue = r;
+        return r;
     }
     if (coll && coll != PROTO_NONE && !isListTag(coll))
         throwError(ctx, "ClassCastException: conj expects a collection, got " +
@@ -4055,8 +4220,6 @@ constexpr PrimitiveEntry kPrimitives[] = {
     {"concat",  &prim_concat},
     {"symbol?", &prim_symbol_p},
     {"keyword?", &prim_keyword_p},
-    {"map",     &prim_map},
-    {"filter",  &prim_filter},
     {"reduce",  &prim_reduce},
 
     // Exceptions (Exceptions.h).
@@ -4131,6 +4294,7 @@ const char* primitiveName(proto::ProtoMethod fn) {
     for (const PrimitiveEntry& p : kPrimitives) {
         if (p.fn == fn) return p.name;
     }
+    if (const char* lazy = lazySeqPrimitiveName(fn)) return lazy;
     return ioPrimitiveName(reinterpret_cast<const void*>(fn));
 }
 
@@ -4157,6 +4321,33 @@ void replPrintValue(proto::ProtoContext* ctx, std::FILE* out,
 // Declared in Primitives.h.
 const proto::ProtoList* seqItems(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     return asSeqOrNull(ctx, v);
+}
+
+// Declared in LazySeq.h: the list seqOf answers for a map, a set or a string.
+bool collectionItems(proto::ProtoContext* ctx, const proto::ProtoObject* v,
+                     const proto::ProtoList** out) {
+    if (!isMap(v) && !isSet(ctx, v) && !isStringLike(v)) return false;
+    ListBuilder b(ctx);
+    pushSeqElements(b, v);
+    *out = b.size() == 0 ? nullptr : b.finishList();
+    return true;
+}
+
+// Declared in Primitives.h.
+const proto::ProtoObject* numberAdd(proto::ProtoContext* ctx, const proto::ProtoObject* a,
+                                    const proto::ProtoObject* b) {
+    if (!isNumber(ctx, a)) throwNotANumber(ctx, "+", a);
+    if (!isNumber(ctx, b)) throwNotANumber(ctx, "+", b);
+    return a->add(ctx, b);
+}
+
+int numberCompare(proto::ProtoContext* ctx, const proto::ProtoObject* a,
+                  const proto::ProtoObject* b) {
+    if (!isNumber(ctx, a)) throwNotANumber(ctx, "<", a);
+    if (!isNumber(ctx, b)) throwNotANumber(ctx, "<", b);
+    if (a->isInteger(ctx) && b->isInteger(ctx)) return compareIntegers(ctx, a, b);
+    const double x = a->asDouble(ctx), y = b->asDouble(ctx);
+    return x < y ? -1 : (x > y ? 1 : 0);
 }
 
 // Declared in Primitives.h; the exception printer's way back into printTo.
@@ -4215,6 +4406,12 @@ const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v)
     if (proto::ProtoObject::isStringTagFast(v)) return "a string";
     if (isListTag(v))                       return "a list";
     if (isVector(v))                        return "a vector";
+    switch (seqObjectKind(ctx, v)) {
+        case SeqObject::Lazy:  return "a lazy seq";
+        case SeqObject::Cons:
+        case SeqObject::Chunk: return "a seq";
+        case SeqObject::None:  break;
+    }
     if (isMap(v))                           return "a map";
     if (isSet(ctx, v))                      return "a set";
     if (isPattern(ctx, v))                  return "a pattern";
@@ -4357,7 +4554,8 @@ bool valuesEqual(proto::ProtoContext* ctx,
     // functions, ... — is equal only to itself. Decided by the pointer tag:
     // protoCore's isString and compare would first probe the
     // object for a `__data__` wrapper attribute, which the runtime never sets.
-    if (isObjectTag(a) || isObjectTag(b)) return false;
+    if ((isObjectTag(a) && !isSeqObject(ctx, a)) || (isObjectTag(b) && !isSeqObject(ctx, b)))
+        return false;
 
     // Sequential collections (lists and vectors) are equal when they hold
     // equal elements in the same order, whatever their concrete types, and
@@ -4365,6 +4563,21 @@ bool valuesEqual(proto::ProtoContext* ctx,
     // stops at the first mismatch. Since vectors stopped being interned
     // tuples, two equal vectors are no longer one pointer, so this walk is
     // what decides them.
+    // A lazy seq, a cons or a chunk is sequential too: two walks in step,
+    // stopping at the first mismatch (only the elements compared are
+    // realised).
+    if (isSeqObject(ctx, a) || isSeqObject(ctx, b)) {
+        if (!(isSeqValue(ctx, a) || isVector(a)) || !(isSeqValue(ctx, b) || isVector(b)))
+            return false;
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(2);
+        SeqWalk wa(&scope, 0, &scope, a);
+        SeqWalk wb(&scope, 1, &scope, b);
+        for (; !wa.done() && !wb.done(); wa.advance(&scope), wb.advance(&scope)) {
+            if (!valuesEqual(&scope, wa.first(&scope), wb.first(&scope))) return false;
+        }
+        return wa.done() && wb.done();
+    }
     const SequentialView sa = sequentialView(ctx, a);
     const SequentialView sb = sequentialView(ctx, b);
     if (sa || sb) {
@@ -4396,6 +4609,13 @@ void installPrimitives(proto::ProtoContext* ctx,
     // entry point roots.
     globals->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__set_prototype__"),
                           initSetOps(ctx));
+    // The lazy seq, cons and chunk prototypes (SeqTypes.h), likewise, and
+    // the lazy-sequence functions (LazySeq.h).
+    globals->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__seq_prototypes__"),
+                          initSeqTypes(ctx));
+    initLazySeqs(ctx);
+    installLazySeqPrimitives(ctx, globals);
+    registerStep(StepKind::ReSeq, &stepReSeq, /*pure=*/true);
     // Install each primitive: wrap the C function pointer in a callable
     // ProtoObject via fromMethod, store on the globals under the symbol key.
     // setAttribute on a mutable receiver mutates in place.

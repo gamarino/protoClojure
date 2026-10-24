@@ -345,6 +345,7 @@ struct Session {
             reader.setSourceInfo(nullptr);
             if (!form) return ok;  // end of the input
             formScope.setAutomaticLocal(0, form);
+            lastDefined = definedName(&formScope, form);
 
             // Expanded, compiled into a module of its own and run (Eval.h).
             try {
@@ -386,9 +387,40 @@ struct Session {
         else      std::fprintf(stderr, "error: %s\n", what.c_str());
     }
 
-    // Prints a result readably and makes it *1.
+    // The name a top-level `(def name ...)`, `(defn name ...)` or
+    // `(defmacro name ...)` defines, or "" for any other form.
+    std::string definedName(proto::ProtoContext* c, const proto::ProtoObject* form) const {
+        constexpr std::uintptr_t kTagMask = 0x3F, kTagList = 2, kTagListSmall = 25;
+        const std::uintptr_t tag = reinterpret_cast<std::uintptr_t>(form) & kTagMask;
+        if (!form || (tag != kTagList && tag != kTagListSmall)) return "";
+        const proto::ProtoList* l = form->asList(c);
+        if (l->getSize(c) < 2) return "";
+        const proto::ProtoObject* head = l->getAt(c, 0);
+        const proto::ProtoObject* name = l->getAt(c, 1);
+        if (!isNamed(c, named, head) || !isNamed(c, named, name)) return "";
+        std::string h = namedSpelling(c, named, head)->toStdString(c);
+        if (h.rfind("clojure.core/", 0) == 0) h = h.substr(13);
+        if (h != "def" && h != "defn" && h != "defmacro") return "";
+        std::string n = namedSpelling(c, named, name)->toStdString(c);
+        if (n.empty() || n[0] == ':') return "";
+        if (n.rfind("user/", 0) == 0) n = n.substr(5);
+        return n;
+    }
+
+    // The name the form being evaluated defines (definedName), for its echo.
+    std::string lastDefined;
+
+    // Prints a result readably and makes it *1. A definition echoes as the
+    // var JVM Clojure prints, `#'user/name`, not as its value: printing the
+    // value would realise a lazy seq (and never end for an endless one) at
+    // the moment it is defined (docs/DESIGN.md §10.2, M31). *1 still holds
+    // the value, there being no vars (D28).
     void printAndBind(const proto::ProtoObject* r) {
-        replPrintValue(ctx, stdout, r);
+        if (!lastDefined.empty()) {
+            std::printf("#'user/%s", lastDefined.c_str());
+        } else {
+            replPrintValue(ctx, stdout, r);
+        }
         std::fputc('\n', stdout);
         bindStars(r);
     }

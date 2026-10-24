@@ -64,6 +64,15 @@ bool valuesEqual(proto::ProtoContext* ctx,
 // result is unrooted; `v` must be rooted by the caller.
 const proto::ProtoList* seqItems(proto::ProtoContext* ctx, const proto::ProtoObject* v);
 
+// `a + b` for two numbers, as `+` computes it (ClassCastException for a
+// non-number). The result is unrooted.
+const proto::ProtoObject* numberAdd(proto::ProtoContext* ctx, const proto::ProtoObject* a,
+                                    const proto::ProtoObject* b);
+// The sign of `a - b` for two numbers, as `<` compares them (integers
+// exactly, any float as doubles; NaN compares as equal to everything here).
+int numberCompare(proto::ProtoContext* ctx, const proto::ProtoObject* a,
+                  const proto::ProtoObject* b);
+
 // Install all v0.0.x primitives on the supplied globals object. The globals
 // object must be a mutable protoCore object (typically a child of
 // objectPrototype) so setAttribute is in-place. After this call, references

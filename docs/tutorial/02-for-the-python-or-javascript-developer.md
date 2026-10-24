@@ -260,11 +260,11 @@ REPL — :help for commands, :quit or Ctrl-D to exit
 user=> (+ 1 2)
 3
 user=> (def xs [10 20 30])
-[10 20 30]
+#'user/xs
 user=> (map inc xs)
 (11 21 31)
 user=> (defn double [x] (* 2 x))
-#<fn>
+#'user/double
 user=> (double 21)
 42
 ```
