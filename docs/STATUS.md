@@ -4,6 +4,12 @@
 > finished, or dropped. If a feature you expect is not listed as
 > implemented here, it is not implemented.
 
+**Branch `feature/macros` (2026-10-24).** `ctest` registers 854 test
+cases: 673 conformance fixtures, 137 GoogleTest unit tests and module
+checks, and 44 CLI checks; all pass locally on Linux against protoCore 3.1.0
+(branch `feature/lazy-object`, not yet released). CI has not run this branch.
+The paragraph below describes the 0.0.3 tag.
+
 **Current state.** Version 0.0.3 (2026-10-22), a preview tag. The interpreter runs
 scripts and an interactive REPL. `ctest` registers 528 test cases: 408
 conformance fixtures under `tests/conformance/`, 99 GoogleTest unit
@@ -55,7 +61,12 @@ directories that cover them.
 | Actors | `25-actors` | 9 |
 | Exceptions: `try` / `catch` / `finally`, `throw`, `ex-info`, catchable primitive errors | `26-exceptions` | 50 |
 | A module's error types caught by name (protoCore's example geometry module) | `tests/modules` | 1 |
-| Input and output: files, `with-open`, `sh`, the environment, HTTP client and Ring server, TCP / UDP / TLS sockets | `27-io` | 69 |
+| Input and output: files, `with-open`, `sh`, the environment, HTTP client and Ring server, TCP / UDP / TLS sockets | `27-io` | 70 |
+| Quote, the quoting reader macros, file loading | `28-quote`, `29-loading` | 25 |
+| Macros, syntax-quote, the `core.clj` macros | `30-macros`, `31-syntax-quote`, `32-core-macros` | 62 |
+| Destructuring, sets, regular expressions | `33-destructuring`, `34-sets`, `35-regex` | 57 |
+| `format` / `printf` / `for`, lazy sequences, the Part C vocabulary | `36-format-for`, `37-lazy-seqs`, `38-vocabulary` | 73 |
+| `read-string`, EDN, JSON (cheshire.core, clojure.data.json), string escapes, `#_` | `39-data-formats` | 40 |
 | Interactive REPL | — (no conformance fixtures) | — |
 
 The design specifications written during development are archived under
@@ -621,7 +632,12 @@ On branch `feature/macros` (DESIGN.md §10.2, ROADMAP.md).
       (M27, D46, D47)
 - [x] Stage 11: lazy sequences (M28-M31; closes D29 and D46; D48-D51);
       protoCore 3.1.0's lazy objects
-- [ ] Stage 12: JSON and EDN
+- [x] Stage 12: `read-string` and `clojure.edn/read-string` on the reader
+      (M35, D55, D56); JSON as `cheshire.core` and `clojure.data.json` over
+      one C++ parser and writer (M36-M38, D57); `pr-str` / `read-string`
+      round-trip every printable value; the string escapes `\uXXXX`,
+      octal, `\b`, `\f` and `#_`; `parse-long`, `parse-double`,
+      `parse-boolean` (M40, D58); `pmap` joins every worker (M39)
 - [ ] Stage 13: showcase against Babashka
 
 ### Bootstrap
@@ -650,7 +666,7 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D10 | No `BigDecimal` literal `M` suffix in v0.x                 | v0.2   |
 | D11 | No `clojure.spec`                                          | v0.x   |
 | D12 | `clojure.java.*` namespaces do not exist                   | (perm) |
-| D13 | `read-string` strict on unregistered reader literals       | core   |
+| D13 | `read-string` strict on unregistered reader literals: there are no tagged-literal readers at all (`#inst`, `#uuid`, data readers), so `#tag x` is the read error `No reader function for tag tag` | core   |
 | D14 | LargeInteger promotion is automatic in `+ - * / inc dec`, so `(* 9223372036854775807 2)` is `18446744073709551614` where JVM Clojure throws `ArithmeticException: integer overflow` — no `+'` / `*'` needed; big integers are not a separate type, so the `N` suffix is accepted but does not change the value or how it prints (CONTRA Clojure-JVM, by design) | (perm) |
 | D15 | `(= 1 1.0)` returns `true` in v0.x (CONTRA Clojure-JVM where `=` is type-strict). Map keys do **not** follow `=` across numeric types: `1`, `1.0`, an equal big integer, and `0` / `-0.0` are different keys, as in JVM Clojure, so `(hash-map 1 :a 1.0 :b)` has two entries and `(= {1 :a} {1.0 :a})` is `false` | (perm) |
 | D16 | In the keyword-argument form `& {:keys [...] :or {...}}` of a parameter vector, `:or` defaults fire on **explicit nil** as well as missing keys (CONTRA JVM-Clojure where only missing keys take the default). Every other map binding form (`let`, positional parameters, `& {:strs ...}`, ...) follows Clojure (DESIGN.md §10.2, M23) | v0.2 |
@@ -690,6 +706,10 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D53 | `letfn` binds each name to a fn that calls its definition through an atom, so every call through a `letfn` name costs an `apply` and a `deref` more than a direct call (JVM Clojure: `letfn*` binds the fns themselves); `(fn name ...)` still cannot call itself by name (D18) | v0.2 |
 | D54 | `System` is an object standing in for `java.lang.System` with the members `exit`, `getenv`, `currentTimeMillis` and `nanoTime` only; a map entry is a `[k v]` vector, which `key` and `val` read (JVM Clojure: a `MapEntry`, also a vector) | (perm) |
 | D47 | `format` / `printf` implement Java's `String.format` conversions `%s %S %d %x %X %o %f %e %E %g %G %b %B %c %C %n %%` with argument indexes, flags, width and precision, but not `%h`, `%a`, the date/time `%t` conversions, nor locale-specific output. Errors are `IllegalArgumentException`s whose message starts with Java's exception name and names a protoClojure type (`IllegalFormatConversionException: d != a float`; Java: `d != java.lang.Double`). `%g` rounds an exact tie to even (Java: half up; `%f` and `%e` round half up, as Java). Widths count bytes, so a multi-byte UTF-8 character counts as several (D17) | (perm) |
+| D55 | Strings are UTF-8, so a `\uXXXX` escape naming an unpaired surrogate (`"\uD83D"` alone) is the read error `Invalid unicode escape: unpaired surrogate` (JVM Clojure keeps the lone UTF-16 unit in its string); a pair (`"\uD83D\uDE00"`) is the one character it encodes, so `count` gives 1 where JVM Clojure gives 2 (D17) | (perm) |
+| D56 | `read-string` and `clojure.edn/read-string` (DESIGN.md M35): a read error is a `RuntimeException` carrying the reader's own message and its line and column in the string (`Map literal must contain an even number of forms (line 2, column 1)`; an unterminated form says `unterminated vector — missing ']'`, JVM Clojure `EOF while reading`); the EDN reader rejects `'`, `` ` ``, `~`, `~@` and `@` with `EDN does not support the reader macro '` (JVM Clojure's EdnReader reads them as part of a symbol); `read-string` takes only the `:eof` option (no `:read-cond` / `:features`), and `clojure.edn/read-string` ignores `:readers` and `:default` (there are no tagged literals, D13); there is no `read` on a reader, nor `clojure.edn/read` | v0.x |
+| D57 | JSON (DESIGN.md M36-M38). Both APIs: error messages are protoClojure's own, `JSON error: <problem> at line L, column C` (Jackson and clojure.data.json word them differently), raised as `IOException` by cheshire.core and `Exception` by clojure.data.json; an unpaired surrogate escape is an error (Jackson accepts it); map keys are written in the map's unspecified order (D24); a stream (`parse-stream`, `clojure.data.json/read`) is read a line at a time and the rest of the line after the value is consumed with it. cheshire.core: a top-level array parses to a vector (Cheshire: a lazy seq; nested arrays are vectors in both); `parse-string`'s third argument (array-coerce-fn), `parsed-seq`, the SMILE / CBOR functions, custom encoders and `generate-string` options other than `:pretty`, `:escape-non-ascii` and `:key-fn` are not supported. clojure.data.json: its behaviour here follows the library's documentation, not a run against it (Babashka does not bundle it); `read-str` raises on data after the value; `:bigdec true` raises `UnsupportedOperationException` (no BigDecimal, D10); `write-str`'s `:value-fn` and `pprint` are not supported | v0.x |
+| D58 | `parse-double` reads what Java's `Double.valueOf` reads except hexadecimal floats (`0x1p3`) and the `d` / `f` suffixes (`1.5d`), which answer nil | (perm) |
 | D34 | A `catch` naming no built-in class names a type looked up at run time, when an exception reaches the clause (a var, a local, or a module member `alias/Type`), and is matched by the thrown value's prototype chain; JVM Clojure resolves the class at compile time. So `(try 1 (catch NoSuchException e 2))` compiles and answers 1, and the error `Unable to resolve classname: NoSuchException` is a `RuntimeException` raised when an exception reaches the clause (JVM Clojure: a compile error). A type that resolves to a value that is not a prototype object raises `IllegalArgumentException`. A module's error (a foreign value) is caught by `Exception`, `Throwable` and `Object`, by its own types, and by no other built-in class | (perm: the platform is late-binding) |
 
 ## Known issues
@@ -779,7 +799,16 @@ See `LANGUAGE.md` for the full discussion. Summary:
   calls pass few arguments, which `ProtoContext::newList` already builds in a
   single cell.
 - **`pmap` spawns one OS thread per element**, which is wasteful for large
-  collections.
+  collections. (It no longer leaks them: every worker is joined, M39.)
+- **A finished future keeps its native thread until the program exits.** A
+  future's thread is joined by `deref` while the future is pending and by
+  `shutdownFutures` at exit, never once it has finished, so a long-running
+  program that creates futures without end keeps one thread stack mapped per
+  finished future (the `pmap` leak, fixed in M39, in its future form). Two
+  threads that `deref` the same pending future both join its thread, which
+  `std::thread` does not allow (found by reading the code, not reproduced).
+  Not fixed: the future's thread would need an
+  owner that joins it exactly once.
 - **Actor `MPMC` throughput** is limited by the global ready-queue mutex.
 - **The HTTP server starts one thread per connection, without a cap.** A
   flood of concurrent connections starts as many ProtoThreads; each waits

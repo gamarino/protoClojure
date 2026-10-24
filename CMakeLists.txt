@@ -229,15 +229,18 @@ add_library(protoclj_runtime STATIC
     src/runtime/ActorScheduler.cpp
     src/runtime/BytecodeModule.cpp
     src/runtime/CorePrims.cpp
+    src/runtime/Edn.cpp
     src/runtime/Exceptions.cpp
     src/runtime/ExecutionEngine.cpp
     src/runtime/GCCensus.cpp
     src/runtime/IO.cpp
+    src/runtime/Json.cpp
     src/runtime/LazySeq.cpp
     src/runtime/Macros.cpp
     src/runtime/Primitives.cpp
 )
-target_link_libraries(protoclj_runtime PUBLIC ${PROTOCORE_LIBRARY} protoclj_support
+# The runtime reads data with the reader (read-string, clojure.edn).
+target_link_libraries(protoclj_runtime PUBLIC ${PROTOCORE_LIBRARY} protoclj_support protoclj_reader
                                         PRIVATE protoIO::protoio)
 target_compile_options(protoclj_runtime PRIVATE ${PROTOCLJ_WARNINGS})
 

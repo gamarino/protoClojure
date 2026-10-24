@@ -70,9 +70,11 @@ void defineBuiltin(proto::ProtoContext* ctx, proto::ProtoObject* globals,
 void addNamespaceAlias(const std::string& alias, const std::string& ns);
 // The namespace `alias` stands for, with true; false when it names none.
 bool namespaceAlias(const std::string& alias, std::string& ns);
-// True for a library namespace protoClojure provides the functions of as
-// built-ins: clojure.core, clojure.string, clojure.set, clojure.java.io,
-// clojure.java.shell.
+// True for a library namespace protoClojure provides: clojure.core,
+// clojure.string, clojure.set, clojure.java.io and clojure.java.shell, whose
+// functions are built-ins, and clojure.edn, cheshire.core and
+// clojure.data.json, whose functions are members of a namespace object
+// (DataFormats.h, M37).
 bool isKnownNamespace(const std::string& ns);
 
 // True while core.clj loads (Eval.h, loadCore): the current namespace is
@@ -115,5 +117,14 @@ using EvalHook = const proto::ProtoObject* (*)(proto::ProtoContext* ctx,
                                                const proto::ProtoObject* form);
 void setEvalHook(EvalHook hook);
 EvalHook evalHook();
+
+// How syntax-quote qualifies a symbol (compiler/Eval.h,
+// qualifySyntaxQuoteSymbol), installed by the compiler beside the eval hook
+// so `read-string` (DataFormats.h) reads `` `x `` as the drivers do. Null
+// until installed: symbols then stay unqualified.
+using SyntaxQuoteResolverHook = std::string (*)(proto::ProtoContext* ctx,
+                                                const std::string& name);
+void setSyntaxQuoteResolverHook(SyntaxQuoteResolverHook hook);
+SyntaxQuoteResolverHook syntaxQuoteResolverHook();
 
 } // namespace protoClojure

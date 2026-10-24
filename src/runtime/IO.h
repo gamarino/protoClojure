@@ -35,6 +35,7 @@
  */
 #pragma once
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -73,6 +74,18 @@ bool appendIOFilePath(proto::ProtoContext* ctx, std::string& out,
 // The type name error messages use for an I/O handle ("a file", "a reader",
 // "a socket", ...), or nullptr when `v` is not one.
 const char* ioHandleTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v);
+
+// For the JSON stream functions (DataFormats.h): the descriptor of `v`, an
+// open reader or socket (readable) or an open writer or socket (writable),
+// raising the error `read-line` / `write` raise for anything else.
+int readableDescriptor(proto::ProtoContext* ctx, const proto::ProtoObject* v, const char* who);
+int writableDescriptor(proto::ProtoContext* ctx, const proto::ProtoObject* v, const char* who);
+// The next line of `fd` without its end (LF or CRLF), std::nullopt at the end
+// of the stream; and writing `data` to `fd`. Both block outside protoCore's
+// managed state (an UnmanagedScope) and touch no protoCore object meanwhile,
+// so the caller must hold every value it needs in a slot or a live context.
+std::optional<std::string> readLineBlocking(proto::ProtoContext* ctx, int fd);
+void writeBlocking(proto::ProtoContext* ctx, int fd, const std::string& data);
 
 // The name an I/O primitive is installed under, or nullptr (for `#<fn NAME>`).
 const char* ioPrimitiveName(const void* fn);

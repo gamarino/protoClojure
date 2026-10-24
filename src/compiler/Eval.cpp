@@ -71,7 +71,10 @@ void releaseRetainedModules() {
     }
 }
 
-void installEval() { setEvalHook(&evalHookEntry); }
+void installEval() {
+    setEvalHook(&evalHookEntry);
+    setSyntaxQuoteResolverHook(&qualifySyntaxQuoteSymbol);
+}
 
 bool loadCore(proto::ProtoContext* ctx) {
     static const char kSource[] = {

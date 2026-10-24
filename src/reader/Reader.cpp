@@ -6,6 +6,7 @@
 #include "runtime/SetOps.h"
 #include "runtime/Regex.h"
 #include "runtime/StackGuard.h"
+#include "runtime/Utf8String.h"
 #include "runtime/VectorOps.h"
 
 #include "protoCore.h"
@@ -48,6 +49,10 @@ const proto::ProtoObject* Reader::readOne() {
 const proto::ProtoObject* Reader::readOne(proto::ProtoContext* ctx) {
     try {
         Token tok = lexer_.next();
+        while (tok.kind == TokenKind::HashUnderscore) {
+            discardNextForm(ctx, tok);
+            tok = lexer_.next();
+        }
         if (tok.kind == TokenKind::EndOfFile) return nullptr;
         formLine_ = tok.line;
         formColumn_ = tok.column;
@@ -78,9 +83,20 @@ const proto::ProtoList* Reader::readAllForms() {
     while (true) {
         Token tok = lexer_.next();
         if (tok.kind == TokenKind::EndOfFile) break;
+        if (tok.kind == TokenKind::HashUnderscore) {
+            discardNextForm(forms.context(), tok);
+            continue;
+        }
         forms.push(readFromToken(forms.context(), tok));
     }
     return forms.finishList();
+}
+
+void Reader::discardNextForm(proto::ProtoContext* parent, const Token& tok) {
+    // The discarded form is built like any other (it may hold a nested
+    // `#_`), in a scope of its own that drops it.
+    proto::ProtoContext scope(parent->space, parent);
+    (void)readNextForm(&scope, tok);
 }
 
 const proto::ProtoObject* Reader::fnLiteralArg(proto::ProtoContext* ctx, const std::string& text) {
@@ -110,7 +126,29 @@ const proto::ProtoObject*
 Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
     // Every nested form recurses through here (readList, `@`).
     checkNativeStack(StackUse::Source);
+    if (edn_) {
+        // EDN is data: the reader macros that only make sense in code are
+        // errors. `#(` and `#"` get the message of Clojure's EdnReader.
+        switch (tok.kind) {
+            case TokenKind::HashLParen:
+                throw ReaderError("No dispatch macro for: (", tok.line, tok.column);
+            case TokenKind::Regex:
+                throw ReaderError("No dispatch macro for: \"", tok.line, tok.column);
+            case TokenKind::Quote: case TokenKind::Backtick: case TokenKind::Tilde:
+            case TokenKind::TildeAt: case TokenKind::At:
+                throw ReaderError("EDN does not support the reader macro " + tok.text,
+                                  tok.line, tok.column);
+            default: break;
+        }
+    }
     switch (tok.kind) {
+        case TokenKind::HashUnderscore: {
+            // `#_x y` in a position that takes one form (`'#_x y`): x is
+            // dropped and the form is y.
+            discardNextForm(parent, tok);
+            return readNextForm(parent, tok);
+        }
+
         case TokenKind::Integer:
             // Atomic — no intermediate state to protect. The caller takes
             // ownership of rooting the return value. A literal beyond the
@@ -127,7 +165,7 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
             // run time. Symbols are named values (runtime/Named.h), never
             // strings, so nothing is lost when protoCore stores a short
             // string inline in the pointer.
-            return parent->fromUTF8String(tok.text.c_str());
+            return makeUtf8String(parent, tok.text);  // NULs included
 
         case TokenKind::Symbol: {
             // `nil`, `true` and `false` are the values themselves, as in
@@ -573,6 +611,10 @@ Reader::readList(proto::ProtoContext* parent, TokenKind closeKind,
         }
         if (tok.kind == closeKind) {
             return items.finish();
+        }
+        if (tok.kind == TokenKind::HashUnderscore) {
+            discardNextForm(items.context(), tok);
+            continue;
         }
         if (tok.kind == TokenKind::RParen ||
             tok.kind == TokenKind::RBracket ||

@@ -375,3 +375,33 @@ TEST(Lexer, HashQuoteIsARegexLiteral) {
     auto open = tokenise(R"(#"abc)");
     EXPECT_EQ(open.back().kind, TokenKind::Error);
 }
+
+// String escapes of Clojure's reader (stage 12): \uXXXX as UTF-8, a
+// surrogate pair as one character, octal up to \377, \b and \f.
+TEST(Lexer, StringEscapes) {
+    auto toks = tokenise(R"("Aé😀" "\101\0\377" "\b\f")");
+    ASSERT_GE(toks.size(), 3u);
+    EXPECT_EQ(toks[0].kind, TokenKind::String);
+    EXPECT_EQ(toks[0].text, "A\xC3\xA9\xF0\x9F\x98\x80");
+    EXPECT_EQ(toks[1].kind, TokenKind::String);
+    EXPECT_EQ(toks[1].text, std::string("A\0\xC3\xBF", 4));
+    EXPECT_EQ(toks[2].text, "\b\f");
+}
+
+TEST(Lexer, BadStringEscapesAreErrors) {
+    EXPECT_EQ(tokenise(R"("\uD83D")")[0].kind, TokenKind::Error);    // unpaired
+    EXPECT_EQ(tokenise(R"("\uDE00")")[0].kind, TokenKind::Error);    // lone low
+    EXPECT_EQ(tokenise(R"("\u12G4")")[0].kind, TokenKind::Error);    // not hex
+    EXPECT_EQ(tokenise(R"("\400")")[0].kind, TokenKind::Error);      // octal > 377
+    EXPECT_EQ(tokenise(R"("\q")")[0].kind, TokenKind::Error);
+}
+
+// `#_` is a token of its own; `#tag` is Clojure's unknown-tag error.
+TEST(Lexer, DiscardAndTags) {
+    auto toks = tokenise("#_ x #inst");
+    ASSERT_GE(toks.size(), 3u);
+    EXPECT_EQ(toks[0].kind, TokenKind::HashUnderscore);
+    EXPECT_EQ(toks[1].kind, TokenKind::Symbol);
+    EXPECT_EQ(toks[2].kind, TokenKind::Error);
+    EXPECT_NE(toks[2].text.find("No reader function for tag inst"), std::string::npos);
+}

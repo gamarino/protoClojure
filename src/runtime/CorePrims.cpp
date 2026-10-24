@@ -1,7 +1,8 @@
 // CorePrims — the scripting vocabulary written in C++ (macros brief, Part C;
 // docs/DESIGN.md §10.2, M32-M34): integer division (`quot`, `rem`, `mod`),
 // `compare`, `max`, `min`, `sort`, `sort-by`, `frequencies`,
-// `clojure.string/split-lines`, `require` (namespace aliases), and the
+// `clojure.string/split-lines`, `require` (namespace aliases), `parse-long`,
+// `parse-double`, `parse-boolean`, and the
 // `System` object (`(System/exit n)`, `System/getenv`,
 // `System/currentTimeMillis`, `System/nanoTime`). The rest of Part C is
 // Clojure, in core.clj.
@@ -19,14 +20,19 @@
 #include "MapOps.h"
 #include "Named.h"
 #include "Primitives.h"
+#include "Utf8String.h"
 #include "SetOps.h"
 #include "VectorOps.h"
 
 #include "protoCore.h"
 
 #include <algorithm>
+#include <charconv>
+#include <cctype>
+#include <system_error>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -345,7 +351,7 @@ COREPRIM(prim_split_lines) {
     scope.setAutomaticLocal(0, scope.newList()->asObject(&scope));
     for (const std::string& l : lines)
         scope.setAutomaticLocal(0, scope.getAutomaticLocal(0)->asList(&scope)
-            ->appendLast(&scope, scope.fromUTF8String(l.c_str()))->asObject(&scope));
+            ->appendLast(&scope, makeUtf8String(&scope, l))->asObject(&scope));
     const PO* r = newVector(&scope, scope.getAutomaticLocal(0)->asList(&scope));
     scope.returnValue = r;
     return r;
@@ -365,7 +371,8 @@ std::string symbolText(proto::ProtoContext* ctx, const ActiveCallContext* cc, co
     throwClassed(ctx, "FileNotFoundException",
                  "Could not locate " + path + "__init.class, " + path + ".clj or " + path +
                  ".cljc on classpath. (protoClojure provides clojure.core, clojure.string, "
-                 "clojure.set, clojure.java.io and clojure.java.shell; D52)");
+                 "clojure.set, clojure.java.io, clojure.java.shell, clojure.edn, cheshire.core "
+                 "and clojure.data.json; D52)");
 }
 
 // (require 'ns), (require '[ns :as alias :refer [...]]) ...: there are no
@@ -409,6 +416,81 @@ COREPRIM(prim_require) {
     return PROTO_NONE;
 }
 
+// ---- parse-long / parse-double / parse-boolean --------------------------------
+
+// The string argument of a parse-* function; Clojure raises
+// IllegalArgumentException for anything else.
+std::string parseArg(proto::ProtoContext* ctx, const proto::ProtoArguments* args, const char* who) {
+    if (argc(ctx, args) != 1) arity(ctx, argc(ctx, args), who);
+    const PO* v = argAt(ctx, args, 0);
+    if (v == PROTO_NONE || !proto::ProtoObject::isStringTagFast(v))
+        throwClassed(ctx, "IllegalArgumentException",
+                     std::string("Expected string, got ") + valueTypeName(ctx, v));
+    return reinterpret_cast<const proto::ProtoString*>(v)->toStdString(ctx);
+}
+
+// (parse-long s): the integer s spells (an optional sign and decimal
+// digits, Java's Long.valueOf), nil when it spells none or is beyond 64 bits.
+COREPRIM(prim_parse_long) {
+    const std::string s = parseArg(ctx, args, "parse-long");
+    std::size_t i = (!s.empty() && (s[0] == '+' || s[0] == '-')) ? 1 : 0;
+    if (i == s.size()) return PROTO_NONE;
+    for (std::size_t j = i; j < s.size(); ++j)
+        if (s[j] < '0' || s[j] > '9') return PROTO_NONE;
+    long long v = 0;
+    const char* b = s.data() + (s[0] == '+' ? 1 : 0);
+    const auto r = std::from_chars(b, s.data() + s.size(), v);
+    if (r.ec != std::errc() || r.ptr != s.data() + s.size()) return PROTO_NONE;
+    return ctx->fromLong(v);
+}
+
+// (parse-double s): the double s spells, as Java's Double.valueOf reads it
+// (surrounding whitespace, a sign, digits with an optional fraction and
+// exponent, `NaN`, `Infinity`), nil otherwise. Hexadecimal floats and the
+// `d` / `f` suffixes Java also accepts are not (D58).
+COREPRIM(prim_parse_double) {
+    std::string s = parseArg(ctx, args, "parse-double");
+    const auto notSpace = [](char c) { return c > ' '; };
+    const auto b = std::find_if(s.begin(), s.end(), notSpace);
+    const auto e = std::find_if(s.rbegin(), s.rend(), notSpace).base();
+    s = b < e ? std::string(b, e) : std::string();
+    bool neg = false;
+    std::size_t i = 0;
+    if (!s.empty() && (s[0] == '+' || s[0] == '-')) { neg = s[0] == '-'; i = 1; }
+    const std::string body = s.substr(i);
+    if (body == "NaN") return ctx->fromDouble(std::nan(""));
+    if (body == "Infinity") return ctx->fromDouble(neg ? -HUGE_VAL : HUGE_VAL);
+    // Digits, an optional fraction, an optional exponent; at least one digit
+    // before or after the point.
+    std::size_t k = 0, digits = 0;
+    while (k < body.size() && std::isdigit(static_cast<unsigned char>(body[k]))) { ++k; ++digits; }
+    if (k < body.size() && body[k] == '.') {
+        ++k;
+        while (k < body.size() && std::isdigit(static_cast<unsigned char>(body[k]))) { ++k; ++digits; }
+    }
+    if (digits == 0) return PROTO_NONE;
+    if (k < body.size() && (body[k] == 'e' || body[k] == 'E')) {
+        ++k;
+        if (k < body.size() && (body[k] == '+' || body[k] == '-')) ++k;
+        std::size_t exp = 0;
+        while (k < body.size() && std::isdigit(static_cast<unsigned char>(body[k]))) { ++k; ++exp; }
+        if (exp == 0) return PROTO_NONE;
+    }
+    if (k != body.size()) return PROTO_NONE;
+    // strtod, as the lexer reads float literals (portable where
+    // std::from_chars for doubles is not); overflow is an infinity.
+    const double d = std::strtod(body.c_str(), nullptr);
+    return ctx->fromDouble(neg ? -d : d);
+}
+
+// (parse-boolean s): true for "true", false for "false", nil otherwise.
+COREPRIM(prim_parse_boolean) {
+    const std::string s = parseArg(ctx, args, "parse-boolean");
+    if (s == "true") return PROTO_TRUE;
+    if (s == "false") return PROTO_FALSE;
+    return PROTO_NONE;
+}
+
 // ---- System ----------------------------------------------------------------------
 
 COREPRIM(prim_current_time_millis) {
@@ -438,6 +520,9 @@ constexpr CorePrim kCorePrims[] = {
     {"frequencies", &prim_frequencies},
     {"split-lines", &prim_split_lines},
     {"require",     &prim_require},
+    {"parse-long",    &prim_parse_long},
+    {"parse-double",  &prim_parse_double},
+    {"parse-boolean", &prim_parse_boolean},
 };
 
 } // namespace

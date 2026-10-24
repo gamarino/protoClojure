@@ -1404,6 +1404,144 @@ made (D18), so two definitions cannot otherwise see each other. Each call
 through the name costs an `apply` and a `deref` (D53). Alternative: a
 `letfn*` special form with a frame slot per name filled after the closures
 are made, rejected for now as compiler work the brief did not require.
+**M35. `read-string` and `clojure.edn/read-string` are the reader, run on a
+string** (*agent, pending review*). Both are C++ built-ins
+(`src/runtime/Edn.cpp`) that build a `Reader` (`src/reader/Reader.cpp`) on
+the string and return its first form; the rest of the string is ignored, as
+in Clojure. `read-string` reads as code is read: quote, `#(...)`, `#"..."`
+and syntax-quote, which it qualifies through the resolver the compiler
+installs beside the `eval` hook (`setSyntaxQuoteResolverHook`, Macros.h), so
+`` (read-string "`(map ~f)") `` reads as the drivers read it. `clojure.edn`
+sets the reader's EDN mode: the code-only reader macros (`'`, `` ` ``, `~`,
+`~@`, `@`, `#(`, `#"`) are read errors, and there is no evaluation (`#=`
+does not exist) and no tagged-literal reader (`#inst` raises Clojure's "No
+reader function for tag inst", D13). `(read-string "")` raises "EOF while
+reading"; `(clojure.edn/read-string "")` and `(clojure.edn/read-string nil)`
+answer nil; both take Clojure's `{:eof v}` option. A read error is a
+`RuntimeException` with the reader's message and its line and column in the
+string (D56). To make `pr-str` and `read-string` round-trip every printable
+value, the reader gained what the printer already wrote or Clojure's reader
+already read: the string escapes `\b`, `\f`, `\uXXXX` (a surrogate pair
+being the one character it encodes, an unpaired surrogate a read error,
+D55) and octal `\0`..`\377`; `#_` (discard the next form, anywhere a form
+may stand); strings holding a NUL byte, which the reader, the VM's string
+constants and the string primitives used to cut at the NUL
+(`src/runtime/Utf8String.h`, `makeUtf8String`). Ratios do not exist in
+protoClojure (`(/ 1 3)` is integer division), so the round trip covers nil,
+booleans, integers of any size, doubles (printed with the shortest digits
+that read back), strings, keywords, symbols, lists, vectors, maps and sets
+(`39-data-formats/pr-str-read-string-round-trip`). Alternatives: (a) a
+separate EDN parser, rejected: it would duplicate the reader and drift from
+it; (b) reading `'a` in EDN mode as the symbol `'a`, as JVM Clojure's
+EdnReader does, rejected: nobody writes that on purpose, and an error says
+what happened.
+
+**M36. JSON: one C++ parser and one writer, two APIs as thin names**
+(*agent, pending review*). `src/runtime/Json.cpp` holds a recursive-descent
+parser over a `Source` (a whole string, or a reader pulled a line at a
+time, M38) and a writer, both building or reading protoClojure values
+directly: an object is a map, an array a vector, a number without a
+fraction or exponent an integer (exact at any size: a `LargeInteger` beyond
+64 bits), any other number a double (`strtod`, as the lexer reads
+float literals; overflow is an infinity and underflow a zero or a subnormal,
+as Java's `Double.parseDouble`).
+Strings take the escapes of RFC 8259, a surrogate pair is one character and
+an unpaired one an error (D57); an unescaped control character is accepted,
+as Cheshire's parser accepts it. Errors name the problem and the line and
+column (in characters) where the input stopped making sense: `JSON error:
+expected ':' after an object key, found character '1' at line 1, column 6`.
+cheshire.core (`parse-string`, `parse-stream`, `generate-string`,
+`generate-stream`, `decode`, `encode`) and clojure.data.json (`read-str`,
+`read`, `write-str`, `write`) are thin functions over it that differ only
+where the libraries differ, as a `Flavor`: Cheshire keeps a keyword's
+namespace (`:a/b` is `"a/b"`), escapes nothing beyond control characters
+unless `:escape-non-ascii`, writes NaN and the infinities as quoted strings
+(Jackson's default), ignores what follows the first value, applies
+`:key-fn` to keyword keys only, writes `{nil 1}` as `{"":1}`, writes
+`:pretty` in Jackson's default pretty-printer layout, and raises
+`IOException` (Jackson's `JsonParseException` is one); clojure.data.json
+writes a keyword's name, escapes non-ASCII (`\u00e9`, lower case), `/` and
+U+2028/U+2029 by default (`:escape-unicode`, `:escape-slash`,
+`:escape-js-separators`), raises on NaN, on a nil key and on data after the
+value in `read-str`, applies `:key-fn` to every key and `:value-fn` to
+every entry (an entry whose value-fn answers the value-fn itself is
+dropped), and raises `Exception`. The behaviour of Cheshire was checked
+against Babashka 1.4.192, which bundles it: the cheshire fixtures of
+`tests/conformance/39-data-formats` pass under `bb` too. clojure.data.json
+is not in Babashka, so its behaviour follows its documentation and source
+as remembered, not a run against the JVM library (D57). GC: each container
+is built in a context of its own, an array through a `ListBuilder` and an
+object in a scope whose slots hold the map so far and up to 64 pending
+entries, folded into the map inside a short-lived context; a key fn or a
+value fn runs with the key and the value in slots. A 20,000-record document
+parses under a 600,000-cell ceiling and 200,000 newline-delimited records
+stream through a 300,000-cell one (`tests/cli/json-under-heap-limit.sh`).
+Alternatives: (a) JSON in Clojure in `core.clj`, rejected: a character per
+VM dispatch would be an order of magnitude slower on the large inputs
+scripts read; (b) a C++ JSON library (nlohmann/json, simdjson), rejected: a
+new dependency, and its document would be one more copy of the data to
+convert into protoCore values, where this parser builds them directly.
+
+**M37. The data-format namespaces are objects whose members are the
+functions** (*agent, pending review*). `clojure.edn`, `cheshire.core` and
+`clojure.data.json` are globals holding an object (as `System` is, M34)
+whose members are the C++ functions. `aliasLibraryNamespace`
+(`src/compiler/Compiler.cpp`) knows their member names: it leaves
+`cheshire.core/parse-string` as it is (and turns `json/parse-string` into it
+once `[cheshire.core :as json]` is required), so it compiles as the member
+call `alias/member` already compiles to (`CALL_MEMBER`, or `GET_MEMBER` for
+a value), and a name the namespace does not have is the compile error `No
+such var: json/parse`, as for clojure.string. `isKnownNamespace` lists them,
+so `require` and `ns` accept them. Alternatives: (a) installing the
+functions as globals, as clojure.string's are (M26), rejected: the names
+collide (`clojure.edn/read-string` is not `clojure.core/read-string`,
+`clojure.data.json/read` would shadow a future `read`) and would fill the
+program's namespace with `parse-string` and `write-str`; (b) rewriting to
+hidden globals (`__cheshire_parse_string`), rejected: a member call costs
+one attribute lookup more, nothing next to parsing a document, and needs no
+second table.
+
+**M38. JSON streams are read a line at a time** (*agent, pending review*).
+`parse-stream` and `clojure.data.json/read` pull their input through
+`readLineBlocking` (IO.h), which blocks outside protoCore's managed state
+with every value parsed so far held in a slot or a live context. A
+document is therefore never held whole beyond the line being parsed, and a
+value that ends a line is answered as soon as the line arrives, so a
+newline-delimited JSON stream over a pipe or a socket is read value by value
+(`(loop [] (when-let [r (json/parse-stream *in* true)] ... (recur)))`). The
+price: the rest of the line after a value is consumed with it (D57).
+Alternatives: (a) reading the whole stream first, rejected: memory, and a
+pipe that stays open would never answer; (b) fixed-size chunks, rejected:
+protoIO's `readBytes` waits until the chunk is full, so a short message on
+a socket would hang.
+
+**M39. `pmap` joins every worker, and holds the thread object until it
+does** (*agent, pending review*). `pmap` joined only the workers it found
+still running; one that had finished kept its native thread (its stack
+mapping and protoCore's `std::thread` object) until the process ended: 21
+calls over 64 elements grew the virtual size by about 40 GB, and
+ThreadSanitizer reported the threads as leaked. Every worker is joined now,
+finished or not (joining a finished thread returns at once), and each
+element holds its `ProtoThread` as an object, not as an address in an
+integer: a finished thread leaves protoCore's thread list, so a thread known
+only by its address could be collected before the join
+(`tests/cli/pmap-joins-workers.sh`). Futures are unchanged: a future's
+thread is still kept by address and joined by `deref` while pending and by
+`shutdownFutures` at exit, so a program that creates futures without end
+keeps every finished one's thread until it exits (an open issue, STATUS.md).
+Alternative: a worker pool (ROADMAP), the real fix for one thread per
+element, not needed for the leak.
+
+**M40. `parse-long`, `parse-double` and `parse-boolean` are C++**
+(*agent, pending review*). Clojure 1.11's string parsers, which a script
+reads numbers with (`src/runtime/CorePrims.cpp`): nil for a string that
+spells no number, `IllegalArgumentException` for an argument that is not a
+string, as in Clojure. `parse-long` is Java's `Long.valueOf` (sign and
+decimal digits, nil beyond 64 bits); `parse-double` reads surrounding
+whitespace, a sign, digits with an optional fraction and exponent, `NaN`
+and `Infinity`, but not Java's hexadecimal floats or the `d` / `f`
+suffixes (D58).
+
 ## 11. The standard library
 
 Two phases:
@@ -1426,8 +1564,9 @@ functions (the list is in `STATUS.md`).
 What is *out of scope* (likely permanently):
 
 - `clojure.java.*` — JVM-specific.
-- `clojure.data.csv`, `clojure.data.json` — replaced by the Python or
-  JS UMD equivalents.
+- `clojure.data.csv` — replaced by the Python or JS UMD equivalents.
+  (`clojure.data.json` and `cheshire.core` exist since the macros branch,
+  §10.2, M36.)
 - `clojure.tools.logging` — TBD; may bridge to a host logger.
 - `core.async` — re-imagined on protoCore actors in a separate v0.3
   design pass, not lifted directly.

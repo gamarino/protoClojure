@@ -1651,6 +1651,22 @@ constexpr IOEntry kIOPrimitives[] = {
 
 // ================================================================= public
 
+int readableDescriptor(proto::ProtoContext* ctx, const PO* v, const char* who) {
+    return openFd(ctx, v, who, {HandleKind::Reader, HandleKind::Socket});
+}
+
+int writableDescriptor(proto::ProtoContext* ctx, const PO* v, const char* who) {
+    return openFd(ctx, v, who, {HandleKind::Writer, HandleKind::Socket});
+}
+
+std::optional<std::string> readLineBlocking(proto::ProtoContext* ctx, int fd) {
+    return blocking(ctx, [&] { return protoio::readLine(fd); });
+}
+
+void writeBlocking(proto::ProtoContext* ctx, int fd, const std::string& data) {
+    blocking(ctx, [&] { protoio::write(fd, data); });
+}
+
 void installIO(proto::ProtoContext* ctx, proto::ProtoObject* globals) {
     const PO* marker = ctx->space->objectPrototype->newChild(ctx);
     globals->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "__io_marker__"), marker);

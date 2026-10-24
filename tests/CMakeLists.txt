@@ -152,6 +152,16 @@ add_test(NAME cli/script-top-words
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/script-top-words.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/repl-scripting
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/repl-scripting.sh" "$<TARGET_FILE:protoclj>")
+# JSON and EDN (src/runtime/Json.cpp, Edn.cpp): at the REPL, and JSON
+# parsed and written under heap ceilings, streamed included.
+add_test(NAME cli/repl-data-formats
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/repl-data-formats.sh" "$<TARGET_FILE:protoclj>")
+add_test(NAME cli/json-under-heap-limit
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/json-under-heap-limit.sh" "$<TARGET_FILE:protoclj>")
+set_tests_properties(cli/json-under-heap-limit PROPERTIES TIMEOUT 300)
+# pmap joins every worker it starts (no native thread is left unjoined).
+add_test(NAME cli/pmap-joins-workers
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/pmap-joins-workers.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/file-form-by-form
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/file-form-by-form.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/repl-forms-in-order

@@ -1,4 +1,5 @@
 #include "ExecutionEngine.h"
+#include "Utf8String.h"
 #include "BytecodeModule.h"
 #include "Exceptions.h"
 #include "ListBuilder.h"
@@ -111,7 +112,11 @@ const proto::ProtoObject* materialise(proto::ProtoContext* ctx,
     switch (c.kind) {
         case K::Long:   return ctx->fromLong(c.ival);
         case K::Double: return ctx->fromDouble(c.dval);
-        case K::String: return ctx->fromUTF8String(c.sval.c_str());
+        case K::String:
+            // A literal holding a NUL byte (`"a\u0000b"`) needs the
+            // length-taking constructor; the common case keeps the old one.
+            if (c.sval.find('\0') != std::string::npos) return makeUtf8String(ctx, c.sval);
+            return ctx->fromUTF8String(c.sval.c_str());
         case K::Named:  return c.named;
         case K::Datum:  return c.named;
         case K::BigInteger: return materialiseBigInteger(ctx, c);

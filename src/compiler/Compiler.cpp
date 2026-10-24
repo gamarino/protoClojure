@@ -107,6 +107,24 @@ bool aliasLibraryNamespace(std::string& name) {
         }
         return false;
     };
+    // The data-format namespaces (DataFormats.h, M37) are objects whose
+    // members are the functions: `cheshire.core/parse-string` stays as it is
+    // and compiles as a member call on the global `cheshire.core`.
+    static const char* const kEdn[] = {"read-string"};
+    static const char* const kCheshire[] = {"parse-string", "generate-string", "parse-stream",
+                                            "generate-stream", "decode", "encode"};
+    static const char* const kDataJson[] = {"read-str", "write-str", "read", "write"};
+    auto isMember = [&](const std::string& prefix, const char* const* names, std::size_t count) {
+        if (name.compare(0, prefix.size(), prefix) != 0) return false;
+        const std::string bare = name.substr(prefix.size());
+        for (std::size_t i = 0; i < count; ++i)
+            if (bare == names[i]) return true;
+        return false;
+    };
+    if (isMember("clojure.edn/", kEdn, sizeof kEdn / sizeof *kEdn) ||
+        isMember("cheshire.core/", kCheshire, sizeof kCheshire / sizeof *kCheshire) ||
+        isMember("clojure.data.json/", kDataJson, sizeof kDataJson / sizeof *kDataJson))
+        return name != written;
     if (tryPrefix("clojure.string/", kString, sizeof kString / sizeof *kString) ||
         tryPrefix("clojure.set/", kSet, sizeof kSet / sizeof *kSet) ||
         tryPrefix("clojure.java.io/", kIo, sizeof kIo / sizeof *kIo) ||

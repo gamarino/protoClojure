@@ -144,7 +144,10 @@ Part B of the macros brief, the scripting vocabulary, on the same branch:
       `quot rem mod compare sort sort-by frequencies group-by update
       update-in assoc-in get-in merge merge-with select-keys zipmap partial
       comp juxt some every? max-key min-key ...` (M32-M34; D52-D54).
-12. [ ] JSON and EDN.
+12. [x] JSON and EDN (DESIGN.md §10.2, M35-M40; D55-D58): `read-string`,
+    `clojure.edn/read-string`, `cheshire.core` and `clojure.data.json` over
+    one C++ parser and writer, `parse-long` / `parse-double` /
+    `parse-boolean`; `pmap` joins every worker.
 13. [ ] Showcase against Babashka.
 
 - A minimal `core.clj` shipped with the runtime; `protoclj` evaluates it

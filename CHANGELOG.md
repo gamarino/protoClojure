@@ -9,6 +9,50 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — JSON and EDN (macros brief, Part B stage 12)
+
+- **`read-string`** (the first form of a string, read as code is read,
+  syntax-quote included) and **`clojure.edn/read-string`** (data only: the
+  code reader macros are errors, no evaluation, no tagged literals), on the
+  reader itself (DESIGN.md §10.2, M35; D56). `pr-str` and `read-string`
+  round-trip every printable value.
+- **JSON**: `cheshire.core` (`parse-string` with `true` or a key fn,
+  `parse-stream`, `generate-string` with `:pretty`, `:escape-non-ascii` and
+  `:key-fn`, `generate-stream`, `decode`, `encode`) and `clojure.data.json`
+  (`read-str` / `read` with `:key-fn`, `:value-fn`, `:eof-error?`,
+  `:eof-value`; `write-str` / `write` with `:escape-unicode`, `:escape-slash`,
+  `:escape-js-separators`, `:key-fn`), thin names over one C++ parser and
+  writer (M36): exact big integers, `\u` escapes and surrogate pairs, errors
+  with the line and column. Streams are read a line at a time, so
+  newline-delimited JSON is read value by value (M38). The namespaces work
+  with `require` / `ns` aliases (M37). Deviations: D57.
+- The reader: the string escapes `\uXXXX` (a surrogate pair is one
+  character; an unpaired one is a read error, D55), octal `\0`..`\377`,
+  `\b` and `\f`; `#_` discards the next form; `#tag` is Clojure's `No
+  reader function for tag` error (D13).
+- **`parse-long`**, **`parse-double`**, **`parse-boolean`** (Clojure 1.11;
+  M40, D58).
+- New tests: 40 fixtures in `tests/conformance/39-data-formats/` (the
+  cheshire ones also pass under Babashka 1.4.192), the CLI checks
+  `cli/repl-data-formats`, `cli/json-under-heap-limit` (a 20,000-record
+  document under a 600,000-cell ceiling, 200,000 streamed records under a
+  300,000-cell one, and a control that must run out of memory) and
+  `cli/pmap-joins-workers`, and three lexer unit tests.
+
+### Fixed — pmap threads, strings holding NUL
+
+- **`pmap` leaked a native thread per element.** It joined only the workers
+  still running when it reached them; a finished worker kept its stack
+  mapped until the process exited (21 calls over 64 elements: about 40 GB of
+  virtual size; ThreadSanitizer reported the threads as leaked). Every worker
+  is joined now, and each element holds its thread as an object until then
+  (M39). The same leak remains for finished futures (STATUS.md, known
+  issues).
+- **Strings holding a NUL byte were cut at it** by the reader, by string
+  constants and by most string primitives (`str`, `pr-str`, `subs`,
+  `upper-case`, ...): `(count (str "a\u0000b"))` was 1. They now build their
+  result from its whole length.
+
 ### Fixed — waits that no longer touch native thread APIs; a future race
 
 - **No native thread API in the runtime's waits.** A reader of a lazy seq

@@ -66,6 +66,7 @@ struct ReaderError : std::runtime_error {
 //   'x                the list (quote x)
 //   ~x  ~@x           (clojure.core/unquote x), (clojure.core/unquote-splicing x)
 //   `x                the syntax-quote expansion of x (Reader.cpp)
+//   #_x               nothing: x is read and discarded, as in Clojure
 //
 // The only thing the reader needs from the runtime is the intern table of
 // keywords and symbols.
@@ -107,6 +108,11 @@ public:
                                            const std::string& name);
     void setSymbolResolver(SymbolResolver r) { resolver_ = r; }
 
+    // EDN mode (`clojure.edn/read-string`, docs/DESIGN.md M35): data only.
+    // The code-only reader macros -- `'`, `` ` ``, `~`, `~@`, `@`, `#(...)`
+    // and `#"..."` -- are read errors; everything else reads as in code.
+    void setEdn(bool edn) { edn_ = edn; }
+
     // Read every form until EOF. Returns a protoCore ProtoList of forms in
     // source order — same representation a Clojure file's top-level forms
     // would have. No std container is used; the protoCore GC traces the
@@ -124,6 +130,10 @@ private:
     int formLine_ = 0;
     int formColumn_ = 0;
     SymbolResolver resolver_ = nullptr;
+    bool edn_ = false;
+
+    // Reads the form after a `#_` token (`tok`) and drops it.
+    void discardNextForm(proto::ProtoContext* parent, const Token& tok);
 
     // One table per syntax-quote being expanded, innermost last: each
     // `foo#` spelling maps to the generated symbol `foo__N__auto__` it

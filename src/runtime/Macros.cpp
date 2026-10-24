@@ -27,6 +27,7 @@ bool isListValue(const proto::ProtoObject* v) {
 }
 
 std::atomic<EvalHook> gEvalHook{nullptr};
+std::atomic<SyntaxQuoteResolverHook> gResolverHook{nullptr};
 std::atomic<bool> gCoreNamespace{false};
 
 } // namespace
@@ -143,7 +144,8 @@ bool namespaceAlias(const std::string& alias, std::string& ns) {
 
 bool isKnownNamespace(const std::string& ns) {
     return ns == "clojure.core" || ns == "clojure.string" || ns == "clojure.set" ||
-           ns == "clojure.java.io" || ns == "clojure.java.shell";
+           ns == "clojure.java.io" || ns == "clojure.java.shell" || ns == "clojure.edn" ||
+           ns == "cheshire.core" || ns == "clojure.data.json";
 }
 
 bool coreNamespaceActive() { return gCoreNamespace.load(std::memory_order_relaxed); }
@@ -151,5 +153,8 @@ void setCoreNamespaceActive(bool active) { gCoreNamespace.store(active, std::mem
 
 void setEvalHook(EvalHook hook) { gEvalHook.store(hook); }
 EvalHook evalHook() { return gEvalHook.load(); }
+
+void setSyntaxQuoteResolverHook(SyntaxQuoteResolverHook hook) { gResolverHook.store(hook); }
+SyntaxQuoteResolverHook syntaxQuoteResolverHook() { return gResolverHook.load(); }
 
 } // namespace protoClojure

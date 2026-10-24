@@ -1,7 +1,9 @@
 #include "Primitives.h"
+#include "Utf8String.h"
 #include "Exceptions.h"
 #include "IO.h"
 #include "CorePrims.h"
+#include "DataFormats.h"
 #include "LazySeq.h"
 #include "ExecutionEngine.h"
 #include "ActorScheduler.h"
@@ -687,7 +689,7 @@ const proto::ProtoObject* prim_str(proto::ProtoContext* ctx,
     for (proto::proto_ulong i = 0; i < n; ++i) {
         appendStr(ctx, text, args->getAt(ctx, (int)i));
     }
-    return ctx->fromUTF8String(text.c_str());
+    return makeUtf8String(ctx, text);
 }
 
 // List + predicate primitives -----------------------------------
@@ -1213,7 +1215,7 @@ const proto::ProtoObject* prim_reverse(proto::ProtoContext* ctx,
         std::string raw = s->toStdString(ctx);
         std::string r(raw.rbegin(), raw.rend());
         return reinterpret_cast<const proto::ProtoObject*>(
-            proto::ProtoString::fromStdString(ctx, r));
+            makeUtf8ProtoString(ctx, r));
     }
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     if (!lst) return ctx->newList()->asObject(ctx);
@@ -1282,7 +1284,7 @@ bool pushSeqElements(ListBuilder& out, const proto::ProtoObject* v) {
             const unsigned char lead = static_cast<unsigned char>(raw[i]);
             const std::size_t len = lead < 0x80 ? 1 : (lead >> 5) == 0x6 ? 2
                                   : (lead >> 4) == 0xE ? 3 : (lead >> 3) == 0x1E ? 4 : 1;
-            out.push(out.context()->fromUTF8String(raw.substr(i, len).c_str()));
+            out.push(makeUtf8String(out.context(), raw.substr(i, len)));
             i += len;
         }
         return true;
@@ -1493,7 +1495,7 @@ const proto::ProtoObject* prim_upper_case(proto::ProtoContext* ctx,
     std::string raw = asProtoString(v)->toStdString(ctx);
     for (auto& c : raw) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     return reinterpret_cast<const proto::ProtoObject*>(
-        proto::ProtoString::fromStdString(ctx, raw));
+        makeUtf8ProtoString(ctx, raw));
 }
 
 const proto::ProtoObject* prim_lower_case(proto::ProtoContext* ctx,
@@ -1509,7 +1511,7 @@ const proto::ProtoObject* prim_lower_case(proto::ProtoContext* ctx,
     std::string raw = asProtoString(v)->toStdString(ctx);
     for (auto& c : raw) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
     return reinterpret_cast<const proto::ProtoObject*>(
-        proto::ProtoString::fromStdString(ctx, raw));
+        makeUtf8ProtoString(ctx, raw));
 }
 
 const proto::ProtoObject* prim_starts_with_p(proto::ProtoContext* ctx,
@@ -1623,13 +1625,13 @@ const proto::ProtoObject* matchValue(proto::ProtoContext* ctx, const std::smatch
                                      unsigned groups) {
     if (groups == 0)
         return reinterpret_cast<const proto::ProtoObject*>(
-            proto::ProtoString::fromStdString(ctx, m.str(0)));
+            makeUtf8ProtoString(ctx, m.str(0)));
     proto::ProtoContext scope(ctx->space, ctx);
     scope.resizeAutomaticLocals(1);
     scope.setAutomaticLocal(0, scope.newList()->asObject(&scope));
     for (unsigned g = 0; g <= groups; ++g) {
         const proto::ProtoObject* part = m[g].matched
-            ? reinterpret_cast<const proto::ProtoObject*>(proto::ProtoString::fromStdString(&scope, m.str(g)))
+            ? reinterpret_cast<const proto::ProtoObject*>(makeUtf8ProtoString(&scope, m.str(g)))
             : PROTO_NONE;
         scope.setAutomaticLocal(0, scope.getAutomaticLocal(0)->asList(&scope)
             ->appendLast(&scope, part)->asObject(&scope));
@@ -1874,7 +1876,7 @@ const proto::ProtoObject* replaceWithPattern(proto::ProtoContext* ctx, const std
         if (firstOnly) break;
     }
     out.append(last, s.end());
-    return reinterpret_cast<const proto::ProtoObject*>(proto::ProtoString::fromStdString(ctx, out));
+    return reinterpret_cast<const proto::ProtoObject*>(makeUtf8ProtoString(ctx, out));
 }
 
 // (replace-first s match replacement) — replace with only the first match
@@ -1894,7 +1896,7 @@ const proto::ProtoObject* prim_replace_first(proto::ProtoContext* ctx,
     const std::string r = stringArgOf(ctx, args, 2, "replace-first");
     const std::size_t at = s.find(m);
     if (at == std::string::npos) return args->getAt(ctx, 0);
-    return reinterpret_cast<const proto::ProtoObject*>(proto::ProtoString::fromStdString(
+    return reinterpret_cast<const proto::ProtoObject*>(makeUtf8ProtoString(
         ctx, s.substr(0, at) + r + s.substr(at + m.size())));
 }
 
@@ -1924,7 +1926,7 @@ const proto::ProtoObject* splitWithPattern(proto::ProtoContext* ctx, const std::
     ListBuilder out(ctx);
     for (const std::string& p : pieces)
         out.push(reinterpret_cast<const proto::ProtoObject*>(
-            proto::ProtoString::fromStdString(out.context(), p)));
+            makeUtf8ProtoString(out.context(), p)));
     proto::ProtoContext scope(ctx->space, ctx);
     scope.resizeAutomaticLocals(1);
     scope.setAutomaticLocal(0, out.finish());
@@ -1965,7 +1967,7 @@ const proto::ProtoObject* prim_replace(proto::ProtoContext* ctx,
         pos = found + m.size();
     }
     return reinterpret_cast<const proto::ProtoObject*>(
-        proto::ProtoString::fromStdString(ctx, out));
+        makeUtf8ProtoString(ctx, out));
 }
 
 // (join sep coll) — concatenate `coll` items, separator between each.
@@ -1999,7 +2001,7 @@ const proto::ProtoObject* prim_join(proto::ProtoContext* ctx,
         }
     }
     return reinterpret_cast<const proto::ProtoObject*>(
-        proto::ProtoString::fromStdString(ctx, text));
+        makeUtf8ProtoString(ctx, text));
 }
 
 // (split s delim) — returns a list of substrings split by `delim`.
@@ -2032,7 +2034,7 @@ const proto::ProtoObject* prim_split(proto::ProtoContext* ctx,
         for (char c : s) {
             std::string one(1, c);
             out.push(reinterpret_cast<const proto::ProtoObject*>(
-                proto::ProtoString::fromStdString(out.context(), one)));
+                makeUtf8ProtoString(out.context(), one)));
         }
         return out.finish();
     }
@@ -2043,7 +2045,7 @@ const proto::ProtoObject* prim_split(proto::ProtoContext* ctx,
             ? s.substr(pos)
             : s.substr(pos, found - pos);
         out.push(reinterpret_cast<const proto::ProtoObject*>(
-            proto::ProtoString::fromStdString(out.context(), piece)));
+            makeUtf8ProtoString(out.context(), piece)));
         if (found == std::string::npos) break;
         pos = found + d.size();
     }
@@ -2069,7 +2071,7 @@ const proto::ProtoObject* prim_trim(proto::ProtoContext* ctx,
     while (a < b && isAsciiWs(static_cast<unsigned char>(s[a]))) ++a;
     while (b > a && isAsciiWs(static_cast<unsigned char>(s[b - 1]))) --b;
     return reinterpret_cast<const proto::ProtoObject*>(
-        proto::ProtoString::fromStdString(ctx, s.substr(a, b - a)));
+        makeUtf8ProtoString(ctx, s.substr(a, b - a)));
 }
 
 const proto::ProtoObject* prim_triml(proto::ProtoContext* ctx,
@@ -2086,7 +2088,7 @@ const proto::ProtoObject* prim_triml(proto::ProtoContext* ctx,
     std::size_t a = 0;
     while (a < s.size() && isAsciiWs(static_cast<unsigned char>(s[a]))) ++a;
     return reinterpret_cast<const proto::ProtoObject*>(
-        proto::ProtoString::fromStdString(ctx, s.substr(a)));
+        makeUtf8ProtoString(ctx, s.substr(a)));
 }
 
 const proto::ProtoObject* prim_trimr(proto::ProtoContext* ctx,
@@ -2103,7 +2105,7 @@ const proto::ProtoObject* prim_trimr(proto::ProtoContext* ctx,
     std::size_t b = s.size();
     while (b > 0 && isAsciiWs(static_cast<unsigned char>(s[b - 1]))) --b;
     return reinterpret_cast<const proto::ProtoObject*>(
-        proto::ProtoString::fromStdString(ctx, s.substr(0, b)));
+        makeUtf8ProtoString(ctx, s.substr(0, b)));
 }
 
 const proto::ProtoObject* prim_blank_p(proto::ProtoContext* ctx,
@@ -2772,8 +2774,12 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
             const proto::ProtoThread* t =
                 fctx->space->newThread(fctx, threadName, &pmapWorkerMain,
                                        targs, nullptr);
+            // The thread object itself, not its address as an integer: the
+            // element keeps it reachable until phase 2 has joined it. A
+            // finished worker leaves protoCore's thread list, so a thread
+            // known only by its address could be collected before the join.
             fut->setAttribute(fctx, cc->threadKey,
-                fctx->fromLong(reinterpret_cast<long long>(t)));
+                reinterpret_cast<const proto::ProtoObject*>(t));
             futures.push(fut);
         }
         scope.setAutomaticLocal(kSlotFs, futures.finish());
@@ -2792,14 +2798,19 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
         proto::ProtoContext* rctx = results.context();
         for (proto::proto_ulong i = 0; i < n; ++i) {
             const proto::ProtoObject* fut = fs->getAt(rctx, (int)i);
-            const proto::ProtoObject* done =
-                fut->getAttribute(rctx, cc->doneKey);
-            if (done != PROTO_TRUE) {
+            // Every worker is joined, finished or not: a worker that has
+            // already finished still holds its native thread (its stack and
+            // its std::thread) until it is joined, so skipping the join for
+            // done elements leaked one thread per element
+            // (tests/cli/pmap-joins-workers.sh). Joining a finished thread
+            // returns at once. These threads are pmap's own: nothing else
+            // joins them.
+            {
                 const proto::ProtoObject* tObj =
                     fut->getAttribute(rctx, cc->threadKey);
-                if (tObj && tObj->isInteger(rctx)) {
+                if (tObj && tObj != PROTO_NONE) {
                     proto::ProtoThread* t =
-                        reinterpret_cast<proto::ProtoThread*>(tObj->asLong(rctx));
+                        const_cast<proto::ProtoThread*>(tObj->asThread(rctx));
                     if (t) {
                         // See the note at shutdownFuturesImpl. pmap joins in
                         // order, so without this the first element that needs
@@ -3370,7 +3381,7 @@ const proto::ProtoObject* prim_name(proto::ProtoContext* ctx,
     if (!s.empty() && s[0] == ':') s.erase(0, 1);
     const std::size_t slash = s.find('/');
     if (slash != std::string::npos && slash + 1 < s.size()) s = s.substr(slash + 1);
-    return ctx->fromUTF8String(s.c_str());
+    return makeUtf8String(ctx, s);
 }
 
 // (list* args... coll) — a list of the leading arguments followed by the
@@ -3809,7 +3820,7 @@ const proto::ProtoObject* prim_pr_str(proto::ProtoContext* ctx,
         if (i > 0) text += ' ';
         printTo(ctx, text, args->getAt(ctx, static_cast<int>(i)), /*readable=*/true);
     }
-    return ctx->fromUTF8String(text.c_str());
+    return makeUtf8String(ctx, text);
 }
 
 // (pr x ...) — the arguments printed readably, as prn does, without the
@@ -4099,7 +4110,7 @@ const proto::ProtoObject* prim_format(proto::ProtoContext* ctx,
     if (!args || args->getSize(ctx) < 1) throwError(ctx, "format: expects (format fmt & args)");
     const std::string fmt = stringArgOf(ctx, args, 0, "format");
     return reinterpret_cast<const proto::ProtoObject*>(
-        proto::ProtoString::fromStdString(ctx, formatString(ctx, fmt, args, 1)));
+        makeUtf8ProtoString(ctx, formatString(ctx, fmt, args, 1)));
 }
 
 // (printf fmt & args) — prints (format fmt args...), with no newline.
@@ -4329,6 +4340,7 @@ const char* primitiveName(proto::ProtoMethod fn) {
     }
     if (const char* lazy = lazySeqPrimitiveName(fn)) return lazy;
     if (const char* core = corePrimitiveName(fn)) return core;
+    if (const char* data = dataFormatPrimitiveName(fn)) return data;
     return ioPrimitiveName(reinterpret_cast<const void*>(fn));
 }
 
@@ -4663,6 +4675,10 @@ void installPrimitives(proto::ProtoContext* ctx,
     // The Part C vocabulary in C++ (CorePrims.h), after the I/O globals,
     // which its `System` object reads.
     installCorePrimitives(ctx, globals);
+    // read-string, clojure.edn, cheshire.core, clojure.data.json
+    // (DataFormats.h).
+    installEdn(ctx, globals);
+    installJson(ctx, globals);
 }
 
 } // namespace protoClojure

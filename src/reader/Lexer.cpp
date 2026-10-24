@@ -328,28 +328,112 @@ Token Lexer::lexNumber(bool negative) {
     return t;
 }
 
+// Appends the UTF-8 encoding of code point `cp` (at most U+10FFFF, not a
+// surrogate) to `out`.
+static void appendUtf8(std::string& out, char32_t cp) {
+    if (cp < 0x80) {
+        out += static_cast<char>(cp);
+    } else if (cp < 0x800) {
+        out += static_cast<char>(0xC0 | (cp >> 6));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        out += static_cast<char>(0xE0 | (cp >> 12));
+        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    } else {
+        out += static_cast<char>(0xF0 | (cp >> 18));
+        out += static_cast<char>(0x80 | ((cp >> 12) & 0x3F));
+        out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+        out += static_cast<char>(0x80 | (cp & 0x3F));
+    }
+}
+
+// The string escapes of Clojure's reader (LispReader.StringReader):
+// `\t \r \n \b \f \\ \"`, `\uXXXX` (exactly four hexadecimal digits) and
+// an octal escape of one to three digits up to `\377`. Strings are UTF-8
+// (D17), so a `\u` escape is encoded as UTF-8, and a high surrogate escape
+// followed by a low surrogate escape (`"\uD83D\uDE00"`) is the one
+// character the UTF-16 pair stands for, which is what the same literal is in
+// JVM Clojure. An unpaired surrogate cannot be encoded in UTF-8 and is a
+// read error (JVM Clojure keeps it in its UTF-16 string, D55).
 Token Lexer::lexString() {
     int startLine = line_, startCol = column_;
     advance(); // consume opening "
     std::string out;
+    // Reads the four hex digits of a `\u` escape, the `u` already consumed;
+    // -1 when they are not four hex digits.
+    auto hex4 = [&]() -> long {
+        long v = 0;
+        for (int i = 0; i < 4; ++i) {
+            if (eof()) return -1;
+            const char h = current();
+            int d;
+            if (h >= '0' && h <= '9') d = h - '0';
+            else if (h >= 'a' && h <= 'f') d = h - 'a' + 10;
+            else if (h >= 'A' && h <= 'F') d = h - 'A' + 10;
+            else return -1;
+            v = v * 16 + d;
+            advance();
+        }
+        return v;
+    };
     while (!eof() && current() != '"') {
         if (current() == '\\') {
             advance();
             if (eof()) {
                 return makeError("unterminated string escape", startLine, startCol);
             }
+            const int escLine = line_, escCol = column_;
             char esc = current();
             switch (esc) {
                 case 'n':  out += '\n'; break;
                 case 't':  out += '\t'; break;
                 case 'r':  out += '\r'; break;
+                case 'b':  out += '\b'; break;
+                case 'f':  out += '\f'; break;
                 case '\\': out += '\\'; break;
                 case '"':  out += '"';  break;
-                case '0':  out += '\0'; break;
+                case 'u': {
+                    advance();
+                    long cp = hex4();
+                    if (cp < 0)
+                        return makeError("Invalid unicode escape: \\u needs four hexadecimal digits",
+                                         escLine, escCol);
+                    if (cp >= 0xD800 && cp <= 0xDBFF) {
+                        // A high surrogate: a low surrogate escape must follow.
+                        long lo = -1;
+                        if (!eof() && current() == '\\' && lookahead() == 'u') {
+                            advance(); advance();
+                            lo = hex4();
+                        }
+                        if (lo < 0xDC00 || lo > 0xDFFF)
+                            return makeError("Invalid unicode escape: unpaired surrogate (UTF-8 strings cannot hold one)",
+                                             escLine, escCol);
+                        cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                    } else if (cp >= 0xDC00 && cp <= 0xDFFF) {
+                        return makeError("Invalid unicode escape: unpaired surrogate (UTF-8 strings cannot hold one)",
+                                         escLine, escCol);
+                    }
+                    appendUtf8(out, static_cast<char32_t>(cp));
+                    continue;  // the digits are consumed
+                }
                 default:
-                    // Unicode `\uXXXX` and octal `\oNNN` reserved.
+                    if (esc >= '0' && esc <= '7') {
+                        // Octal: one to three digits, at most \377.
+                        int v = 0, digits = 0;
+                        while (!eof() && digits < 3 && current() >= '0' && current() <= '7') {
+                            v = v * 8 + (current() - '0');
+                            ++digits;
+                            advance();
+                        }
+                        if (v > 0377)
+                            return makeError("Octal escape sequence must be in range [0, 377]",
+                                             escLine, escCol);
+                        appendUtf8(out, static_cast<char32_t>(v));
+                        continue;
+                    }
                     return makeError(
-                        std::string("unsupported string escape: \\") + esc,
+                        std::string("Unsupported escape character: \\") + esc,
                         line_, column_);
             }
             advance();
@@ -531,10 +615,34 @@ Token Lexer::lexSymbolOrPunct() {
             advance(); advance();
             return t;
         }
-        if (la == '_' || la == '\'' ) {
+        if (la == '_') {
+            // `#_form`: the next form is read and discarded (Reader.cpp).
+            Token t;
+            t.kind = TokenKind::HashUnderscore;
+            t.text = "#_";
+            t.line = startLine;
+            t.column = startCol;
+            advance(); advance();
+            return t;
+        }
+        if (la == '\'') {
             std::string s = std::string("#") + la;
             advance(); advance();
             return reserved(s);
+        }
+        if (std::isalpha(static_cast<unsigned char>(la))) {
+            // `#tag form`: a tagged literal. protoClojure has no reader
+            // functions (no #inst, #uuid or data readers), so every tag is
+            // Clojure's error for an unknown one.
+            advance();  // #
+            std::string tag;
+            while (!eof()) {
+                const std::size_t len = symbolCharLength(pos_);
+                if (len == 0) break;
+                tag.append(source_, pos_, len);
+                for (std::size_t i = 0; i < len; ++i) advance();
+            }
+            return makeError("No reader function for tag " + tag, startLine, startCol);
         }
         std::string s = "#";
         advance();

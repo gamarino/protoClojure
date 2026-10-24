@@ -71,7 +71,10 @@ tell at a glance which parts of the surface are runnable today. The
 | Closures with N-level lexical capture | Implemented |
 | Named arguments `& {:keys [...] :or {...} :as m}` | Implemented |
 | Destructuring in `let`, `loop`, `fn`, `defn`, `defmacro` and the binding macros (`[a b & r :as all]`, `{x :x :keys [...] :strs [...] :syms [...] :or {...} :as m}`, nested) | Implemented (§5.4) |
-| `ns` with `(:require [clojure.string :as str] ...)`, `require` with `:as` / `:refer` | Implemented for the library namespaces protoClojure provides (clojure.core, clojure.string, clojure.set, clojure.java.io, clojure.java.shell): their aliases resolve, `:refer` names are globals (§7.1, D52) |
+| `ns` with `(:require [clojure.string :as str] ...)`, `require` with `:as` / `:refer` | Implemented for the library namespaces protoClojure provides (clojure.core, clojure.string, clojure.set, clojure.java.io, clojure.java.shell, clojure.edn, cheshire.core, clojure.data.json): their aliases resolve, `:refer` names are globals (§7.1, D52) |
+| `read-string`, `clojure.edn/read-string`, `pr-str` round trip | Implemented (§3.1, §19.1; D56) |
+| JSON: `cheshire.core` (`parse-string`, `parse-stream`, `generate-string`, `generate-stream`) and `clojure.data.json` (`read-str`, `read`, `write-str`, `write`) | Implemented over one C++ parser and writer (§19.2; D57) |
+| `parse-long`, `parse-double`, `parse-boolean` | Implemented (D58) |
 | Full namespaces (`in-ns`, vars per namespace, loading `.clj` files by namespace) | Planned |
 | State (`atom`, `swap!`, `reset!`, `compare-and-set!`, `@`, watches) | Implemented |
 | `future`, `promise`, `deliver`, `pmap` | Implemented |
@@ -199,7 +202,12 @@ comment is `#_<form>` — the next form is read and dropped.
 ### 2.3 Strings
 
 Double-quoted, backslash-escaped: `"hello\n"`. The escape set is the
-Clojure set: `\n \t \r \\ \"` plus `\uXXXX` unicode and `\oNNN` octal.
+Clojure set: `\n \t \r \b \f \\ \"`, `\uXXXX` (exactly four hexadecimal
+digits; a surrogate pair such as `"\uD83D\uDE00"` is the one character it
+encodes, and an unpaired surrogate is a read error because a UTF-8 string
+cannot hold one, D55) and octal `\0` to `\377` (`"\101"` is `"A"`). Any
+other escape is a read error, `Unsupported escape character: \q`. A string
+may hold a NUL byte (`"a\u0000b"` has three characters).
 A string is a protoCore `ProtoString` (rope-backed UTF-8). Multi-line
 strings are written across newlines:
 
@@ -343,7 +351,9 @@ truthy).
   error (`Duplicate key: :a`), as in Clojure.
 - `#'sym` → var-quote: produces the var, not the value (`@#'my-fn`
   returns the current value).
-- `#_form` → discard the next form.
+- `#_form` → discard the next form (implemented): `[1 #_2 3]` reads as
+  `[1 3]`, `#_ #_ a b` discards two forms, and a `#_` before the end of a
+  file or a collection discards the last form.
 - `#!` → a comment to end of line (implemented; §2.1).
 - `^{:a 1} form` → attach metadata to `form`. `^kw` is `{:tag kw}`;
   `^Type` is `{:tag Type}`.
@@ -351,8 +361,9 @@ truthy).
 
 ### 2.9 Reader literals
 
-`#inst "..."` and `#uuid "..."` are reserved. v0.1 reads them as the
-tagged forms but does not yet ship `inst?` / `uuid?` predicates.
+There are no tagged-literal readers yet: `#inst "..."`, `#uuid "..."` and
+any other `#tag form` are the read error `No reader function for tag inst`,
+Clojure's error for a tag it has no reader for (D13).
 
 ### 2.10 Regular expressions
 
@@ -414,9 +425,13 @@ a string a string, `[...]` a vector, `{...}` a map, `(...)` a list, and
 `nil`, `true` and `false` are those values. Code is therefore data of the
 ordinary kinds, which is what quote and macros rely on.
 
-`(read-string s)` parses one form. `(read rdr)` reads from a reader
-object. Errors carry source position. (Planned: `read-string` and
-`read` are not available yet; the reader is used internally.)
+`(read-string s)` reads the first form of the string `s`, as code is read
+(quote, syntax-quote, `#(...)`), and ignores the rest; `(read-string {:eof
+v} s)` answers `v` for a string with no form, which is otherwise the error
+`EOF while reading`. `(eval (read-string "(+ 1 2)"))` is 3. A read error is a
+`RuntimeException` naming the problem and its line and column in the
+string (D56). `clojure.edn/read-string` reads data only (§19.1). `read` on a
+reader object is not implemented.
 
 ### 3.2 The evaluator
 
@@ -1824,3 +1839,98 @@ Not implemented: `*out*` and `binding` (§8), `input-stream` /
 `output-stream` and byte arrays, `as-file` / `as-url`, `resource`, `sh`'s
 `:in-enc` / `:out-enc`, HTTP keep-alive, an HTTPS server, and streaming
 request or response bodies.
+
+## 19. Data formats: EDN and JSON
+
+### 19.1 EDN
+
+`clojure.edn/read-string` reads the first value of a string with the reader
+in EDN mode: data only. Maps, vectors, sets, lists, strings, keywords,
+symbols, numbers, `nil` and booleans read as in code, `;` comments and `#_`
+are skipped, and there is nothing to evaluate. The reader macros that only
+mean something in code are errors: `'`, `` ` ``, `~`, `~@` and `@`
+(`EDN does not support the reader macro '`), `#(...)` and `#"..."`
+(`No dispatch macro for: (`, Clojure's EdnReader message), and there are no
+tagged literals (`No reader function for tag inst`). `nil` or a string with
+no value answers nil; `(edn/read-string {:eof v} s)` answers `v` instead,
+and with an options map that has no `:eof` such a string is an error, as in
+Clojure.
+
+```clojure
+(require '[clojure.edn :as edn])
+(edn/read-string "{:port 8080 :hosts [\"a\" \"b\"] :debug false}")
+;; => {:port 8080, :hosts ["a" "b"], :debug false}  (in some order, D24)
+(edn/read-string "")                 ;; => nil
+```
+
+`pr-str` writes what `read-string` and `edn/read-string` read back: for
+every printable value `(= v (read-string (pr-str v)))` holds, nested maps,
+vectors, sets, keywords and symbols with namespaces, strings with any
+escape, big integers, doubles (printed with the shortest digits that read
+back), `nil`, `true` and `false` included. protoClojure has no ratios and
+no characters (D3), so neither appears. Functions, atoms and other
+reference values print as tags (`#<atom 1>`) that do not read back, as in
+Clojure.
+
+### 19.2 JSON
+
+Two libraries Clojure scripts use, with their own names, over one C++ parser
+and writer. Both work with `require` and `ns` aliases, and without them by
+their full names (`cheshire.core/parse-string`).
+
+```clojure
+(require '[cheshire.core :as json])
+(json/parse-string "{\"a\":1,\"b\":[1,2.5,null]}" true)   ;; => {:a 1, :b [1 2.5 nil]}
+(json/parse-string "{\"a\":1}")                         ;; => {"a" 1}
+(json/generate-string {:a [1 "x" nil]})                ;; => "{\"a\":[1,\"x\",null]}"
+(json/generate-string {:a 1} {:pretty true})           ;; => "{\n  \"a\" : 1\n}"
+
+(require '[clojure.data.json :as dj])
+(dj/read-str "{\"a\":1}" :key-fn keyword)               ;; => {:a 1}
+(dj/write-str {:path "a/b"})                           ;; => "{\"path\":\"a\\/b\"}"
+```
+
+Parsing: an object is a map (string keys; `true` as cheshire's second
+argument, or `:key-fn keyword` in data.json, gives keyword keys, and any
+fn is applied to each key), an array a vector, a number without a fraction
+or an exponent an integer (exact at any size), any other number a double,
+`null` nil. Escapes and surrogate pairs are decoded; an unpaired surrogate is
+an error. A malformed document raises an exception naming the problem and
+the position, `JSON error: expected ':' after an object key, found character
+'1' at line 1, column 6`: an `IOException` from cheshire.core (Jackson's
+`JsonParseException` is one), an `Exception` from clojure.data.json.
+cheshire's `parse-string` answers nil for nil or a blank string and ignores
+what follows the first value; data.json's `read-str` raises on both, unless
+`:eof-error? false` (then `:eof-value`) for an empty input. data.json's
+`:value-fn` is called with each key and value; an entry whose value-fn
+answers the value-fn itself is dropped.
+
+Writing: maps are objects, vectors, lists, sets and sequences arrays,
+keywords and symbols strings, `nil` null. cheshire.core keeps a keyword's
+namespace (`:a/b` is `"a/b"`), writes `nil` keys as `""` and other non-string
+keys as their `str`, writes NaN and the infinities as the strings `"NaN"`,
+`"Infinity"`, `"-Infinity"` (Jackson's default), and takes `{:pretty true}`
+(Jackson's layout), `{:escape-non-ascii true}` and `{:key-fn f}` (applied
+to keyword keys). clojure.data.json writes a keyword's name, escapes
+non-ASCII characters (`\u00e9`), `/` and U+2028 / U+2029 unless told
+otherwise (`:escape-unicode false`, `:escape-slash false`,
+`:escape-js-separators false`), applies `:key-fn` to every key, and raises
+on a nil key and on NaN. The order of an object's keys follows the map's
+walk order, which is unspecified (D24).
+
+Streams. `(json/parse-stream rdr)` and `(dj/read rdr)` read one value from
+a reader, a line at a time: a file or a pipe of newline-delimited JSON is
+read value by value, and the rest of the line after a value is consumed with
+it (D57). `parse-stream` answers nil at the end of the stream.
+`(json/generate-stream x w)` and `(dj/write x w)` write to a writer.
+
+```clojure
+;; Newline-delimited JSON from standard input, one record at a time.
+(loop [n 0]
+  (if-let [rec (json/parse-stream *in* true)]
+    (recur (+ n (:count rec)))
+    (println "total" n)))
+```
+
+D57 lists what is not supported (cheshire's array-coerce-fn, custom
+encoders, SMILE; data.json's `:bigdec`, `pprint`, a write `:value-fn`).
