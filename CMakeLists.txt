@@ -230,6 +230,7 @@ add_library(protoclj_runtime STATIC
     src/runtime/BytecodeModule.cpp
     src/runtime/CorePrims.cpp
     src/runtime/DebugHook.cpp
+    src/runtime/Disassembler.cpp
     src/runtime/Edn.cpp
     src/runtime/Exceptions.cpp
     src/runtime/ExecutionEngine.cpp

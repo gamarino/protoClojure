@@ -1,0 +1,6 @@
+(defn both [a b] (and a b))
+(defn either [a b] (or a b))
+(defn spread [f xs] (apply f 1 xs))
+(def quoted '(a b c))
+(defn now [] (System/currentTimeMillis))
+(defn exit-fn [] System/exit)

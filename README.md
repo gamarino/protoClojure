@@ -687,6 +687,7 @@ empty under the debugger; stopping the session ends the script. Details in
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Planned milestones, versioning, and how to read the plan. |
 | [docs/INTEROP.md](docs/INTEROP.md) | The UMD interop design — pulling a Python or JavaScript module into a protoClojure namespace. |
 | [docs/DESIGN.md](docs/DESIGN.md) | The architectural overview — reader, compiler, BytecodeModule, VM, primitives. |
+| [docs/VM.md](docs/VM.md) | The bytecode VM for contributors — where to start reading the source, every opcode, worked examples from `protoclj --disasm`, how to add an opcode or a primitive. |
 | [docs/TUTORIAL.md](docs/TUTORIAL.md) | Index to the dual-audience tutorial under `docs/tutorial/`. |
 | [CHANGELOG.md](CHANGELOG.md) | Changes since the start of the project. |
 | [docs/archive/design-specs/](docs/archive/design-specs/) | Historical design specifications — engineering principles, phase plans, foreign dispatch, call convention. |

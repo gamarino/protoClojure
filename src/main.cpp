@@ -15,6 +15,7 @@
 #include "repl/Repl.h"
 #include "runtime/ActorScheduler.h"
 #include "runtime/BytecodeModule.h"
+#include "runtime/Disassembler.h"
 #include "runtime/Exceptions.h"
 #include "runtime/ExecutionEngine.h"
 #include "runtime/GCCensus.h"
@@ -69,6 +70,8 @@ void printHelp() {
         "  --help, -h      Print this help and exit.\n"
         "  --dap           Run as a Debug Adapter Protocol server over stdin/stdout\n"
         "                  (the VS Code debugger; see docs/debugging.md).\n"
+        "  --disasm        Run the script and, before each of its top-level forms\n"
+        "                  runs, print the form and its bytecode (docs/VM.md).\n"
         "\n"
         "Arguments after the script's path are bound, as strings, to\n"
         "*command-line-args* (nil when there are none).\n"
@@ -449,6 +452,15 @@ int main(int argc, char** argv) {
         }
         if (std::strcmp(a, "--dap") == 0) {
             return protoClojure::runDapServer(&runForDebugger, nullptr);
+        }
+        if (std::strcmp(a, "--disasm") == 0) {
+            // A script must follow: `protoclj --disasm script.clj [args...]`.
+            if (i + 1 >= argc) {
+                std::fprintf(stderr, "protoclj: --disasm needs a script. Try --help.\n");
+                return 1;
+            }
+            protoClojure::setDisassemblyOutput(stdout);
+            continue;
         }
         if (a[0] == '-') {
             std::fprintf(stderr,

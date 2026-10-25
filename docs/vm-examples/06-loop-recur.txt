@@ -1,0 +1,46 @@
+;; form 1: (defn sum-to [n] (loop [i 0 acc 0] (if (> i n) acc (recur (inc i) (+ acc i)))))
+module form1: arity 0, locals 0, max stack 1
+  constants:
+    #0   name    sum-to
+  code:
+    0  MAKE_FN          0         ; fn form1.0
+    1  STORE_GLOBAL     0         ; sum-to
+    2  RETURN
+
+module form1.0: arity 1, locals 2, max stack 3
+  constants:
+    #0   long    0
+    #1   name    inc
+  code:
+     0  PUSH_CONST       0        ; 0
+     1  STORE_LOCAL      1        ; local
+     2  PUSH_CONST       0        ; 0
+     3  STORE_LOCAL      2        ; local
+     4  PUSH_LOCAL       1        ; local
+     5  PUSH_LOCAL       0        ; param 0
+     6  GT
+     7  JUMP_IF_FALSE    2        ; -> 10
+     8  PUSH_LOCAL       2        ; local
+     9  JUMP             9        ; -> 19
+    10  PUSH_VAR         1        ; inc
+    11  PUSH_LOCAL       1        ; local
+    12  CALL             1        ; 1 arg
+    13  PUSH_LOCAL       2        ; local
+    14  PUSH_LOCAL       1        ; local
+    15  ADD
+    16  STORE_LOCAL      2        ; local
+    17  STORE_LOCAL      1        ; local
+    18  JUMP_BACK        15       ; -> 4
+    19  RETURN
+
+;; form 2: (sum-to 10)
+module form2: arity 0, locals 0, max stack 2
+  constants:
+    #0   name    sum-to
+    #1   long    10
+  code:
+    0  PUSH_VAR         0         ; sum-to
+    1  PUSH_CONST       1         ; 10
+    2  CALL             1         ; 1 arg
+    3  RETURN
+

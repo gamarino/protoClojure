@@ -1,0 +1,37 @@
+;; form 1: (defn make-adder [n] (fn [x] (+ x n)))
+module form1: arity 0, locals 0, max stack 1
+  constants:
+    #0   name    make-adder
+  code:
+    0  MAKE_FN          0         ; fn form1.0
+    1  STORE_GLOBAL     0         ; make-adder
+    2  RETURN
+
+module form1.0: arity 1, locals 0, max stack 1
+  code:
+    0  PUSH_LOCAL_CLEAR 0         ; param 0
+    1  MAKE_FN          0         ; fn form1.0.0
+    2  RETURN
+
+module form1.0.0: arity 1, locals 1, max stack 2
+  captures: parent slot 0 -> slot 1
+  code:
+    0  PUSH_LOCAL_CLEAR 0         ; param 0
+    1  PUSH_LOCAL       1         ; capture (parent slot 0)
+    2  ADD
+    3  RETURN
+
+;; form 2: ((make-adder 5) 10)
+module form2: arity 0, locals 0, max stack 2
+  constants:
+    #0   name    make-adder
+    #1   long    5
+    #2   long    10
+  code:
+    0  PUSH_VAR         0         ; make-adder
+    1  PUSH_CONST       1         ; 5
+    2  CALL             1         ; 1 arg
+    3  PUSH_CONST       2         ; 10
+    4  CALL             1         ; 1 arg
+    5  RETURN
+

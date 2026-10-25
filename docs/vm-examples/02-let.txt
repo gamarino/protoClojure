@@ -1,0 +1,23 @@
+;; form 1: (let [x 10 y (* x 2)] (+ x y))
+module form1: arity 0, locals 0, max stack 1
+  code:
+    0  MAKE_FN          0         ; fn form1.0
+    1  CALL             0         ; 0 args
+    2  RETURN
+
+module form1.0: arity 0, locals 2, max stack 2
+  constants:
+    #0   long    10
+    #1   long    2
+  code:
+     0  PUSH_CONST       0        ; 10
+     1  STORE_LOCAL      0        ; local
+     2  PUSH_LOCAL       0        ; local
+     3  PUSH_CONST       1        ; 2
+     4  MUL
+     5  STORE_LOCAL      1        ; local
+     6  PUSH_LOCAL       0        ; local
+     7  PUSH_LOCAL_CLEAR 1        ; local
+     8  ADD
+     9  RETURN
+

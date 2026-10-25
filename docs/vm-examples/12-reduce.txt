@@ -1,0 +1,52 @@
+;; form 1: (reduce (fn [acc x] (+ acc x)) 0 [1 2 3 4])
+module form1: arity 0, locals 0, max stack 8
+  constants:
+    #0   name    reduce
+    #1   long    0
+    #2   name    vector
+    #3   long    1
+    #4   long    2
+    #5   long    3
+    #6   long    4
+  code:
+     0  PUSH_VAR         0        ; reduce
+     1  MAKE_FN          0        ; fn form1.0
+     2  PUSH_CONST       1        ; 0
+     3  PUSH_VAR         2        ; vector
+     4  PUSH_CONST       3        ; 1
+     5  PUSH_CONST       4        ; 2
+     6  PUSH_CONST       5        ; 3
+     7  PUSH_CONST       6        ; 4
+     8  CALL             4        ; 4 args
+     9  CALL             3        ; 3 args
+    10  RETURN
+
+module form1.0: arity 2, locals 0, max stack 2
+  code:
+    0  PUSH_LOCAL_CLEAR 0         ; param 0
+    1  PUSH_LOCAL_CLEAR 1         ; param 1
+    2  ADD
+    3  RETURN
+
+;; form 2: (reduce + [1 2 3 4])
+module form2: arity 0, locals 0, max stack 7
+  constants:
+    #0   name    reduce
+    #1   name    +
+    #2   name    vector
+    #3   long    1
+    #4   long    2
+    #5   long    3
+    #6   long    4
+  code:
+     0  PUSH_VAR         0        ; reduce
+     1  PUSH_VAR         1        ; +
+     2  PUSH_VAR         2        ; vector
+     3  PUSH_CONST       3        ; 1
+     4  PUSH_CONST       4        ; 2
+     5  PUSH_CONST       5        ; 3
+     6  PUSH_CONST       6        ; 4
+     7  CALL             4        ; 4 args
+     8  CALL             2        ; 2 args
+     9  RETURN
+

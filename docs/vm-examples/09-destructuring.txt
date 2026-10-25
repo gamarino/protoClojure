@@ -1,0 +1,149 @@
+;; form 1: (defn sum-pair [[a b]] (+ a b))
+module form1: arity 0, locals 0, max stack 1
+  constants:
+    #0   name    sum-pair
+  code:
+    0  MAKE_FN          0         ; fn form1.0
+    1  STORE_GLOBAL     0         ; sum-pair
+    2  RETURN
+
+module form1.0: arity 1, locals 3, max stack 4
+  constants:
+    #0   name    clojure.core/nth
+    #1   long    0
+    #2   long    1
+  code:
+     0  PUSH_LOCAL_CLEAR 0        ; param 0
+     1  STORE_LOCAL      1        ; local
+     2  PUSH_VAR         0        ; clojure.core/nth
+     3  PUSH_LOCAL       1        ; local
+     4  PUSH_CONST       1        ; 0
+     5  PUSH_NIL
+     6  CALL             3        ; 3 args
+     7  STORE_LOCAL      2        ; local
+     8  PUSH_VAR         0        ; clojure.core/nth
+     9  PUSH_LOCAL       1        ; local
+    10  PUSH_CONST       2        ; 1
+    11  PUSH_NIL
+    12  CALL             3        ; 3 args
+    13  STORE_LOCAL      3        ; local
+    14  PUSH_LOCAL_CLEAR 2        ; local
+    15  PUSH_LOCAL_CLEAR 3        ; local
+    16  ADD
+    17  RETURN
+
+;; form 2: (defn area [{:keys [w h]}] (* w h))
+module form2: arity 0, locals 0, max stack 1
+  constants:
+    #0   name    area
+  code:
+    0  MAKE_FN          0         ; fn form2.0
+    1  STORE_GLOBAL     0         ; area
+    2  RETURN
+
+module form2.0: arity 1, locals 4, max stack 3
+  constants:
+    #0   name    clojure.core/__destructure-map
+    #1   name    clojure.core/get
+    #2   named   :w
+    #3   named   :h
+  code:
+     0  PUSH_LOCAL_CLEAR 0        ; param 0
+     1  STORE_LOCAL      1        ; local
+     2  PUSH_VAR         0        ; clojure.core/__destructure-map
+     3  PUSH_LOCAL_CLEAR 1        ; local
+     4  CALL             1        ; 1 arg
+     5  STORE_LOCAL      2        ; local
+     6  PUSH_VAR         1        ; clojure.core/get
+     7  PUSH_LOCAL       2        ; local
+     8  PUSH_CONST       2        ; :w
+     9  CALL             2        ; 2 args
+    10  STORE_LOCAL      3        ; local
+    11  PUSH_VAR         1        ; clojure.core/get
+    12  PUSH_LOCAL       2        ; local
+    13  PUSH_CONST       3        ; :h
+    14  CALL             2        ; 2 args
+    15  STORE_LOCAL      4        ; local
+    16  PUSH_LOCAL_CLEAR 3        ; local
+    17  PUSH_LOCAL_CLEAR 4        ; local
+    18  MUL
+    19  RETURN
+
+;; form 3: (defn connect [host & {:keys [port], :or {port 80}}] [host port])
+module form3: arity 0, locals 0, max stack 1
+  constants:
+    #0   name    connect
+  code:
+    0  MAKE_FN          0         ; fn form3.0
+    1  STORE_GLOBAL     0         ; connect
+    2  RETURN
+
+module form3.0: arity 1 + keyword args, locals 1, max stack 3
+  keyword args: :port -> slot 1
+  constants:
+    #0   long    80
+    #1   name    vector
+  code:
+     0  PUSH_LOCAL       1        ; :keys port
+     1  PUSH_NIL
+     2  EQ
+     3  JUMP_IF_FALSE    2        ; -> 6
+     4  PUSH_CONST       0        ; 80
+     5  STORE_LOCAL      1        ; :keys port
+     6  PUSH_VAR         1        ; vector
+     7  PUSH_LOCAL_CLEAR 0        ; param 0
+     8  PUSH_LOCAL       1        ; :keys port
+     9  CALL             2        ; 2 args
+    10  RETURN
+
+;; form 4: (sum-pair [1 2])
+module form4: arity 0, locals 0, max stack 4
+  constants:
+    #0   name    sum-pair
+    #1   name    vector
+    #2   long    1
+    #3   long    2
+  code:
+    0  PUSH_VAR         0         ; sum-pair
+    1  PUSH_VAR         1         ; vector
+    2  PUSH_CONST       2         ; 1
+    3  PUSH_CONST       3         ; 2
+    4  CALL             2         ; 2 args
+    5  CALL             1         ; 1 arg
+    6  RETURN
+
+;; form 5: (area {:w 3, :h 4})
+module form5: arity 0, locals 0, max stack 6
+  constants:
+    #0   name    area
+    #1   name    hash-map
+    #2   named   :w
+    #3   long    3
+    #4   named   :h
+    #5   long    4
+  code:
+    0  PUSH_VAR         0         ; area
+    1  PUSH_VAR         1         ; hash-map
+    2  PUSH_CONST       2         ; :w
+    3  PUSH_CONST       3         ; 3
+    4  PUSH_CONST       4         ; :h
+    5  PUSH_CONST       5         ; 4
+    6  CALL             4         ; 4 args
+    7  CALL             1         ; 1 arg
+    8  RETURN
+
+;; form 6: (connect "example.org" :port 8080)
+module form6: arity 0, locals 0, max stack 4
+  constants:
+    #0   name    connect
+    #1   string  "example.org"
+    #2   named   :port
+    #3   long    8080
+  code:
+    0  PUSH_VAR         0         ; connect
+    1  PUSH_CONST       1         ; "example.org"
+    2  PUSH_CONST       2         ; :port
+    3  PUSH_CONST       3         ; 8080
+    4  CALL_KW          3         ; 3 args
+    5  RETURN
+

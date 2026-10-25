@@ -1,0 +1,61 @@
+;; form 1: (defmacro unless [test then] (clojure.core/seq (clojure.core/concat (clojure.core/list (quote if)) (clojure.core/list test) (clojure.core/list nil) (clojure.core/list then))))
+module form1: arity 0, locals 0, max stack 2
+  constants:
+    #0   name    __macro__
+    #1   name    unless
+  code:
+    0  PUSH_VAR         0         ; __macro__
+    1  MAKE_FN          0         ; fn form1.0
+    2  CALL             1         ; 1 arg
+    3  STORE_GLOBAL     1         ; unless
+    4  RETURN
+
+module form1.0: arity 4, locals 0, max stack 7
+  constants:
+    #0   name    clojure.core/seq
+    #1   name    clojure.core/concat
+    #2   name    clojure.core/list
+    #3   named   if
+  code:
+     0  PUSH_VAR         0        ; clojure.core/seq
+     1  PUSH_VAR         1        ; clojure.core/concat
+     2  PUSH_VAR         2        ; clojure.core/list
+     3  PUSH_CONST       3        ; if
+     4  CALL             1        ; 1 arg
+     5  PUSH_VAR         2        ; clojure.core/list
+     6  PUSH_LOCAL_CLEAR 2        ; param 2
+     7  CALL             1        ; 1 arg
+     8  PUSH_VAR         2        ; clojure.core/list
+     9  PUSH_NIL
+    10  CALL             1        ; 1 arg
+    11  PUSH_VAR         2        ; clojure.core/list
+    12  PUSH_LOCAL_CLEAR 3        ; param 3
+    13  CALL             1        ; 1 arg
+    14  CALL             4        ; 4 args
+    15  CALL             1        ; 1 arg
+    16  RETURN
+
+;; form 2: (if false nil :ran)
+module form2: arity 0, locals 0, max stack 1
+  constants:
+    #0   named   :ran
+  code:
+    0  PUSH_CONST       0         ; :ran
+    1  RETURN
+
+;; form 3: (if (pos? 1) (do :yes))
+module form3: arity 0, locals 0, max stack 2
+  constants:
+    #0   name    pos?
+    #1   long    1
+    #2   named   :yes
+  code:
+    0  PUSH_VAR         0         ; pos?
+    1  PUSH_CONST       1         ; 1
+    2  CALL             1         ; 1 arg
+    3  JUMP_IF_FALSE    2         ; -> 6
+    4  PUSH_CONST       2         ; :yes
+    5  JUMP             1         ; -> 7
+    6  PUSH_NIL
+    7  RETURN
+

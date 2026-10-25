@@ -1,0 +1,27 @@
+;; form 1: (defn square [x] (* x x))
+module form1: arity 0, locals 0, max stack 1
+  constants:
+    #0   name    square
+  code:
+    0  MAKE_FN          0         ; fn form1.0
+    1  STORE_GLOBAL     0         ; square
+    2  RETURN
+
+module form1.0: arity 1, locals 0, max stack 2
+  code:
+    0  PUSH_LOCAL       0         ; param 0
+    1  PUSH_LOCAL       0         ; param 0
+    2  MUL
+    3  RETURN
+
+;; form 2: (square 7)
+module form2: arity 0, locals 0, max stack 2
+  constants:
+    #0   name    square
+    #1   long    7
+  code:
+    0  PUSH_VAR         0         ; square
+    1  PUSH_CONST       1         ; 7
+    2  CALL             1         ; 1 arg
+    3  RETURN
+

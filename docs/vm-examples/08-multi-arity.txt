@@ -1,0 +1,40 @@
+;; form 1: (defn greet ([] (greet "world")) ([who] (str "hello, " who)))
+module form1: arity 0, locals 0, max stack 1
+  constants:
+    #0   name    greet
+  arity group 0: blocks 0 1
+  code:
+    0  MAKE_FN_MULTI    0         ; multi-arity fn: form1.0 form1.1
+    1  STORE_GLOBAL     0         ; greet
+    2  RETURN
+
+module form1.0: arity 0, locals 0, max stack 2
+  constants:
+    #0   name    greet
+    #1   string  "world"
+  code:
+    0  PUSH_VAR         0         ; greet
+    1  PUSH_CONST       1         ; "world"
+    2  CALL             1         ; 1 arg
+    3  RETURN
+
+module form1.1: arity 1, locals 0, max stack 3
+  constants:
+    #0   name    str
+    #1   string  "hello, "
+  code:
+    0  PUSH_VAR         0         ; str
+    1  PUSH_CONST       1         ; "hello, "
+    2  PUSH_LOCAL_CLEAR 0         ; param 0
+    3  CALL             2         ; 2 args
+    4  RETURN
+
+;; form 2: (greet)
+module form2: arity 0, locals 0, max stack 1
+  constants:
+    #0   name    greet
+  code:
+    0  PUSH_VAR         0         ; greet
+    1  CALL             0         ; 0 args
+    2  RETURN
+

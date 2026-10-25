@@ -4,7 +4,7 @@
     python3 -I tests/docs/check_snippets.py PROTOCLJ [FILE.md ...]
 
 Every fenced ```clojure block of the given files (default: README.md,
-docs/LANGUAGE.md, docs/TUTORIAL.md and docs/tutorial/*.md) is run as a
+docs/LANGUAGE.md, docs/TUTORIAL.md, docs/VM.md and docs/tutorial/*.md) is run as a
 script, in a fresh temporary directory, with a small text on standard input.
 A block passes when protoclj exits 0. Blocks are skipped when they are REPL
 transcripts (`user=>`), or when the line just before the fence is the HTML
@@ -59,7 +59,8 @@ def blocks(path):
 def main():
     protoclj = sys.argv[1]
     files = [pathlib.Path(f) for f in sys.argv[2:]] or (
-        [ROOT / "README.md", ROOT / "docs/LANGUAGE.md", ROOT / "docs/TUTORIAL.md"]
+        [ROOT / "README.md", ROOT / "docs/LANGUAGE.md", ROOT / "docs/TUTORIAL.md",
+         ROOT / "docs/VM.md"]
         + sorted((ROOT / "docs/tutorial").glob("*.md")))
     ran = failed = skipped = 0
     for f in files:

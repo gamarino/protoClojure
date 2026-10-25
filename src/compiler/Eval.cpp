@@ -7,6 +7,7 @@
 
 #include "runtime/BytecodeModule.h"
 #include "runtime/DebugHook.h"
+#include "runtime/Disassembler.h"
 #include "runtime/Exceptions.h"
 #include "runtime/ExecutionEngine.h"
 #include "runtime/Macros.h"
@@ -228,6 +229,9 @@ const proto::ProtoObject* evalTopLevel(proto::ProtoContext* ctx,
         }
     }
     mod.emit(Op::RETURN, 0);
+    // `protoclj --disasm` (Disassembler.h): the form and its bytecode, before
+    // it runs. The form is rooted in slot 0.
+    disassembleTopLevel(&scope, expanded, mod);
     // Retained before it runs: the functions it defines point into it.
     retainModule(std::move(modPtr));
 

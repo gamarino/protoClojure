@@ -1,0 +1,72 @@
+;; form 1: (defn guarded [f T mod] (try (f) (catch ArithmeticException e :arithmetic) (catch T e :local-type) (catch mod/Failure e :member-type) (catch app.errors/Timeout e :global-type)))
+module form1: arity 0, locals 0, max stack 1
+  constants:
+    #0   name    guarded
+  code:
+    0  MAKE_FN          0         ; fn form1.0
+    1  STORE_GLOBAL     0         ; guarded
+    2  RETURN
+
+module form1.0: arity 3, locals 1, max stack 2, has handlers
+  constants:
+    #0   named   :arithmetic
+    #1   name    T
+    #2   named   :local-type
+    #3   name    Failure
+    #4   name    mod/Failure
+    #5   named   :member-type
+    #6   name    app.errors/Timeout
+    #7   named   :global-type
+  code:
+     0  TRY_BEGIN        4        ; -> 5
+     1  PUSH_LOCAL_CLEAR 0        ; param 0
+     2  CALL             0        ; 0 args
+     3  TRY_END
+     4  JUMP             26       ; -> 31
+     5  STORE_CAUGHT     3        ; local
+     6  PUSH_LOCAL       3        ; local
+     7  EXC_MATCH        5        ; ArithmeticException
+     8  JUMP_IF_FALSE    2        ; -> 11
+     9  PUSH_CONST       0        ; :arithmetic
+    10  JUMP             20       ; -> 31
+    11  PUSH_LOCAL       3        ; local
+    12  PUSH_LOCAL_CLEAR 1        ; param 1
+    13  EXC_MATCH_TYPE   1        ; T
+    14  JUMP_IF_FALSE    2        ; -> 17
+    15  PUSH_CONST       2        ; :local-type
+    16  JUMP             14       ; -> 31
+    17  PUSH_LOCAL       3        ; local
+    18  PUSH_LOCAL_CLEAR 2        ; param 2
+    19  GET_MEMBER       3        ; Failure
+    20  EXC_MATCH_TYPE   4        ; mod/Failure
+    21  JUMP_IF_FALSE    2        ; -> 24
+    22  PUSH_CONST       5        ; :member-type
+    23  JUMP             7        ; -> 31
+    24  PUSH_LOCAL       3        ; local
+    25  RESOLVE_CLASS    6        ; app.errors/Timeout
+    26  EXC_MATCH_TYPE   6        ; app.errors/Timeout
+    27  JUMP_IF_FALSE    2        ; -> 30
+    28  PUSH_CONST       7        ; :global-type
+    29  JUMP             1        ; -> 31
+    30  RETHROW          3        ; local
+    31  RETURN
+
+;; form 2: (guarded (fn [] 42) nil nil)
+module form2: arity 0, locals 0, max stack 4
+  constants:
+    #0   name    guarded
+  code:
+    0  PUSH_VAR         0         ; guarded
+    1  MAKE_FN          0         ; fn form2.0
+    2  PUSH_NIL
+    3  PUSH_NIL
+    4  CALL             3         ; 3 args
+    5  RETURN
+
+module form2.0: arity 0, locals 0, max stack 1
+  constants:
+    #0   long    42
+  code:
+    0  PUSH_CONST       0         ; 42
+    1  RETURN
+

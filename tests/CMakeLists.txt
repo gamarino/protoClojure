@@ -171,7 +171,7 @@ add_test(NAME cli/repl-data-formats
 add_test(NAME cli/json-under-heap-limit
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/json-under-heap-limit.sh" "$<TARGET_FILE:protoclj>")
 set_tests_properties(cli/json-under-heap-limit PROPERTIES TIMEOUT 300)
-# Every Clojure snippet of README.md, docs/LANGUAGE.md and the tutorial runs
+# Every Clojure snippet of README.md, docs/LANGUAGE.md, docs/VM.md and the tutorial runs
 # (tests/docs/check_snippets.py; a snippet that cannot run says why).
 if(Python3_FOUND)
     add_test(NAME docs/snippets
@@ -181,6 +181,13 @@ if(Python3_FOUND)
         set_tests_properties(docs/snippets PROPERTIES
             ENVIRONMENT_MODIFICATION "PATH=path_list_append:${PROTOCLJ_POSIX_TOOLS}")
     endif()
+    # The bytecode listings of docs/VM.md are real `protoclj --disasm` output:
+    # each docs/vm-examples/*.clj is disassembled and compared with its golden
+    # .txt file and with VM.md's copy (docs/vm-examples/disasm_examples.py).
+    add_test(NAME docs/vm-examples
+        COMMAND ${Python3_EXECUTABLE} -I "${PROJECT_SOURCE_DIR}/docs/vm-examples/disasm_examples.py"
+                "$<TARGET_FILE:protoclj>" --check)
+    set_tests_properties(docs/vm-examples PROPERTIES TIMEOUT 300)
     # `protoclj --dap`, driven as VS Code drives it (docs/debugging.md).
     add_test(NAME cli/dap-session
         COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/cli/dap-session.py" "$<TARGET_FILE:protoclj>")

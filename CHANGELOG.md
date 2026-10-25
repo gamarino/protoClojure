@@ -9,6 +9,20 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — VM documentation and `protoclj --disasm` (2026-10-25)
+
+- `docs/VM.md`: the bytecode VM for contributors — a reading order through
+  the source, the frame layout and calling conventions, all 41 opcodes with
+  operands, stack effects and the constructs that emit them, 18 worked
+  examples, how to add an opcode or a primitive, and the oddities found on
+  the way.
+- `protoclj --disasm script.clj` runs the script and prints each top-level
+  form and its bytecode, nested fn bodies included
+  (`src/runtime/Disassembler.cpp`).
+- Every listing in VM.md is real `--disasm` output, kept as golden files in
+  `docs/vm-examples/` and checked by the ctest `docs/vm-examples`; VM.md's
+  Clojure snippets run under `docs/snippets`.
+
 ### Changed — lists as cells, direct seq primitives (2026-10-24)
 
 - A Clojure list is a chain of immutable list cells (first, rest, count)

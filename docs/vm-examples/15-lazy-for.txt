@@ -1,0 +1,100 @@
+;; form 1: (defn nats [n] (lazy-seq (cons n (nats (inc n)))))
+module form1: arity 0, locals 0, max stack 1
+  constants:
+    #0   name    nats
+  code:
+    0  MAKE_FN          0         ; fn form1.0
+    1  STORE_GLOBAL     0         ; nats
+    2  RETURN
+
+module form1.0: arity 1, locals 0, max stack 2
+  constants:
+    #0   name    clojure.core/__lazy-seq
+  code:
+    0  PUSH_VAR         0         ; clojure.core/__lazy-seq
+    1  PUSH_LOCAL_CLEAR 0         ; param 0
+    2  MAKE_FN          0         ; fn form1.0.0
+    3  CALL             1         ; 1 arg
+    4  RETURN
+
+module form1.0.0: arity 0, locals 1, max stack 5
+  captures: parent slot 0 -> slot 0
+  constants:
+    #0   name    cons
+    #1   name    nats
+    #2   name    inc
+  code:
+    0  PUSH_VAR         0         ; cons
+    1  PUSH_LOCAL       0         ; capture (parent slot 0)
+    2  PUSH_VAR         1         ; nats
+    3  PUSH_VAR         2         ; inc
+    4  PUSH_LOCAL       0         ; capture (parent slot 0)
+    5  CALL             1         ; 1 arg
+    6  CALL             1         ; 1 arg
+    7  CALL             2         ; 2 args
+    8  RETURN
+
+;; form 2: (take 3 (nats 0))
+module form2: arity 0, locals 0, max stack 4
+  constants:
+    #0   name    take
+    #1   long    3
+    #2   name    nats
+    #3   long    0
+  code:
+    0  PUSH_VAR         0         ; take
+    1  PUSH_CONST       1         ; 3
+    2  PUSH_VAR         2         ; nats
+    3  PUSH_CONST       3         ; 0
+    4  CALL             1         ; 1 arg
+    5  CALL             2         ; 2 args
+    6  RETURN
+
+;; form 3: (defn squares [n] (for [x (range n)] (* x x)))
+module form3: arity 0, locals 0, max stack 1
+  constants:
+    #0   name    squares
+  code:
+    0  MAKE_FN          0         ; fn form3.0
+    1  STORE_GLOBAL     0         ; squares
+    2  RETURN
+
+module form3.0: arity 1, locals 0, max stack 4
+  constants:
+    #0   name    clojure.core/__for-step
+    #1   name    range
+  code:
+    0  PUSH_VAR         0         ; clojure.core/__for-step
+    1  PUSH_VAR         1         ; range
+    2  PUSH_LOCAL_CLEAR 0         ; param 0
+    3  CALL             1         ; 1 arg
+    4  MAKE_FN          0         ; fn form3.0.0
+    5  PUSH_TRUE
+    6  CALL             3         ; 3 args
+    7  RETURN
+
+module form3.0.0: arity 1, locals 0, max stack 3
+  constants:
+    #0   name    clojure.core/list
+  code:
+    0  PUSH_VAR         0         ; clojure.core/list
+    1  PUSH_LOCAL       0         ; param 0
+    2  PUSH_LOCAL       0         ; param 0
+    3  MUL
+    4  CALL             1         ; 1 arg
+    5  RETURN
+
+;; form 4: (doall (squares 3))
+module form4: arity 0, locals 0, max stack 3
+  constants:
+    #0   name    doall
+    #1   name    squares
+    #2   long    3
+  code:
+    0  PUSH_VAR         0         ; doall
+    1  PUSH_VAR         1         ; squares
+    2  PUSH_CONST       2         ; 3
+    3  CALL             1         ; 1 arg
+    4  CALL             1         ; 1 arg
+    5  RETURN
+

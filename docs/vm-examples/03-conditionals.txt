@@ -1,0 +1,77 @@
+;; form 1: (defn sign-word [n] (if (< n 0) :negative :non-negative))
+module form1: arity 0, locals 0, max stack 1
+  constants:
+    #0   name    sign-word
+  code:
+    0  MAKE_FN          0         ; fn form1.0
+    1  STORE_GLOBAL     0         ; sign-word
+    2  RETURN
+
+module form1.0: arity 1, locals 0, max stack 2
+  constants:
+    #0   long    0
+    #1   named   :negative
+    #2   named   :non-negative
+  code:
+    0  PUSH_LOCAL_CLEAR 0         ; param 0
+    1  PUSH_CONST       0         ; 0
+    2  LT
+    3  JUMP_IF_FALSE    2         ; -> 6
+    4  PUSH_CONST       1         ; :negative
+    5  JUMP             1         ; -> 7
+    6  PUSH_CONST       2         ; :non-negative
+    7  RETURN
+
+;; form 2: (defn inc-when [x] (when x (inc x)))
+module form2: arity 0, locals 0, max stack 1
+  constants:
+    #0   name    inc-when
+  code:
+    0  MAKE_FN          0         ; fn form2.0
+    1  STORE_GLOBAL     0         ; inc-when
+    2  RETURN
+
+module form2.0: arity 1, locals 0, max stack 2
+  constants:
+    #0   name    inc
+  code:
+    0  PUSH_LOCAL       0         ; param 0
+    1  JUMP_IF_FALSE    4         ; -> 6
+    2  PUSH_VAR         0         ; inc
+    3  PUSH_LOCAL       0         ; param 0
+    4  CALL             1         ; 1 arg
+    5  JUMP             1         ; -> 7
+    6  PUSH_NIL
+    7  RETURN
+
+;; form 3: (defn classify [n] (cond (< n 0) :negative (= n 0) :zero :else :positive))
+module form3: arity 0, locals 0, max stack 1
+  constants:
+    #0   name    classify
+  code:
+    0  MAKE_FN          0         ; fn form3.0
+    1  STORE_GLOBAL     0         ; classify
+    2  RETURN
+
+module form3.0: arity 1, locals 0, max stack 2
+  constants:
+    #0   long    0
+    #1   named   :negative
+    #2   named   :zero
+    #3   named   :positive
+  code:
+     0  PUSH_LOCAL       0        ; param 0
+     1  PUSH_CONST       0        ; 0
+     2  LT
+     3  JUMP_IF_FALSE    2        ; -> 6
+     4  PUSH_CONST       1        ; :negative
+     5  JUMP             7        ; -> 13
+     6  PUSH_LOCAL       0        ; param 0
+     7  PUSH_CONST       0        ; 0
+     8  EQ
+     9  JUMP_IF_FALSE    2        ; -> 12
+    10  PUSH_CONST       2        ; :zero
+    11  JUMP             1        ; -> 13
+    12  PUSH_CONST       3        ; :positive
+    13  RETURN
+

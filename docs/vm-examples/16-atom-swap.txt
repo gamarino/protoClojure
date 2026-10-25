@@ -1,0 +1,52 @@
+;; form 1: (def counter (atom 0))
+module form1: arity 0, locals 0, max stack 2
+  constants:
+    #0   name    atom
+    #1   long    0
+    #2   name    counter
+  code:
+    0  PUSH_VAR         0         ; atom
+    1  PUSH_CONST       1         ; 0
+    2  CALL             1         ; 1 arg
+    3  STORE_GLOBAL     2         ; counter
+    4  RETURN
+
+;; form 2: (swap! counter inc)
+module form2: arity 0, locals 0, max stack 3
+  constants:
+    #0   name    swap!
+    #1   name    counter
+    #2   name    inc
+  code:
+    0  PUSH_VAR         0         ; swap!
+    1  PUSH_VAR         1         ; counter
+    2  PUSH_VAR         2         ; inc
+    3  CALL             2         ; 2 args
+    4  RETURN
+
+;; form 3: (swap! counter + 10)
+module form3: arity 0, locals 0, max stack 4
+  constants:
+    #0   name    swap!
+    #1   name    counter
+    #2   name    +
+    #3   long    10
+  code:
+    0  PUSH_VAR         0         ; swap!
+    1  PUSH_VAR         1         ; counter
+    2  PUSH_VAR         2         ; +
+    3  PUSH_CONST       3         ; 10
+    4  CALL             3         ; 3 args
+    5  RETURN
+
+;; form 4: (clojure.core/deref counter)
+module form4: arity 0, locals 0, max stack 2
+  constants:
+    #0   name    clojure.core/deref
+    #1   name    counter
+  code:
+    0  PUSH_VAR         0         ; clojure.core/deref
+    1  PUSH_VAR         1         ; counter
+    2  CALL             1         ; 1 arg
+    3  RETURN
+

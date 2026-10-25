@@ -1,0 +1,11 @@
+;; form 1: (+ 1 2)
+module form1: arity 0, locals 0, max stack 2
+  constants:
+    #0   long    1
+    #1   long    2
+  code:
+    0  PUSH_CONST       0         ; 1
+    1  PUSH_CONST       1         ; 2
+    2  ADD
+    3  RETURN
+
