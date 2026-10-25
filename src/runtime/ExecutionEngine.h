@@ -8,9 +8,9 @@
  * frame entry.
  *
  * P3: no std container holds ProtoObject*. The frame's stack is
- * automaticLocals; intermediate working ProtoLists (e.g. the args list
- * for CALL) live in slots of a child context that destructs at the end
- * of the instruction.
+ * automaticLocals. A primitive the frame calls runs in the frame itself and
+ * reads its arguments in the operand stack; it builds no context
+ * (CallerSlots.h).
  *
  * Session 3 minimum: one flat run, no nested frames yet (no user
  * functions yet). When user-defined fns land, each
@@ -43,6 +43,13 @@ public:
     // primitives uniformly. Variadic packing matches the in-VM CALL
     // path. Returns the callable's return value; never reads the
     // operand stack.
+    //
+    // `callable` and `args` must be rooted by the caller: in traced slots
+    // (CallerSlots, a frame's slots), or young cells of a context whose
+    // chain is not submitted before the call returns. A primitive callee
+    // runs in `ctx` itself, with no context of its own (CallerSlots.h); a
+    // Clojure fn callee gets its frame. The result is anchored in `ctx`
+    // (a young cell of it, or a ReturnReference in its chain).
     const proto::ProtoObject* invoke(proto::ProtoContext* ctx,
                                      const proto::ProtoObject* callable,
                                      const proto::ProtoObject* const* args,
@@ -221,6 +228,17 @@ private:
     void gcSafepoint(proto::ProtoContext* ctx) const {
         if (--gcSafepointCountdown_ == 0) gcSafepointSlow(ctx);
     }
+
+    // Hands the young chain of `frame` to the collector before the frame
+    // calls a Clojure fn, while every value the frame holds is in its slots.
+    // Primitives run in their caller's frame (CallerSlots.h), so what they
+    // build is a young cell of that frame, and a young chain is a root: a
+    // lazy seq built in this frame and walked to the end by the callee would
+    // otherwise be held, with every element realised, until this frame's own
+    // next safepoint, which cannot come while it waits for the call (locals
+    // clearing, M30). Costs one test when the frame allocated nothing since
+    // its last submission.
+    void submitBeforeCall(proto::ProtoContext& frame) const;
 
     // The strided path: resets the countdown and, unless disabled, calls
     // `ProtoContext::safepoint()` on `ctx`. Defined in ExecutionEngine.cpp,

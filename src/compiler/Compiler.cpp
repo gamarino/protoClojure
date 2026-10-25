@@ -1,4 +1,5 @@
 #include "Compiler.h"
+#include "runtime/CallerSlots.h"
 #include "runtime/LazySeq.h"
 
 #include "runtime/DebugHook.h"
@@ -216,10 +217,9 @@ FormList::FormList(proto::ProtoContext* ctx, const proto::ProtoObject* form) : f
     // Any other seq is walked, realising it: what it realises is held by
     // `form` (a lazy seq keeps the seq it computed, a cons its rest), so its
     // elements stay reachable from the form, as a list's do.
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    for (SeqWalk w(&scope, 0, &scope, form); !w.done(); w.advance(&scope))
-        items_.push_back(w.first(&scope));
+    CallerSlots scope(ctx, 1);
+    for (SeqWalk w(scope, 0, ctx, form); !w.done(); w.advance(ctx))
+        items_.push_back(w.first(ctx));
 }
 
 FormList::FormList(proto::ProtoContext* ctx, const proto::ProtoList* items,

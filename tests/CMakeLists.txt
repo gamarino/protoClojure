@@ -139,6 +139,11 @@ add_test(NAME cli/macro-expansion-survives-gc
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/macro-expansion-survives-gc.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/destructuring-survives-gc
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/destructuring-survives-gc.sh" "$<TARGET_FILE:protoclj>")
+# Primitives run in their caller's context (src/runtime/CallerSlots.h): the
+# ones that call back into Clojure code, under a heap ceiling and a 200-cell
+# submission threshold, with every result checked.
+add_test(NAME cli/primitive-callbacks-survive-gc
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/primitive-callbacks-survive-gc.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/sets-survive-gc
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/sets-survive-gc.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/regex-survives-gc

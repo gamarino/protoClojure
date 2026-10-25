@@ -3,6 +3,7 @@
 #include "Exceptions.h"
 #include "IO.h"
 #include "CorePrims.h"
+#include "CallerSlots.h"
 #include "DataFormats.h"
 #include "LazySeq.h"
 #include "DebugHook.h"
@@ -233,13 +234,12 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
         // A lazy seq, a cons or a chunk prints as a list, realised as it is
         // printed (an endless one never finishes, as in Clojure without
         // *print-length*). The walk's position is the only thing it holds.
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(1);
-        SeqWalk w(&scope, 0, &scope, v);
+        CallerSlots scope(ctx, 1);
+        SeqWalk w(scope, 0, ctx, v);
         out += '(';
-        for (bool firstEl = true; !w.done(); w.advance(&scope), firstEl = false) {
+        for (bool firstEl = true; !w.done(); w.advance(ctx), firstEl = false) {
             if (!firstEl) out += ' ';
-            printTo(&scope, out, w.first(&scope), readable);
+            printTo(ctx, out, w.first(ctx), readable);
         }
         out += ')';
         return;
@@ -826,16 +826,15 @@ const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
             throwNthOutOfBounds(ctx, args->getAt(ctx, 1),
                                 isListValue(ctx, coll) ? listCount(ctx, coll) : 0);
         }
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(1);
-        SeqWalk w(&scope, 0, &scope, coll);
+        CallerSlots scope(ctx, 1);
+        SeqWalk w(scope, 0, ctx, coll);
         long long i = 0;
-        for (; i < idx && !w.done(); ++i) w.advance(&scope);
+        for (; i < idx && !w.done(); ++i) w.advance(ctx);
         if (w.done()) {
             if (notFound) return notFound;
             throwNthOutOfBounds(ctx, args->getAt(ctx, 1), i);
         }
-        return w.first(&scope);
+        return w.first(ctx);
     }
     if (!vector) {
         throwClassed(ctx, "UnsupportedOperationException",
@@ -923,25 +922,23 @@ const proto::ProtoObject* prim_assoc(proto::ProtoContext* ctx,
     if (isVector(m)) {
         // A vector by index, 0 to its count (the count appends), as in
         // Clojure; any other index raises IndexOutOfBoundsException.
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(1);
-        scope.setAutomaticLocal(0, vectorItems(&scope, m)->asObject(&scope));
+        CallerSlots scope(ctx, 1);
+        scope.set(0, vectorItems(ctx, m)->asObject(ctx));
         for (proto::proto_ulong i = 1; i + 1 < n; i += 2) {
-            const proto::ProtoList* items = scope.getAutomaticLocal(0)->asList(&scope);
-            const proto::ProtoObject* k = args->getAt(&scope, static_cast<int>(i));
-            const long long size = static_cast<long long>(items->getSize(&scope));
+            const proto::ProtoList* items = scope.get(0)->asList(ctx);
+            const proto::ProtoObject* k = args->getAt(ctx, static_cast<int>(i));
+            const long long size = static_cast<long long>(items->getSize(ctx));
             if (!proto::isSmallInt(k) || proto::asSmallInt(k) < 0 || proto::asSmallInt(k) > size)
-                throwClassed(&scope, "IndexOutOfBoundsException",
-                             "assoc index " + printedValue(&scope, k) + " is out of bounds (count " +
+                throwClassed(ctx, "IndexOutOfBoundsException",
+                             "assoc index " + printedValue(ctx, k) + " is out of bounds (count " +
                              std::to_string(size) + ")");
             const long long idx = proto::asSmallInt(k);
-            const proto::ProtoObject* v = args->getAt(&scope, static_cast<int>(i + 1));
-            items = idx == size ? items->appendLast(&scope, v)
-                                : items->setAt(&scope, static_cast<int>(idx), v);
-            scope.setAutomaticLocal(0, items->asObject(&scope));
+            const proto::ProtoObject* v = args->getAt(ctx, static_cast<int>(i + 1));
+            items = idx == size ? items->appendLast(ctx, v)
+                                : items->setAt(ctx, static_cast<int>(idx), v);
+            scope.set(0, items->asObject(ctx));
         }
-        const proto::ProtoObject* r = newVector(&scope, scope.getAutomaticLocal(0)->asList(&scope));
-        scope.returnValue = r;
+        const proto::ProtoObject* r = newVector(ctx, scope.get(0)->asList(ctx));
         return r;
     }
     if (!isMap(m))
@@ -971,16 +968,15 @@ const proto::ProtoObject* prim_dissoc(proto::ProtoContext* ctx,
                                  valueTypeName(ctx, m));
     }
     // mapDissoc returns an unrooted map: each intermediate map is rooted in
-    // the scope slot before the next key is removed.
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, m);
+    // a CallerSlots slot before the next key is removed.
+    CallerSlots scope(ctx, 1);
+    scope.set(0, m);
     for (proto::proto_ulong i = 1; i < n; ++i) {
-        scope.setAutomaticLocal(0,
-            mapDissoc(&scope, scope.getAutomaticLocal(0),
-                      args->getAt(&scope, static_cast<int>(i))));
+        scope.set(0,
+            mapDissoc(ctx, scope.get(0),
+                      args->getAt(ctx, static_cast<int>(i))));
     }
-    return scope.getAutomaticLocal(0);
+    return scope.get(0);
 }
 
 const proto::ProtoObject* prim_get(proto::ProtoContext* ctx,
@@ -1120,13 +1116,11 @@ const proto::ProtoObject* prim_cons(proto::ProtoContext* ctx,
     const proto::ProtoObject* r = nullptr;
     if (tryCons(ctx, x, coll, &r)) return r;
     // Onto any other collection: a cons onto its seq, as Clojure's RT.cons.
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, seqOf(&scope, coll));
-    r = scope.getAutomaticLocal(0) == PROTO_NONE
-        ? listCons(&scope, x, emptyListValue())
-        : newCons(&scope, x, scope.getAutomaticLocal(0));
-    scope.returnValue = r;
+    CallerSlots scope(ctx, 1);
+    scope.set(0, seqOf(ctx, coll));
+    r = scope.get(0) == PROTO_NONE
+        ? listCons(ctx, x, emptyListValue())
+        : newCons(ctx, x, scope.get(0));
     return r;
 }
 
@@ -1161,14 +1155,14 @@ const proto::ProtoObject* prim_count(proto::ProtoContext* ctx,
         // keeps none of its elements (releaseArg, SeqWalk). The walk stops
         // where the rest is counted (a list, the end of a chunk), as
         // Clojure's RT.count stops at a Counted.
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(1);
-        SeqWalk w(&scope, 0, &scope, v);
+        SafepointPermit permit(ctx);   // only the walk's position is held
+        CallerSlots scope(ctx, 1);
+        SeqWalk w(scope, 0, ctx, v);
         releaseArg(args, 0);
         long long n = 0;
-        for (; !w.done(); w.advance(&scope)) {
+        for (; !w.done(); w.advance(ctx), scope.tick()) {
             long long c = 0;
-            if (w.counted(&scope, &c)) { n += c; break; }
+            if (w.counted(ctx, &c)) { n += c; break; }
             ++n;
         }
         return ctx->fromLong(n);
@@ -1239,16 +1233,14 @@ const proto::ProtoObject* prim_reverse(proto::ProtoContext* ctx,
     }
     // A list, as in Clojure: each element consed onto the ones before it,
     // one cell per element and no garbage.
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(2);
-    scope.setAutomaticLocal(1, emptyListValue());
+    CallerSlots scope(ctx, 2);
+    scope.set(1, emptyListValue());
     {
-        SeqWalk w(&scope, 0, &scope, v);
-        for (; !w.done(); w.advance(&scope))
-            scope.setAutomaticLocal(1, listCons(&scope, w.first(&scope), scope.getAutomaticLocal(1)));
+        SeqWalk w(scope, 0, ctx, v);
+        for (; !w.done(); w.advance(ctx))
+            scope.set(1, listCons(ctx, w.first(ctx), scope.get(1)));
     }
-    scope.returnValue = scope.getAutomaticLocal(1);
-    return scope.getAutomaticLocal(1);
+    return scope.get(1);
 }
 
 // The elements of `v` as a seq builds them, pushed onto `out`: a list's or
@@ -1352,12 +1344,10 @@ const proto::ProtoObject* prim_concat(proto::ProtoContext* ctx,
     for (proto::proto_ulong i = 0; i < n; ++i) {
         const proto::ProtoObject* a = args->getAt(ctx, static_cast<int>(i));
         if (isSeqObject(ctx, a) && !isListValue(ctx, a)) {
-            proto::ProtoContext scope(ctx->space, ctx);
-            scope.resizeAutomaticLocals(1);
-            scope.setAutomaticLocal(0, listFromArray(&scope, args->count(), args->values()));
+            CallerSlots scope(ctx, 1);
+            scope.set(0, listFromArray(ctx, args->count(), args->values()));
             const proto::ProtoObject* r =
-                lazyStep(&scope, StepKind::Concat, PROTO_NONE, scope.getAutomaticLocal(0));
-            scope.returnValue = r;
+                lazyStep(ctx, StepKind::Concat, PROTO_NONE, scope.get(0));
             return r;
         }
     }
@@ -1425,36 +1415,35 @@ const proto::ProtoObject* prim_reduce(proto::ProtoContext* ctx,
         // reduced; the accumulator lives in slot 1.
         const ActiveCallContext* cc = activeCallContext();
         if (!cc) throwError(ctx, "reduce: no active VM context");
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(2);
+        // Everything held across a call is in a slot or an argument: the
+        // loop may hand its garbage over (CallerSlots.h).
+        SafepointPermit permit(ctx);
+        CallerSlots scope(ctx, 2);
         const proto::ProtoObject* p = coll;
-        scope.setAutomaticLocal(0, p);
+        scope.set(0, p);
         releaseArg(args, ac == 2 ? 1 : 2);
         if (ac == 3) {
-            scope.setAutomaticLocal(1, args->getAt(ctx, 1));
+            scope.set(1, args->getAt(ctx, 1));
         } else {
             if (p == emptyListValue()) {
-                const proto::ProtoObject* r = cc->engine->invoke(&scope, f, nullptr, 0);
-                scope.returnValue = r;
+                const proto::ProtoObject* r = cc->engine->invoke(ctx, f, nullptr, 0);
                 return r;
             }
-            scope.setAutomaticLocal(1, listFirst(&scope, p));
-            p = listRest(&scope, p);
-            scope.setAutomaticLocal(0, p);
+            scope.set(1, listFirst(ctx, p));
+            p = listRest(ctx, p);
+            scope.set(0, p);
         }
-        unsigned steps = 0;
         while (p != emptyListValue()) {
             const proto::ProtoObject* x = nullptr;
             const proto::ProtoObject* next = nullptr;
-            listSplit(&scope, p, &x, &next);
-            const proto::ProtoObject* two[2] = {scope.getAutomaticLocal(1), x};
-            scope.setAutomaticLocal(1, cc->engine->invoke(&scope, f, two, 2));
+            listSplit(ctx, p, &x, &next);
+            const proto::ProtoObject* two[2] = {scope.get(1), x};
+            scope.set(1, cc->engine->invoke(ctx, f, two, 2));
             p = next;
-            scope.setAutomaticLocal(0, p);
-            if (++steps % 64 == 0) scope.safepoint();
+            scope.set(0, p);
+            scope.tick();
         }
-        const proto::ProtoObject* acc = scope.getAutomaticLocal(1);
-        scope.returnValue = acc;
+        const proto::ProtoObject* acc = scope.get(1);
         return acc ? acc : PROTO_NONE;
     }
     if (isSeqObject(ctx, coll)) {
@@ -1463,29 +1452,26 @@ const proto::ProtoObject* prim_reduce(proto::ProtoContext* ctx,
         // in a slot and the walk's garbage is handed over every 64 steps.
         const ActiveCallContext* cc = activeCallContext();
         if (!cc) throwError(ctx, "reduce: no active VM context");
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(2);
-        SeqWalk w(&scope, 0, &scope, coll);
+        SafepointPermit permit(ctx);
+        CallerSlots scope(ctx, 2);
+        SeqWalk w(scope, 0, ctx, coll);
         releaseArg(args, ac == 2 ? 1 : 2);
         if (ac == 3) {
-            scope.setAutomaticLocal(1, args->getAt(ctx, 1));
+            scope.set(1, args->getAt(ctx, 1));
         } else {
             if (w.done()) {
-                const proto::ProtoObject* r = cc->engine->invoke(&scope, f, nullptr, 0);
-                scope.returnValue = r;
+                const proto::ProtoObject* r = cc->engine->invoke(ctx, f, nullptr, 0);
                 return r;
             }
-            scope.setAutomaticLocal(1, w.first(&scope));
-            w.advance(&scope);
+            scope.set(1, w.first(ctx));
+            w.advance(ctx);
         }
-        unsigned steps = 0;
-        for (; !w.done(); w.advance(&scope)) {
-            const proto::ProtoObject* two[2] = {scope.getAutomaticLocal(1), w.first(&scope)};
-            scope.setAutomaticLocal(1, cc->engine->invoke(&scope, f, two, 2));
-            if (++steps % 64 == 0) scope.safepoint();
+        for (; !w.done(); w.advance(ctx)) {
+            const proto::ProtoObject* two[2] = {scope.get(1), w.first(ctx)};
+            scope.set(1, cc->engine->invoke(ctx, f, two, 2));
+            scope.tick();
         }
-        const proto::ProtoObject* acc = scope.getAutomaticLocal(1);
-        scope.returnValue = acc;
+        const proto::ProtoObject* acc = scope.get(1);
         return acc ? acc : PROTO_NONE;
     }
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
@@ -1693,17 +1679,16 @@ const proto::ProtoObject* matchValue(proto::ProtoContext* ctx, const std::smatch
     if (groups == 0)
         return reinterpret_cast<const proto::ProtoObject*>(
             makeUtf8ProtoString(ctx, m.str(0)));
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, scope.newList()->asObject(&scope));
+    CallerSlots scope(ctx, 1);
+    scope.set(0, ctx->newList()->asObject(ctx));
     for (unsigned g = 0; g <= groups; ++g) {
         const proto::ProtoObject* part = m[g].matched
-            ? reinterpret_cast<const proto::ProtoObject*>(makeUtf8ProtoString(&scope, m.str(g)))
+            ? reinterpret_cast<const proto::ProtoObject*>(makeUtf8ProtoString(ctx, m.str(g)))
             : PROTO_NONE;
-        scope.setAutomaticLocal(0, scope.getAutomaticLocal(0)->asList(&scope)
-            ->appendLast(&scope, part)->asObject(&scope));
+        scope.set(0, scope.get(0)->asList(ctx)
+            ->appendLast(ctx, part)->asObject(ctx));
     }
-    return newVector(&scope, scope.getAutomaticLocal(0)->asList(&scope));
+    return newVector(ctx, scope.get(0)->asList(ctx));
 }
 
 // (re-pattern s) — the pattern of a string; a pattern is itself.
@@ -1739,14 +1724,13 @@ const proto::ProtoObject* prim_re_matcher(proto::ProtoContext* ctx,
     if (!args || args->getSize(ctx) != 2) throwError(ctx, "re-matcher: expects (re-matcher re s)");
     patternArg(ctx, args, 0, "re-matcher");
     stringArgOf(ctx, args, 1, "re-matcher");
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, matcherPrototype()->newChild(&scope, /*isMutable=*/true));
-    proto::ProtoObject* m = const_cast<proto::ProtoObject*>(scope.getAutomaticLocal(0));
-    m->setAttribute(&scope, mPatternKey(&scope), args->getAt(&scope, 0));
-    m->setAttribute(&scope, mSubjectKey(&scope), args->getAt(&scope, 1));
-    m->setAttribute(&scope, mPosKey(&scope), scope.fromLong(0));
-    return scope.getAutomaticLocal(0);
+    CallerSlots scope(ctx, 1);
+    scope.set(0, matcherPrototype()->newChild(ctx, /*isMutable=*/true));
+    proto::ProtoObject* m = const_cast<proto::ProtoObject*>(scope.get(0));
+    m->setAttribute(ctx, mPatternKey(ctx), args->getAt(ctx, 0));
+    m->setAttribute(ctx, mSubjectKey(ctx), args->getAt(ctx, 1));
+    m->setAttribute(ctx, mPosKey(ctx), ctx->fromLong(0));
+    return scope.get(0);
 }
 
 // The next match of matcher `mv`, as re-find answers it, or nil; records the
@@ -1769,12 +1753,11 @@ const proto::ProtoObject* matcherFind(proto::ProtoContext* ctx, const proto::Pro
     const long long start = pos + match.position(0);
     long long next = start + match.length(0);
     if (match.length(0) == 0) ++next;
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, matchValue(&scope, match, cp->groups));
-    m->setAttribute(&scope, mGroupsKey(&scope), scope.getAutomaticLocal(0));
-    m->setAttribute(&scope, mPosKey(&scope), scope.fromLong(next));
-    return scope.getAutomaticLocal(0);
+    CallerSlots scope(ctx, 1);
+    scope.set(0, matchValue(ctx, match, cp->groups));
+    m->setAttribute(ctx, mGroupsKey(ctx), scope.get(0));
+    m->setAttribute(ctx, mPosKey(ctx), ctx->fromLong(next));
+    return scope.get(0);
 }
 
 // (re-find re s) — the first match in `s`, or nil; (re-find m) — the next
@@ -1836,13 +1819,11 @@ const proto::ProtoObject* reSeqFrom(proto::ProtoContext* ctx, const proto::Proto
     const std::size_t start = static_cast<std::size_t>(m[0].first - subject->cbegin());
     const std::size_t end = start + static_cast<std::size_t>(m.length(0));
     const std::size_t next = m.length(0) == 0 ? end + 1 : end;
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(2);
-    scope.setAutomaticLocal(0, matchValue(&scope, m, cp->groups));
-    scope.setAutomaticLocal(1, lazyStep(&scope, StepKind::ReSeq, pattern, subjectBox,
-                                        scope.fromLong(static_cast<long long>(next))));
-    const proto::ProtoObject* r = newCons(&scope, scope.getAutomaticLocal(0), scope.getAutomaticLocal(1));
-    scope.returnValue = r;
+    CallerSlots scope(ctx, 2);
+    scope.set(0, matchValue(ctx, m, cp->groups));
+    scope.set(1, lazyStep(ctx, StepKind::ReSeq, pattern, subjectBox,
+                                        ctx->fromLong(static_cast<long long>(next))));
+    const proto::ProtoObject* r = newCons(ctx, scope.get(0), scope.get(1));
     return r;
 }
 
@@ -1866,13 +1847,11 @@ const proto::ProtoObject* prim_re_seq(proto::ProtoContext* ctx,
     const CompiledPattern* cp = patternArg(ctx, args, 0, "re-seq");
     std::string subject = stringArgOf(ctx, args, 1, "re-seq");
     guardRecursiveMatch(cp, subject.size());
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, scope.fromExternalPointer(
+    CallerSlots scope(ctx, 1);
+    scope.set(0, ctx->fromExternalPointer(
         new std::string(std::move(subject)),
         [](void* p) { delete static_cast<std::string*>(p); }));
-    const proto::ProtoObject* r = reSeqFrom(&scope, args->getAt(&scope, 0), scope.getAutomaticLocal(0), 0);
-    scope.returnValue = r;
+    const proto::ProtoObject* r = reSeqFrom(ctx, args->getAt(ctx, 0), scope.get(0), 0);
     return r;
 }
 
@@ -1900,11 +1879,10 @@ void appendReplacement(proto::ProtoContext* ctx, std::string& out, const std::sm
     if (!isStringLike(repl)) {
         const ActiveCallContext* cc = activeCallContext();
         if (!cc) throwError(ctx, "replace: no active VM context");
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(1);
-        scope.setAutomaticLocal(0, matchValue(&scope, m, groups));
-        const proto::ProtoObject* one[1] = {scope.getAutomaticLocal(0)};
-        appendStr(&scope, out, cc->engine->invoke(&scope, repl, one, 1));
+        CallerSlots scope(ctx, 1);
+        scope.set(0, matchValue(ctx, m, groups));
+        const proto::ProtoObject* one[1] = {scope.get(0)};
+        appendStr(ctx, out, cc->engine->invoke(ctx, repl, one, 1));
         return;
     }
     const std::string r = asProtoString(repl)->toStdString(ctx);
@@ -1994,10 +1972,9 @@ const proto::ProtoObject* splitWithPattern(proto::ProtoContext* ctx, const std::
     for (const std::string& p : pieces)
         out.push(reinterpret_cast<const proto::ProtoObject*>(
             makeUtf8ProtoString(out.context(), p)));
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, out.finish());
-    return newVector(&scope, scope.getAutomaticLocal(0)->asList(&scope));
+    CallerSlots scope(ctx, 1);
+    scope.set(0, out.finish());
+    return newVector(ctx, scope.get(0)->asList(ctx));
 }
 
 const proto::ProtoObject* prim_replace(proto::ProtoContext* ctx,
@@ -2262,15 +2239,14 @@ const proto::ProtoString* threadErrorKey(proto::ProtoContext* ctx) {
 // in-flight exception is still pinned. `holder` is mutable and rooted by the
 // caller.
 void recordThreadError(proto::ProtoContext* ctx, const proto::ProtoObject* holder) {
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, caughtErrorValue(&scope));
-    if (scope.getAutomaticLocal(0) == PROTO_NONE) {
-        scope.setAutomaticLocal(0, exceptionFromError(
-            &scope, std::runtime_error("a foreign error raised nil")));
+    CallerSlots scope(ctx, 1);
+    scope.set(0, caughtErrorValue(ctx));
+    if (scope.get(0) == PROTO_NONE) {
+        scope.set(0, exceptionFromError(
+            ctx, std::runtime_error("a foreign error raised nil")));
     }
     const_cast<proto::ProtoObject*>(holder)->setAttribute(
-        &scope, threadErrorKey(&scope), scope.getAutomaticLocal(0));
+        ctx, threadErrorKey(ctx), scope.get(0));
 }
 
 // The value the body of `holder` (a future or a pmap element) raised, or
@@ -2383,44 +2359,43 @@ static void fireWatches(proto::ProtoContext* ctx,
                         const proto::ProtoObject* newV) {
     // Pin the watches map as soon as it is read: another thread may replace
     // the atom's watches (add-watch, remove-watch) while the watches run.
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(2);
+    CallerSlots scope(ctx, 2);
     constexpr unsigned int kSlotWatchesMap = 0;
     constexpr unsigned int kSlotWatchList  = 1;
     const proto::ProtoObject* watchesObj =
-        atomObj->getAttribute(&scope, cc->watchesKey);
+        atomObj->getAttribute(ctx, cc->watchesKey);
     if (!isMap(watchesObj)) return;
-    scope.setAutomaticLocal(kSlotWatchesMap, watchesObj);
+    scope.pin(kSlotWatchesMap, watchesObj);
 
     // Collect (key fn key fn ...) first, then call the watches after the
     // walk. On a map of more than 3 entries protoCore walks inside a GC
     // critical section, where only structures may be built: user code there
     // would skip heap-limit checkpoints and never park for collection. Watch
     // order is the map's unspecified walk order, as on the JVM.
-    scope.setAutomaticLocal(kSlotWatchList, scope.newList()->asObject(&scope));
-    mapForEach(&scope, watchesObj, &scope,
+    scope.set(kSlotWatchList, ctx->newList()->asObject(ctx));
+    mapForEach(ctx, watchesObj, &scope,
         [](proto::ProtoContext* c, void* self,
            const proto::ProtoObject* k, const proto::ProtoObject* f) {
-            auto* s = static_cast<proto::ProtoContext*>(self);
-            s->setAutomaticLocal(kSlotWatchList,
-                s->getAutomaticLocal(kSlotWatchList)->asList(c)
+            auto* s = static_cast<CallerSlots*>(self);
+            s->set(kSlotWatchList,
+                s->get(kSlotWatchList)->asList(c)
                     ->appendLast(c, k)->appendLast(c, f)->asObject(c));
         });
 
     // The list stays rooted in its slot while the watches run.
     const proto::ProtoList* watches =
-        scope.getAutomaticLocal(kSlotWatchList)->asList(&scope);
-    const proto::proto_ulong n = watches->getSize(&scope);
+        scope.get(kSlotWatchList)->asList(ctx);
+    const proto::proto_ulong n = watches->getSize(ctx);
     for (proto::proto_ulong i = 0; i + 1 < n; i += 2) {
         const proto::ProtoObject* four[4] = {
-            watches->getAt(&scope, static_cast<int>(i)), atomObj,
+            watches->getAt(ctx, static_cast<int>(i)), atomObj,
             oldV ? oldV : PROTO_NONE,
             newV ? newV : PROTO_NONE
         };
         try {
             DebugCatchBarrier swallowed;   // nothing the watch throws reaches the caller
-            cc->engine->invoke(&scope,
-                               watches->getAt(&scope, static_cast<int>(i + 1)),
+            cc->engine->invoke(ctx,
+                               watches->getAt(ctx, static_cast<int>(i + 1)),
                                four, 4);
         } catch (...) {
             // v0.18: swallow exceptions in a watcher; capturing them is a
@@ -2446,16 +2421,15 @@ const proto::ProtoObject* prim_reset_bang(proto::ProtoContext* ctx,
     // watches is exactly the value this reset! replaced, even when other
     // threads write the atom concurrently. The old value is referenced only
     // by this function once replaced, and the compare-and-set and the
-    // watches allocate: it is pinned in a child context slot as soon as it
+    // watches allocate: it is pinned in a CallerSlots slot as soon as it
     // is read, with no allocation in between.
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
+    CallerSlots scope(ctx, 1);
     for (;;) {
         const proto::ProtoObject* old =
-            a->getOwnAttributeDirect(&scope, cc->valueKey);
-        scope.setAutomaticLocal(0, old ? old : PROTO_NONE);
-        if (a->setAttributeIfEqual(&scope, cc->valueKey, old, nv)) {
-            fireWatches(&scope, cc, a, old ? old : PROTO_NONE, nv);
+            a->getOwnAttributeDirect(ctx, cc->valueKey);
+        scope.pin(0, old ? old : PROTO_NONE);
+        if (a->setAttributeIfEqual(ctx, cc->valueKey, old, nv)) {
+            fireWatches(ctx, cc, a, old ? old : PROTO_NONE, nv);
             return nv;
         }
     }
@@ -2494,22 +2468,21 @@ const proto::ProtoObject* prim_swap_bang(proto::ProtoContext* ctx,
     // GC rooting: another thread may replace the atom's value, dropping the
     // last reference to `old`, while `f`, the compare-and-set and the
     // watches allocate; and the callee returns `neu` unrooted. Both are
-    // pinned in a child context's slots as soon as they are obtained, with
+    // pinned in CallerSlots slots as soon as they are obtained, with
     // no allocation in between.
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(2);
+    CallerSlots scope(ctx, 2);
     constexpr unsigned int kSlotOld = 0;
     constexpr unsigned int kSlotNew = 1;
     for (;;) {
         const proto::ProtoObject* old =
-            a->getOwnAttributeDirect(&scope, cc->valueKey);
-        scope.setAutomaticLocal(kSlotOld, old ? old : PROTO_NONE);
+            a->getOwnAttributeDirect(ctx, cc->valueKey);
+        scope.pin(kSlotOld, old ? old : PROTO_NONE);
         buf[0] = old ? old : PROTO_NONE;
         const proto::ProtoObject* neu =
-            cc->engine->invoke(&scope, f, buf, extras + 1);
-        scope.setAutomaticLocal(kSlotNew, neu);
-        if (a->setAttributeIfEqual(&scope, cc->valueKey, old, neu)) {
-            fireWatches(&scope, cc, a, old, neu);
+            cc->engine->invoke(ctx, f, buf, extras + 1);
+        scope.set(kSlotNew, neu);
+        if (a->setAttributeIfEqual(ctx, cc->valueKey, old, neu)) {
+            fireWatches(ctx, cc, a, old, neu);
             return neu;
         }
     }
@@ -2828,12 +2801,11 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
     // each is built in chunks; each builder is closed before the next phase
     // starts, because while one is open it must stay the innermost context on
     // this thread (see ListBuilder.h).
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(2);
+    CallerSlots scope(ctx, 2);
     constexpr unsigned int kSlotFs  = 0;
     constexpr unsigned int kSlotOut = 1;
     {
-        ListBuilder futures(&scope);
+        ListBuilder futures(ctx);
         proto::ProtoContext* fctx = futures.context();
         for (proto::proto_ulong i = 0; i < n; ++i) {
             const proto::ProtoObject* x = lst->getAt(fctx, (int)i);
@@ -2859,7 +2831,7 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
                 reinterpret_cast<const proto::ProtoObject*>(t));
             futures.push(fut);
         }
-        scope.setAutomaticLocal(kSlotFs, futures.finish());
+        scope.set(kSlotFs, futures.finish());
     }
 
     // Phase 2 — join in order, collect results. An element whose call raised
@@ -2868,10 +2840,10 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
     // element in input order is the one raised, after the loop has waited
     // for every element.
     const proto::ProtoList* fs =
-        scope.getAutomaticLocal(kSlotFs)->asList(&scope);
+        scope.get(kSlotFs)->asList(ctx);
     proto::proto_long firstFailed = -1;   // index of the first failing element
     {
-        ListBuilder results(&scope);
+        ListBuilder results(ctx);
         proto::ProtoContext* rctx = results.context();
         for (proto::proto_ulong i = 0; i < n; ++i) {
             const proto::ProtoObject* fut = fs->getAt(rctx, (int)i);
@@ -2912,15 +2884,15 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
                 firstFailed = static_cast<proto::proto_long>(i);
             results.push(fut->getAttribute(rctx, cc->resultKey));
         }
-        scope.setAutomaticLocal(kSlotOut, results.finishSeq());
+        scope.set(kSlotOut, results.finishSeq());
     }
     if (firstFailed >= 0) {
         // The element stays rooted in the kSlotFs list, and its exception
         // with it.
-        throwExecutionException(&scope, threadFailure(&scope,
-            fs->getAt(&scope, static_cast<int>(firstFailed))));
+        throwExecutionException(ctx, threadFailure(ctx,
+            fs->getAt(ctx, static_cast<int>(firstFailed))));
     }
-    return scope.getAutomaticLocal(kSlotOut);
+    return scope.get(kSlotOut);
 }
 
 // Session 18 — promises. A promise is a child of promiseMarkerProto
@@ -3055,17 +3027,14 @@ static const proto::ProtoObject* sendCore(proto::ProtoContext* ctx,
     // Build the per-send promise — same wire shape as `promise`.
     // A pending promise has no own value attribute: deliverPromise installs
     // it with one compare-and-set, which is why the promise is mutable.
-    // Being mutable also makes it a GC root, so it survives the scope below.
     const proto::ProtoObject* p =
         cc->promiseMarkerProto->newChild(ctx, /*isMutable=*/true);
 
     // The extra arguments, the message list and the queue node it is pushed
-    // into are all allocated in a scope that ends here, so protoCore sees
-    // them as candidates as soon as the send returns. Through `ctx` they
-    // would stay in the young generation of the caller's frame, which in a
-    // `(loop … (send a f))` is one context for every message the loop sends.
+    // into are young cells of the caller's frame: a `(loop … (send a f))`
+    // hands them to the collector at its back-edge safepoint, as it does the
+    // loop's own garbage (no context of its own here, CallerSlots.h).
     {
-        proto::ProtoContext scope(ctx->space, ctx);
         // Pack the extra args (positions 2..N-1) into a fresh ProtoList.
         // Their number is the call's arity, which `apply` can make
         // arbitrarily large, so the pack is chunked; the builder is closed
@@ -3073,16 +3042,16 @@ static const proto::ProtoObject* sendCore(proto::ProtoContext* ctx,
         // (see ListBuilder.h). A send with no extra arguments — the common
         // case, and the one the actor benchmarks measure — skips it.
         const proto::ProtoObject* extras = PROTO_NONE;
-        const proto::proto_ulong n = args->getSize(&scope);
+        const proto::proto_ulong n = args->getSize(ctx);
         if (n > 2) {
-            ListBuilder b(&scope);
+            ListBuilder b(ctx);
             for (proto::proto_ulong i = 2; i < n; ++i) {
                 b.push(args->getAt(b.context(), static_cast<int>(i)));
             }
             extras = b.finish();
         }
         ActorScheduler::instance().send(
-            &scope, state, priority, newMessage(&scope, f, extras, p));
+            ctx, state, priority, newMessage(ctx, f, extras, p));
     }
     return p;
 }
@@ -3192,20 +3161,21 @@ const proto::ProtoObject* prim_add_watch(proto::ProtoContext* ctx,
     const proto::ProtoObject* k = args->getAt(ctx, 1);
     const proto::ProtoObject* f = args->getAt(ctx, 2);
 
-    // CAS the watches map (key -> fn). `neu` is rooted in an automatic
-    // local across the CAS, which allocates.
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
+    // CAS the watches map (key -> fn). The new map is rooted in a slot
+    // across the CAS, which allocates; the old one, which another thread may
+    // replace, is pinned while the new one is built from it.
+    CallerSlots scope(ctx, 2);
     const proto::ProtoObject* kf[2] = {k, f};
     for (;;) {
         const proto::ProtoObject* old =
-            a->getOwnAttributeDirect(&scope, cc->watchesKey);
+            a->getOwnAttributeDirect(ctx, cc->watchesKey);
+        scope.pin(1, old);
         const proto::ProtoObject* base =
             isMap(old) ? old : nullptr;
-        scope.setAutomaticLocal(0,
-            mapAssocPairs(&scope, base, kf, 2));
-        if (a->setAttributeIfEqual(&scope, cc->watchesKey, old,
-                                   scope.getAutomaticLocal(0))) break;
+        scope.set(0,
+            mapAssocPairs(ctx, base, kf, 2));
+        if (a->setAttributeIfEqual(ctx, cc->watchesKey, old,
+                                   scope.get(0))) break;
     }
     return a;
 }
@@ -3224,18 +3194,18 @@ const proto::ProtoObject* prim_remove_watch(proto::ProtoContext* ctx,
         throwError(ctx, "remove-watch: not an atom");
     const proto::ProtoObject* k = args->getAt(ctx, 1);
 
-    // CAS the watches map without `k`; `neu` is rooted across the CAS, which
-    // allocates.
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
+    // CAS the watches map without `k`; the new map is rooted across the CAS,
+    // which allocates, and the old one is pinned while it is read.
+    CallerSlots scope(ctx, 2);
     for (;;) {
         const proto::ProtoObject* old =
-            a->getOwnAttributeDirect(&scope, cc->watchesKey);
+            a->getOwnAttributeDirect(ctx, cc->watchesKey);
+        scope.pin(1, old);
         if (!isMap(old)) return a;
-        scope.setAutomaticLocal(0, mapDissoc(&scope, old, k));
-        if (scope.getAutomaticLocal(0) == old) return a;   // key absent
-        if (a->setAttributeIfEqual(&scope, cc->watchesKey, old,
-                                   scope.getAutomaticLocal(0))) break;
+        scope.set(0, mapDissoc(ctx, old, k));
+        if (scope.get(0) == old) return a;   // key absent
+        if (a->setAttributeIfEqual(ctx, cc->watchesKey, old,
+                                   scope.get(0))) break;
     }
     return a;
 }
@@ -3313,7 +3283,7 @@ const proto::ProtoObject* prim_macroexpand_1(proto::ProtoContext* ctx,
 }
 
 // (macroexpand form) — macroexpand-1 repeated until the form is no longer a
-// macro call. Each step's result is rooted in a slot of its own scope.
+// macro call. Each step's result is rooted in a CallerSlots slot.
 const proto::ProtoObject* prim_macroexpand(proto::ProtoContext* ctx,
                                            const proto::ProtoObject*,
                                            const proto::ParentLink*,
@@ -3322,18 +3292,16 @@ const proto::ProtoObject* prim_macroexpand(proto::ProtoContext* ctx,
     if (!args || args->getSize(ctx) != 1) arityError(ctx, args, "macroexpand");
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throwError(ctx, "macroexpand: no active VM context");
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, args->getAt(ctx, 0));
+    CallerSlots scope(ctx, 1);
+    scope.set(0, args->getAt(ctx, 0));
     for (;;) {
         checkNativeStack(StackUse::Source);
-        const proto::ProtoObject* f = scope.getAutomaticLocal(0);
-        const proto::ProtoObject* e = macroexpandOnce(&scope, *cc, f);
+        const proto::ProtoObject* f = scope.get(0);
+        const proto::ProtoObject* e = macroexpandOnce(ctx, *cc, f);
         if (e == f) break;
-        scope.setAutomaticLocal(0, e);
+        scope.set(0, e);
     }
-    scope.returnValue = scope.getAutomaticLocal(0);
-    return scope.getAutomaticLocal(0);
+    return scope.get(0);
 }
 
 // (eval form) — compiles and runs `form` as a top-level form (Eval.h).
@@ -3474,14 +3442,12 @@ const proto::ProtoObject* prim_list_star(proto::ProtoContext* ctx,
     if (isSeqObject(ctx, args->getAt(ctx, static_cast<int>(n - 1)))) {
         // (list* x y lazy): cons cells in front of the lazy tail, which stays
         // unrealised, as in Clojure.
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(1);
-        scope.setAutomaticLocal(0, args->getAt(&scope, static_cast<int>(n - 1)));
+        CallerSlots scope(ctx, 1);
+        scope.set(0, args->getAt(ctx, static_cast<int>(n - 1)));
         for (proto::proto_ulong i = n - 1; i-- > 0;)
-            scope.setAutomaticLocal(0, newCons(&scope, args->getAt(&scope, static_cast<int>(i)),
-                                               scope.getAutomaticLocal(0)));
-        const proto::ProtoObject* r = scope.getAutomaticLocal(0);
-        scope.returnValue = r;
+            scope.set(0, newCons(ctx, args->getAt(ctx, static_cast<int>(i)),
+                                               scope.get(0)));
+        const proto::ProtoObject* r = scope.get(0);
         return r;
     }
     ListBuilder out(ctx);
@@ -3637,13 +3603,12 @@ const proto::ProtoObject* prim_disj(proto::ProtoContext* ctx,
     if (n < 1) throwError(ctx, "disj: expects (disj set x ...)");
     const proto::ProtoObject* s = setArg(ctx, args, 0, "disj");
     if (!s || s == PROTO_NONE) return PROTO_NONE;
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, s);
+    CallerSlots scope(ctx, 1);
+    scope.set(0, s);
     for (proto::proto_ulong i = 1; i < n; ++i)
-        scope.setAutomaticLocal(0, setDisj(&scope, scope.getAutomaticLocal(0),
-                                           args->getAt(&scope, static_cast<int>(i))));
-    return scope.getAutomaticLocal(0);
+        scope.set(0, setDisj(ctx, scope.get(0),
+                                           args->getAt(ctx, static_cast<int>(i))));
+    return scope.get(0);
 }
 
 // clojure.set/union: every element of every set; (union) is #{}.
@@ -3761,11 +3726,10 @@ const proto::ProtoObject* prim_second(proto::ProtoContext* ctx,
     if (!args || args->getSize(ctx) != 1) arityError(ctx, args, "second");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (isSeqObject(ctx, v)) {
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(1);
-        SeqWalk w(&scope, 0, &scope, v);
-        if (!w.done()) w.advance(&scope);
-        return w.done() ? PROTO_NONE : w.first(&scope);
+        CallerSlots scope(ctx, 1);
+        SeqWalk w(scope, 0, ctx, v);
+        if (!w.done()) w.advance(ctx);
+        return w.done() ? PROTO_NONE : w.first(ctx);
     }
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     if (!lst || lst->getSize(ctx) < 2) return PROTO_NONE;
@@ -3797,15 +3761,13 @@ const proto::ProtoObject* prim_last(proto::ProtoContext* ctx,
     const proto::ProtoObject* v = args->getAt(ctx, 0);
     if (isSeqObject(ctx, v)) {
         // Walked to the end, keeping only the current element.
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(2);
-        SeqWalk w(&scope, 0, &scope, v);
+        SafepointPermit permit(ctx);   // the walk and the element are in slots
+        CallerSlots scope(ctx, 2);
+        SeqWalk w(scope, 0, ctx, v);
         releaseArg(args, 0);
-        scope.setAutomaticLocal(1, PROTO_NONE);
-        for (; !w.done(); w.advance(&scope)) scope.setAutomaticLocal(1, w.first(&scope));
-        const proto::ProtoObject* r = scope.getAutomaticLocal(1);
-        scope.returnValue = r;
-        return r;
+        scope.set(1, PROTO_NONE);
+        for (; !w.done(); w.advance(ctx), scope.tick()) scope.set(1, w.first(ctx));
+        return scope.ret(scope.get(1));
     }
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     if (!lst || lst->getSize(ctx) == 0) return PROTO_NONE;
@@ -3872,26 +3834,22 @@ const proto::ProtoObject* prim_conj(proto::ProtoContext* ctx,
     if (!coll || coll == PROTO_NONE || isListValue(ctx, coll)) {
         // A list (nil is the empty list) grows at the front: the list one
         // longer per element, one cell each.
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(1);
-        scope.setAutomaticLocal(0, (coll && coll != PROTO_NONE) ? coll : emptyListValue());
+        CallerSlots scope(ctx, 1);
+        scope.set(0, (coll && coll != PROTO_NONE) ? coll : emptyListValue());
         for (proto::proto_ulong i = 1; i < n; ++i)
-            scope.setAutomaticLocal(0, listCons(&scope, args->getAt(&scope, static_cast<int>(i)),
-                                                scope.getAutomaticLocal(0)));
-        const proto::ProtoObject* r = scope.getAutomaticLocal(0);
-        scope.returnValue = r;
+            scope.set(0, listCons(ctx, args->getAt(ctx, static_cast<int>(i)),
+                                                scope.get(0)));
+        const proto::ProtoObject* r = scope.get(0);
         return r;
     }
     if (isSeqObject(ctx, coll)) {
         // A seq grows at the front, one cons per element, as in Clojure.
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(1);
-        scope.setAutomaticLocal(0, coll);
+        CallerSlots scope(ctx, 1);
+        scope.set(0, coll);
         for (proto::proto_ulong i = 1; i < n; ++i)
-            scope.setAutomaticLocal(0, newCons(&scope, args->getAt(&scope, static_cast<int>(i)),
-                                               scope.getAutomaticLocal(0)));
-        const proto::ProtoObject* r = scope.getAutomaticLocal(0);
-        scope.returnValue = r;
+            scope.set(0, newCons(ctx, args->getAt(ctx, static_cast<int>(i)),
+                                               scope.get(0)));
+        const proto::ProtoObject* r = scope.get(0);
         return r;
     }
     throwError(ctx, "ClassCastException: conj expects a collection, got " +
@@ -4521,15 +4479,14 @@ void printValueTo(proto::ProtoContext* ctx, std::string& out,
 bool deliverPromise(proto::ProtoContext* ctx, const proto::ProtoString* valueKey,
                     const proto::ProtoObject* promise,
                     const proto::ProtoObject* value) {
-    // The one-element list is rooted in a child context slot across the
+    // The one-element list is rooted in a CallerSlots slot across the
     // compare-and-set, which allocates.
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0,
-        scope.newList()->appendLast(&scope, value ? value : PROTO_NONE)
-            ->asObject(&scope));
-    return promise->setAttributeIfEqual(&scope, valueKey, nullptr,
-                                        scope.getAutomaticLocal(0));
+    CallerSlots scope(ctx, 1);
+    scope.set(0,
+        ctx->newList()->appendLast(ctx, value ? value : PROTO_NONE)
+            ->asObject(ctx));
+    return promise->setAttributeIfEqual(ctx, valueKey, nullptr,
+                                        scope.get(0));
 }
 
 namespace {
@@ -4737,12 +4694,11 @@ bool valuesEqual(proto::ProtoContext* ctx,
                 if (!valuesEqual(ctx, listFirst(ctx, a), listFirst(ctx, b))) return false;
             return true;
         }
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(2);
-        SeqWalk wa(&scope, 0, &scope, a);
-        SeqWalk wb(&scope, 1, &scope, b);
-        for (; !wa.done() && !wb.done(); wa.advance(&scope), wb.advance(&scope)) {
-            if (!valuesEqual(&scope, wa.first(&scope), wb.first(&scope))) return false;
+        CallerSlots scope(ctx, 2);
+        SeqWalk wa(scope, 0, ctx, a);
+        SeqWalk wb(scope, 1, ctx, b);
+        for (; !wa.done() && !wb.done(); wa.advance(ctx), wb.advance(ctx)) {
+            if (!valuesEqual(ctx, wa.first(ctx), wb.first(ctx))) return false;
         }
         return wa.done() && wb.done();
     }
@@ -4810,6 +4766,12 @@ namespace protoClojure {
 const proto::ProtoObject* fastPrimitiveCall(proto::ProtoContext* ctx, proto::ProtoMethod fn,
                                             const proto::ProtoObject* const* argv, unsigned argc,
                                             bool mayAllocate) {
+#ifdef PROTOCLJ_NO_FAST_PRIMITIVES
+    // Measurement build only (docs/DESIGN.md §10.2, M45): every primitive
+    // takes the general path.
+    (void)ctx; (void)fn; (void)argv; (void)argc; (void)mayAllocate;
+    return nullptr;
+#endif
     const proto::ProtoObject* r = nullptr;
     if (argc == 1) {
         const proto::ProtoObject* v = argv[0];

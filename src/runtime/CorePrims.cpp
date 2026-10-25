@@ -13,6 +13,7 @@
 // numeric semantics need protoCore's exact integers (quot, rem, mod).
 
 #include "CorePrims.h"
+#include "CallerSlots.h"
 
 #include "Exceptions.h"
 #include "ExecutionEngine.h"
@@ -100,21 +101,18 @@ const PO* intDivision(proto::ProtoContext* ctx, const proto::ProtoArguments* arg
         return ctx->fromLong(r);
     }
     // Large integers: protoCore's divide truncates toward zero, as quot.
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(2);
-    scope.setAutomaticLocal(0, a->divide(&scope, b));
+    CallerSlots scope(ctx, 2);
+    scope.set(0, a->divide(ctx, b));
     if (kind == DivKind::Quot) {
-        scope.returnValue = scope.getAutomaticLocal(0);
-        return scope.getAutomaticLocal(0);
+        return scope.get(0);
     }
-    scope.setAutomaticLocal(1, scope.getAutomaticLocal(0)->multiply(&scope, b));
-    const PO* r = a->subtract(&scope, scope.getAutomaticLocal(1));
-    scope.setAutomaticLocal(1, r);
-    const PO* zero = scope.fromLong(0);
-    if (kind == DivKind::Mod && numberCompare(&scope, r, zero) != 0 &&
-        ((numberCompare(&scope, r, zero) < 0) != (numberCompare(&scope, b, zero) < 0)))
-        r = r->add(&scope, b);
-    scope.returnValue = r;
+    scope.set(1, scope.get(0)->multiply(ctx, b));
+    const PO* r = a->subtract(ctx, scope.get(1));
+    scope.set(1, r);
+    const PO* zero = ctx->fromLong(0);
+    if (kind == DivKind::Mod && numberCompare(ctx, r, zero) != 0 &&
+        ((numberCompare(ctx, r, zero) < 0) != (numberCompare(ctx, b, zero) < 0)))
+        r = r->add(ctx, b);
     return r;
 }
 
@@ -212,64 +210,61 @@ int callComparator(proto::ProtoContext* ctx, const PO* cmp, const PO* x, const P
     if (!cmp || cmp == PROTO_NONE) return compareValues(ctx, x, y);
     const ActiveCallContext* cc = callContext(ctx, "sort");
     const PO* xy[2] = {x, y};
-    proto::ProtoContext scope(ctx->space, ctx);
-    const PO* r = cc->engine->invoke(&scope, cmp, xy, 2);
+    const PO* r = cc->engine->invoke(ctx, cmp, xy, 2);
     if (r == PROTO_TRUE) return -1;
     if (!r || r == PROTO_NONE || r == PROTO_FALSE) {
         const PO* yx[2] = {y, x};
-        return truthy(cc->engine->invoke(&scope, cmp, yx, 2)) ? 1 : 0;
+        return truthy(cc->engine->invoke(ctx, cmp, yx, 2)) ? 1 : 0;
     }
-    if (!isNumber(&scope, r)) throwNotANumber(&scope, "sort comparator", r);
-    return numberCompare(&scope, r, scope.fromLong(0));
+    if (!isNumber(ctx, r)) throwNotANumber(ctx, "sort comparator", r);
+    return numberCompare(ctx, r, ctx->fromLong(0));
 }
 
 // The elements of `coll` sorted by `keys` (the same elements when keyfn is
 // nil) with `cmp`, stably, as Clojure's sort (a merge sort) is. The elements
 // and the keys are rooted in lists in slots of `scope`.
 const PO* sortedList(proto::ProtoContext* ctx, const PO* keyfn, const PO* cmp, const PO* coll) {
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(2);
+    CallerSlots scope(ctx, 2);
     std::vector<const PO*> elems, keys;
-    if (isListValue(&scope, coll)) {
+    if (isListValue(ctx, coll)) {
         // A list is read along its cells; it is rooted in slot 0.
-        scope.setAutomaticLocal(0, coll);
-        for (const PO* p = coll; p != emptyListValue(); p = listRest(&scope, p))
-            elems.push_back(listFirst(&scope, p));
+        scope.set(0, coll);
+        for (const PO* p = coll; p != emptyListValue(); p = listRest(ctx, p))
+            elems.push_back(listFirst(ctx, p));
     } else {
-        const proto::ProtoList* items = seqToList(&scope, coll);
+        const proto::ProtoList* items = seqToList(ctx, coll);
         if (!items) return emptyListValue();
-        scope.setAutomaticLocal(0, items->asObject(&scope));
-        const proto::proto_ulong ni = items->getSize(&scope);
+        scope.set(0, items->asObject(ctx));
+        const proto::proto_ulong ni = items->getSize(ctx);
         elems.resize(ni);
-        for (proto::proto_ulong i = 0; i < ni; ++i) elems[i] = items->getAt(&scope, static_cast<int>(i));
+        for (proto::proto_ulong i = 0; i < ni; ++i) elems[i] = items->getAt(ctx, static_cast<int>(i));
     }
     const proto::proto_ulong n = elems.size();
     if (n == 0) return emptyListValue();
     if (keyfn && keyfn != PROTO_NONE) {
-        const ActiveCallContext* cc = callContext(&scope, "sort-by");
+        const ActiveCallContext* cc = callContext(ctx, "sort-by");
         // The keys are appended to a list rooted in slot 1 as they are made.
-        scope.setAutomaticLocal(1, scope.newList()->asObject(&scope));
+        scope.set(1, ctx->newList()->asObject(ctx));
         for (proto::proto_ulong i = 0; i < n; ++i) {
             const PO* one[1] = {elems[i]};
-            const PO* k = cc->engine->invoke(&scope, keyfn, one, 1);
-            scope.setAutomaticLocal(1, scope.getAutomaticLocal(1)->asList(&scope)
-                                           ->appendLast(&scope, k)->asObject(&scope));
+            const PO* k = cc->engine->invoke(ctx, keyfn, one, 1);
+            scope.set(1, scope.get(1)->asList(ctx)
+                                           ->appendLast(ctx, k)->asObject(ctx));
         }
-        const proto::ProtoList* kl = scope.getAutomaticLocal(1)->asList(&scope);
+        const proto::ProtoList* kl = scope.get(1)->asList(ctx);
         keys.resize(n);
-        for (proto::proto_ulong i = 0; i < n; ++i) keys[i] = kl->getAt(&scope, static_cast<int>(i));
+        for (proto::proto_ulong i = 0; i < n; ++i) keys[i] = kl->getAt(ctx, static_cast<int>(i));
     }
     std::vector<std::size_t> order(n);
     for (std::size_t i = 0; i < n; ++i) order[i] = i;
     const std::vector<const PO*>& by = keys.empty() ? elems : keys;
     std::stable_sort(order.begin(), order.end(), [&](std::size_t i, std::size_t j) {
-        return callComparator(&scope, cmp, by[i], by[j]) < 0;
+        return callComparator(ctx, cmp, by[i], by[j]) < 0;
     });
     std::vector<const PO*> out(n);
     for (std::size_t i = 0; i < n; ++i) out[i] = elems[order[i]];
     // The elements are rooted in the list in slot 0.
-    const PO* r = listFromArray(&scope, n, out.data());
-    scope.returnValue = r;
+    const PO* r = listFromArray(ctx, n, out.data());
     return r;
 }
 
@@ -298,9 +293,8 @@ COREPRIM(prim_sort_by) {
 // collection, and the map is built at the end.
 COREPRIM(prim_frequencies) {
     if (argc(ctx, args) != 1) arity(ctx, argc(ctx, args), "frequencies");
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(2);
-    scope.setAutomaticLocal(1, scope.newList()->asObject(&scope));
+    CallerSlots scope(ctx, 2);
+    scope.set(1, ctx->newList()->asObject(ctx));
     struct Hash {
         proto::ProtoContext* c;
         std::size_t operator()(const PO* k) const { return static_cast<std::size_t>(keyHash(c, k)); }
@@ -309,29 +303,28 @@ COREPRIM(prim_frequencies) {
         proto::ProtoContext* c;
         bool operator()(const PO* a, const PO* b) const { return keyEquals(c, a, b); }
     };
-    std::unordered_map<const PO*, long long, Hash, Eq> counts(16, Hash{&scope}, Eq{&scope});
+    std::unordered_map<const PO*, long long, Hash, Eq> counts(16, Hash{ctx}, Eq{ctx});
     std::vector<const PO*> distinct;
     {
-        SeqWalk w(&scope, 0, &scope, argAt(ctx, args, 0));
+        SeqWalk w(scope, 0, ctx, argAt(ctx, args, 0));
         releaseArg(args, 0);
-        for (; !w.done(); w.advance(&scope)) {
-            const PO* x = w.first(&scope);
+        for (; !w.done(); w.advance(ctx)) {
+            const PO* x = w.first(ctx);
             auto it = counts.find(x);
             if (it != counts.end()) { ++it->second; continue; }
             counts.emplace(x, 1);
             distinct.push_back(x);
-            scope.setAutomaticLocal(1, scope.getAutomaticLocal(1)->asList(&scope)
-                                           ->appendLast(&scope, x)->asObject(&scope));
+            scope.set(1, scope.get(1)->asList(ctx)
+                                           ->appendLast(ctx, x)->asObject(ctx));
         }
     }
     std::vector<const PO*> kv;
     kv.reserve(2 * distinct.size());
     for (const PO* k : distinct) {
         kv.push_back(k);
-        kv.push_back(scope.fromLong(counts.find(k)->second));
+        kv.push_back(ctx->fromLong(counts.find(k)->second));
     }
-    const PO* m = mapAssocPairs(&scope, nullptr, kv.data(), kv.size());
-    scope.returnValue = m;
+    const PO* m = mapAssocPairs(ctx, nullptr, kv.data(), kv.size());
     return m;
 }
 
@@ -359,14 +352,12 @@ COREPRIM(prim_split_lines) {
     lines.push_back(s.substr(start));
     while (lines.size() > 1 && lines.back().empty()) lines.pop_back();
     if (lines.size() == 1 && lines[0].empty() && !s.empty()) lines.clear();
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, scope.newList()->asObject(&scope));
+    CallerSlots scope(ctx, 1);
+    scope.set(0, ctx->newList()->asObject(ctx));
     for (const std::string& l : lines)
-        scope.setAutomaticLocal(0, scope.getAutomaticLocal(0)->asList(&scope)
-            ->appendLast(&scope, makeUtf8String(&scope, l))->asObject(&scope));
-    const PO* r = newVector(&scope, scope.getAutomaticLocal(0)->asList(&scope));
-    scope.returnValue = r;
+        scope.set(0, scope.get(0)->asList(ctx)
+            ->appendLast(ctx, makeUtf8String(ctx, l))->asObject(ctx));
+    const PO* r = newVector(ctx, scope.get(0)->asList(ctx));
     return r;
 }
 
@@ -625,11 +616,9 @@ COREPRIM(prim_pop) {
     if (isVector(v)) {
         const proto::ProtoList* items = vectorItems(ctx, v);
         if (items->getSize(ctx) == 0) throwClassed(ctx, "IllegalStateException", "Can't pop empty vector");
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(1);
-        scope.setAutomaticLocal(0, items->removeLast(&scope)->asObject(&scope));
-        const PO* r = newVector(&scope, scope.getAutomaticLocal(0)->asList(&scope));
-        scope.returnValue = r;
+        CallerSlots scope(ctx, 1);
+        scope.set(0, items->removeLast(ctx)->asObject(ctx));
+        const PO* r = newVector(ctx, scope.get(0)->asList(ctx));
         return r;
     }
     if (isListValue(ctx, v)) {
@@ -700,19 +689,18 @@ void installCorePrimitives(proto::ProtoContext* ctx, proto::ProtoObject* globals
     // `System`, an object whose members stand in for java.lang.System's
     // static methods a script calls: (System/exit n) is `exit`,
     // (System/getenv "X") `getenv`. Installed after the I/O globals.
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, ctx->space->objectPrototype->newChild(&scope, false));
+    CallerSlots scope(ctx, 1);
+    scope.set(0, ctx->space->objectPrototype->newChild(ctx, false));
     auto member = [&](const char* name, const PO* value) {
         if (!value) return;
-        scope.setAutomaticLocal(0, scope.getAutomaticLocal(0)->setAttribute(
-            &scope, proto::ProtoString::createSymbol(&scope, name), value));
+        scope.set(0, scope.get(0)->setAttribute(
+            ctx, proto::ProtoString::createSymbol(ctx, name), value));
     };
-    member("exit", globals->getOwnAttributeDirect(&scope, proto::ProtoString::createSymbol(&scope, "exit")));
-    member("getenv", globals->getOwnAttributeDirect(&scope, proto::ProtoString::createSymbol(&scope, "getenv")));
-    member("currentTimeMillis", scope.fromMethod(nullptr, &prim_current_time_millis));
-    member("nanoTime", scope.fromMethod(nullptr, &prim_nano_time));
-    defineBuiltin(&scope, globals, "System", scope.getAutomaticLocal(0));
+    member("exit", globals->getOwnAttributeDirect(ctx, proto::ProtoString::createSymbol(ctx, "exit")));
+    member("getenv", globals->getOwnAttributeDirect(ctx, proto::ProtoString::createSymbol(ctx, "getenv")));
+    member("currentTimeMillis", ctx->fromMethod(nullptr, &prim_current_time_millis));
+    member("nanoTime", ctx->fromMethod(nullptr, &prim_nano_time));
+    defineBuiltin(ctx, globals, "System", scope.get(0));
 }
 
 const char* corePrimitiveName(proto::ProtoMethod fn) {

@@ -54,6 +54,8 @@ class ProtoArguments;
 
 namespace protoClojure {
 
+class CallerSlots;
+
 // Interns the attribute keys and installs the hook the map helpers use
 // (SeqTypes.h). Called by installPrimitives after initSeqTypes.
 void initLazySeqs(proto::ProtoContext* ctx);
@@ -173,19 +175,16 @@ bool collectionItems(proto::ProtoContext* ctx, const proto::ProtoObject* v,
 // ---- Walking ----------------------------------------------------------------
 
 // A cursor over the elements of a seqable that holds nothing but its
-// position: the current seq node, in slot `slot` of `root`, a context the
-// caller owns and keeps alive for the walk. So a walk over a lazy seq that
+// position: the current seq node, in slot `slot` of `roots` (CallerSlots.h),
+// which the caller keeps alive for the walk. So a walk over a lazy seq that
 // no one else holds lets every element it has passed be collected, which is
 // what keeps `(count (line-seq rdr))` in constant memory. Lists and chunks
-// are read by index; moving to the next node realises it in a short-lived
-// context of its own, so the walk's garbage is handed to the collector as it
-// goes.
-//
-// Pass the innermost context of the thread (the one the caller would pass
-// to any call that pushes a context) to first/advance; see ListBuilder.h.
+// are read by index; moving to the next node realises it in `ctx`, the
+// caller's context; the walker hands that garbage to the collector by
+// ticking its CallerSlots (under a SafepointPermit), never the walk itself.
 class SeqWalk {
 public:
-    SeqWalk(proto::ProtoContext* root, unsigned slot, proto::ProtoContext* ctx,
+    SeqWalk(CallerSlots& roots, unsigned slot, proto::ProtoContext* ctx,
             const proto::ProtoObject* coll);
     bool done() const { return node_ == nullptr; }
     // The current element; reachable from the current node until advance.
@@ -203,9 +202,9 @@ public:
 private:
     void load(proto::ProtoContext* ctx, const proto::ProtoObject* node);
 
-    proto::ProtoContext*      root_;
+    CallerSlots&              roots_;
     unsigned                  slot_;
-    const proto::ProtoObject* node_ = nullptr;  // also in root_'s slot
+    const proto::ProtoObject* node_ = nullptr;  // also in roots_'s slot
     const proto::ProtoList*   items_ = nullptr; // a chunk's elements
     long long                 i_ = 0, end_ = 0;
     bool                      cons_ = false;    // a cons or a list cell

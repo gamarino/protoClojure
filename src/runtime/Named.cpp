@@ -1,3 +1,4 @@
+#include "CallerSlots.h"
 #include "Named.h"
 
 #include "protoCore.h"
@@ -102,21 +103,20 @@ static const proto::ProtoObject* internNamedUncached(proto::ProtoContext* ctx,
 
     // First use of this spelling: build the value, rooted in a child
     // context until the table holds it.
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, layout.marker->newChild(&scope, /*isMutable=*/false));
-    scope.setAutomaticLocal(0, scope.getAutomaticLocal(0)->setAttribute(
-        &scope, layout.spellingKey,
+    CallerSlots scope(ctx, 1);
+    scope.set(0, layout.marker->newChild(ctx, /*isMutable=*/false));
+    scope.set(0, scope.get(0)->setAttribute(
+        ctx, layout.spellingKey,
         reinterpret_cast<const proto::ProtoObject*>(key)));
-    const proto::ProtoObject* fresh = scope.getAutomaticLocal(0);
+    const proto::ProtoObject* fresh = scope.get(0);
 
     // Publish it, or adopt the value another thread published first.
     for (;;) {
-        if (layout.table->setAttributeIfEqual(&scope, key, nullptr, fresh)) {
+        if (layout.table->setAttributeIfEqual(ctx, key, nullptr, fresh)) {
             namedcache::record(fresh);
             return fresh;
         }
-        found = layout.table->getOwnAttributeDirect(&scope, key);
+        found = layout.table->getOwnAttributeDirect(ctx, key);
         if (found) { namedcache::record(found); return found; }
     }
 }

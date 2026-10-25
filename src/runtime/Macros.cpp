@@ -1,3 +1,4 @@
+#include "CallerSlots.h"
 #include "Macros.h"
 
 #include <unordered_map>
@@ -96,11 +97,10 @@ const proto::ProtoObject* expandMacroCall(proto::ProtoContext* ctx,
         for (const proto::ProtoObject* p = listRest(ctx, form); p != emptyListValue(); p = listRest(ctx, p))
             args.push_back(listFirst(ctx, p));
     } else {
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(1);
-        SeqWalk w(&scope, 0, &scope, form);
-        if (!w.done()) w.advance(&scope);
-        for (; !w.done(); w.advance(&scope)) args.push_back(w.first(&scope));
+        CallerSlots scope(ctx, 1);
+        SeqWalk w(scope, 0, ctx, form);
+        if (!w.done()) w.advance(ctx);
+        for (; !w.done(); w.advance(ctx)) args.push_back(w.first(ctx));
     }
     const proto::proto_ulong n = static_cast<proto::proto_ulong>(args.size() - 1);
     const unsigned int argc = static_cast<unsigned int>(args.size());

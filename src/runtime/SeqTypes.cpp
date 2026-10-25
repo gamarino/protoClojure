@@ -1,3 +1,4 @@
+#include "CallerSlots.h"
 #include "SeqTypes.h"
 
 #include "ListBuilder.h"
@@ -17,18 +18,16 @@ inline const proto::ProtoObject* orNil(const proto::ProtoObject* v) { return v ?
 }
 
 const proto::ProtoObject* initSeqTypes(proto::ProtoContext* ctx) {
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
+    CallerSlots scope(ctx, 1);
     const proto::ProtoObject* root = ctx->space->objectPrototype;
-    const proto::ProtoList* holder = scope.newList();
+    const proto::ProtoList* holder = ctx->newList();
     for (const proto::ProtoObject** p : {&g_seqProtos.lazy, &g_seqProtos.cons, &g_seqProtos.chunk,
                                          &g_seqProtos.list, &g_seqProtos.empty}) {
-        *p = root->newChild(&scope, /*isMutable=*/false);
-        holder = holder->appendLast(&scope, *p);
-        scope.setAutomaticLocal(0, holder->asObject(&scope));
+        *p = root->newChild(ctx, /*isMutable=*/false);
+        holder = holder->appendLast(ctx, *p);
+        scope.set(0, holder->asObject(ctx));
     }
-    scope.returnValue = scope.getAutomaticLocal(0);
-    return scope.getAutomaticLocal(0);
+    return scope.get(0);
 }
 
 SeqObject seqObjectKind(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
@@ -99,28 +98,24 @@ const proto::ProtoObject* listFromArray(proto::ProtoContext* ctx, std::size_t n,
     if (n == 0) return g_seqProtos.empty;
     // Built from the end; each new cell is rooted in the slot, and holds the
     // ones built before it. Nothing built here becomes garbage.
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
+    CallerSlots scope(ctx, 1);
     const proto::ProtoObject* acc = g_seqProtos.empty;
     for (std::size_t i = n; i-- > 0;) {
-        acc = listCons(&scope, items[i], acc);
-        scope.setAutomaticLocal(0, acc);
+        acc = listCons(ctx, items[i], acc);
+        scope.set(0, acc);
     }
-    scope.returnValue = acc;
     return acc;
 }
 
 const proto::ProtoObject* listFromProtoList(proto::ProtoContext* ctx, const proto::ProtoList* items) {
     const proto::proto_ulong n = items ? items->getSize(ctx) : 0;
     if (n == 0) return g_seqProtos.empty;
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
+    CallerSlots scope(ctx, 1);
     const proto::ProtoObject* acc = g_seqProtos.empty;
     for (proto::proto_ulong i = n; i-- > 0;) {
-        acc = listCons(&scope, items->getAt(&scope, static_cast<int>(i)), acc);
-        scope.setAutomaticLocal(0, acc);
+        acc = listCons(ctx, items->getAt(ctx, static_cast<int>(i)), acc);
+        scope.set(0, acc);
     }
-    scope.returnValue = acc;
     return acc;
 }
 

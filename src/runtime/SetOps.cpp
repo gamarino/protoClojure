@@ -1,3 +1,4 @@
+#include "CallerSlots.h"
 #include "SetOps.h"
 
 #include "MapOps.h"
@@ -22,11 +23,10 @@ constexpr proto::proto_ulong kSaltSet = PROTO_UL(0x7C9F2D6A1B3E5F81);
 
 // A new set holding `elements` (a ProtoMap, never null).
 const proto::ProtoObject* wrap(proto::ProtoContext* ctx, const proto::ProtoObject* elements) {
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, elements);
-    return g_setPrototype->newChild(&scope, /*isMutable=*/false)
-        ->setAttribute(&scope, elementsKey(&scope), scope.getAutomaticLocal(0));
+    CallerSlots scope(ctx, 1);
+    scope.set(0, elements);
+    return g_setPrototype->newChild(ctx, /*isMutable=*/false)
+        ->setAttribute(ctx, elementsKey(ctx), scope.get(0));
 }
 
 } // namespace
@@ -59,10 +59,9 @@ const proto::ProtoObject* setConj(proto::ProtoContext* ctx, const proto::ProtoOb
         kv.push_back(e);
     }
     if (base && kv.empty()) return base;
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, mapAssocPairs(&scope, elements, kv.data(), kv.size()));
-    return wrap(&scope, scope.getAutomaticLocal(0));
+    CallerSlots scope(ctx, 1);
+    scope.set(0, mapAssocPairs(ctx, elements, kv.data(), kv.size()));
+    return wrap(ctx, scope.get(0));
 }
 
 const proto::ProtoObject* setDisj(proto::ProtoContext* ctx, const proto::ProtoObject* s,
@@ -71,10 +70,9 @@ const proto::ProtoObject* setDisj(proto::ProtoContext* ctx, const proto::ProtoOb
     if (!elements) return s;
     const proto::ProtoObject* after = mapDissoc(ctx, elements, item ? item : PROTO_NONE);
     if (after == elements) return s;
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, after);
-    return wrap(&scope, scope.getAutomaticLocal(0));
+    CallerSlots scope(ctx, 1);
+    scope.set(0, after);
+    return wrap(ctx, scope.get(0));
 }
 
 const proto::ProtoObject* setGet(proto::ProtoContext* ctx, const proto::ProtoObject* s,

@@ -1,4 +1,5 @@
 #include "LazySeq.h"
+#include "CallerSlots.h"
 
 #include "Exceptions.h"
 #include "ExecutionEngine.h"
@@ -87,30 +88,24 @@ const PO* call1(proto::ProtoContext* ctx, const PO* f, const PO* x) {
     return call(ctx, f, one, 1);
 }
 
-// A context of the caller's that roots a few values in its slots and hands
-// its garbage to the collector every kStride iterations of a loop
-// (ProtoContext::safepoint submits once past protoCore's per-context
-// threshold). Every value the loop still needs must be in a slot when
-// tick() runs.
+// A few traced slots of the caller's (CallerSlots.h): no context of its
+// own. tick() hands the caller frame's garbage to the collector every
+// CallerSlots::kTickStride iterations of a loop, when the primitive at the
+// bottom holds a SafepointPermit; every value the loop still needs must be in
+// a slot when tick() runs. ret() returns a result, anchoring it in the
+// caller's chain if a submission happened meanwhile.
 class Scope {
 public:
-    Scope(proto::ProtoContext* ctx, unsigned slots) : c_(ctx->space, ctx) {
-        c_.resizeAutomaticLocals(slots);
-    }
-    proto::ProtoContext* ctx() { return &c_; }
-    void set(unsigned i, const PO* v) { c_.setAutomaticLocal(i, orNil(v)); }
-    const PO* get(unsigned i) { return orNil(c_.getAutomaticLocal(i)); }
-    void tick() {
-        if (++n_ % kStride == 0) c_.safepoint();
-    }
-    // Anchors `v` in the parent context when this scope ends, for a result
-    // the caller will root.
-    const PO* ret(const PO* v) { c_.returnValue = v; return v; }
+    Scope(proto::ProtoContext* ctx, unsigned slots) : c_(ctx, slots) {}
+    proto::ProtoContext* ctx() { return c_.ctx(); }
+    void set(unsigned i, const PO* v) { c_.set(i, orNil(v)); }
+    const PO* get(unsigned i) { return orNil(c_.get(i)); }
+    void tick() { c_.tick(); }
+    const PO* ret(const PO* v) { return c_.ret(v); }
+    CallerSlots& slots() { return c_; }
 
 private:
-    static constexpr unsigned kStride = 64;
-    proto::ProtoContext c_;
-    unsigned n_ = 0;
+    CallerSlots c_;
 };
 
 const PO* newStep(proto::ProtoContext* ctx, StepKind kind, const PO* a, const PO* b,
@@ -131,7 +126,7 @@ const PO* lazy5(proto::ProtoContext* ctx, StepKind kind, const PO* a, const PO* 
 
 // lazy5 for a step function that stores the new seq in its own scope's
 // slot `slot`: the step is rooted in that slot until the lazy seq holds it,
-// so no scope of its own is opened. One context fewer per element walked.
+// so no slots of its own are taken.
 const PO* lazy5At(Scope& s, unsigned slot, StepKind kind, const PO* a, const PO* b,
                   const PO* c, const PO* d, const PO* e) {
     const PO* step = newStep(s.ctx(), kind, a, b, c, d, e);
@@ -347,14 +342,14 @@ const PO* stepTakeWhile(proto::ProtoContext* ctx, const PO*, const StepOperands&
 const PO* stepDrop(proto::ProtoContext* ctx, const PO*, const StepOperands& o) {
     long long n = countOperand(ctx, o.a);
     Scope s(ctx, 1);
-    SeqWalk w(s.ctx(), 0, s.ctx(), o.b);
+    SeqWalk w(s.slots(), 0, s.ctx(), o.b);
     for (; n > 0 && !w.done(); --n) w.advance(s.ctx());
     return s.ret(w.done() ? PROTO_NONE : seqOf(s.ctx(), w.remaining(s.ctx())));
 }
 
 const PO* stepDropWhile(proto::ProtoContext* ctx, const PO*, const StepOperands& o) {
     Scope s(ctx, 1);
-    SeqWalk w(s.ctx(), 0, s.ctx(), o.b);
+    SeqWalk w(s.slots(), 0, s.ctx(), o.b);
     while (!w.done() && truthy(call1(s.ctx(), o.a, w.first(s.ctx())))) {
         w.advance(s.ctx());
         s.tick();
@@ -506,7 +501,7 @@ const PO* stepPartition(proto::ProtoContext* ctx, const PO*, const StepOperands&
     s.set(1, newAcc(s.ctx()));
     long long k = 0;
     {
-        SeqWalk w(s.ctx(), 2, s.ctx(), s.get(0));
+        SeqWalk w(s.slots(), 2, s.ctx(), s.get(0));
         for (; k < n && !w.done(); ++k) {
             s.set(1, s.get(1)->asList(s.ctx())->appendLast(s.ctx(), w.first(s.ctx()))->asObject(s.ctx()));
             w.advance(s.ctx());
@@ -515,7 +510,7 @@ const PO* stepPartition(proto::ProtoContext* ctx, const PO*, const StepOperands&
     if (k < n) {
         if (mode == 0 || (mode == 2 && k == 0)) return PROTO_NONE;
         if (mode == 1) {
-            SeqWalk w(s.ctx(), 2, s.ctx(), o.c);
+            SeqWalk w(s.slots(), 2, s.ctx(), o.c);
             for (; k < n && !w.done(); ++k) {
                 s.set(1, s.get(1)->asList(s.ctx())->appendLast(s.ctx(), w.first(s.ctx()))->asObject(s.ctx()));
                 w.advance(s.ctx());
@@ -528,7 +523,7 @@ const PO* stepPartition(proto::ProtoContext* ctx, const PO*, const StepOperands&
     s.set(1, listFromProtoList(s.ctx(), s.get(1)->asList(s.ctx())));
     // The next partition starts `step` elements on.
     {
-        SeqWalk w(s.ctx(), 2, s.ctx(), s.get(0));
+        SeqWalk w(s.slots(), 2, s.ctx(), s.get(0));
         for (long long i = 0; i < step && !w.done(); ++i) w.advance(s.ctx());
         s.set(3, w.done() ? PROTO_NONE : w.remaining(s.ctx()));
     }
@@ -969,17 +964,15 @@ const proto::ProtoList* seqToList(proto::ProtoContext* ctx, const PO* v) {
     Scope s(ctx, 2);
     s.set(1, newAcc(s.ctx()));
     {
-        SeqWalk w(s.ctx(), 0, s.ctx(), v);
+        SeqWalk w(s.slots(), 0, s.ctx(), v);
         // A list is built by appending, which leaves a path of garbage per
-        // element: the build runs in chunks, each in a context of its own.
+        // element: the loop ticks, with the walk and the list in slots.
         while (!w.done()) {
-            proto::ProtoContext chunk(s.ctx()->space, s.ctx());
-            const proto::ProtoList* acc = s.get(1)->asList(&chunk);
-            for (int i = 0; i < 256 && !w.done(); ++i) {
-                acc = acc->appendLast(&chunk, w.first(&chunk));
-                s.set(1, acc->asObject(&chunk));
-                w.advance(&chunk);
-            }
+            const proto::ProtoList* acc = s.get(1)->asList(s.ctx());
+            acc = acc->appendLast(s.ctx(), w.first(s.ctx()));
+            s.set(1, acc->asObject(s.ctx()));
+            w.advance(s.ctx());
+            s.tick();
         }
     }
     const proto::ProtoList* out = s.get(1)->asList(s.ctx());
@@ -990,28 +983,27 @@ const proto::ProtoList* seqToList(proto::ProtoContext* ctx, const PO* v) {
 
 // ---- walking --------------------------------------------------------------------
 
-SeqWalk::SeqWalk(proto::ProtoContext* root, unsigned slot, proto::ProtoContext* ctx,
+SeqWalk::SeqWalk(CallerSlots& roots, unsigned slot, proto::ProtoContext* ctx,
                  const PO* coll)
-    : root_(root), slot_(slot) {
+    : roots_(roots), slot_(slot) {
     // A list cell, a cons or a chunk is its own seq, and the empty list has
-    // none: no realisation, and no context for it.
+    // none: no realisation.
     switch (seqObjectKind(ctx, coll)) {
         case SeqObject::List:
         case SeqObject::Cons:
         case SeqObject::Chunk:
-            root_->setAutomaticLocal(slot_, coll);
+            roots_.set(slot_, coll);
             load(ctx, coll);
             return;
         case SeqObject::Empty:
-            root_->setAutomaticLocal(slot_, PROTO_NONE);
+            roots_.set(slot_, PROTO_NONE);
             return;
         default:
             break;
     }
-    proto::ProtoContext step(ctx->space, ctx);
-    const PO* s = seqOf(&step, coll);
-    root_->setAutomaticLocal(slot_, s);
-    load(&step, s);
+    const PO* s = seqOf(ctx, coll);
+    roots_.set(slot_, s);
+    load(ctx, s);
 }
 
 void SeqWalk::load(proto::ProtoContext* ctx, const PO* node) {
@@ -1042,27 +1034,27 @@ void SeqWalk::advance(proto::ProtoContext* ctx) {
     if (!cons_ && ++i_ < end_) return;
     const PO* more = cons_ ? orNil(fields_->getAt(ctx, 1)) : chunkOf(ctx, node_).more;
     if (more == PROTO_NONE || more == emptyListValue()) {
-        root_->setAutomaticLocal(slot_, PROTO_NONE);
+        roots_.set(slot_, PROTO_NONE);
         node_ = nullptr;
         items_ = nullptr;
         return;
     }
-    // A list cell, a cons or a chunk is its own seq: no realisation, and no
-    // context for it. Only a lazy seq is realised, in a context of its own.
+    // A list cell, a cons or a chunk is its own seq: no realisation. A lazy
+    // seq is realised in `ctx` (`more` stays reachable from the node in the
+    // slot while it runs); its garbage goes when the walker ticks.
     switch (seqObjectKind(ctx, more)) {
         case SeqObject::List:
         case SeqObject::Cons:
         case SeqObject::Chunk:
-            root_->setAutomaticLocal(slot_, more);
+            roots_.set(slot_, more);
             load(ctx, more);
             return;
         default:
             break;
     }
-    proto::ProtoContext step(ctx->space, ctx);
-    const PO* s = seqOf(&step, more);
-    root_->setAutomaticLocal(slot_, s);
-    load(&step, s);
+    const PO* s = seqOf(ctx, more);
+    roots_.set(slot_, s);
+    load(ctx, s);
 }
 
 bool SeqWalk::counted(proto::ProtoContext* ctx, long long* n) const {
@@ -1287,8 +1279,11 @@ LAZYPRIM(prim_distinct) {
 // Walks `coll` (to `limit` elements when limit >= 0), realising it.
 void walkAll(proto::ProtoContext* ctx, const PO* coll, long long limit,
              const proto::ProtoArguments* release, unsigned releaseIdx) {
+    // The walk's position is in a slot and nothing else is held: the walk
+    // may hand its garbage to the collector as it goes (CallerSlots.h).
+    SafepointPermit permit(ctx);
     Scope s(ctx, 1);
-    SeqWalk w(s.ctx(), 0, s.ctx(), coll);
+    SeqWalk w(s.slots(), 0, s.ctx(), coll);
     if (release) releaseArg(release, releaseIdx);
     for (long long i = 0; !w.done() && (limit < 0 || i < limit); ++i) {
         w.advance(s.ctx());
@@ -1326,9 +1321,10 @@ LAZYPRIM(prim_doall) {
 // (run! proc coll): calls proc on each element for its side effects; nil.
 LAZYPRIM(prim_run_bang) {
     if (argc(ctx, args) != 2) arity(ctx, argc(ctx, args), "run!");
-    const PO* proc = argAt(ctx, args, 0);
+    const PO* proc = argAt(ctx, args, 0);  // rooted in its argument slot
+    SafepointPermit permit(ctx);
     Scope s(ctx, 1);
-    SeqWalk w(s.ctx(), 0, s.ctx(), argAt(ctx, args, 1));
+    SeqWalk w(s.slots(), 0, s.ctx(), argAt(ctx, args, 1));
     releaseArg(args, 1);
     for (; !w.done(); w.advance(s.ctx())) {
         call1(s.ctx(), proc, w.first(s.ctx()));

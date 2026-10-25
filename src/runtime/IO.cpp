@@ -1,3 +1,4 @@
+#include "CallerSlots.h"
 #include "IO.h"
 #include "Macros.h"
 
@@ -695,19 +696,19 @@ void serveConnection(proto::ProtoContext* ctx, HttpServer* s, Connection* c) {
 
     Answer answer;
     {
-        // Everything the request builds is this context's young generation,
-        // handed to the collector when it is destroyed.
-        proto::ProtoContext req(ctx->space, ctx);
-        req.resizeAutomaticLocals(2);
+        // Everything the request builds is a young cell of this connection
+        // thread's context (one request per connection), handed to the
+        // collector when the thread ends; the handler runs in its own frame.
+        CallerSlots req(ctx, 2);
         try {
-            req.setAutomaticLocal(0, requestMap(&req, s, *head, body, remote));
-            const PO* argv[1] = {req.getAutomaticLocal(0)};
-            req.setAutomaticLocal(1, s->cc.engine->invoke(&req, s->handler, argv, 1));
-            answer = answerOf(&req, req.getAutomaticLocal(1));
+            req.set(0, requestMap(ctx, s, *head, body, remote));
+            const PO* argv[1] = {req.get(0)};
+            req.set(1, s->cc.engine->invoke(ctx, s->handler, argv, 1));
+            answer = answerOf(ctx, req.get(1));
         } catch (const proto::ProtoException& e) {
             // A Clojure exception, a protoCore error or a module's error.
             answer.error = std::string("run-server: the handler threw ") +
-                           describeThrown(&req, e.value());
+                           describeThrown(ctx, e.value());
         } catch (const std::exception& e) {
             answer.error = std::string("run-server: the handler threw ") + e.what();
         }
@@ -834,15 +835,17 @@ const PO* acceptMain(proto::ProtoContext* ctx, const PO*, const proto::ParentLin
             conn->done.store(true);
             break;
         }
-        // The argument list is rooted by the new thread; the child context
-        // hands this iteration's cells to the collector.
-        proto::ProtoContext spawn(ctx->space, ctx);
-        const proto::ProtoList* targs = spawn.newList()
-            ->appendLast(&spawn, spawn.fromLong(reinterpret_cast<long long>(s)))
-            ->appendLast(&spawn, spawn.fromLong(reinterpret_cast<long long>(conn.get())));
+        // The argument list is rooted by the new thread once newThread
+        // returns; this thread holds no other value, so its context hands
+        // the iteration's cells to the collector right away (no context per
+        // connection).
+        const proto::ProtoList* targs = ctx->newList()
+            ->appendLast(ctx, ctx->fromLong(reinterpret_cast<long long>(s)))
+            ->appendLast(ctx, ctx->fromLong(reinterpret_cast<long long>(conn.get())));
         conn->thread = ctx->space->newThread(
-            &spawn, proto::ProtoString::createSymbol(&spawn, "protoclj-http-connection"),
+            ctx, proto::ProtoString::createSymbol(ctx, "protoclj-http-connection"),
             &connectionMain, targs, nullptr);
+        ctx->safepoint();
     }
     joinConnections(ctx, s, /*all=*/true);
     {
@@ -1034,13 +1037,11 @@ const PO* nextLine(proto::ProtoContext* ctx, const PO* h) {
 // The line, then a lazy seq that reads the next one when it is first read:
 // (cons line (lazy-seq (line-seq rdr))); nil at the end.
 const PO* lineCons(proto::ProtoContext* ctx, const PO* h) {
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(2);
-    scope.setAutomaticLocal(0, nextLine(&scope, h));
-    if (scope.getAutomaticLocal(0) == PROTO_NONE) return PROTO_NONE;
-    scope.setAutomaticLocal(1, lazyStep(&scope, StepKind::Line, h));
-    const PO* r = newCons(&scope, scope.getAutomaticLocal(0), scope.getAutomaticLocal(1));
-    scope.returnValue = r;
+    CallerSlots scope(ctx, 2);
+    scope.set(0, nextLine(ctx, h));
+    if (scope.get(0) == PROTO_NONE) return PROTO_NONE;
+    scope.set(1, lazyStep(ctx, StepKind::Line, h));
+    const PO* r = newCons(ctx, scope.get(0), scope.get(1));
     return r;
 }
 

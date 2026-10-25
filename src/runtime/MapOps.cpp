@@ -1,3 +1,4 @@
+#include "CallerSlots.h"
 #include "MapOps.h"
 #include "Named.h"
 #include "SeqTypes.h"
@@ -35,7 +36,7 @@ constexpr proto::proto_ulong kSaltString   = PROTO_UL(0xD6E8FEB86659FD93);
 constexpr proto::proto_ulong kSaltSequence = PROTO_UL(0xA24BAED4963EE407);
 constexpr proto::proto_ulong kSaltMap      = PROTO_UL(0x9FB21C651E98DF25);
 
-// Automatic-local slots of a MapBuilder scope.
+// CallerSlots slots of a MapBuilder.
 constexpr unsigned int kSlotMap   = 0;
 constexpr unsigned int kSlotCount = 1;
 
@@ -182,18 +183,18 @@ void countEntry(proto::ProtoContext*, void* self, const proto::ProtoObject*,
     ++static_cast<CountAccumulator*>(self)->n;
 }
 
-// A working copy of one map, rooted in the slots of a child context.
-// Construct it on the stack only (contexts nest LIFO).
+// A working copy of one map, in a CallerSlots slot of the caller's context
+// (no context of its own, CallerSlots.h). Construct it on the stack only
+// (the slots are a stack).
 class MapBuilder {
 public:
-    MapBuilder(proto::ProtoContext* parent, const proto::ProtoObject* base)
-        : scope_(parent->space, parent) {
-        scope_.resizeAutomaticLocals(kSlotCount);
-        scope_.setAutomaticLocal(kSlotMap,
-            (base && base != PROTO_NONE) ? base : scope_.newMap()->asObject(&scope_));
+    MapBuilder(proto::ProtoContext* ctx, const proto::ProtoObject* base)
+        : ctx_(ctx), slots_(ctx, kSlotCount) {
+        slots_.set(kSlotMap,
+            (base && base != PROTO_NONE) ? base : ctx_->newMap()->asObject(ctx_));
     }
 
-    proto::ProtoContext* ctx() { return &scope_; }
+    proto::ProtoContext* ctx() { return ctx_; }
 
     // A key already present keeps its stored key object and takes the new
     // value; an identical value changes nothing.
@@ -202,9 +203,9 @@ public:
         // A nullptr value means "remove" to the helper, and nil is a value
         // here: a key mapped to nil is an entry.
         if (!value) value = PROTO_NONE;
-        scope_.setAutomaticLocal(kSlotMap,
-            proto::hashedPut(&scope_, slotMap(), clojureKeySemantics(), key, value)
-                ->asObject(&scope_));
+        slots_.set(kSlotMap,
+            proto::hashedPut(ctx_, slotMap(), clojureKeySemantics(), key, value)
+                ->asObject(ctx_));
     }
 
     // Returns false, changing nothing, when `key` is absent.
@@ -214,22 +215,24 @@ public:
         // Probe first: ProtoMap::removeAt of an absent key is free to return
         // a new, equal version, and dissoc of an absent key must return the
         // receiver itself.
-        if (!proto::hashedGet(&scope_, before, clojureKeySemantics(), key)) return false;
-        scope_.setAutomaticLocal(kSlotMap,
-            proto::hashedRemove(&scope_, before, clojureKeySemantics(), key)
-                ->asObject(&scope_));
+        if (!proto::hashedGet(ctx_, before, clojureKeySemantics(), key)) return false;
+        slots_.set(kSlotMap,
+            proto::hashedRemove(ctx_, before, clojureKeySemantics(), key)
+                ->asObject(ctx_));
         return true;
     }
 
-    // The map built so far. UNROOTED once this builder goes out of scope.
-    const proto::ProtoObject* result() { return scope_.getAutomaticLocal(kSlotMap); }
+    // The map built so far: a young cell of the caller's context (or held
+    // by the caller's arguments), unrooted once this builder is gone.
+    const proto::ProtoObject* result() { return slots_.get(kSlotMap); }
 
 private:
     const proto::ProtoMap* slotMap() {
-        return asMapFast(scope_.getAutomaticLocal(kSlotMap));
+        return asMapFast(slots_.get(kSlotMap));
     }
 
-    proto::ProtoContext scope_;
+    proto::ProtoContext* ctx_;
+    CallerSlots          slots_;
 };
 
 void requireEven(proto::proto_ulong n) {
@@ -327,12 +330,11 @@ proto::proto_ulong keyHash(proto::ProtoContext* ctx, const proto::ProtoObject* k
                 // key as an equal list or vector. Realises it (Clojure's
                 // hasheq walks it too).
                 checkNativeStack();
-                proto::ProtoContext scope(ctx->space, ctx);
-                scope.resizeAutomaticLocals(1);
-                const proto::ProtoList* lst = seqObjectToList(&scope, key);
-                if (!lst) lst = scope.newList();
-                scope.setAutomaticLocal(0, lst->asObject(&scope));
-                return sequenceHash(&scope, scope.getAutomaticLocal(0));
+                CallerSlots scope(ctx, 1);
+                const proto::ProtoList* lst = seqObjectToList(ctx, key);
+                if (!lst) lst = ctx->newList();
+                scope.set(0, lst->asObject(ctx));
+                return sequenceHash(ctx, scope.get(0));
             }
             return combine(kSaltIdentity, reinterpret_cast<proto::proto_ulong>(key));
     }
@@ -351,24 +353,23 @@ bool keyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
     if (aString || bString) return aString && bString && a->partialCompare(ctx, b) == 0;
 
     // A lazy seq, a cons or a chunk is compared as the list of its elements
-    // (SeqTypes.h), each realised in a scope of its own; a list is read
+    // (SeqTypes.h), each realised in the caller's context; a list is read
     // along its cells (isSequential).
     const auto unrealised = [&](const proto::ProtoObject* v) {
         return isSeqObject(ctx, v) && !isListValue(ctx, v);
     };
     if (unrealised(a) || unrealised(b)) {
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(2);
+        CallerSlots scope(ctx, 2);
         const proto::ProtoObject* both[2] = {a, b};
         for (int i = 0; i < 2; ++i) {
             const proto::ProtoObject* v = both[i];
-            if (isSeqObject(&scope, v) && !isListValue(&scope, v)) {
-                const proto::ProtoList* lst = seqObjectToList(&scope, v);
-                v = (lst ? lst : scope.newList())->asObject(&scope);
+            if (isSeqObject(ctx, v) && !isListValue(ctx, v)) {
+                const proto::ProtoList* lst = seqObjectToList(ctx, v);
+                v = (lst ? lst : ctx->newList())->asObject(ctx);
             }
-            scope.setAutomaticLocal(i, v);
+            scope.set(i, v);
         }
-        return keyEquals(&scope, scope.getAutomaticLocal(0), scope.getAutomaticLocal(1));
+        return keyEquals(ctx, scope.get(0), scope.get(1));
     }
 
     // A list and a vector with equal elements are one key.
@@ -454,14 +455,13 @@ void mapForEach(proto::ProtoContext* ctx, const proto::ProtoObject* m,
                 void* self, MapEntryFn fn) {
     if (!m || m == PROTO_NONE) return;
     // Pin the map: a callback may replace the only other reference to it.
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, m);
+    CallerSlots scope(ctx, 1);
+    scope.set(0, m);
     struct Adapter {
         void*      self;
         MapEntryFn fn;
     } adapter{self, fn};
-    proto::hashedForEach(&scope, asMapFast(m), &adapter,
+    proto::hashedForEach(ctx, asMapFast(m), &adapter,
         [](proto::ProtoContext* c, void* a, const proto::ProtoObject* key,
            const proto::ProtoObject* value) {
             const auto* ad = static_cast<Adapter*>(a);

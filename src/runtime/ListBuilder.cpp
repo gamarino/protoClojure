@@ -5,93 +5,69 @@
 
 namespace protoClojure {
 
-ListBuilder::ListBuilder(proto::ProtoContext* parent)
-    : holder_(new proto::ProtoContext(parent->space, parent)) {
-    holder_->resizeAutomaticLocals(kSlotPending0 + capacity_);
-    holder_->setAutomaticLocal(kSlotAcc, holder_->newList()->asObject(holder_));
-}
+ListBuilder::ListBuilder(proto::ProtoContext* ctx)
+    : ctx_(ctx), slots_(ctx, 1 + kMaxPending) {}
 
-ListBuilder::~ListBuilder() {
-    delete holder_;
+ListBuilder::~ListBuilder() = default;
+
+const proto::ProtoList* ListBuilder::acc() {
+    return slots_.get(kSlotAcc) == PROTO_NONE ? ctx_->newList()
+                                              : slots_.get(kSlotAcc)->asList(ctx_);
 }
 
 void ListBuilder::push(const proto::ProtoObject* value) {
-    // Root first, allocate second. On entry pending_ < capacity_ always, so
-    // this store cannot allocate and `value` — which may be an unrooted
-    // pointer the caller has just been handed — reaches a GC-visible slot
-    // before any collection can start.
-    holder_->setAutomaticLocal(kSlotPending0 + pending_, value);
-    ++pending_;
     ++size_;
-    if (pending_ < capacity_) return;
-    // Full. Either widen the parking area (cheap, allocates no cell) or, once
-    // it is at its maximum, fold the parked elements into the accumulator and
-    // hand that chunk's garbage to the collector.
-    if (capacity_ < kMaxPending) {
-        capacity_ = (capacity_ * 4 < kMaxPending) ? capacity_ * 4 : kMaxPending;
-        holder_->resizeAutomaticLocals(kSlotPending0 + capacity_);
-    } else {
+    if (!slots_.traced()) {
+        // Untraced slots: appended at once, so the element is referenced by a
+        // young cell of ctx_ before anything else can run.
+        slots_.set(kSlotAcc, acc()->appendLast(ctx_, value)->asObject(ctx_));
+        return;
+    }
+    slots_.set(kSlotPending0 + npending_++, value);
+    if (npending_ == kMaxPending) {
         flush();
+        // Nothing is parked: the folded chunk's garbage may go now, when the
+        // primitive at the bottom holds a SafepointPermit (protoCore submits
+        // once the context is past its threshold).
+        slots_.safepoint();
     }
 }
 
 void ListBuilder::flush() {
-    if (pending_ == 0) return;
-    {
-        // Every append below allocates through `chunk`. When it destructs,
-        // `~ProtoContext` submits its young generation to the collector: the
-        // log2(N) cells each append left behind become reclaimable, while the
-        // accumulator itself stays rooted in holder_'s slot 0 and survives.
-        // This is the whole point of the type — see ListBuilder.h.
-        proto::ProtoContext chunk(holder_->space, holder_);
-        for (unsigned int i = 0; i < pending_; ++i) {
-            const proto::ProtoList* cur =
-                holder_->getAutomaticLocal(kSlotAcc)->asList(&chunk);
-            const proto::ProtoList* grown =
-                cur->appendLast(&chunk,
-                                holder_->getAutomaticLocal(kSlotPending0 + i));
-            holder_->setAutomaticLocal(kSlotAcc, grown->asObject(&chunk));
-        }
+    if (npending_ == 0) return;
+    const proto::ProtoList* cur = acc();
+    for (unsigned int i = 0; i < npending_; ++i) {
+        cur = cur->appendLast(ctx_, slots_.get(kSlotPending0 + i));
+        slots_.set(kSlotAcc, cur->asObject(ctx_));
     }
-    // Drop the parked references: a stale slot would keep an element alive
-    // long after the accumulator is the only thing that should hold it.
-    for (unsigned int i = 0; i < pending_; ++i) {
-        holder_->setAutomaticLocal(kSlotPending0 + i, PROTO_NONE);
-    }
-    pending_ = 0;
+    for (unsigned int i = 0; i < npending_; ++i) slots_.set(kSlotPending0 + i, PROTO_NONE);
+    npending_ = 0;
 }
 
 const proto::ProtoObject* ListBuilder::finish() {
     flush();
-    const proto::ProtoObject* result = holder_->getAutomaticLocal(kSlotAcc);
-    // Anchor the result in the parent's young generation: ~ProtoContext turns
-    // a context's returnValue into a ReturnReference held by `previous`, so
-    // the list stays reachable across the window between this return and the
-    // caller storing it in a slot of its own.
-    holder_->returnValue = result;
-    return result;
+    if (slots_.get(kSlotAcc) == PROTO_NONE) slots_.set(kSlotAcc, ctx_->newList()->asObject(ctx_));
+    return slots_.ret(slots_.get(kSlotAcc));
 }
 
 const proto::ProtoList* ListBuilder::finishList() {
-    return finish()->asList(holder_);
+    return finish()->asList(ctx_);
 }
 
 const proto::ProtoObject* ListBuilder::finishSeq() {
     const proto::ProtoObject* result;
-    if (size_ == pending_) {
-        // Nothing was folded yet (at most kMaxPending elements, the common
-        // case): the cells are built straight from the parked elements,
-        // which stay rooted in holder_'s slots, with no ProtoList between.
-        result = listFromArray(holder_, pending_, holder_->getAutomaticLocals() + kSlotPending0);
+    if (slots_.traced() && size_ == npending_) {
+        // Nothing was folded (at most kMaxPending elements): the cells are
+        // built straight from the parked elements, rooted in their slots.
+        result = listFromArray(ctx_, npending_, slots_.data() + kSlotPending0);
     } else {
-        // The cells are built in holder_, from the accumulator rooted in
-        // its slot 0.
         flush();
-        result = listFromProtoList(holder_, holder_->getAutomaticLocal(kSlotAcc)->asList(holder_));
+        result = listFromProtoList(ctx_, acc());
     }
-    holder_->setAutomaticLocal(kSlotAcc, result);
-    holder_->returnValue = result;
-    return result;
+    for (unsigned int i = 0; i < npending_; ++i) slots_.set(kSlotPending0 + i, PROTO_NONE);
+    npending_ = 0;
+    slots_.set(kSlotAcc, result);
+    return slots_.ret(result);
 }
 
 } // namespace protoClojure

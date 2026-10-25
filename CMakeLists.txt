@@ -204,10 +204,12 @@ endif()
 # vectors, maps) is here because the reader yields runtime values: it builds
 # the same vectors, maps and named values the runtime manipulates.
 add_library(protoclj_support STATIC
+    src/runtime/CallerSlots.cpp
     src/runtime/ListBuilder.cpp
     src/runtime/MapOps.cpp
     src/runtime/Named.cpp
     src/runtime/Regex.cpp
+    src/runtime/ScopedListBuilder.cpp
     src/runtime/SeqTypes.cpp
     src/runtime/SetOps.cpp
     src/runtime/StackGuard.cpp

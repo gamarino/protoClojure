@@ -149,13 +149,12 @@ int runOnEvaluatorThread(proto::ProtoSpace& space, int (*body)(proto::ProtoConte
     proto::ProtoContext* ctx = space.rootContext;
     const proto::ProtoThread* thread = nullptr;
     {
-        // The argument list is rooted by the new thread; this context hands
-        // the cells made here to the collector.
-        proto::ProtoContext spawn(&space, ctx);
+        // The argument list is rooted by the new thread; its cells, made
+        // once per process, are young cells of the root context.
         const proto::ProtoList* args =
-            spawn.newList()->appendLast(&spawn, spawn.fromLong(reinterpret_cast<long long>(&job)));
+            ctx->newList()->appendLast(ctx, ctx->fromLong(reinterpret_cast<long long>(&job)));
         try {
-            thread = space.newThread(&spawn, proto::ProtoString::createSymbol(&spawn, "protoclj-evaluator"),
+            thread = space.newThread(ctx, proto::ProtoString::createSymbol(ctx, "protoclj-evaluator"),
                                      &evaluatorMain, args, nullptr);
         } catch (const std::exception&) {
             thread = nullptr;

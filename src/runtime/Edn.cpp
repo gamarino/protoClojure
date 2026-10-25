@@ -11,6 +11,7 @@
 // A read error is a RuntimeException whose message is the reader's, followed
 // by where in the string it happened.
 
+#include "CallerSlots.h"
 #include "DataFormats.h"
 
 #include "Exceptions.h"
@@ -133,14 +134,13 @@ EDNPRIM(prim_edn_read_string) {
 
 void installEdn(proto::ProtoContext* ctx, proto::ProtoObject* globals) {
     defineBuiltin(ctx, globals, "read-string", ctx->fromMethod(nullptr, &prim_read_string));
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, ctx->space->objectPrototype->newChild(&scope, false));
-    scope.setAutomaticLocal(0, scope.getAutomaticLocal(0)->setAttribute(
-        &scope, proto::ProtoString::createSymbol(&scope, "read-string"),
-        scope.fromMethod(nullptr, &prim_edn_read_string)));
-    globals->setAttribute(&scope, proto::ProtoString::createSymbol(&scope, "clojure.edn"),
-                          scope.getAutomaticLocal(0));
+    CallerSlots scope(ctx, 1);
+    scope.set(0, ctx->space->objectPrototype->newChild(ctx, false));
+    scope.set(0, scope.get(0)->setAttribute(
+        ctx, proto::ProtoString::createSymbol(ctx, "read-string"),
+        ctx->fromMethod(nullptr, &prim_edn_read_string)));
+    globals->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, "clojure.edn"),
+                          scope.get(0));
 }
 
 const char* ednPrimitiveName(proto::ProtoMethod fn) {

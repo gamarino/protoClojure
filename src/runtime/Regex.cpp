@@ -1,3 +1,4 @@
+#include "CallerSlots.h"
 #include "Regex.h"
 #include "StackGuard.h"
 
@@ -218,12 +219,11 @@ void guardRecursiveMatch(const CompiledPattern* cp, std::size_t subjectBytes) {
 
 const proto::ProtoObject* makePattern(proto::ProtoContext* ctx, const std::string& source) {
     const CompiledPattern* compiled = compilePattern(source);
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, g_patternPrototype->newChild(&scope, /*isMutable=*/false)
-        ->setAttribute(&scope, sourceKey(&scope), scope.fromUTF8String(source.c_str())));
-    return scope.getAutomaticLocal(0)->setAttribute(&scope, regexKey(&scope),
-        scope.fromExternalPointer(const_cast<CompiledPattern*>(compiled)));
+    CallerSlots scope(ctx, 1);
+    scope.set(0, g_patternPrototype->newChild(ctx, /*isMutable=*/false)
+        ->setAttribute(ctx, sourceKey(ctx), ctx->fromUTF8String(source.c_str())));
+    return scope.get(0)->setAttribute(ctx, regexKey(ctx),
+        ctx->fromExternalPointer(const_cast<CompiledPattern*>(compiled)));
 }
 
 bool isPattern(proto::ProtoContext* ctx, const proto::ProtoObject* v) {

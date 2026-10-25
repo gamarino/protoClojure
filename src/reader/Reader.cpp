@@ -1,6 +1,6 @@
 #include "Reader.h"
 
-#include "runtime/ListBuilder.h"
+#include "runtime/ScopedListBuilder.h"
 #include "runtime/MapOps.h"
 #include "runtime/Named.h"
 #include "runtime/SetOps.h"
@@ -78,8 +78,8 @@ const proto::ProtoList* Reader::readAllForms() {
     // being read instead of being pinned until the last form is parsed.
     // Forms are read through the builder's context: a thread's contexts form
     // a LIFO stack and the builder must stay its innermost frame while it is
-    // open (see ListBuilder.h).
-    ListBuilder forms(ctx_);
+    // open (see ScopedListBuilder.h).
+    ScopedListBuilder forms(ctx_);
 
     while (true) {
         Token tok = lexer_.next();
@@ -584,7 +584,7 @@ const proto::ProtoObject* Reader::syntaxQuote(proto::ProtoContext* parent,
     proto::ProtoContext outer(parent->space, parent);
     outer.resizeAutomaticLocals(1);
     {
-        ListBuilder concat(&outer);
+        ScopedListBuilder concat(&outer);
         concat.push(sym(concat.context(), "clojure.core/concat"));
         for (const proto::ProtoObject* item : items) {
             proto::ProtoContext* c = concat.context();
@@ -623,7 +623,7 @@ const proto::ProtoObject* Reader::syntaxQuote(proto::ProtoContext* parent,
 const proto::ProtoObject*
 Reader::readList(proto::ProtoContext* parent, TokenKind closeKind,
                  int openLine, int openColumn, const char* unterminated) {
-    // One read scope per recursive call, as a ListBuilder: it owns a child
+    // One read scope per recursive call, as a ScopedListBuilder: it owns a child
     // context of `parent` that roots the in-progress list, and it folds the
     // elements in in chunks so a large literal — `[0 1 … 69999]` — does not
     // pin every intermediate version of the list until the form is closed.
@@ -631,12 +631,12 @@ Reader::readList(proto::ProtoContext* parent, TokenKind closeKind,
     // The builder's context is the innermost one on this thread while it is
     // open, so nested forms are read through `items.context()`; a context
     // chained to `parent` instead would unlink the builder from the thread's
-    // root chain when it destructs (see ListBuilder.h).
+    // root chain when it destructs (see ScopedListBuilder.h).
     //
     // The returned ProtoObject* is not rooted by us. The caller's contract is
     // to put it in its OWN slot immediately — the protoCore calling
     // convention: returns are unrooted, the caller takes responsibility.
-    ListBuilder items(parent);
+    ScopedListBuilder items(parent);
 
     while (true) {
         Token tok = lexer_.next();

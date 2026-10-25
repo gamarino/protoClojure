@@ -1,3 +1,4 @@
+#include "CallerSlots.h"
 #include "Exceptions.h"
 
 #include "DebugHook.h"
@@ -345,14 +346,13 @@ void throwClassed(proto::ProtoContext* ctx, const char* className,
     // The message string and the exception are rooted in a slot of a child
     // context until the ProtoException has pinned the exception; protoCore's
     // pin then keeps it alive after this context is gone.
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(2);
-    scope.setAutomaticLocal(0, scope.fromUTF8String(message.c_str()));
-    scope.setAutomaticLocal(1, makeException(&scope, cls,
-        scope.getAutomaticLocal(0), data, cause));
+    CallerSlots scope(ctx, 2);
+    scope.set(0, ctx->fromUTF8String(message.c_str()));
+    scope.set(1, makeException(ctx, cls,
+        scope.get(0), data, cause));
     if (debugHook()) [[unlikely]]
-        debugNotifyThrow(&scope, scope.getAutomaticLocal(1), ThrowSite::Runtime);
-    ClojureThrow pending(&scope, scope.getAutomaticLocal(1));
+        debugNotifyThrow(ctx, scope.get(1), ThrowSite::Runtime);
+    ClojureThrow pending(ctx, scope.get(1));
     throw pending;
 }
 
@@ -400,12 +400,11 @@ const proto::ProtoObject* exceptionFromError(proto::ProtoContext* ctx,
     // message is the whole text.
     std::string message;
     const int cls = classFromText(error.what(), message);
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, scope.fromUTF8String(message.c_str()));
+    CallerSlots scope(ctx, 1);
+    scope.set(0, ctx->fromUTF8String(message.c_str()));
     // Built in `ctx`, not in `scope`, so the result outlives `scope`: it is
     // a young cell of the caller's live context.
-    return makeException(ctx, cls, scope.getAutomaticLocal(0), nullptr, nullptr);
+    return makeException(ctx, cls, scope.get(0), nullptr, nullptr);
 }
 
 // ---- Primitives -------------------------------------------------------------

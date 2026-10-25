@@ -1,4 +1,5 @@
 #include "ActorScheduler.h"
+#include "CallerSlots.h"
 #include "Primitives.h"
 #include "DebugHook.h"
 #include "ExecutionEngine.h"
@@ -239,35 +240,37 @@ void ActorScheduler::workerLoop(proto::ProtoContext* ctx) {
         // re-enqueue, or — if it arrives BEFORE we drain its band on
         // this turn — folded into the same batch.
         //
-        // The whole turn runs in its own context: takeAll's batch list,
-        // the values the handlers build and the cells the mailbox nodes
-        // leave behind are that context's young generation, and
-        // protoCore shows a context's allocations to the collector when
-        // it is destroyed. A worker thread lives for the process, so
-        // draining through the thread's own context would pin every
-        // message it ever handled.
+        // The turn runs in the worker thread's own context, with no
+        // context of its own (only a method activation has one,
+        // CallerSlots.h): takeAll's batch list, the values the handlers
+        // build and the cells the mailbox nodes leave behind are young
+        // cells of `ctx`, and the turn ends with ctx->safepoint(), which
+        // hands them to the collector (past protoCore's per-context
+        // threshold) while the worker holds no value in C++ locals. A
+        // worker lives for the process, so without it every message it
+        // ever handled would stay pinned.
         {
-            proto::ProtoContext turn(ctx->space, ctx);
-            // The three batches, rooted in slots while they are walked:
-            // a handler may run arbitrary Clojure code, including one
-            // that drops the only other reference to a message.
-            turn.resizeAutomaticLocals(3);
+            // The three batches, held while they are walked: a handler may
+            // run arbitrary Clojure code, including one that drops the only
+            // other reference to a message. They are young cells of `ctx`,
+            // which nothing submits until the turn ends.
+            CallerSlots turn(ctx, 3);
             for (int band = 0; band < 3; ++band) {
-                turn.setAutomaticLocal(
-                    band, actor->mailbox[band]->takeAll(&turn)->asObject(&turn));
+                turn.set(
+                    band, actor->mailbox[band]->takeAll(ctx)->asObject(ctx));
             }
 
             for (int band = 0; band < 3; ++band) {
                 const proto::ProtoList* batch =
-                    turn.getAutomaticLocal(band)->asList(&turn);
-                const proto::proto_ulong count = batch->getSize(&turn);
+                    turn.get(band)->asList(ctx);
+                const proto::proto_ulong count = batch->getSize(ctx);
                 for (proto::proto_ulong at = 0; at < count; ++at) {
                     const proto::ProtoList* msg =
-                        batch->getAt(&turn, (int)at)->asList(&turn);
-                    const proto::ProtoObject* fn = msg->getAt(&turn, message::kFn);
-                    const proto::ProtoObject* margs = msg->getAt(&turn, message::kArgs);
+                        batch->getAt(ctx, (int)at)->asList(ctx);
+                    const proto::ProtoObject* fn = msg->getAt(ctx, message::kFn);
+                    const proto::ProtoObject* margs = msg->getAt(ctx, message::kArgs);
                     const proto::ProtoObject* promise =
-                        msg->getAt(&turn, message::kPromise);
+                        msg->getAt(ctx, message::kPromise);
 
                     const proto::ProtoObject* result = PROTO_NONE;
                     try {
@@ -275,14 +278,14 @@ void ActorScheduler::workerLoop(proto::ProtoContext* ctx) {
                         unsigned int total = 1;
                         buf[0] = actor->value ? actor->value : PROTO_NONE;
                         if (margs && margs != PROTO_NONE) {
-                            const proto::ProtoList* alist = margs->asList(&turn);
-                            proto::proto_ulong an = alist->getSize(&turn);
+                            const proto::ProtoList* alist = margs->asList(ctx);
+                            proto::proto_ulong an = alist->getSize(ctx);
                             if (an > 15) an = 15;
                             for (proto::proto_ulong i = 0; i < an; ++i) {
-                                buf[total++] = alist->getAt(&turn, (int)i);
+                                buf[total++] = alist->getAt(ctx, (int)i);
                             }
                         }
-                        result = ccBlueprint_->engine->invoke(&turn, fn, buf, total);
+                        result = ccBlueprint_->engine->invoke(ctx, fn, buf, total);
                     } catch (...) {
                         result = PROTO_NONE;
                     }
@@ -293,19 +296,20 @@ void ActorScheduler::workerLoop(proto::ProtoContext* ctx) {
                     actor->value = result;
                     if (actor->wrapper) {
                         const_cast<proto::ProtoObject*>(actor->wrapper)
-                            ->setAttribute(&turn, ccBlueprint_->valueKey, result);
+                            ->setAttribute(ctx, ccBlueprint_->valueKey, result);
                     }
                     if (promise && promise != PROTO_NONE) {
                         // One compare-and-set, as `deliver` does: a concurrent
                         // deref never sees the promise realized without its
                         // value.
-                        deliverPromise(&turn, ccBlueprint_->valueKey, promise, result);
+                        deliverPromise(ctx, ccBlueprint_->valueKey, promise, result);
                     }
 
                     messagesProcessed_.fetch_add(1, std::memory_order_relaxed);
                 }
             }
         }
+        ctx->safepoint();
 
         // End of batch — drop the claim. A sender that pushes BEFORE
         // this store will see claimed==true and skip the schedule;

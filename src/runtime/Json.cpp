@@ -31,16 +31,18 @@
 // waiting for more input (newline-delimited JSON over a pipe or a socket
 // works). The rest of the line after the value is consumed with it (D57).
 //
-// GC (engineering principles P1/P2): every container is built in a context
-// of its own -- an array through a ListBuilder, an object in a scope whose
-// slots hold the map built so far and the pending entries, folded into the
-// map in batches inside short-lived contexts -- so the intermediate versions
-// a large document leaves behind are reclaimed while it is still being read
+// GC (engineering principles P1/P2): every container is built in the
+// caller's context, with no context of its own (CallerSlots.h) -- an array
+// through a ListBuilder, an object with the map built so far in a slot and
+// the pending entries in a batch under a SafepointBlock -- and the reading
+// primitive holds a SafepointPermit, so the intermediate versions a large
+// document leaves behind are reclaimed while it is still being read
 // (tests/cli/json-under-heap-limit.sh). Values are returned unrooted and
 // rooted by the caller before anything else allocates. A blocking read
 // happens with every value parsed so far held in a slot or a live context.
 
 #include "DataFormats.h"
+#include "CallerSlots.h"
 
 #include "ExecutionEngine.h"
 #include "Exceptions.h"
@@ -411,104 +413,100 @@ const PO* Parser::makeKey(proto::ProtoContext* ctx, const std::string& text) {
     return makeUtf8String(ctx, text);
 }
 
-const PO* Parser::array(proto::ProtoContext* parent) {
-    proto::ProtoContext scope(parent->space, parent);
-    scope.resizeAutomaticLocals(1);
+// The containers are built in the caller's context, with no context of
+// their own (CallerSlots.h). An array's elements go to a ListBuilder, which
+// hands each folded chunk's garbage to the collector when the reading
+// primitive holds a SafepointPermit; an object's entries wait in a C++ batch,
+// under a SafepointBlock, until they are folded into the map in its slot.
+const PO* Parser::array(proto::ProtoContext* ctx) {
+    CallerSlots scope(ctx, 1);
     {
-        ListBuilder items(&scope);
-        proto::ProtoContext* c = items.context();
-        skipWhitespace(c);
-        if (src_.peek(c) == ']') {
+        ListBuilder items(ctx);
+        skipWhitespace(ctx);
+        if (src_.peek(ctx) == ']') {
             src_.advance();
         } else {
             for (;;) {
-                items.push(value(c));
-                skipWhitespace(c);
-                const int d = src_.peek(c);
+                items.push(value(ctx));
+                skipWhitespace(ctx);
+                const int d = src_.peek(ctx);
                 if (d == ',') { src_.advance(); continue; }
                 if (d == ']') { src_.advance(); break; }
                 if (d < 0) fail("unexpected end of input inside an array, expected ',' or ']'");
-                fail("expected ',' or ']' in an array, found " + describeCurrent(c));
+                fail("expected ',' or ']' in an array, found " + describeCurrent(ctx));
             }
         }
-        scope.setAutomaticLocal(0, items.finish());
+        scope.set(0, items.finish());
     }
-    const PO* v = newVector(&scope, scope.getAutomaticLocal(0)->asList(&scope));
-    scope.returnValue = v;
-    return v;
+    return scope.ret(newVector(ctx, scope.get(0)->asList(ctx)));
 }
 
-const PO* Parser::object(proto::ProtoContext* parent) {
-    // Slot 0: the map so far; slots 1..2*kBatch: the entries not yet in it.
-    constexpr unsigned kBatch = 64;
-    proto::ProtoContext scope(parent->space, parent);
-    scope.resizeAutomaticLocals(1 + 2 * kBatch);
-    scope.setAutomaticLocal(0, mapAssocPairs(&scope, nullptr, nullptr, 0));
+const PO* Parser::object(proto::ProtoContext* ctx) {
+    // Slot 0: the map so far. The entries not yet in it wait in `kv`, a C++
+    // array the collector does not trace, so `parked` blocks submissions
+    // while any is there; each is a young cell of ctx or a callback's result
+    // anchored in ctx, and nothing else submits ctx's chain meanwhile.
+    constexpr unsigned kBatch = 16;
+    CallerSlots scope(ctx, 1);
+    SafepointBlock parked;
+    const PO* kv[2 * kBatch];
+    scope.set(0, mapAssocPairs(ctx, nullptr, nullptr, 0));
     unsigned pending = 0;
     auto fold = [&]() {
         if (pending == 0) return;
-        const PO* kv[2 * kBatch];
-        for (unsigned i = 0; i < 2 * pending; ++i) kv[i] = scope.getAutomaticLocal(1 + i);
-        const PO* m;
-        {
-            proto::ProtoContext f(scope.space, &scope);
-            m = mapAssocPairs(&f, scope.getAutomaticLocal(0), kv, 2 * pending);
-            f.returnValue = m;
-        }
-        scope.setAutomaticLocal(0, m);
-        for (unsigned i = 0; i < 2 * pending; ++i) scope.setAutomaticLocal(1 + i, PROTO_NONE);
+        scope.set(0, mapAssocPairs(ctx, scope.get(0), kv, 2 * pending));
         pending = 0;
+        parked.release();
     };
-    skipWhitespace(&scope);
-    if (src_.peek(&scope) == '}') {
+    skipWhitespace(ctx);
+    if (src_.peek(ctx) == '}') {
         src_.advance();
     } else {
         for (;;) {
-            skipWhitespace(&scope);
-            const int q = src_.peek(&scope);
+            skipWhitespace(ctx);
+            const int q = src_.peek(ctx);
             if (q != '"') {
                 if (q < 0) fail("unexpected end of input inside an object, expected a key");
-                fail("expected a string key in an object, found " + describeCurrent(&scope));
+                fail("expected a string key in an object, found " + describeCurrent(ctx));
             }
             src_.advance();
             std::string keyText;
-            string(&scope, keyText);
-            const unsigned ks = 1 + 2 * pending, vs = ks + 1;
-            scope.setAutomaticLocal(ks, makeKey(&scope, keyText));
+            string(ctx, keyText);
+            parked.hold();
+            const unsigned ks = 2 * pending, vs = ks + 1;
+            kv[ks] = makeKey(ctx, keyText);
+            kv[vs] = PROTO_NONE;
             if (opts_.keys == ReadOptions::Keys::Fn) {
-                const PO* a[1] = {scope.getAutomaticLocal(ks)};
-                scope.setAutomaticLocal(ks, cc_.engine->invoke(&scope, opts_.keyFn, a, 1));
+                const PO* a[1] = {kv[ks]};
+                kv[ks] = cc_.engine->invoke(ctx, opts_.keyFn, a, 1);
             }
-            skipWhitespace(&scope);
-            expect(&scope, ':', "':' after an object key");
-            scope.setAutomaticLocal(vs, value(&scope));
+            skipWhitespace(ctx);
+            expect(ctx, ':', "':' after an object key");
+            kv[vs] = value(ctx);
             bool keep = true;
             if (opts_.valueFn) {
                 // data.json: (value-fn key value); answering value-fn itself
                 // drops the entry.
-                const PO* a[2] = {scope.getAutomaticLocal(ks), scope.getAutomaticLocal(vs)};
-                const PO* r = cc_.engine->invoke(&scope, opts_.valueFn, a, 2);
+                const PO* a[2] = {kv[ks], kv[vs]};
+                const PO* r = cc_.engine->invoke(ctx, opts_.valueFn, a, 2);
                 if (r == opts_.valueFn) keep = false;
-                else scope.setAutomaticLocal(vs, r ? r : PROTO_NONE);
+                else kv[vs] = r ? r : PROTO_NONE;
             }
             if (keep) {
                 if (++pending == kBatch) fold();
-            } else {
-                scope.setAutomaticLocal(ks, PROTO_NONE);
-                scope.setAutomaticLocal(vs, PROTO_NONE);
+            } else if (pending == 0) {
+                parked.release();
             }
-            skipWhitespace(&scope);
-            const int d = src_.peek(&scope);
+            skipWhitespace(ctx);
+            const int d = src_.peek(ctx);
             if (d == ',') { src_.advance(); continue; }
             if (d == '}') { src_.advance(); break; }
             if (d < 0) fail("unexpected end of input inside an object, expected ',' or '}'");
-            fail("expected ',' or '}' in an object, found " + describeCurrent(&scope));
+            fail("expected ',' or '}' in an object, found " + describeCurrent(ctx));
         }
     }
     fold();
-    const PO* m = scope.getAutomaticLocal(0);
-    scope.returnValue = m;
-    return m;
+    return scope.ret(scope.get(0));
 }
 
 // ============================================================== the writer
@@ -643,15 +641,14 @@ std::string Writer::keyText(proto::ProtoContext* ctx, const PO* k) {
     const bool keyword = named && namedSpelling(ctx, cc_.named, k)->toStdString(ctx)[0] == ':';
     // cheshire applies :key-fn to keyword keys only; data.json to every key.
     if (opts_.keyFn && (opts_.flavor == Flavor::DataJson || keyword)) {
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(1);
+        CallerSlots scope(ctx, 1);
         const PO* a[1] = {k ? k : PROTO_NONE};
-        scope.setAutomaticLocal(0, cc_.engine->invoke(&scope, opts_.keyFn, a, 1));
-        const PO* r = scope.getAutomaticLocal(0);
+        scope.set(0, cc_.engine->invoke(ctx, opts_.keyFn, a, 1));
+        const PO* r = scope.get(0);
         if (r && r != PROTO_NONE && proto::ProtoObject::isStringTagFast(r))
-            return reinterpret_cast<const proto::ProtoString*>(r)->toStdString(&scope);
+            return reinterpret_cast<const proto::ProtoString*>(r)->toStdString(ctx);
         std::string s;
-        printValueTo(&scope, s, r ? r : PROTO_NONE, false);
+        printValueTo(ctx, s, r ? r : PROTO_NONE, false);
         return s;
     }
     if (k == nullptr || k == PROTO_NONE) return "";
@@ -701,10 +698,9 @@ void Writer::sequence(proto::ProtoContext* ctx, const PO* v) {
             (*static_cast<Acc*>(self)->f)(c, e);
         });
     } else {
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(1);
-        for (SeqWalk w(&scope, 0, &scope, v); !w.done(); w.advance(&scope))
-            element(&scope, w.first(&scope));
+        CallerSlots scope(ctx, 1);
+        for (SeqWalk w(scope, 0, ctx, v); !w.done(); w.advance(ctx))
+            element(ctx, w.first(ctx));
     }
     if (opts_.pretty) out_ += ' ';  // "[ ]", "[ 1, 2 ]", as Jackson
     out_ += ']';
@@ -820,20 +816,22 @@ const PO* readJson(proto::ProtoContext* ctx, const ActiveCallContext& cc, Source
                    const PO* eofValue) {
     std::string error;
     {
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(1);
+        // The reading primitives hold their options in their arguments or in
+        // a slot, and the parser keeps its partial containers in slots or
+        // under a SafepointBlock: a large document hands its garbage to the
+        // collector while it is read (CallerSlots.h).
+        SafepointPermit permit(ctx);
+        CallerSlots scope(ctx, 1);
         try {
             Parser p(src, opts, cc);
-            if (!p.more(&scope)) {
+            if (!p.more(ctx)) {
                 if (eofOk) return eofValue;
                 p.fail("unexpected end of input, expected a value");
             }
-            scope.setAutomaticLocal(0, p.value(&scope));
-            if (trailing == Trailing::Reject && p.more(&scope))
-                p.fail("found extra data after the value: " + p.describeCurrent(&scope));
-            const PO* v = scope.getAutomaticLocal(0);
-            scope.returnValue = v;
-            return v;
+            scope.set(0, p.value(ctx));
+            if (trailing == Trailing::Reject && p.more(ctx))
+                p.fail("found extra data after the value: " + p.describeCurrent(ctx));
+            return scope.ret(scope.get(0));
         } catch (const JsonSyntaxError& e) {
             error = e.message;
         }
@@ -899,16 +897,14 @@ JSONPRIM(prim_read_str) {
     const proto::proto_ulong n = argc(ctx, args);
     if (n < 1) arity(ctx, n, "read-str");
     const ActiveCallContext& cc = callContext(ctx, "read-str");
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, pairOptions(&scope, args, 1, "read-str"));
+    CallerSlots scope(ctx, 1);
+    scope.set(0, pairOptions(ctx, args, 1, "read-str"));
     ReadOptions o;
     bool eofOk = false;
     const PO* eofValue = PROTO_NONE;
-    dataJsonReadOptions(&scope, cc, scope.getAutomaticLocal(0), o, eofOk, eofValue, "read-str");
-    Source src(stringArg(&scope, argAt(ctx, args, 0), "read-str"));
-    const PO* v = readJson(&scope, cc, src, o, Flavor::DataJson, Trailing::Reject, eofOk, eofValue);
-    scope.returnValue = v;
+    dataJsonReadOptions(ctx, cc, scope.get(0), o, eofOk, eofValue, "read-str");
+    Source src(stringArg(ctx, argAt(ctx, args, 0), "read-str"));
+    const PO* v = readJson(ctx, cc, src, o, Flavor::DataJson, Trailing::Reject, eofOk, eofValue);
     return v;
 }
 
@@ -917,16 +913,14 @@ JSONPRIM(prim_read) {
     const proto::proto_ulong n = argc(ctx, args);
     if (n < 1) arity(ctx, n, "read");
     const ActiveCallContext& cc = callContext(ctx, "read");
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, pairOptions(&scope, args, 1, "read"));
+    CallerSlots scope(ctx, 1);
+    scope.set(0, pairOptions(ctx, args, 1, "read"));
     ReadOptions o;
     bool eofOk = false;
     const PO* eofValue = PROTO_NONE;
-    dataJsonReadOptions(&scope, cc, scope.getAutomaticLocal(0), o, eofOk, eofValue, "read");
-    Source src(readableDescriptor(&scope, argAt(ctx, args, 0), "clojure.data.json/read"));
-    const PO* v = readJson(&scope, cc, src, o, Flavor::DataJson, Trailing::Ignore, eofOk, eofValue);
-    scope.returnValue = v;
+    dataJsonReadOptions(ctx, cc, scope.get(0), o, eofOk, eofValue, "read");
+    Source src(readableDescriptor(ctx, argAt(ctx, args, 0), "clojure.data.json/read"));
+    const PO* v = readJson(ctx, cc, src, o, Flavor::DataJson, Trailing::Ignore, eofOk, eofValue);
     return v;
 }
 
@@ -1001,12 +995,10 @@ JSONPRIM(prim_write_str) {
     const proto::proto_ulong n = argc(ctx, args);
     if (n < 1) arity(ctx, n, "write-str");
     const ActiveCallContext& cc = callContext(ctx, "write-str");
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, pairOptions(&scope, args, 1, "write-str"));
-    const WriteOptions o = dataJsonWriteOptions(&scope, cc, scope.getAutomaticLocal(0));
-    const PO* s = makeUtf8String(&scope, writeJson(&scope, cc, argAt(ctx, args, 0), o));
-    scope.returnValue = s;
+    CallerSlots scope(ctx, 1);
+    scope.set(0, pairOptions(ctx, args, 1, "write-str"));
+    const WriteOptions o = dataJsonWriteOptions(ctx, cc, scope.get(0));
+    const PO* s = makeUtf8String(ctx, writeJson(ctx, cc, argAt(ctx, args, 0), o));
     return s;
 }
 
@@ -1016,11 +1008,10 @@ JSONPRIM(prim_write) {
     if (n < 2) arity(ctx, n, "write");
     const ActiveCallContext& cc = callContext(ctx, "write");
     const int fd = writableDescriptor(ctx, argAt(ctx, args, 1), "clojure.data.json/write");
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, pairOptions(&scope, args, 2, "write"));
-    const WriteOptions o = dataJsonWriteOptions(&scope, cc, scope.getAutomaticLocal(0));
-    writeBlocking(&scope, fd, writeJson(&scope, cc, argAt(ctx, args, 0), o));
+    CallerSlots scope(ctx, 1);
+    scope.set(0, pairOptions(ctx, args, 2, "write"));
+    const WriteOptions o = dataJsonWriteOptions(ctx, cc, scope.get(0));
+    writeBlocking(ctx, fd, writeJson(ctx, cc, argAt(ctx, args, 0), o));
     return PROTO_NONE;
 }
 
@@ -1044,15 +1035,14 @@ constexpr JsonPrim kDataJson[] = {
 
 void installNamespaceObject(proto::ProtoContext* ctx, proto::ProtoObject* globals,
                             const char* name, const JsonPrim* prims, std::size_t count) {
-    proto::ProtoContext scope(ctx->space, ctx);
-    scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, ctx->space->objectPrototype->newChild(&scope, false));
+    CallerSlots scope(ctx, 1);
+    scope.set(0, ctx->space->objectPrototype->newChild(ctx, false));
     for (std::size_t i = 0; i < count; ++i)
-        scope.setAutomaticLocal(0, scope.getAutomaticLocal(0)->setAttribute(
-            &scope, proto::ProtoString::createSymbol(&scope, prims[i].name),
-            scope.fromMethod(nullptr, prims[i].fn)));
-    globals->setAttribute(&scope, proto::ProtoString::createSymbol(&scope, name),
-                          scope.getAutomaticLocal(0));
+        scope.set(0, scope.get(0)->setAttribute(
+            ctx, proto::ProtoString::createSymbol(ctx, prims[i].name),
+            ctx->fromMethod(nullptr, prims[i].fn)));
+    globals->setAttribute(ctx, proto::ProtoString::createSymbol(ctx, name),
+                          scope.get(0));
 }
 
 } // namespace

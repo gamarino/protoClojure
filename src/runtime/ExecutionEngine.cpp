@@ -1,6 +1,7 @@
 #include "ExecutionEngine.h"
 #include "Utf8String.h"
 #include "BytecodeModule.h"
+#include "CallerSlots.h"
 #include "DebugHook.h"
 #include "Exceptions.h"
 #include "ListBuilder.h"
@@ -335,9 +336,11 @@ bool matchCatchType(proto::ProtoContext* ctx, const proto::ProtoObject* v,
 // CALL_MEMBER: `(a/b args...)`. A protoCore method (a module's export) is
 // called with the receiver as `self`, the way a module expects; any other
 // member value is called as a Clojure fn. `args` are the frame's stack
-// slots, which the collector traces. A C++ exception that is not a
-// ProtoException (a module defect) becomes a RuntimeException carrying its
-// what() here, at the native-call boundary.
+// slots, which the collector traces; the method runs in the frame `ctx`
+// itself, with the frame's free slots above the arguments as its
+// PrimitiveWindow (CallerSlots.h), and no context of its own. A C++
+// exception that is not a ProtoException (a module defect) becomes a
+// RuntimeException carrying its what() here, at the native-call boundary.
 [[gnu::noinline]]
 const proto::ProtoObject* callMember(proto::ProtoContext* ctx, ExecutionEngine* engine,
                                      const proto::ProtoObject* receiver,
@@ -346,11 +349,14 @@ const proto::ProtoObject* callMember(proto::ProtoContext* ctx, ExecutionEngine* 
     const proto::ProtoObject* member = getMember(ctx, receiver, key, name);
     if (!member->isMethod(ctx))
         return engine->invoke(ctx, member, args, argc);
-    proto::ProtoContext callScope(ctx->space, ctx);
     const proto::ProtoArguments positional(args, argc);
+    const proto::ProtoObject** frameSlots = ctx->getAutomaticLocals();
+    PrimitiveWindow window{ctx, const_cast<const proto::ProtoObject**>(args) + argc,
+                           frameSlots + ctx->getAutomaticLocalsCount(), 1};
+    PrimitiveCallScope callScope(window);
     // A ProtoException is no std::exception: it passes through untouched.
     try {
-        return member->asMethod(&callScope)(&callScope, receiver, nullptr, &positional, nullptr);
+        return member->asMethod(ctx)(ctx, receiver, nullptr, &positional, nullptr);
     } catch (const std::exception& e) {
         throwClassed(ctx, "RuntimeException", e.what());
     }
@@ -412,6 +418,21 @@ const bool ExecutionEngine::gcSafepointEnabled_ =
     (std::getenv("PROTOCLJ_NO_GC_SAFEPOINT") == nullptr);
 
 thread_local unsigned ExecutionEngine::gcSafepointCountdown_ = 1;
+
+void ExecutionEngine::submitBeforeCall(proto::ProtoContext& frame) const {
+    // See the declaration. protoCore's safepoint() submits a context's young
+    // chain only past maxAllocatedCellsPerContext; the count is raised past
+    // it for this one call so that safepoint() itself, with every check and
+    // configuration it applies, makes the submission. If it did not submit
+    // (a critical section, submission disabled), the count is restored.
+    if (!gcSafepointEnabled_ || !frame.lastAllocatedCell) return;
+    const unsigned int threshold = frame.space->maxAllocatedCellsPerContext;
+    if (threshold == 0) return;
+    const proto::proto_ulong saved = frame.allocatedCellsCount;
+    frame.allocatedCellsCount = static_cast<proto::proto_ulong>(threshold) + 1;
+    frame.safepoint();
+    if (frame.lastAllocatedCell) frame.allocatedCellsCount = saved;
+}
 
 void ExecutionEngine::gcSafepointSlow(proto::ProtoContext* ctx) const {
     // Reload first, unconditionally: leaving the countdown at zero would wrap
@@ -562,19 +583,18 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
                           proto != cc->named.marker, args, argc);
     }
 
-    // C++ primitive. The caller's `args` need not be traced memory, so they
-    // are copied into the call scope's slots (the thread's slot stack, no
-    // allocation) and the primitive reads them there (protoCore's array
-    // call form): slot 0 the callable, 1..argc the arguments.
-    proto::ProtoContext callScope(ctx->space, ctx, nullptr, nullptr, nullptr, nullptr, argc + 1);
-    callScope.setAutomaticLocal(0, callable);
-    for (unsigned int i = 0; i < argc; ++i) callScope.setAutomaticLocal(i + 1, args[i]);
-    proto::ProtoMethod fn = callable->asMethod(&callScope);
+    // C++ primitive. It runs in the caller's context `ctx`, with no context
+    // of its own (CallerSlots.h): `callable` and `args` are rooted by the
+    // caller (invoke's contract), and nothing submits `ctx`'s young chain
+    // while the primitive runs, because it counts as a nested activation on
+    // the current PrimitiveWindow and so never safepoints.
+    proto::ProtoMethod fn = callable->asMethod(ctx);
     if (!fn && isVector(callable)) return callVector(ctx, callable, args, argc);
     if (!fn) throwError(ctx, "VM: invoke: value is not callable");
-    const proto::ProtoObject* self = callable->asMethodSelf(&callScope);
-    const proto::ProtoArguments positional(callScope.getAutomaticLocals() + 1, argc);
-    return fn(&callScope, self, nullptr, &positional, nullptr);
+    const proto::ProtoObject* self = callable->asMethodSelf(ctx);
+    const proto::ProtoArguments positional(args, argc);
+    NestedPrimitiveScope nested;
+    return fn(ctx, self, nullptr, &positional, nullptr);
 }
 
 bool ExecutionEngine::acceptsArgCount(proto::ProtoContext* ctx,
@@ -688,8 +708,10 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
 
     // Built at its full initial size: the slots come from the thread's slot
     // stack once, instead of an empty context grown by resizeAutomaticLocals.
+    // kPrimitiveSlots more above the operand stack are the floor of the
+    // PrimitiveWindow of the primitives this frame calls (CallerSlots.h).
     proto::ProtoContext frame(parent->space, parent, nullptr, nullptr, nullptr, nullptr,
-                              stackBase + stackCapacity);
+                              stackBase + stackCapacity + kPrimitiveSlots);
     unsigned int sp = 0;   // 0 means "stack empty"; sp <= stackCapacity
 
     // A body compiled for the debugger is a frame of the debugger's call
@@ -762,7 +784,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
     auto reserveStack = [&](proto::proto_ulong extra) {
         if (sp + extra <= stackCapacity) return;
         stackCapacity = static_cast<unsigned int>(sp + extra);
-        frame.resizeAutomaticLocals(stackBase + stackCapacity);
+        frame.resizeAutomaticLocals(stackBase + stackCapacity + kPrimitiveSlots);
     };
     auto popVal = [&]() -> const proto::ProtoObject* {
         if (sp == 0) {
@@ -804,6 +826,12 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
         const bool isMulti  = (proto == env.fnMultiProto);
 
         if (isSingle || isMulti) {
+            // The frame is suspended for the call, with every value it holds
+            // in its slots (the arguments too, until they are read below):
+            // what it and its primitives allocated goes to the collector
+            // now, so a value built here and walked by the callee is not
+            // kept alive by this frame's young chain (submitBeforeCall).
+            submitBeforeCall(frame);
             const BytecodeModule* subMod = nullptr;
             const proto::ProtoObject* capsVal = nullptr;
 
@@ -958,9 +986,12 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
         // C++ primitive. The callable and its arguments already sit
         // contiguously in the frame's operand stack, which the collector
         // traces: the primitive reads them there (protoCore's array call
-        // form), nothing is packed or copied.
-        proto::ProtoContext callScope(frame.space, &frame);
-        proto::ProtoMethod fn = callable->asMethod(&callScope);
+        // form), nothing is packed or copied. It runs in this frame, with no
+        // context of its own (CallerSlots.h): what it allocates is this
+        // frame's garbage, handed to the collector at the frame's next
+        // safepoint, and the free slots above its arguments are its
+        // PrimitiveWindow.
+        proto::ProtoMethod fn = callable->asMethod(&frame);
         if (!fn && isVector(callable)) {
             const proto::ProtoObject* vargs[1] = {
                 argc >= 1 ? frame.getAutomaticLocal(stackBase + sp - argc) : nullptr};
@@ -971,11 +1002,16 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
         }
         if (!fn)
             throwError(&frame, "VM: value is not callable in CALL");
-        const proto::ProtoObject* self = callable->asMethodSelf(&callScope);
-        const proto::ProtoArguments positional(
-            frame.getAutomaticLocals() + stackBase + sp - argc, argc);
-        const proto::ProtoObject* result =
-            fn(&callScope, self, nullptr, &positional, nullptr);
+        const proto::ProtoObject* self = callable->asMethodSelf(&frame);
+        const proto::ProtoObject** frameSlots = frame.getAutomaticLocals();
+        const proto::ProtoArguments positional(frameSlots + stackBase + sp - argc, argc);
+        const proto::ProtoObject* result;
+        {
+            PrimitiveWindow window{&frame, frameSlots + stackBase + sp,
+                                   frameSlots + frame.getAutomaticLocalsCount(), 1};
+            PrimitiveCallScope callScope(window);
+            result = fn(&frame, self, nullptr, &positional, nullptr);
+        }
         // The argument slots are dead now; clear them so they do not keep a
         // value (the head of a lazy seq the primitive walked) alive until
         // the stack grows back over them.
@@ -1151,7 +1187,17 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 } else if (isVector(listObj)) {
                     argsList = vectorItems(&frame, listObj);
                 } else {
-                    // A map, a set or a string spreads its seq (seqItems).
+                    // A lazy seq, a map, a set or a string spreads its seq
+                    // (seqItems), realised as by a primitive the frame calls:
+                    // under a PrimitiveWindow above the popped list's slot,
+                    // which still holds it, and with a SafepointPermit, since
+                    // everything the frame holds is in its slots, so a long
+                    // realisation hands its garbage over (CallerSlots.h).
+                    const proto::ProtoObject** frameSlots = frame.getAutomaticLocals();
+                    PrimitiveWindow window{&frame, frameSlots + stackBase + sp + 1,
+                                           frameSlots + frame.getAutomaticLocalsCount(), 1};
+                    PrimitiveCallScope callScope(window);
+                    SafepointPermit permit(&frame);
                     argsList = seqItems(&frame, listObj);
                 }
                 if (!argsList)
