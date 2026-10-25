@@ -26,11 +26,12 @@ void ListBuilder::push(const proto::ProtoObject* value) {
     slots_.set(kSlotPending0 + npending_++, value);
     if (npending_ == kMaxPending) {
         flush();
-        // Nothing is parked: every CallerSlots::kTickStride folds the
-        // garbage may go, when the primitive at the bottom holds a
-        // SafepointPermit (protoCore submits once the context is past its
-        // threshold).
-        slots_.tick();
+        // Nothing is parked: the folded chunk's garbage may go now, when the
+        // primitive at the bottom holds a SafepointPermit (protoCore submits
+        // once the context is past its threshold, so this is one call and a
+        // test per fold; a stride of 64 folds was too coarse for the JSON
+        // reader on protoCore 3.1.0, tests/cli/json-under-heap-limit.sh).
+        slots_.safepoint();
     }
 }
 

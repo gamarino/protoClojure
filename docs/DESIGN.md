@@ -83,8 +83,8 @@ program controls must:
 
 `src/runtime/ListBuilder.{h,cpp}` implements (2) for primitives and is the
 type to reach for: it builds in the caller's context, parks up to five
-elements in traced slots, folds them into the accumulator and ticks
-(`CallerSlots::tick()`), which submits only under a permit. `map`,
+elements in traced slots, folds them into the accumulator and then calls
+`CallerSlots::safepoint()`, which submits only under a permit. `map`,
 `filter`, `reverse`, `keys` / `vals`, `split`, `pmap`, `send`, the JSON
 reader and the VM's argument packing all build through it. The reader (host
 code, not a primitive) keeps the earlier builder, which opens a context per

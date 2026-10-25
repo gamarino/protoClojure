@@ -11,7 +11,7 @@
  *
  * The accumulator lives in a CallerSlots slot, and so do up to kMaxPending
  * elements waiting to be folded into it when the slots are traced (a
- * PrimitiveWindow). After each fold the builder ticks (CallerSlots::tick), so a long
+ * PrimitiveWindow). After each fold the builder calls safepoint(), so a long
  * build inside a primitive that holds a SafepointPermit hands its garbage
  * over chunk by chunk. Without traced slots (host code: the reader, an actor
  * turn) each element is appended at once, so it is referenced by a young
