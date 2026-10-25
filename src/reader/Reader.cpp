@@ -201,38 +201,10 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
             return internNamed(parent, named_, tok.text.c_str());
         }
 
-        case TokenKind::HashLParen: {
-            // `#(body)`: `(fn* [p1 ... pN & rest] (body))`, where `%` and
-            // `%1` .. `%N` name the positional parameters, N the largest
-            // index used, and `%&` the rest, as Clojure's reader writes it.
-            // The parameters are generated symbols, `p1__N#`, interned like
-            // every symbol.
-            if (fnLiteral_) throw ReaderError("Nested #()s are not allowed", tok.line, tok.column);
-            FnLiteral lit;
-            fnLiteral_ = &lit;
-            struct Reset { FnLiteral*& f; ~Reset() { f = nullptr; } } reset{fnLiteral_};
-            proto::ProtoContext scope(parent->space, parent);
-            scope.resizeAutomaticLocals(2);
-            scope.setAutomaticLocal(0, readList(&scope, TokenKind::RParen, tok.line, tok.column));
-            const proto::ProtoList* params = scope.newList();
-            for (std::size_t i = 0; i < lit.params.size(); ++i) {
-                if (!lit.params[i])
-                    lit.params[i] = internNamed(&scope, named_,
-                        ("p" + std::to_string(i + 1) + "__" + std::to_string(nextGensymId()) + "#").c_str());
-                params = params->appendLast(&scope, lit.params[i]);
-            }
-            if (lit.rest)
-                params = params->appendLast(&scope, internNamed(&scope, named_, "&"))
-                               ->appendLast(&scope, lit.rest);
-            scope.setAutomaticLocal(1, newVector(&scope, params));
-            const proto::ProtoObject* items[3] = {internNamed(&scope, named_, "fn*"),
-                                                  scope.getAutomaticLocal(1),
-                                                  scope.getAutomaticLocal(0)};
-            const proto::ProtoObject* form = listFromArray(&scope, 3, items);
-            recordPosition(form, tok.line, tok.column);  // the body: readList
-            scope.returnValue = form;
-            return form;
-        }
+        case TokenKind::HashLParen:
+            // Out of line (readFnLiteral): its locals would otherwise sit in
+            // this frame, which nests once per level of source nesting.
+            return readFnLiteral(parent, tok);
 
         case TokenKind::LParen:
             // readList records where the list starts (debugging); a tail
@@ -272,60 +244,11 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
             return syntaxQuote(&scope, scope.getAutomaticLocal(0), tok);
         }
 
-        case TokenKind::LBracket: {
-            // `[..]` is a vector, the value `(vector ..)` builds at run time
-            // (runtime/VectorOps.h): the items are read into a ProtoList and
-            // boxed, an O(1) step.
-            proto::ProtoContext wrapScope(parent->space, parent);
-            wrapScope.resizeAutomaticLocals(1);
-            wrapScope.setAutomaticLocal(0,
-                readList(&wrapScope, TokenKind::RBracket, tok.line, tok.column));
-            return newVector(&wrapScope,
-                wrapScope.getAutomaticLocal(0)->asList(&wrapScope));
-        }
+        case TokenKind::LBracket:
+            return readVector(parent, tok);
 
-        case TokenKind::LBrace: {
-            // `{k1 v1 k2 v2 ...}` is a map, the value `(hash-map ..)` builds
-            // at run time (runtime/MapOps.h). The forms are read in source
-            // order into a ProtoList, then associated. As in Clojure, an odd
-            // number of forms and a repeated key are read errors.
-            proto::ProtoContext wrapScope(parent->space, parent);
-            wrapScope.resizeAutomaticLocals(1);
-            wrapScope.setAutomaticLocal(0,
-                readList(&wrapScope, TokenKind::RBrace, tok.line, tok.column));
-            const proto::ProtoList* lst =
-                wrapScope.getAutomaticLocal(0)->asList(&wrapScope);
-            const proto::proto_ulong n = lst->getSize(&wrapScope);
-            if (n % 2 != 0) {
-                throw ReaderError("Map literal must contain an even number of forms",
-                                  tok.line, tok.column);
-            }
-            // The forms stay reachable through the rooted list while the map
-            // is built; protoCore does not move objects.
-            std::vector<const proto::ProtoObject*> kv;
-            kv.reserve(n);
-            for (proto::proto_ulong i = 0; i < n; ++i)
-                kv.push_back(lst->getAt(&wrapScope, static_cast<int>(i)));
-            const proto::ProtoObject* m =
-                mapAssocPairs(&wrapScope, nullptr, kv.data(), n);
-            if (mapCount(&wrapScope, m) != n / 2) {
-                for (proto::proto_ulong i = 2; i < n; i += 2) {
-                    for (proto::proto_ulong j = 0; j < i; j += 2) {
-                        if (keyEquals(&wrapScope, kv[j], kv[i])) {
-                            throw ReaderError(
-                                "Duplicate key: " + describeKey(&wrapScope, named_, kv[i]),
-                                tok.line, tok.column);
-                        }
-                    }
-                }
-            }
-            if (info_ && n > 0) {
-                std::vector<const proto::ProtoObject*>& keys = info_->mapKeyOrder[m];
-                keys.clear();
-                for (proto::proto_ulong i = 0; i < n; i += 2) keys.push_back(kv[i]);
-            }
-            return m;
-        }
+        case TokenKind::LBrace:
+            return readMap(parent, tok);
 
         case TokenKind::Regex:
             // `#"..."` is a pattern value, compiled when it is read, as in
@@ -338,36 +261,8 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
                                   tok.line, tok.column);
             }
 
-        case TokenKind::HashLBrace: {
-            // `#{a b}` is a set, the value `(hash-set ..)` builds at run time
-            // (runtime/SetOps.h). As in Clojure, a repeated element is a read
-            // error.
-            proto::ProtoContext wrapScope(parent->space, parent);
-            wrapScope.resizeAutomaticLocals(1);
-            wrapScope.setAutomaticLocal(0,
-                readList(&wrapScope, TokenKind::RBrace, tok.line, tok.column,
-                         "unterminated set — missing `}`"));
-            const proto::ProtoList* lst =
-                wrapScope.getAutomaticLocal(0)->asList(&wrapScope);
-            const proto::proto_ulong n = lst->getSize(&wrapScope);
-            std::vector<const proto::ProtoObject*> items;
-            items.reserve(n);
-            for (proto::proto_ulong i = 0; i < n; ++i)
-                items.push_back(lst->getAt(&wrapScope, static_cast<int>(i)));
-            const proto::ProtoObject* s = setConj(&wrapScope, nullptr, items.data(), n);
-            if (setCount(&wrapScope, s) != n) {
-                for (proto::proto_ulong i = 1; i < n; ++i) {
-                    for (proto::proto_ulong j = 0; j < i; ++j) {
-                        if (keyEquals(&wrapScope, items[j], items[i])) {
-                            throw ReaderError(
-                                "Duplicate key: " + describeKey(&wrapScope, named_, items[i]),
-                                tok.line, tok.column);
-                        }
-                    }
-                }
-            }
-            return s;
-        }
+        case TokenKind::HashLBrace:
+            return readSet(parent, tok);
 
         case TokenKind::Error:
             throw ReaderError(tok.text, tok.line, tok.column);
@@ -384,6 +279,145 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
                 tokenKindName(tok.kind),
                 tok.line, tok.column);
     }
+}
+
+#if defined(_MSC_VER)
+__declspec(noinline)
+#else
+__attribute__((noinline))
+#endif
+const proto::ProtoObject* Reader::readFnLiteral(proto::ProtoContext* parent, const Token& tok) {
+    // `#(body)`: `(fn* [p1 ... pN & rest] (body))`, where `%` and
+    // `%1` .. `%N` name the positional parameters, N the largest
+    // index used, and `%&` the rest, as Clojure's reader writes it.
+    // The parameters are generated symbols, `p1__N#`, interned like
+    // every symbol.
+    if (fnLiteral_) throw ReaderError("Nested #()s are not allowed", tok.line, tok.column);
+    FnLiteral lit;
+    fnLiteral_ = &lit;
+    struct Reset { FnLiteral*& f; ~Reset() { f = nullptr; } } reset{fnLiteral_};
+    proto::ProtoContext scope(parent->space, parent);
+    scope.resizeAutomaticLocals(2);
+    scope.setAutomaticLocal(0, readList(&scope, TokenKind::RParen, tok.line, tok.column));
+    const proto::ProtoList* params = scope.newList();
+    for (std::size_t i = 0; i < lit.params.size(); ++i) {
+        if (!lit.params[i])
+            lit.params[i] = internNamed(&scope, named_,
+                ("p" + std::to_string(i + 1) + "__" + std::to_string(nextGensymId()) + "#").c_str());
+        params = params->appendLast(&scope, lit.params[i]);
+    }
+    if (lit.rest)
+        params = params->appendLast(&scope, internNamed(&scope, named_, "&"))
+                       ->appendLast(&scope, lit.rest);
+    scope.setAutomaticLocal(1, newVector(&scope, params));
+    const proto::ProtoObject* items[3] = {internNamed(&scope, named_, "fn*"),
+                                          scope.getAutomaticLocal(1),
+                                          scope.getAutomaticLocal(0)};
+    const proto::ProtoObject* form = listFromArray(&scope, 3, items);
+    recordPosition(form, tok.line, tok.column);  // the body: readList
+    scope.returnValue = form;
+    return form;
+}
+
+#if defined(_MSC_VER)
+__declspec(noinline)
+#else
+__attribute__((noinline))
+#endif
+const proto::ProtoObject* Reader::readVector(proto::ProtoContext* parent, const Token& tok) {
+    // `[..]` is a vector, the value `(vector ..)` builds at run time
+    // (runtime/VectorOps.h): the items are read into a ProtoList and
+    // boxed, an O(1) step.
+    proto::ProtoContext wrapScope(parent->space, parent);
+    wrapScope.resizeAutomaticLocals(1);
+    wrapScope.setAutomaticLocal(0,
+        readList(&wrapScope, TokenKind::RBracket, tok.line, tok.column));
+    return newVector(&wrapScope,
+        wrapScope.getAutomaticLocal(0)->asList(&wrapScope));
+}
+
+#if defined(_MSC_VER)
+__declspec(noinline)
+#else
+__attribute__((noinline))
+#endif
+const proto::ProtoObject* Reader::readMap(proto::ProtoContext* parent, const Token& tok) {
+    // `{k1 v1 k2 v2 ...}` is a map, the value `(hash-map ..)` builds
+    // at run time (runtime/MapOps.h). The forms are read in source
+    // order into a ProtoList, then associated. As in Clojure, an odd
+    // number of forms and a repeated key are read errors.
+    proto::ProtoContext wrapScope(parent->space, parent);
+    wrapScope.resizeAutomaticLocals(1);
+    wrapScope.setAutomaticLocal(0,
+        readList(&wrapScope, TokenKind::RBrace, tok.line, tok.column));
+    const proto::ProtoList* lst =
+        wrapScope.getAutomaticLocal(0)->asList(&wrapScope);
+    const proto::proto_ulong n = lst->getSize(&wrapScope);
+    if (n % 2 != 0) {
+        throw ReaderError("Map literal must contain an even number of forms",
+                          tok.line, tok.column);
+    }
+    // The forms stay reachable through the rooted list while the map
+    // is built; protoCore does not move objects.
+    std::vector<const proto::ProtoObject*> kv;
+    kv.reserve(n);
+    for (proto::proto_ulong i = 0; i < n; ++i)
+        kv.push_back(lst->getAt(&wrapScope, static_cast<int>(i)));
+    const proto::ProtoObject* m =
+        mapAssocPairs(&wrapScope, nullptr, kv.data(), n);
+    if (mapCount(&wrapScope, m) != n / 2) {
+        for (proto::proto_ulong i = 2; i < n; i += 2) {
+            for (proto::proto_ulong j = 0; j < i; j += 2) {
+                if (keyEquals(&wrapScope, kv[j], kv[i])) {
+                    throw ReaderError(
+                        "Duplicate key: " + describeKey(&wrapScope, named_, kv[i]),
+                        tok.line, tok.column);
+                }
+            }
+        }
+    }
+    if (info_ && n > 0) {
+        std::vector<const proto::ProtoObject*>& keys = info_->mapKeyOrder[m];
+        keys.clear();
+        for (proto::proto_ulong i = 0; i < n; i += 2) keys.push_back(kv[i]);
+    }
+    return m;
+}
+
+#if defined(_MSC_VER)
+__declspec(noinline)
+#else
+__attribute__((noinline))
+#endif
+const proto::ProtoObject* Reader::readSet(proto::ProtoContext* parent, const Token& tok) {
+    // `#{a b}` is a set, the value `(hash-set ..)` builds at run time
+    // (runtime/SetOps.h). As in Clojure, a repeated element is a read
+    // error.
+    proto::ProtoContext wrapScope(parent->space, parent);
+    wrapScope.resizeAutomaticLocals(1);
+    wrapScope.setAutomaticLocal(0,
+        readList(&wrapScope, TokenKind::RBrace, tok.line, tok.column,
+                 "unterminated set — missing `}`"));
+    const proto::ProtoList* lst =
+        wrapScope.getAutomaticLocal(0)->asList(&wrapScope);
+    const proto::proto_ulong n = lst->getSize(&wrapScope);
+    std::vector<const proto::ProtoObject*> items;
+    items.reserve(n);
+    for (proto::proto_ulong i = 0; i < n; ++i)
+        items.push_back(lst->getAt(&wrapScope, static_cast<int>(i)));
+    const proto::ProtoObject* s = setConj(&wrapScope, nullptr, items.data(), n);
+    if (setCount(&wrapScope, s) != n) {
+        for (proto::proto_ulong i = 1; i < n; ++i) {
+            for (proto::proto_ulong j = 0; j < i; ++j) {
+                if (keyEquals(&wrapScope, items[j], items[i])) {
+                    throw ReaderError(
+                        "Duplicate key: " + describeKey(&wrapScope, named_, items[i]),
+                        tok.line, tok.column);
+                }
+            }
+        }
+    }
+    return s;
 }
 
 const proto::ProtoObject* Reader::readNextForm(proto::ProtoContext* parent,

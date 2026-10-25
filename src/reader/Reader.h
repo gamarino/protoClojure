@@ -174,6 +174,16 @@ private:
     const proto::ProtoObject* readFromToken(proto::ProtoContext* parent,
                                             const Token& tok);
 
+    // `#(body)`, the opening token `tok` consumed: `(fn* [params] (body))`.
+    // It and the three below are out of readFromToken, whose frame nests
+    // once per level of source nesting, so that their locals (the scopes
+    // that root what they build) are not in it.
+    const proto::ProtoObject* readFnLiteral(proto::ProtoContext* parent, const Token& tok);
+    // `[...]`, `{...}` and `#{...}`, the opening token `tok` consumed.
+    const proto::ProtoObject* readVector(proto::ProtoContext* parent, const Token& tok);
+    const proto::ProtoObject* readMap(proto::ProtoContext* parent, const Token& tok);
+    const proto::ProtoObject* readSet(proto::ProtoContext* parent, const Token& tok);
+
     // The form after a reader-macro token (`'`, `@`, ...); EOF is a read
     // error naming the macro.
     const proto::ProtoObject* readNextForm(proto::ProtoContext* parent,

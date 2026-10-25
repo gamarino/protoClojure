@@ -514,8 +514,10 @@ static void clearLastReads(BytecodeModule& mod, int fixedArity, int paramEnd) {
 
 #if defined(_MSC_VER)
 #define PROTOCLJ_DEBUG_HELPER __declspec(noinline)
+#define PROTOCLJ_FRAME_HELPER __declspec(noinline)
 #else
 #define PROTOCLJ_DEBUG_HELPER __attribute__((noinline, cold))
+#define PROTOCLJ_FRAME_HELPER __attribute__((noinline))
 #endif
 
 PROTOCLJ_DEBUG_HELPER int Compiler::formLineOf(const proto::ProtoObject* form) const {
@@ -1440,6 +1442,299 @@ void Compiler::compileDefmacro(proto::ProtoContext* ctx, const FormList* lst,
     emitStoreGlobal(&scope, key, out);
 }
 
+// The fn / defn, let and loop forms, out of compileForm: their locals (form
+// views, rebuilt forms, the scopes that root them) would otherwise sit in
+// compileForm's frame, which nests once per level of source nesting
+// (cli/deeply-nested-source).
+PROTOCLJ_FRAME_HELPER void Compiler::compileFnForm(proto::ProtoContext* ctx, const proto::ProtoObject* form,
+                                               const FormList* lst, const proto::ProtoObject* head,
+                                               const std::string& headName, BytecodeModule& out,
+                                               const CompilerMarkers& markers) {
+    const proto::proto_ulong n = lst->getSize(ctx);
+    (void)form; (void)head; (void)headName; (void)n;
+    // (defn name "doc"? {attrs}? ...): the docstring and the attribute
+    // map are dropped, there being no vars to hold them (D28).
+    if (headName == "defn" && n > 3) {
+        proto::proto_ulong skip = 2;
+        if (isStringForm(lst->getAt(ctx, 2))) ++skip;
+        if (skip < n - 1 && isMap(lst->getAt(ctx, static_cast<int>(skip)))) ++skip;
+        if (skip > 2) {
+            proto::ProtoContext scope(ctx->space, ctx);
+            scope.resizeAutomaticLocals(1);
+            std::vector<const proto::ProtoObject*> rebuilt{head, lst->getAt(&scope, 1)};
+            for (proto::proto_ulong k = skip; k < n; ++k)
+                rebuilt.push_back(lst->getAt(&scope, static_cast<int>(k)));
+            scope.setAutomaticLocal(0, listForm(&scope, rebuilt));
+            compileForm(&scope, scope.getAutomaticLocal(0), out, markers);
+            return;
+        }
+    }
+    proto::proto_ulong aritiesStart = (headName == "fn") ? 1 : 2;
+    if (n <= aritiesStart) {
+        throw CompileError("fn/defn: missing parameter vector");
+    }
+    const proto::ProtoObject* nameForm = nullptr;
+    if (headName == "defn") {
+        nameForm = lst->getAt(ctx, 1);
+        if (!isNameForm(ctx, markers.named, nameForm)) {
+            throw CompileError("defn: name must be a symbol");
+        }
+    }
+    // Debugging: the name and line the body's frames show, set
+    // again before each arity (compiling one consumes them).
+    const int fnLine = pendingFnLine_;
+
+    const proto::ProtoObject* first = lst->getAt(ctx, (int)aritiesStart);
+    // Single-arity: the form right after the head/name is a
+    // vector `[..]`. Multi-arity: a list whose first
+    // element is itself a vector — `(fn ([x] ...) ([x y] ...))`.
+    bool multiArity = false;
+    if (isList(ctx, first)) {
+        const FormList fl(ctx, first);
+        multiArity = fl.getSize(ctx) >= 1 && isVector(fl.getAt(ctx, 0));
+    }
+
+    auto emitCapsThenOp = [&](std::size_t blockIdx, Op makeOp,
+                              std::size_t makeOperand) {
+        const auto& caps = out.block(blockIdx).captureSpecs();
+        for (const auto& c : caps) {
+            out.emit(Op::PUSH_LOCAL,
+                c.parentSlot);
+        }
+        out.emit(makeOp, makeOperand);
+    };
+
+    if (!multiArity) {
+        // Single-arity — the original single-body path.
+        if (debugOn()) setPendingFn(ctx, lst, nameForm, form, markers, fnLine);
+        std::unique_ptr<BytecodeModule> body =
+            compileFnBody(ctx, lst, markers);
+        std::size_t blockIdx = out.addBlock(std::move(body));
+        emitCapsThenOp(blockIdx, Op::MAKE_FN,
+                       blockIdx);
+    } else {
+        // Multi-arity — compile each `(params body...)` separately,
+        // push their captures (arity 0 first), emit MAKE_FN_MULTI.
+        std::vector<std::size_t> blockIdxs;
+        for (proto::proto_ulong i = aritiesStart; i < n; ++i) {
+            const proto::ProtoObject* aobj = lst->getAt(ctx, (int)i);
+            if (!isList(ctx, aobj)) {
+                throw CompileError("multi-arity: each arity must be a list");
+            }
+            const FormList alist(ctx, aobj);
+            if (alist.getSize(ctx) < 1) {
+                throw CompileError("multi-arity: arity missing params");
+            }
+            const proto::ProtoObject* paramsForm = alist.getAt(ctx, 0);
+            FormList params;
+            if (isVector(paramsForm)) {
+                params = FormList(ctx, vectorItems(ctx, paramsForm), paramsForm);
+            } else if (isList(ctx, paramsForm)) {
+                params = FormList(ctx, paramsForm);
+            } else {
+                throw CompileError("multi-arity: params must be a vector");
+            }
+            if (debugOn()) setPendingFn(ctx, lst, nameForm, form, markers, fnLine);
+            std::unique_ptr<BytecodeModule> body =
+                compileArity(ctx, &params, &alist, 1, markers);
+            std::size_t blockIdx = out.addBlock(std::move(body));
+            blockIdxs.push_back(blockIdx);
+        }
+        // Push captures in arity-emission order so the VM can pop
+        // them back into per-arity lists.
+        for (std::size_t bi : blockIdxs) {
+            const auto& caps = out.block(bi).captureSpecs();
+            for (const auto& c : caps) {
+                out.emit(Op::PUSH_LOCAL,
+                    c.parentSlot);
+            }
+        }
+        std::size_t groupIdx = out.addArityGroup(std::move(blockIdxs));
+        out.emit(Op::MAKE_FN_MULTI,
+                 groupIdx);
+    }
+
+    if (headName == "defn") {
+        std::string key;
+        globalKeyForSymbol(nameOf(ctx, markers.named, nameForm), key);
+        emitStoreGlobal(ctx, key, out);
+    }
+    return;
+}
+
+PROTOCLJ_FRAME_HELPER void Compiler::compileLetForm(proto::ProtoContext* ctx, const proto::ProtoObject* form,
+                                               const FormList* lst, const proto::ProtoObject* head,
+                                               const std::string& headName, BytecodeModule& out,
+                                               const CompilerMarkers& markers) {
+    const proto::proto_ulong n = lst->getSize(ctx);
+    (void)form; (void)head; (void)headName; (void)n;
+    // The top level has no local slots: a top-level let runs as the
+    // body of a fn called on the spot.
+    if (scopes_.empty()) { compileAsThunk(ctx, form, out, markers); return; }
+    if (n < 2) throw CompileError("let: expects bindings vector");
+    const proto::ProtoObject* bindings = lst->getAt(ctx, 1);
+    FormList bitems;
+    if (isVector(bindings)) {
+        bitems = FormList(ctx, vectorItems(ctx, bindings), bindings);
+    } else if (isList(ctx, bindings)) {
+        bitems = FormList(ctx, bindings);
+    } else {
+        throw CompileError("let: bindings must be a vector");
+    }
+    const FormList* bvec = &bitems;
+    proto::proto_ulong bn = bvec->getSize(ctx);
+    if (bn % 2 != 0) {
+        throw CompileError("let: bindings must come in name/value pairs");
+    }
+    // Destructuring: `(let [[a b] v] ...)` is compiled as the `let`
+    // of the symbol bindings it stands for (destructure), rooted in
+    // a slot of its own scope while it is compiled.
+    {
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(1);
+        if (const proto::ProtoObject* flat = destructureBindings(&scope, markers, bvec)) {
+            scope.setAutomaticLocal(0, flat);
+            std::vector<const proto::ProtoObject*> rebuilt{head, scope.getAutomaticLocal(0)};
+            for (proto::proto_ulong i = 2; i < n; ++i)
+                rebuilt.push_back(lst->getAt(&scope, static_cast<int>(i)));
+            scope.setAutomaticLocal(0, listForm(&scope, rebuilt));
+            compileForm(&scope, scope.getAutomaticLocal(0), out, markers);
+            return;
+        }
+    }
+    // The names the bindings shadow, restored once the body is
+    // compiled: a binding is in scope in the let's body only.
+    BindingRestore restore(scopes_);
+    const std::size_t letLocals = localsMark(out);  // debugging
+    for (proto::proto_ulong i = 0; i < bn; i += 2) {
+        const proto::ProtoObject* nameForm = bvec->getAt(ctx, (int)i);
+        const proto::ProtoObject* valForm  = bvec->getAt(ctx, (int)(i + 1));
+        if (!isNameForm(ctx, markers.named, nameForm)) {
+            throw CompileError("let: binding name must be a symbol");
+        }
+        const std::string bname = nameOf(ctx, markers.named, nameForm);
+        if (isQualifiedName(bname)) throw CompileError("Can't let qualified name: " + bname);
+        compileForm(ctx, valForm, out, markers);  // push value
+        int slot = restore.bind(bname);
+        out.emit(Op::STORE_LOCAL, slot);
+        bindLocal(out, bname, slot, out.pos());
+    }
+    // Body — last expression's value stays on the stack as `let`'s
+    // value.
+    if (n == 2) {
+        out.emit(Op::PUSH_NIL, 0);                  // (let [...]) => nil
+    } else {
+        for (proto::proto_ulong i = 2; i < n; ++i) {
+            compileForm(ctx, lst->getAt(ctx, (int)i), out, markers);
+            if (i + 1 < n) out.emit(Op::POP, 0);
+        }
+    }
+    closeLocals(out, letLocals);
+    return;
+}
+
+PROTOCLJ_FRAME_HELPER void Compiler::compileLoopForm(proto::ProtoContext* ctx, const proto::ProtoObject* form,
+                                               const FormList* lst, const proto::ProtoObject* head,
+                                               const std::string& headName, BytecodeModule& out,
+                                               const CompilerMarkers& markers) {
+    const proto::proto_ulong n = lst->getSize(ctx);
+    (void)form; (void)head; (void)headName; (void)n;
+    if (scopes_.empty()) { compileAsThunk(ctx, form, out, markers); return; }
+    if (n < 2) throw CompileError("loop: expects bindings vector");
+    const proto::ProtoObject* bindings = lst->getAt(ctx, 1);
+    FormList bitems;
+    if (isVector(bindings)) {
+        bitems = FormList(ctx, vectorItems(ctx, bindings), bindings);
+    } else if (isList(ctx, bindings)) {
+        bitems = FormList(ctx, bindings);
+    } else {
+        throw CompileError("loop: bindings must be a vector");
+    }
+    const FormList* bvec = &bitems;
+    proto::proto_ulong bn = bvec->getSize(ctx);
+    if (bn % 2 != 0) {
+        throw CompileError("loop: bindings must come in name/value pairs");
+    }
+    // Destructuring, as clojure.core/loop does it: a binding form that
+    // is not a symbol is bound to a generated local g, which the loop
+    // rebinds and the body destructures:
+    //   (let [g v form g ...] (loop [g g ...] (let [form g ...] body)))
+    // so later inits see the earlier destructured names.
+    {
+        bool simple = true;
+        for (proto::proto_ulong i = 0; i < bn; i += 2) {
+            const proto::ProtoObject* b = bvec->getAt(ctx, static_cast<int>(i));
+            if (!isNameForm(ctx, markers.named, b) || isKeywordForm(ctx, markers.named, b)) simple = false;
+        }
+        if (!simple) {
+            proto::ProtoContext scope(ctx->space, ctx);
+            scope.resizeAutomaticLocals(1);
+            const proto::ProtoList* outer = scope.newList();
+            const proto::ProtoList* loopBs = scope.newList();
+            const proto::ProtoList* inner = scope.newList();
+            for (proto::proto_ulong i = 0; i < bn; i += 2) {
+                const proto::ProtoObject* b = bvec->getAt(&scope, static_cast<int>(i));
+                const proto::ProtoObject* v = bvec->getAt(&scope, static_cast<int>(i + 1));
+                const bool isSym = isNameForm(&scope, markers.named, b);
+                const proto::ProtoObject* g = isSym ? b : freshSymbol(&scope, markers.named, "p__");
+                outer = outer->appendLast(&scope, g)->appendLast(&scope, v);
+                if (!isSym) {
+                    outer = outer->appendLast(&scope, b)->appendLast(&scope, g);
+                    inner = inner->appendLast(&scope, b)->appendLast(&scope, g);
+                }
+                loopBs = loopBs->appendLast(&scope, g)->appendLast(&scope, g);
+            }
+            std::vector<const proto::ProtoObject*> innerLet{
+                symbolForm(&scope, markers.named, "let"), newVector(&scope, inner)};
+            for (proto::proto_ulong i = 2; i < n; ++i)
+                innerLet.push_back(lst->getAt(&scope, static_cast<int>(i)));
+            const proto::ProtoObject* loopForm = listForm(&scope,
+                {head, newVector(&scope, loopBs), listForm(&scope, innerLet)});
+            scope.setAutomaticLocal(0, listForm(&scope,
+                {symbolForm(&scope, markers.named, "let"), newVector(&scope, outer), loopForm}));
+            compileForm(&scope, scope.getAutomaticLocal(0), out, markers);
+            return;
+        }
+    }
+    std::vector<int> recurSlots;
+    BindingRestore restore(scopes_);
+    const std::size_t loopLocals = localsMark(out);  // debugging
+    for (proto::proto_ulong i = 0; i < bn; i += 2) {
+        const proto::ProtoObject* nameForm = bvec->getAt(ctx, (int)i);
+        const proto::ProtoObject* valForm  = bvec->getAt(ctx, (int)(i + 1));
+        if (!isNameForm(ctx, markers.named, nameForm)) {
+            throw CompileError("loop: binding name must be a symbol");
+        }
+        const std::string bname = nameOf(ctx, markers.named, nameForm);
+        if (isQualifiedName(bname)) throw CompileError("Can't let qualified name: " + bname);
+        compileForm(ctx, valForm, out, markers);
+        int slot = restore.bind(bname);
+        out.emit(Op::STORE_LOCAL, slot);
+        recurSlots.push_back(slot);
+        bindLocal(out, bname, slot, out.pos());
+    }
+    // Recur target = current bytecode position. recur jumps BACK here
+    // after rebinding.
+    Scope::RecurTarget tgt;
+    tgt.bodyStart = out.pos();
+    tgt.slots = recurSlots;
+    tgt.tryDepth = scopes_.back().tryDepth;
+    scopes_.back().recurStack.push_back(tgt);
+
+    if (n == 2) {
+        out.emit(Op::PUSH_NIL, 0);
+    } else {
+        for (proto::proto_ulong i = 2; i < n; ++i) {
+            compileForm(ctx, lst->getAt(ctx, (int)i), out, markers);
+            if (i + 1 < n) out.emit(Op::POP, 0);
+        }
+    }
+
+    scopes_.back().recurStack.pop_back();
+    closeLocals(out, loopLocals);
+    return;
+}
+
 void Compiler::compileForm(proto::ProtoContext* ctx,
                            const proto::ProtoObject* form,
                            BytecodeModule& out,
@@ -1685,113 +1980,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // is itself a list, the form is multi-arity. Each subsequent form
         // is then a `(params body...)` arity body.
         if (headName == "fn" || headName == "defn") {
-            // (defn name "doc"? {attrs}? ...): the docstring and the attribute
-            // map are dropped, there being no vars to hold them (D28).
-            if (headName == "defn" && n > 3) {
-                proto::proto_ulong skip = 2;
-                if (isStringForm(lst->getAt(ctx, 2))) ++skip;
-                if (skip < n - 1 && isMap(lst->getAt(ctx, static_cast<int>(skip)))) ++skip;
-                if (skip > 2) {
-                    proto::ProtoContext scope(ctx->space, ctx);
-                    scope.resizeAutomaticLocals(1);
-                    std::vector<const proto::ProtoObject*> rebuilt{head, lst->getAt(&scope, 1)};
-                    for (proto::proto_ulong k = skip; k < n; ++k)
-                        rebuilt.push_back(lst->getAt(&scope, static_cast<int>(k)));
-                    scope.setAutomaticLocal(0, listForm(&scope, rebuilt));
-                    compileForm(&scope, scope.getAutomaticLocal(0), out, markers);
-                    return;
-                }
-            }
-            proto::proto_ulong aritiesStart = (headName == "fn") ? 1 : 2;
-            if (n <= aritiesStart) {
-                throw CompileError("fn/defn: missing parameter vector");
-            }
-            const proto::ProtoObject* nameForm = nullptr;
-            if (headName == "defn") {
-                nameForm = lst->getAt(ctx, 1);
-                if (!isNameForm(ctx, markers.named, nameForm)) {
-                    throw CompileError("defn: name must be a symbol");
-                }
-            }
-            // Debugging: the name and line the body's frames show, set
-            // again before each arity (compiling one consumes them).
-            const int fnLine = pendingFnLine_;
-
-            const proto::ProtoObject* first = lst->getAt(ctx, (int)aritiesStart);
-            // Single-arity: the form right after the head/name is a
-            // vector `[..]`. Multi-arity: a list whose first
-            // element is itself a vector — `(fn ([x] ...) ([x y] ...))`.
-            bool multiArity = false;
-            if (isList(ctx, first)) {
-                const FormList fl(ctx, first);
-                multiArity = fl.getSize(ctx) >= 1 && isVector(fl.getAt(ctx, 0));
-            }
-
-            auto emitCapsThenOp = [&](std::size_t blockIdx, Op makeOp,
-                                      std::size_t makeOperand) {
-                const auto& caps = out.block(blockIdx).captureSpecs();
-                for (const auto& c : caps) {
-                    out.emit(Op::PUSH_LOCAL,
-                        c.parentSlot);
-                }
-                out.emit(makeOp, makeOperand);
-            };
-
-            if (!multiArity) {
-                // Single-arity — the original single-body path.
-                if (debugOn()) setPendingFn(ctx, lst, nameForm, form, markers, fnLine);
-                std::unique_ptr<BytecodeModule> body =
-                    compileFnBody(ctx, lst, markers);
-                std::size_t blockIdx = out.addBlock(std::move(body));
-                emitCapsThenOp(blockIdx, Op::MAKE_FN,
-                               blockIdx);
-            } else {
-                // Multi-arity — compile each `(params body...)` separately,
-                // push their captures (arity 0 first), emit MAKE_FN_MULTI.
-                std::vector<std::size_t> blockIdxs;
-                for (proto::proto_ulong i = aritiesStart; i < n; ++i) {
-                    const proto::ProtoObject* aobj = lst->getAt(ctx, (int)i);
-                    if (!isList(ctx, aobj)) {
-                        throw CompileError("multi-arity: each arity must be a list");
-                    }
-                    const FormList alist(ctx, aobj);
-                    if (alist.getSize(ctx) < 1) {
-                        throw CompileError("multi-arity: arity missing params");
-                    }
-                    const proto::ProtoObject* paramsForm = alist.getAt(ctx, 0);
-                    FormList params;
-                    if (isVector(paramsForm)) {
-                        params = FormList(ctx, vectorItems(ctx, paramsForm), paramsForm);
-                    } else if (isList(ctx, paramsForm)) {
-                        params = FormList(ctx, paramsForm);
-                    } else {
-                        throw CompileError("multi-arity: params must be a vector");
-                    }
-                    if (debugOn()) setPendingFn(ctx, lst, nameForm, form, markers, fnLine);
-                    std::unique_ptr<BytecodeModule> body =
-                        compileArity(ctx, &params, &alist, 1, markers);
-                    std::size_t blockIdx = out.addBlock(std::move(body));
-                    blockIdxs.push_back(blockIdx);
-                }
-                // Push captures in arity-emission order so the VM can pop
-                // them back into per-arity lists.
-                for (std::size_t bi : blockIdxs) {
-                    const auto& caps = out.block(bi).captureSpecs();
-                    for (const auto& c : caps) {
-                        out.emit(Op::PUSH_LOCAL,
-                            c.parentSlot);
-                    }
-                }
-                std::size_t groupIdx = out.addArityGroup(std::move(blockIdxs));
-                out.emit(Op::MAKE_FN_MULTI,
-                         groupIdx);
-            }
-
-            if (headName == "defn") {
-                std::string key;
-                globalKeyForSymbol(nameOf(ctx, markers.named, nameForm), key);
-                emitStoreGlobal(ctx, key, out);
-            }
+            compileFnForm(ctx, form, lst, head, headName, out, markers);
             return;
         }
 
@@ -1800,68 +1989,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // compile the body. Bindings are visible to subsequent binding RHSes
         // (Clojure's let* semantics).
         if (headName == "let") {
-            // The top level has no local slots: a top-level let runs as the
-            // body of a fn called on the spot.
-            if (scopes_.empty()) { compileAsThunk(ctx, form, out, markers); return; }
-            if (n < 2) throw CompileError("let: expects bindings vector");
-            const proto::ProtoObject* bindings = lst->getAt(ctx, 1);
-            FormList bitems;
-            if (isVector(bindings)) {
-                bitems = FormList(ctx, vectorItems(ctx, bindings), bindings);
-            } else if (isList(ctx, bindings)) {
-                bitems = FormList(ctx, bindings);
-            } else {
-                throw CompileError("let: bindings must be a vector");
-            }
-            const FormList* bvec = &bitems;
-            proto::proto_ulong bn = bvec->getSize(ctx);
-            if (bn % 2 != 0) {
-                throw CompileError("let: bindings must come in name/value pairs");
-            }
-            // Destructuring: `(let [[a b] v] ...)` is compiled as the `let`
-            // of the symbol bindings it stands for (destructure), rooted in
-            // a slot of its own scope while it is compiled.
-            {
-                proto::ProtoContext scope(ctx->space, ctx);
-                scope.resizeAutomaticLocals(1);
-                if (const proto::ProtoObject* flat = destructureBindings(&scope, markers, bvec)) {
-                    scope.setAutomaticLocal(0, flat);
-                    std::vector<const proto::ProtoObject*> rebuilt{head, scope.getAutomaticLocal(0)};
-                    for (proto::proto_ulong i = 2; i < n; ++i)
-                        rebuilt.push_back(lst->getAt(&scope, static_cast<int>(i)));
-                    scope.setAutomaticLocal(0, listForm(&scope, rebuilt));
-                    compileForm(&scope, scope.getAutomaticLocal(0), out, markers);
-                    return;
-                }
-            }
-            // The names the bindings shadow, restored once the body is
-            // compiled: a binding is in scope in the let's body only.
-            BindingRestore restore(scopes_);
-            const std::size_t letLocals = localsMark(out);  // debugging
-            for (proto::proto_ulong i = 0; i < bn; i += 2) {
-                const proto::ProtoObject* nameForm = bvec->getAt(ctx, (int)i);
-                const proto::ProtoObject* valForm  = bvec->getAt(ctx, (int)(i + 1));
-                if (!isNameForm(ctx, markers.named, nameForm)) {
-                    throw CompileError("let: binding name must be a symbol");
-                }
-                const std::string bname = nameOf(ctx, markers.named, nameForm);
-                if (isQualifiedName(bname)) throw CompileError("Can't let qualified name: " + bname);
-                compileForm(ctx, valForm, out, markers);  // push value
-                int slot = restore.bind(bname);
-                out.emit(Op::STORE_LOCAL, slot);
-                bindLocal(out, bname, slot, out.pos());
-            }
-            // Body — last expression's value stays on the stack as `let`'s
-            // value.
-            if (n == 2) {
-                out.emit(Op::PUSH_NIL, 0);                  // (let [...]) => nil
-            } else {
-                for (proto::proto_ulong i = 2; i < n; ++i) {
-                    compileForm(ctx, lst->getAt(ctx, (int)i), out, markers);
-                    if (i + 1 < n) out.emit(Op::POP, 0);
-                }
-            }
-            closeLocals(out, letLocals);
+            compileLetForm(ctx, form, lst, head, headName, out, markers);
             return;
         }
 
@@ -1869,99 +1997,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
         // at the start of the body. recur rebinds the loop locals and jumps
         // back.
         if (headName == "loop") {
-            if (scopes_.empty()) { compileAsThunk(ctx, form, out, markers); return; }
-            if (n < 2) throw CompileError("loop: expects bindings vector");
-            const proto::ProtoObject* bindings = lst->getAt(ctx, 1);
-            FormList bitems;
-            if (isVector(bindings)) {
-                bitems = FormList(ctx, vectorItems(ctx, bindings), bindings);
-            } else if (isList(ctx, bindings)) {
-                bitems = FormList(ctx, bindings);
-            } else {
-                throw CompileError("loop: bindings must be a vector");
-            }
-            const FormList* bvec = &bitems;
-            proto::proto_ulong bn = bvec->getSize(ctx);
-            if (bn % 2 != 0) {
-                throw CompileError("loop: bindings must come in name/value pairs");
-            }
-            // Destructuring, as clojure.core/loop does it: a binding form that
-            // is not a symbol is bound to a generated local g, which the loop
-            // rebinds and the body destructures:
-            //   (let [g v form g ...] (loop [g g ...] (let [form g ...] body)))
-            // so later inits see the earlier destructured names.
-            {
-                bool simple = true;
-                for (proto::proto_ulong i = 0; i < bn; i += 2) {
-                    const proto::ProtoObject* b = bvec->getAt(ctx, static_cast<int>(i));
-                    if (!isNameForm(ctx, markers.named, b) || isKeywordForm(ctx, markers.named, b)) simple = false;
-                }
-                if (!simple) {
-                    proto::ProtoContext scope(ctx->space, ctx);
-                    scope.resizeAutomaticLocals(1);
-                    const proto::ProtoList* outer = scope.newList();
-                    const proto::ProtoList* loopBs = scope.newList();
-                    const proto::ProtoList* inner = scope.newList();
-                    for (proto::proto_ulong i = 0; i < bn; i += 2) {
-                        const proto::ProtoObject* b = bvec->getAt(&scope, static_cast<int>(i));
-                        const proto::ProtoObject* v = bvec->getAt(&scope, static_cast<int>(i + 1));
-                        const bool isSym = isNameForm(&scope, markers.named, b);
-                        const proto::ProtoObject* g = isSym ? b : freshSymbol(&scope, markers.named, "p__");
-                        outer = outer->appendLast(&scope, g)->appendLast(&scope, v);
-                        if (!isSym) {
-                            outer = outer->appendLast(&scope, b)->appendLast(&scope, g);
-                            inner = inner->appendLast(&scope, b)->appendLast(&scope, g);
-                        }
-                        loopBs = loopBs->appendLast(&scope, g)->appendLast(&scope, g);
-                    }
-                    std::vector<const proto::ProtoObject*> innerLet{
-                        symbolForm(&scope, markers.named, "let"), newVector(&scope, inner)};
-                    for (proto::proto_ulong i = 2; i < n; ++i)
-                        innerLet.push_back(lst->getAt(&scope, static_cast<int>(i)));
-                    const proto::ProtoObject* loopForm = listForm(&scope,
-                        {head, newVector(&scope, loopBs), listForm(&scope, innerLet)});
-                    scope.setAutomaticLocal(0, listForm(&scope,
-                        {symbolForm(&scope, markers.named, "let"), newVector(&scope, outer), loopForm}));
-                    compileForm(&scope, scope.getAutomaticLocal(0), out, markers);
-                    return;
-                }
-            }
-            std::vector<int> recurSlots;
-            BindingRestore restore(scopes_);
-            const std::size_t loopLocals = localsMark(out);  // debugging
-            for (proto::proto_ulong i = 0; i < bn; i += 2) {
-                const proto::ProtoObject* nameForm = bvec->getAt(ctx, (int)i);
-                const proto::ProtoObject* valForm  = bvec->getAt(ctx, (int)(i + 1));
-                if (!isNameForm(ctx, markers.named, nameForm)) {
-                    throw CompileError("loop: binding name must be a symbol");
-                }
-                const std::string bname = nameOf(ctx, markers.named, nameForm);
-                if (isQualifiedName(bname)) throw CompileError("Can't let qualified name: " + bname);
-                compileForm(ctx, valForm, out, markers);
-                int slot = restore.bind(bname);
-                out.emit(Op::STORE_LOCAL, slot);
-                recurSlots.push_back(slot);
-                bindLocal(out, bname, slot, out.pos());
-            }
-            // Recur target = current bytecode position. recur jumps BACK here
-            // after rebinding.
-            Scope::RecurTarget tgt;
-            tgt.bodyStart = out.pos();
-            tgt.slots = recurSlots;
-            tgt.tryDepth = scopes_.back().tryDepth;
-            scopes_.back().recurStack.push_back(tgt);
-
-            if (n == 2) {
-                out.emit(Op::PUSH_NIL, 0);
-            } else {
-                for (proto::proto_ulong i = 2; i < n; ++i) {
-                    compileForm(ctx, lst->getAt(ctx, (int)i), out, markers);
-                    if (i + 1 < n) out.emit(Op::POP, 0);
-                }
-            }
-
-            scopes_.back().recurStack.pop_back();
-            closeLocals(out, loopLocals);
+            compileLoopForm(ctx, form, lst, head, headName, out, markers);
             return;
         }
 

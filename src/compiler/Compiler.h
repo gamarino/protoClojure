@@ -217,6 +217,22 @@ private:
         int tryDepth = 0;
     };
 
+    // The fn / defn, let and loop special forms (`lst` is the form's
+    // elements, `head` its head, `headName` the head's name as compileForm
+    // resolved it). Out of line: see compileForm.
+    void compileFnForm(proto::ProtoContext* ctx, const proto::ProtoObject* form,
+                       const FormList* lst, const proto::ProtoObject* head,
+                       const std::string& headName, BytecodeModule& out,
+                       const CompilerMarkers& markers);
+    void compileLetForm(proto::ProtoContext* ctx, const proto::ProtoObject* form,
+                        const FormList* lst, const proto::ProtoObject* head,
+                        const std::string& headName, BytecodeModule& out,
+                        const CompilerMarkers& markers);
+    void compileLoopForm(proto::ProtoContext* ctx, const proto::ProtoObject* form,
+                         const FormList* lst, const proto::ProtoObject* head,
+                         const std::string& headName, BytecodeModule& out,
+                         const CompilerMarkers& markers);
+
     // Compiles `(try body* (catch Class name body*)* (finally body*)?)`.
     void compileTry(proto::ProtoContext* ctx, const FormList* lst,
                     BytecodeModule& out, const CompilerMarkers& markers);
