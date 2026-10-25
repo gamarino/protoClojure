@@ -9,6 +9,31 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Changed — lists as cells, direct seq primitives (2026-10-24)
+
+- A Clojure list is a chain of immutable list cells (first, rest, count)
+  ending in the empty list, one value (DESIGN.md M44): `first`, `rest`,
+  `count` and `conj` onto a list are O(1) and allocate one cell; `nth` on a
+  list is O(n), as in Clojure. The reader yields these lists and the
+  compiler, macroexpansion, syntax-quote, destructuring and `eval` read them
+  as they are; a `ProtoList` is never a Clojure value any more (the printer
+  shows a leaked one as `#<internal list>`).
+- `(cons x coll)` answers a cons for any coll but nil, as in Clojure, so
+  `(list? (cons 1 '(2)))` is false; the rest parameter of a variadic fn is
+  a list; `count` stops at a counted rest. `coll?` and `sequential?` added.
+- The VM answers `inc`, `dec`, two-argument `+`, `first`, `rest`, `next`,
+  `seq`, `empty?`, `count`, `nth`, `cons` and `conj` on nil, lists, vectors,
+  cons cells and chunks without a call context (M43); anything else takes
+  the general call.
+- Measured against `main` (n = 10^6, ns per element): a list walk with
+  `rest` 1304 -> 288 (Babashka 175), `reduce` over a list 161 -> 85,
+  cons-build then count 993 -> 432, `empty?` + `first` 331 -> 195, sequential
+  `nth` on a vector 389 -> 292. Slower: start-up +3.9 % cycles, `(vec list)`
+  O(n log n) where it was O(1), four protoCore cells per list element (D60).
+  Report: `benchmarks/reports/2026-10-24-seq-cost/`.
+- Tests: `cli/list-walk-under-heap-limit` (a list reclaimed cell by cell as
+  it is walked, two-directional), conformance `list-cells`,
+  `long-list-iterative`, `direct-primitive-calls`.
 ### Added — VS Code extension tests (2026-10-25)
 
 - **VS Code extension 0.4.1: integration tests, and two launch fixes they

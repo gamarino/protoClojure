@@ -166,8 +166,9 @@ and metadata are rejected with a "reserved-for-later token" error.
 
 Every reader output is a runtime value: the reader yields exactly what a
 program manipulates at run time, so code is data with no conversion at any
-boundary (decision M1, §10.1). A list is a `ProtoList`; a vector is a
-`ProtoList` inside a one-entry `ProtoSparseList` box
+boundary (decision M1, §10.1). A list is a chain of immutable list cells
+ending in the empty list (`src/runtime/SeqTypes.h`, decision M44); a vector
+is a `ProtoList` inside a one-entry `ProtoSparseList` box
 (`src/runtime/VectorOps.h`, decision R2); a map literal is the runtime map;
 a symbol or a keyword is its interned named value (`src/runtime/Named.h`); a
 string is a protoCore string; `nil`, `true` and `false` are the values
@@ -215,8 +216,8 @@ The user-facing rules are in `LANGUAGE.md` §4.3. Symbols and keywords are
 interned named values, never strings (`src/runtime/Named.h`).
 
 The reader is the place where "code is data" becomes literal: the result
-of `(read-string "(+ 1 2)")` is a real `ProtoList` of three elements that
-the same code path can evaluate.
+of `(read-string "(+ 1 2)")` is a real list of three elements (three list
+cells, M44) that the same code path can evaluate.
 
 ## 4. The compiler / evaluator
 
@@ -793,7 +794,8 @@ the maintainer's review; each lists the alternatives considered.
 produces the values the runtime manipulates: a symbol or a keyword is its
 interned named value (`runtime/Named.h`), a string a protoCore string, a
 vector and a map the runtime's own, `nil` / `true` / `false` the values
-themselves, a list a `ProtoList`. The compiler consumes those values. There
+themselves, a list a `ProtoList` (a chain of list cells since M44). The
+compiler consumes those values. There
 is no conversion at the reader/compiler boundary, and none at the
 compiler/macro boundary later: a macro receives and returns the same values
 a program builds with `list`, `vector`, `hash-map` and quote.
@@ -1577,6 +1579,97 @@ does not have either, and `:pre` / `:post` conditions, now marked as not
 implemented). Alternative: checking the `;; =>` results as well, deferred:
 map print order is unspecified (D24), so a textual comparison would need
 per-snippet exceptions.
+
+**M43. The VM answers the hot seq primitives without a call context**
+(*agent, pending review*). A call of a C++ primitive built and destroyed a
+protoCore context for the primitive (constructor, destructor, slot
+clearing, current-context switch), about 40 % of the cycles of a `first`
+or `empty?` call, more than the primitive's own work. Profiled
+(`benchmarks/reports/2026-10-24-seq-cost`): per iteration of `(if (empty?
+xs) 1 (first xs))` the context was 19 % of the cycles, the global lookup
+of the name 7 %, and the rest the dispatch loop and the type tests. Now,
+when the callee of `CALL` is a method value (one pointer-tag test) and is
+`inc`, `dec`, two-argument `+`, `first`, `rest`, `next`, `seq`, `empty?`,
+`count`, `nth`, `cons` or `conj`, `fastPrimitiveCall`
+(`src/runtime/Primitives.cpp`) answers it in the caller's frame for the
+arguments it reads without running Clojure code and without raising:
+nil, lists, vectors, cons cells, chunks, SmallInt numbers. Anything else
+(a lazy seq to realise, a string, a map, an index out of range, a number
+that overflows) returns nullptr and takes the general path, so errors are
+raised by the primitive as before, and a redefined global (`(defn first
+...)`) is a different value at the call site, which never matches. What a
+direct call allocates (the chunk of `rest` of a vector, a cons cell) is a
+young cell of the frame, handed to the collector at the next loop
+back-edge (the safepoint the arithmetic opcodes already rely on).
+`ExecutionEngine::invoke` (map, filter, reduce calling a primitive) uses
+the subset that never allocates, its context being a long-lived scope. The
+primitives and the direct calls share one implementation (`tryFirst`,
+`tryRest`, `tryNext`, `trySeq`, `tryEmpty`, `tryCons`, `tryCount`,
+`src/runtime/LazySeq.h`). Alternatives: (a) opcodes for the seq functions,
+emitted by the compiler like `ADD`, rejected: a global redefinition would
+need a run-time check of the binding anyway, which is the global lookup
+`PUSH_VAR` already does, and the general call would have to be rebuilt in
+the opcode's slow path; (b) a cache of the resolved primitive per call
+site, rejected: mutable state beside protoCore's per-thread attribute
+cache; (c) a threaded dispatch loop, which would cut the interpreter's own
+cost (now the largest, about half of a primitive call), deferred: it is a
+change to every opcode and has hurt before (icache layout, protoJS).
+
+**M44. A Clojure list is a chain of immutable list cells** (*agent,
+pending review*). A list was a protoCore `ProtoList`, an AVL tree: `rest`
+and `cons` rebuilt a root-to-leaf path, log2 n cells each (14.8 cells per
+element walking a list of 10^6 with `rest`, 7.3 per `cons`), and `first`
+was an O(log n) read. Clojure's `PersistentList` is a cell holding first,
+rest and count. Now (`src/runtime/SeqTypes.h`): a non-empty list is a
+**list cell**, a protoCore lazy object of the list prototype published at
+birth with the one-cell field list `[first rest count]`, the layout of a
+cons (M28), so the seq machinery reads both alike; the empty list is one
+value per ProtoSpace, told apart by identity. `first`, `rest`, `count` and
+`conj` onto a list are O(1) and allocate one cell (four protoCore cells)
+per element; `nth` on a list is O(n), as in Clojure. `(cons x coll)`
+answers a cons for any coll but nil, as Clojure's `RT.cons` does (a cons
+is not `list?`; `(cons x nil)` is the one-element list). Vectors stay
+boxed `ProtoList`s (R2).
+The representation is unified (M1): the reader yields list cells
+(`readList`, syntax-quote, `#()`, the reader macros), and the compiler
+reads them as they are -- `FormList` (`src/compiler/Compiler.h`) reads a
+form's cells into a C++ array of the element pointers, with nothing
+allocated, and reads any other seq a macro built (a cons, a lazy seq) the
+same way, as Clojure's compiler takes any `ISeq` as a call form. The forms
+the compiler and the macro machinery build (destructuring, `defmacro`'s
+hidden parameters, a top-level thunk) are lists too. A `ProtoList` is
+never a Clojure value any more: it is a vector's storage and an internal
+container (a step's accumulator, a chunk's items, the captures list); the
+printer shows one that leaks as `#<internal list>`, and the type name is
+"an internal list", so a leak is visible instead of passing for a list.
+The seq of a map, a set or a string is an unchunked chunk over their
+items, not a list (as in Clojure, where it is not a list either). The
+rest parameter of a variadic fn is a list (Clojure: an `ArraySeq`, a seq
+too). Walking a list allocates nothing, so a list nobody else holds is
+reclaimed cell by cell as it is walked (`tests/cli/list-walk-under-heap-limit.sh`,
+two-directional); printing, `=`, `hash`, map keys and the collector walk a
+long list iteratively (`tests/conformance/08-collections/long-list-iterative.clj`).
+Costs, measured (`benchmarks/reports/2026-10-24-seq-cost`, n = 10^6, ns
+per element, against M43 alone): a list walk with `rest` 1181 -> 288,
+`reduce` over a list 117 -> 85, cons-build then count 1027 -> 432,
+`(count (rest xs))` 1334 -> 207; building a list of 10^6 with `(apply list
+(range n))` 17.7 -> 8.5 Gcycles and 1540 -> 803 MB. Slower: start-up +3.9 %
+cycles (core.clj's lists are four cells per element), `(vec list)` O(n log n)
+where it was O(1) (1.07 s for 10^6: protoCore has no bulk `ProtoList`
+constructor), and a list that is kept costs four cells per element.
+Alternatives: (a) a list as the existing cons with a count field, rejected:
+Clojure tells a `PersistentList` (`list?`, counted) from a `Cons` (neither),
+and one prototype could not; (b) a list cell as a bare `ProtoList` of three
+elements `[first rest count]` -- one cell instead of four -- rejected: a
+`ProtoList` would then be a list or a vector's storage or an internal
+container depending on where it came from, which is the ambiguity that
+lets a leak pass silently; (c) keeping the `ProtoList` and caching a
+cursor per walk, rejected: mutable state, and `cons` would still copy a
+path; (d) **a one-cell immutable record type in protoCore** (a prototype
+and N traced slots in one cell), which would make a list cell, a cons and
+a chunk one cell instead of four and halve the cache lines a walk touches:
+not done, protoCore is not changed by this work; it is the extension this
+decision asks of protoCore (a new type, no existing model changed).
 
 ## 11. The standard library
 

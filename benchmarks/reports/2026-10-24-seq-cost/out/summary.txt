@@ -1,0 +1,117 @@
+## list-cost cases (5 interleaved rounds)
+
+ns per element: the case's own timer (work run). cycles per element: perf stat,
+work run minus setup run, every thread (the collector's included).
+
+### n = 10000
+
+| case | main ns | A ns | B ns | bb ns | main cyc | A cyc | B cyc | B vs main (cyc) | B vs A (cyc) | cells/el main / B |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 list walk (rest) | 798 | 695 | 216 | 184 | 3529 | 2588 | 628 | -82 % | -76 % | 0.0 / 0.0 |
+| 2 vector (seq v) walk | 626 | 445 | 466 | 199 | 2491 | 1841 | 1072 | -57 % | -42 % | 0.0 / 0.0 |
+| 3 reduce + over a list | 161 | 96 | 51 | 67 | 769 | 455 | 233 | -70 % | -49 % | 0.0 / 0.0 |
+| 4 cons-build then count | 546 | 450 | 246 | 184 | 2158 | 1506 | 890 | -59 % | -41 % | 0.0 / 0.0 |
+| 5 sequential nth (vector) | 363 | 267 | 291 | 211 | 1306 | 1134 | 1464 | +12 % | +29 % | 0.0 / 0.0 |
+| 50   control for 5 | 128 | 81 | 80 | 179 | 1132 | 101 | -106 | -109 % | -204 % | 0.0 / 0.0 |
+| 6 random nth (vector) | 661 | 624 | 648 | 489 | 2587 | 2420 | 2639 | +2 % | +9 % | 0.0 / 0.0 |
+| 60   control for 6 | 351 | 339 | 334 | 413 | 1009 | 1319 | 1582 | +57 % | +20 % | 0.0 / 0.0 |
+| 7 empty? + first (list) | 292 | 180 | 209 | 221 | 950 | 755 | 477 | -50 % | -37 % | 0.0 / 0.0 |
+| 8 count of rest (list) | 1032 | 821 | 209 | 231 | 3834 | 3601 | 891 | -77 % | -75 % | 0.0 / 0.0 |
+| 9 count of cons (list) | 972 | 987 | 510 | 276 | 3307 | 3470 | 2167 | -34 % | -38 % | 0.0 / 0.0 |
+
+Peak RSS of building the list (case 1 setup run), MB: main 40, A 40, B 32
+Cycles of the whole setup run (start-up plus (apply list (range n))), M: main 147, A 151, B 134
+
+### n = 100000
+
+| case | main ns | A ns | B ns | bb ns | main cyc | A cyc | B cyc | B vs main (cyc) | B vs A (cyc) | cells/el main / B |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 list walk (rest) | 878 | 725 | 247 | 149 | 5940 | 4309 | 892 | -85 % | -79 % | 5.3 / 0.0 |
+| 2 vector (seq v) walk | 660 | 470 | 471 | 182 | 2513 | 1495 | 1888 | -25 % | +26 % | 0.0 / 0.0 |
+| 3 reduce + over a list | 153 | 97 | 73 | 31 | 824 | 553 | 26 | -97 % | -95 % | 5.5 / 0.0 |
+| 4 cons-build then count | 1113 | 1278 | 285 | 143 | 4225 | 4396 | 1166 | -72 % | -73 % | 0.0 / 0.0 |
+| 5 sequential nth (vector) | 372 | 261 | 260 | 189 | 1418 | 994 | 1007 | -29 % | +1 % | -0.0 / 0.0 |
+| 50   control for 5 | 113 | 77 | 75 | 157 | 324 | 358 | 413 | +27 % | +15 % | -0.0 / -0.0 |
+| 6 random nth (vector) | 1136 | 1062 | 1062 | 493 | 4029 | 3929 | 3984 | -1 % | +1 % | 0.0 / -0.0 |
+| 60   control for 6 | 391 | 341 | 365 | 418 | 1253 | 1451 | 1245 | -1 % | -14 % | 0.0 / 0.0 |
+| 7 empty? + first (list) | 331 | 207 | 200 | 195 | 1377 | 774 | 794 | -42 % | +3 % | 5.8 / -0.0 |
+| 8 count of rest (list) | 922 | 755 | 204 | 203 | 5890 | 5276 | 543 | -91 % | -90 % | 5.3 / 0.0 |
+| 9 count of cons (list) | 889 | 827 | 294 | 269 | 5949 | 4337 | 2066 | -65 % | -52 % | 5.3 / 18.3 |
+
+Peak RSS of building the list (case 1 setup run), MB: main 151, A 151, B 142
+Cycles of the whole setup run (start-up plus (apply list (range n))), M: main 1170, A 1155, B 783
+
+### n = 1000000
+
+| case | main ns | A ns | B ns | bb ns | main cyc | A cyc | B cyc | B vs main (cyc) | B vs A (cyc) | cells/el main / B |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 list walk (rest) | 1304 | 1181 | 288 | 175 | 3677 | 3777 | 822 | -78 % | -78 % | 6.4 / 0.4 |
+| 2 vector (seq v) walk | 848 | 567 | 608 | 252 | 3770 | 2832 | 2864 | -24 % | +1 % | 8.6 / 8.2 |
+| 3 reduce + over a list | 161 | 117 | 85 | 24 | 118 | 107 | 257 | +119 % | +140 % | -0.5 / 0.7 |
+| 4 cons-build then count | 993 | 1027 | 432 | 319 | 6008 | 5490 | 2293 | -62 % | -58 % | 15.9 / 2.0 |
+| 5 sequential nth (vector) | 389 | 292 | 292 | 273 | 1540 | 1196 | 717 | -53 % | -40 % | 0.6 / -0.7 |
+| 50   control for 5 | 121 | 81 | 72 | 243 | 604 | 267 | 230 | -62 % | -14 % | -0.5 / 0.0 |
+| 6 random nth (vector) | 2141 | 2081 | 2003 | 783 | 7974 | 7515 | 7770 | -3 % | +3 % | 1.1 / 2.1 |
+| 60   control for 6 | 383 | 373 | 358 | 494 | 1261 | 1248 | 1210 | -4 % | -3 % | 0.8 / 0.6 |
+| 7 empty? + first (list) | 331 | 211 | 195 | 186 | 834 | 331 | 624 | -25 % | +88 % | -0.8 / 0.5 |
+| 8 count of rest (list) | 1401 | 1334 | 207 | 169 | 5250 | 6080 | 883 | -83 % | -85 % | 7.6 / 1.2 |
+| 9 count of cons (list) | 1453 | 1397 | 342 | 249 | 4822 | 5608 | 2548 | -47 % | -55 % | 6.8 / 9.7 |
+
+Peak RSS of building the list (case 1 setup run), MB: main 1540, A 1535, B 803
+Cycles of the whole setup run (start-up plus (apply list (range n))), M: main 17724, A 17293, B 8481
+
+Checksums: every runtime and run computed the same result per case and n
+
+## benchmarks/bench.sh (best of 3 per run, median of rounds, ms)
+
+| workload | main | A | B | bb | B vs main |
+|---|---:|---:|---:|---:|---:|
+| fib | 395 | 368 | 384 | 424 | -2.8 % |
+| tak | 39 | 39 | 39 | 26 | +0.0 % |
+| sum-loop | 72 | 71 | 71 | 164 | -1.4 % |
+| reduce-list | 31 | 32 | 28 | 17 | -9.7 % |
+| sum-squares | 27 | 27 | 27 | 16 | +0.0 % |
+
+Results match Babashka's in every run
+
+## start-up, empty file (perf stat -r 50, median of rounds)
+
+| variant | Mcycles | task-clock ms |
+|---|---:|---:|
+| main | 63.9 | 17.6 |
+| A | 63.8 | 17.0 |
+| B | 66.3 | 17.8 |
+
+## showcase scripts (wall s / peak RSS MB, median of rounds)
+
+| script | main | A | B | bb | B vs main (time) | outputs |
+|---|---:|---:|---:|---:|---:|---|
+| startup | 0.02 / 23 | 0.02 / 23 | 0.02 / 23 | 0.00 / 14 | +0 % | same |
+| factorial | 0.03 / 24 | 0.03 / 24 | 0.03 / 24 | 0.01 / 17 | +0 % | same |
+| grep | 15.53 / 148 | 15.64 / 148 | 15.55 / 148 | 1.71 / 133 | +0 % | same |
+| json | 5.09 / 1521 | 4.27 / 1522 | 4.44 / 1418 | 2.27 / 296 | -13 % | same |
+| wordfreq | 16.63 / 163 | 16.58 / 162 | 16.43 / 158 | 4.21 / 142 | -1 % | same |
+
+## machine state at each round (gate.txt)
+
+    02:04:46 cases r1 idle=82% builds=0 load=7.33 7.68 7.40
+    02:08:05 cases r2 idle=82% builds=0 load=4.19 5.82 6.70
+    02:11:26 cases r3 idle=83% builds=0 load=6.73 6.54 6.86
+    02:14:40 cases r4 idle=86% builds=0 load=4.35 5.84 6.55
+    02:17:38 cases r5 idle=86% builds=0 load=3.96 4.73 5.97
+    02:20:37 bench r1 idle=87% builds=0 load=4.51 4.52 5.65
+    02:20:59 bench r2 idle=85% builds=0 load=7.07 5.13 5.83
+    02:21:22 bench r3 idle=85% builds=0 load=5.19 4.83 5.71
+    02:21:44 bench r4 idle=86% builds=0 load=3.89 4.55 5.60
+    02:22:06 bench r5 idle=86% builds=0 load=2.85 4.27 5.48
+    02:22:28 startup r1 idle=86% builds=0 load=2.48 4.07 5.38
+    02:22:41 startup r2 idle=86% builds=0 load=2.17 3.95 5.33
+    02:22:55 startup r3 idle=85% builds=0 load=2.24 3.88 5.28
+    02:23:08 startup r4 idle=86% builds=0 load=6.01 4.63 5.51
+    02:23:22 startup r5 idle=86% builds=0 load=5.17 4.50 5.45
+    02:23:46 showcase r1 idle=86% builds=0 load=3.83 4.24 5.34
+    02:25:54 showcase r2 idle=85% builds=0 load=4.72 4.75 5.39
+    02:28:03 showcase r3 idle=86% builds=0 load=3.69 4.26 5.12
+    02:30:11 showcase r4 idle=86% builds=0 load=3.76 4.31 5.03
+    02:32:20 showcase r5 idle=87% builds=0 load=2.80 3.69 4.70
+    done 02:34:21

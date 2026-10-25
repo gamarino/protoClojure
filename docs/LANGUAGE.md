@@ -504,14 +504,27 @@ rules of §4.5 listed there as not implemented are planned.
 
 ### 4.1 List
 
-A singly-linked persistent list backed by `ProtoList`. Cheap `conj` at
-head, `O(1)` `first` / `rest`, `O(n)` random access.
+A singly-linked persistent list, as Clojure's `PersistentList`: `O(1)`
+`first`, `rest`, `count` and `conj` at the head, `O(n)` `nth`.
 
 ```clojure
-(conj '(2 3) 1)   ;; => (1 2 3)
-(first '(a b c))  ;; => a
-(rest '(a b c))   ;; => (b c)
+(conj '(2 3) 1)        ;; => (1 2 3)
+(first '(a b c))       ;; => a
+(rest '(a b c))        ;; => (b c)
+(count '(a b c))       ;; => 3, without walking the list
+(list? (cons 0 '(1)))  ;; => false: cons answers a seq, as in Clojure
 ```
+
+**Representation.** A non-empty list is a chain of immutable list cells,
+each holding its first element, the rest of the list and its count; the
+empty list `()` is one value (`src/runtime/SeqTypes.h`, DESIGN.md M44). The
+reader yields these lists and the compiler reads them as they are, so code
+is data with nothing converted. Walking a list allocates nothing, so a list
+nobody else holds is collected cell by cell as it is walked. A cell costs
+four protoCore cells (256 bytes), against one AVL node per element when
+lists were `ProtoList`s; what that buys is `rest` and `cons` in constant
+time where they copied a path of log2 n nodes. `(vec list)` copies the
+elements into the vector's storage (D60).
 
 ### 4.2 Vector
 
@@ -733,9 +746,8 @@ spelling.
 In 0.0.1, `=` and `not=` follow these rules for numbers, strings,
 keywords, booleans, `nil`, lists, vectors and maps, recursively through
 nested collections, with any number of arguments; every sequence the
-runtime produces (`rest`, `map`, `filter`, `keys`, `cons`, ...) is a list
-or a vector and compares the same way. Lists are written with `list`,
-since the `'` reader macro is not implemented. The departures are:
+runtime produces (`rest`, `map`, `filter`, `keys`, `cons`, ...) compares
+like a list. The departures are:
 
 - `=` compares numbers across types: `(= 1 1.0)` is true (deviation D15
   in `STATUS.md`). Map keys do not follow it: `1` and `1.0` are different

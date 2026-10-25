@@ -1,0 +1,21 @@
+02:04:46 cases r1 idle=82% builds=0 load=7.33 7.68 7.40
+02:08:05 cases r2 idle=82% builds=0 load=4.19 5.82 6.70
+02:11:26 cases r3 idle=83% builds=0 load=6.73 6.54 6.86
+02:14:40 cases r4 idle=86% builds=0 load=4.35 5.84 6.55
+02:17:38 cases r5 idle=86% builds=0 load=3.96 4.73 5.97
+02:20:37 bench r1 idle=87% builds=0 load=4.51 4.52 5.65
+02:20:59 bench r2 idle=85% builds=0 load=7.07 5.13 5.83
+02:21:22 bench r3 idle=85% builds=0 load=5.19 4.83 5.71
+02:21:44 bench r4 idle=86% builds=0 load=3.89 4.55 5.60
+02:22:06 bench r5 idle=86% builds=0 load=2.85 4.27 5.48
+02:22:28 startup r1 idle=86% builds=0 load=2.48 4.07 5.38
+02:22:41 startup r2 idle=86% builds=0 load=2.17 3.95 5.33
+02:22:55 startup r3 idle=85% builds=0 load=2.24 3.88 5.28
+02:23:08 startup r4 idle=86% builds=0 load=6.01 4.63 5.51
+02:23:22 startup r5 idle=86% builds=0 load=5.17 4.50 5.45
+02:23:46 showcase r1 idle=86% builds=0 load=3.83 4.24 5.34
+02:25:54 showcase r2 idle=85% builds=0 load=4.72 4.75 5.39
+02:28:03 showcase r3 idle=86% builds=0 load=3.69 4.26 5.12
+02:30:11 showcase r4 idle=86% builds=0 load=3.76 4.31 5.03
+02:32:20 showcase r5 idle=87% builds=0 load=2.80 3.69 4.70
+done 02:34:21

@@ -4,10 +4,15 @@
 > finished, or dropped. If a feature you expect is not listed as
 > implemented here, it is not implemented.
 
-**Branch `feature/macros` (2026-10-24).** `ctest` registers 862 test
-cases: 680 conformance fixtures, 137 GoogleTest unit tests and module
-checks, 44 CLI checks and the documentation snippet check; all pass locally on Linux against protoCore 3.1.0
-(branch `feature/lazy-object`, not yet released). CI has not run this branch.
+**Branch `perf/seq-cost-cons-lists` (2026-10-24).** `ctest` registers 868
+test cases: 683 conformance fixtures, 138 GoogleTest unit tests and module
+checks, 46 CLI checks and the documentation snippet check; all pass locally
+on Linux against protoCore 3.1.0 (34eca79f, the version CI builds). Against
+protoCore master 3.2.0 (bb2d581a) three CLI checks fail, on `main` as well:
+`loop-garbage-is-reclaimed`, `blocking-joins-park-for-gc` and
+`waiters-park-for-gc` count fewer collection cycles under 3.2.0's collector
+than their premise requires. Lists are chains of cells (DESIGN.md M44) and
+the VM answers the hot seq primitives directly (M43).
 The paragraph below describes the 0.0.3 tag.
 
 **Current state.** Version 0.0.3 (2026-10-22), a preview tag. The interpreter runs
@@ -202,7 +207,11 @@ The design specifications written during development are archived under
 
 ### Data structures
 
-- [x] Lists — protoCore `ProtoList`
+- [x] Lists — a chain of immutable list cells (first, rest, count) ending
+      in the empty list (`src/runtime/SeqTypes.h`, DESIGN.md M44): O(1)
+      `first`, `rest`, `count` and `conj`, O(n) `nth`, as in Clojure; read by
+      the compiler as they are (M1). They were `ProtoList`s, whose `rest` and
+      `cons` copied a path of log2 n cells
 - [x] Vectors — a protoCore `ProtoList` of the elements in a one-entry
       `ProtoSparseList` box (`src/runtime/VectorOps.h`): O(log N) `nth`,
       O(1) `count`, O(1) construction and O(1) coercion to a sequence, and
@@ -718,6 +727,7 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D57 | JSON (DESIGN.md M36-M38). Both APIs: error messages are protoClojure's own, `JSON error: <problem> at line L, column C` (Jackson and clojure.data.json word them differently), raised as `IOException` by cheshire.core and `Exception` by clojure.data.json; an unpaired surrogate escape is an error (Jackson accepts it); map keys are written in the map's unspecified order (D24); a stream (`parse-stream`, `clojure.data.json/read`) is read a line at a time and the rest of the line after the value is consumed with it. cheshire.core: a top-level array parses to a vector (Cheshire: a lazy seq; nested arrays are vectors in both); `parse-string`'s third argument (array-coerce-fn), `parsed-seq`, the SMILE / CBOR functions, custom encoders and `generate-string` options other than `:pretty`, `:escape-non-ascii` and `:key-fn` are not supported. clojure.data.json: its behaviour here follows the library's documentation, not a run against it (Babashka does not bundle it); `read-str` raises on data after the value; `:bigdec true` raises `UnsupportedOperationException` (no BigDecimal, D10); `write-str`'s `:value-fn` and `pprint` are not supported | v0.x |
 | D59 | `hash` answers protoClojure's map-key hash folded to 32 bits, consistent with `=` for map keys (a list and a vector with equal elements hash alike) but not the numbers JVM Clojure answers; `int?` is true for an integer of any size, integers being one type (D14; JVM Clojure: fixed-width only); a vector called as a function takes exactly one index, as in Clojure | (perm) |
 | D58 | `parse-double` reads what Java's `Double.valueOf` reads except hexadecimal floats (`0x1p3`) and the `d` / `f` suffixes (`1.5d`), which answer nil | (perm) |
+| D60 | Lists (DESIGN.md M44): `keys`, `vals`, `sort`, `sort-by`, `split` with a string delimiter, `partition`'s partitions, `file-seq`, `pmap`, `concat` of realised collections and `list*` with a tail that is not a seq answer lists where JVM Clojure answers other seqs (`KeySeq`, `ArraySeq`, `LazySeq`, `Cons`), so `list?` is true of them where it is false there; the rest parameter of a variadic fn is a list (JVM Clojure: an `ArraySeq`, not `list?`); `(vec list)` copies the list's elements into the vector's `ProtoList`, O(n log n) in protoCore's appends (JVM Clojure: O(n)); a list cell costs four protoCore cells, 256 bytes (JVM Clojure's `PersistentList` about 40) | (perm) |
 | D34 | A `catch` naming no built-in class names a type looked up at run time, when an exception reaches the clause (a var, a local, or a module member `alias/Type`), and is matched by the thrown value's prototype chain; JVM Clojure resolves the class at compile time. So `(try 1 (catch NoSuchException e 2))` compiles and answers 1, and the error `Unable to resolve classname: NoSuchException` is a `RuntimeException` raised when an exception reaches the clause (JVM Clojure: a compile error). A type that resolves to a value that is not a prototype object raises `IllegalArgumentException`. A module's error (a foreign value) is caught by `Exception`, `Throwable` and `Object`, by its own types, and by no other built-in class | (perm: the platform is late-binding) |
 
 ## Known issues

@@ -218,6 +218,27 @@ Measured on 2026-06-14, the move from a per-actor `std::mutex` + `std::deque` to
 
 ## Performance — what is measured
 
+**Seq cost and cons lists (measured 2026-10-24).** `main` e1a4136 against
+the VM's direct seq primitives (A, e2b1e53) and lists as cells (B,
+563cf14), clean Release worktrees on protoCore 3.2.0, fresh copies of each
+binary and library per run, 5 rotated rounds, the machine 82-87 % idle.
+The list-cost cases at n = 10^6, ns per element (each case's own timer):
+
+| case | main | A | B | Babashka |
+|---|---:|---:|---:|---:|
+| list walk with `rest` | 1304 | 1181 | **288** | 175 |
+| vector `(seq v)` walk | 848 | 567 | 608 | 252 |
+| `reduce +` over a list | 161 | 117 | **85** | 24 |
+| cons-build, then count | 993 | 1027 | **432** | 319 |
+| sequential `nth` (vector) | 389 | 292 | 292 | 273 |
+| random `nth` (vector) | 2141 | 2081 | 2003 | 783 |
+| `empty?` + `first` (list) | 331 | 211 | 195 | 186 |
+
+`bench.sh` moved by -3 % to +0 % (`reduce-list` -10 %); start-up is +3.9 %
+cycles (core.clj's lists are four protoCore cells per element), and
+`(vec list)` is O(n log n) where it was O(1). Details, profiles and what got
+slower: [`benchmarks/reports/2026-10-24-seq-cost/`](benchmarks/reports/2026-10-24-seq-cost/README.md).
+
 **The macros branch end to end, after the regression fixes (measured
 2026-10-24).** Baseline `main` 8b7938a against `feature/macros` before
 (3b75e41) and after (eb274bb) the fixes, clean Release worktrees on
@@ -467,7 +488,7 @@ protoClojure runs scripts and an interactive REPL, both one top-level form at a 
 | Full namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **862 test cases: 680 conformance fixtures, 137 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics, value lifetime, the vector representation, value equality and hashing, native stack guard, double printer, exception values, rethrow) **and 45 CLI checks, counting the documentation check** (`--help`, three checks of the adaptive heap controller -- on by default, off with `PROTOCORE_ADAPTIVE_HEAP=0`, peak RSS bounded under a small budget --, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, the reader's values under a heap limit, the garbage a `loop` makes under a heap limit, joins that park for the collector, threads waiting for a claimed lazy seq or a promise while the collector runs, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, literals and quote in the REPL, several forms per REPL line and `:load`, quoted data under a heap limit, macros at the REPL, macro expansion under a heap limit, destructuring under a heap limit, sets under a heap limit, regular expressions under a heap limit, `for` / `doseq` / `format` under a heap limit, the scripting vocabulary at the REPL, the embedded core.clj, scripts run form by form, deeply nested source, an uncaught exception, exceptions under a heap limit, `read-line` in pipelines, `*command-line-args*`, exit statuses, `sh` with `:dir` and `:env` and no shell on `PATH`, `localhost` requests to a server started without a host, an HTTP server under a heap limit, scripts run as commands through a `#!` line, lazy sequences under a heap limit, holding and not holding the head of a lazy seq, a grep over a stream larger than the heap ceiling, lazy seqs at the REPL, the tutorial's twenty-line script in a pipeline, JSON and EDN at the REPL, JSON parsed, written and streamed under heap limits, and `pmap` joining every worker; plus `docs/snippets`, which runs every Clojure snippet of this README, LANGUAGE.md and the tutorial). All 862 pass locally on Linux against protoCore 3.1.0 (2026-10-24, branch `feature/macros`, protoCore branch `feature/lazy-object`). The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **868 test cases: 683 conformance fixtures, 138 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics, value lifetime, the vector representation, value equality and hashing, native stack guard, double printer, exception values, rethrow) **and 47 CLI checks, counting the documentation check** (`--help`, three checks of the adaptive heap controller -- on by default, off with `PROTOCORE_ADAPTIVE_HEAP=0`, peak RSS bounded under a small budget --, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, the reader's values under a heap limit, the garbage a `loop` makes under a heap limit, joins that park for the collector, threads waiting for a claimed lazy seq or a promise while the collector runs, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, literals and quote in the REPL, several forms per REPL line and `:load`, quoted data under a heap limit, macros at the REPL, macro expansion under a heap limit, destructuring under a heap limit, sets under a heap limit, regular expressions under a heap limit, `for` / `doseq` / `format` under a heap limit, the scripting vocabulary at the REPL, the embedded core.clj, scripts run form by form, deeply nested source, an uncaught exception, exceptions under a heap limit, `read-line` in pipelines, `*command-line-args*`, exit statuses, `sh` with `:dir` and `:env` and no shell on `PATH`, `localhost` requests to a server started without a host, an HTTP server under a heap limit, scripts run as commands through a `#!` line, lazy sequences under a heap limit, holding and not holding the head of a lazy seq, a grep over a stream larger than the heap ceiling, lazy seqs at the REPL, the tutorial's twenty-line script in a pipeline, JSON and EDN at the REPL, JSON parsed, written and streamed under heap limits, `pmap` joining every worker, and a list of 10^6 reclaimed cell by cell as it is walked under a heap limit; plus `docs/snippets`, which runs every Clojure snippet of this README, LANGUAGE.md and the tutorial). All 868 pass locally on Linux against protoCore 3.1.0 (2026-10-24, branch `perf/seq-cost-cons-lists`); against protoCore master 3.2.0 three GC-premise checks fail on `main` too (STATUS.md). The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 
@@ -484,7 +505,7 @@ What is implemented:
   - reading data: `read-string` (the first form of a string, as code is read), `clojure.edn/read-string` (data only), `parse-long parse-double parse-boolean`; `pr-str` writes what they read back
   - JSON ([LANGUAGE.md §19](docs/LANGUAGE.md#19-data-formats-edn-and-json)): `cheshire.core/parse-string parse-stream generate-string generate-stream decode encode` and `clojure.data.json/read-str read write-str write`, by full name or through `require` / `ns` aliases
   - macros and symbols: `macroexpand-1 macroexpand eval gensym symbol keyword name list*`
-  - lists and vectors: `list vector vec nth first second next last rest cons conj count empty? reverse`, and `seq concat` (`seq` of a vector is its chunked seq, as in Clojure). A vector is a protoCore `ProtoList` of its elements in a one-entry `ProtoSparseList` box, which is what carries its type; `nth` is O(log n), `vector` / `vec` are O(1), and a vector is collected like any other value (it used to be an interned `ProtoTuple`, which protoCore never frees — decision R2)
+  - lists and vectors: `list vector vec nth first second next last rest cons conj count empty? reverse coll? sequential?`, and `seq concat` (`seq` of a vector is its chunked seq, as in Clojure). A list is a chain of immutable cells holding first, rest and count, so `first`, `rest`, `count` and `conj` are O(1) (DESIGN.md M44). A vector is a protoCore `ProtoList` of its elements in a one-entry `ProtoSparseList` box, which is what carries its type; `nth` is O(log n), `vector` / `vec` are O(1), and a vector is collected like any other value (it used to be an interned `ProtoTuple`, which protoCore never frees — decision R2)
   - higher-order: `reduce pmap`
   - lazy sequences ([LANGUAGE.md §10](docs/LANGUAGE.md)): `map` (over several collections too) `filter remove take take-while drop drop-while iterate repeat repeatedly cycle range mapcat partition partition-all interleave distinct`, lazy `concat`, `line-seq`, `re-seq`, `doall dorun run! chunked-seq?`, and `realized?` of a lazy seq. A lazy seq is a protoCore lazy object, computed once and shared safely by threads (decision M28)
   - predicates: `nil? not vector? list? seq? map? string? symbol? keyword? even? odd?`
