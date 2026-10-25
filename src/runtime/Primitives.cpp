@@ -1084,10 +1084,8 @@ const proto::ProtoObject* prim_first(proto::ProtoContext* ctx,
     if (!args || args->getSize(ctx) != 1)
         throwError(ctx, "first: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
-    if (isListTag(v) || isVector(v)) {
-        const proto::ProtoList* lst = isVector(v) ? vectorItems(ctx, v) : v->asList(ctx);
-        return lst->getSize(ctx) == 0 ? PROTO_NONE : lst->getFirst(ctx);
-    }
+    const proto::ProtoObject* r;
+    if (tryFirst(ctx, v, &r)) return r;
     const proto::ProtoObject* s = seqOf(ctx, v);
     return s == PROTO_NONE ? PROTO_NONE : seqFirst(ctx, s);
 }
@@ -1101,6 +1099,8 @@ const proto::ProtoObject* prim_rest(proto::ProtoContext* ctx,
         throwError(ctx, "rest: expects 1 arg");
     // Clojure's rest: what follows the first element, `()` when nothing
     // does (seqMore); a vector's is a chunked seq, as Clojure's ChunkedSeq.
+    const proto::ProtoObject* r;
+    if (tryRest(ctx, args->getAt(ctx, 0), &r)) return r;
     const proto::ProtoObject* s = seqOf(ctx, args->getAt(ctx, 0));
     if (s == PROTO_NONE) return ctx->newList()->asObject(ctx);
     return seqMore(ctx, s);
@@ -1172,7 +1172,8 @@ const proto::ProtoObject* prim_empty_p(proto::ProtoContext* ctx,
     if (!args || args->getSize(ctx) != 1)
         throwError(ctx, "empty?: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
-    if (!v || v == PROTO_NONE) return PROTO_TRUE;
+    bool e;
+    if (tryEmpty(ctx, v, &e)) return e ? PROTO_TRUE : PROTO_FALSE;
     if (isStringLike(v)) {
         return asProtoString(v)->getSize(ctx) == 0 ? PROTO_TRUE : PROTO_FALSE;
     }
@@ -3707,6 +3708,8 @@ const proto::ProtoObject* prim_next(proto::ProtoContext* ctx,
                                     const proto::ProtoArguments* args,
                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1) arityError(ctx, args, "next");
+    const proto::ProtoObject* r;
+    if (tryNext(ctx, args->getAt(ctx, 0), &r)) return r;
     const proto::ProtoObject* s = seqOf(ctx, args->getAt(ctx, 0));
     if (s == PROTO_NONE) return PROTO_NONE;
     return seqNext(ctx, s);
@@ -4173,6 +4176,21 @@ const proto::ProtoObject* prim_prn(proto::ProtoContext* ctx,
     std::fflush(stdout);
     return PROTO_NONE;
 }
+
+// The VM's direct primitive calls (Primitives.h, fastPrimitiveCall): the
+// values each of these primitives reads without running Clojure code.
+namespace {
+const proto::ProtoObject* fastIndexed(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
+                                      const proto::ProtoObject* i) {
+    if (!proto::isSmallInt(i)) return nullptr;
+    const bool vector = isVector(coll);
+    if (!vector && !isListTag(coll)) return nullptr;
+    const proto::ProtoList* lst = vector ? vectorItems(ctx, coll) : coll->asList(ctx);
+    const long long idx = proto::asSmallInt(i);
+    if (idx < 0 || idx >= static_cast<long long>(lst->getSize(ctx))) return nullptr;
+    return lst->getAt(ctx, static_cast<int>(idx));
+}
+} // namespace
 
 // Every built-in function and the global name it is installed under. The
 // single source for installPrimitives and for the printer's `#<fn NAME>`.
@@ -4691,6 +4709,53 @@ void installPrimitives(proto::ProtoContext* ctx,
     // (DataFormats.h).
     installEdn(ctx, globals);
     installJson(ctx, globals);
+}
+
+} // namespace protoClojure
+
+namespace protoClojure {
+
+const proto::ProtoObject* fastPrimitiveCall(proto::ProtoContext* ctx, proto::ProtoMethod fn,
+                                            const proto::ProtoObject* const* argv, unsigned argc,
+                                            bool mayAllocate) {
+    const proto::ProtoObject* r = nullptr;
+    if (argc == 1) {
+        const proto::ProtoObject* v = argv[0];
+        if (fn == &prim_inc || fn == &prim_dec) {
+            if (!proto::isSmallInt(v)) return nullptr;
+            const long long n = proto::asSmallInt(v) + (fn == &prim_inc ? 1 : -1);
+            return proto::smallIntInRange(n) ? proto::makeSmallInt(n) : nullptr;
+        }
+        if (fn == &prim_first) return tryFirst(ctx, v, &r) ? r : nullptr;
+        if (!mayAllocate) {
+            if (fn == &prim_rest || fn == &prim_next || fn == &prim_seq) return nullptr;
+        }
+        if (fn == &prim_rest)  return tryRest(ctx, v, &r) ? r : nullptr;
+        if (fn == &prim_next)  return tryNext(ctx, v, &r) ? r : nullptr;
+        if (fn == &prim_seq)   return trySeq(ctx, v, &r) ? r : nullptr;
+        if (fn == &prim_empty_p) {
+            bool e;
+            return tryEmpty(ctx, v, &e) ? (e ? PROTO_TRUE : PROTO_FALSE) : nullptr;
+        }
+        if (fn == &prim_count) {
+            if (!v || v == PROTO_NONE) return proto::makeSmallInt(0);
+            if (isListTag(v))
+                return proto::makeSmallInt(static_cast<long long>(v->asList(ctx)->getSize(ctx)));
+            if (isVector(v))
+                return proto::makeSmallInt(static_cast<long long>(vectorItems(ctx, v)->getSize(ctx)));
+            return nullptr;
+        }
+        return nullptr;
+    }
+    if (argc == 2) {
+        if (fn == &prim_nth) return fastIndexed(ctx, argv[0], argv[1]);
+        if (fn == &prim_plus) {
+            if (!proto::isSmallInt(argv[0]) || !proto::isSmallInt(argv[1])) return nullptr;
+            const long long n = proto::asSmallInt(argv[0]) + proto::asSmallInt(argv[1]);
+            return proto::smallIntInRange(n) ? proto::makeSmallInt(n) : nullptr;
+        }
+    }
+    return nullptr;
 }
 
 } // namespace protoClojure

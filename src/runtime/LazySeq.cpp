@@ -818,6 +818,101 @@ const PO* seqMore(proto::ProtoContext* ctx, const PO* s) {
     return cv.more == PROTO_NONE ? emptyList(ctx) : cv.more;
 }
 
+// ---- direct reads ---------------------------------------------------------------
+
+bool tryFirst(proto::ProtoContext* ctx, const PO* v, const PO** out) {
+    if (!v || v == PROTO_NONE) { *out = PROTO_NONE; return true; }
+    if (isListTag(v) || isVector(v)) {
+        const proto::ProtoList* l = isVector(v) ? vectorItems(ctx, v) : v->asList(ctx);
+        *out = l->getSize(ctx) == 0 ? PROTO_NONE : orNil(l->getFirst(ctx));
+        return true;
+    }
+    switch (seqObjectKind(ctx, v)) {
+        case SeqObject::Cons: *out = consFirst(ctx, v); return true;
+        case SeqObject::Chunk: {
+            const ChunkView cv = chunkOf(ctx, v);
+            *out = orNil(cv.items->getAt(ctx, static_cast<int>(cv.off)));
+            return true;
+        }
+        default: return false;
+    }
+}
+
+bool tryRest(proto::ProtoContext* ctx, const PO* v, const PO** out) {
+    if (!v || v == PROTO_NONE) { *out = emptyList(ctx); return true; }
+    if (isListTag(v)) { *out = seqMore(ctx, v); return true; }  // seqMore of () is ()
+    if (isVector(v)) {
+        // seqMore of the vector's chunked seq, without building that seq.
+        const proto::ProtoList* items = vectorItems(ctx, v);
+        const long long n = static_cast<long long>(items->getSize(ctx));
+        *out = n <= 1 ? emptyList(ctx) : newChunk(ctx, items, 1, n, PROTO_NONE, true);
+        return true;
+    }
+    switch (seqObjectKind(ctx, v)) {
+        case SeqObject::Cons:
+        case SeqObject::Chunk: *out = seqMore(ctx, v); return true;
+        default: return false;
+    }
+}
+
+bool tryNext(proto::ProtoContext* ctx, const PO* v, const PO** out) {
+    if (!v || v == PROTO_NONE) { *out = PROTO_NONE; return true; }
+    if (isListTag(v)) {
+        const proto::ProtoList* l = v->asList(ctx);
+        *out = l->getSize(ctx) <= 1 ? PROTO_NONE : l->removeFirst(ctx)->asObject(ctx);
+        return true;
+    }
+    if (isVector(v)) {
+        const proto::ProtoList* items = vectorItems(ctx, v);
+        const long long n = static_cast<long long>(items->getSize(ctx));
+        *out = n <= 1 ? PROTO_NONE : newChunk(ctx, items, 1, n, PROTO_NONE, true);
+        return true;
+    }
+    switch (seqObjectKind(ctx, v)) {
+        case SeqObject::Cons: {
+            // seqOf of what follows, unless that is a lazy seq to realise.
+            const PO* m = consMore(ctx, v);
+            const PO* s;
+            if (!trySeq(ctx, m, &s)) return false;
+            *out = s;
+            return true;
+        }
+        case SeqObject::Chunk: {
+            const ChunkView cv = chunkOf(ctx, v);
+            if (cv.off + 1 < cv.end) {
+                *out = newChunk(ctx, cv.items, cv.off + 1, cv.end, cv.more, cv.chunked);
+                return true;
+            }
+            const PO* s;
+            if (!trySeq(ctx, cv.more, &s)) return false;
+            *out = s;
+            return true;
+        }
+        default: return false;
+    }
+}
+
+bool trySeq(proto::ProtoContext* ctx, const PO* v, const PO** out) {
+    if (!v || v == PROTO_NONE) { *out = PROTO_NONE; return true; }
+    if (isListTag(v) || isVector(v)) { *out = seqOf(ctx, v); return true; }
+    switch (seqObjectKind(ctx, v)) {
+        case SeqObject::Cons:
+        case SeqObject::Chunk: *out = v; return true;
+        default: return false;
+    }
+}
+
+bool tryEmpty(proto::ProtoContext* ctx, const PO* v, bool* out) {
+    if (!v || v == PROTO_NONE) { *out = true; return true; }
+    if (isListTag(v)) { *out = v->asList(ctx)->getSize(ctx) == 0; return true; }
+    if (isVector(v)) { *out = vectorItems(ctx, v)->getSize(ctx) == 0; return true; }
+    switch (seqObjectKind(ctx, v)) {
+        case SeqObject::Cons:
+        case SeqObject::Chunk: *out = false; return true;  // never empty
+        default: return false;
+    }
+}
+
 bool isSeqValue(proto::ProtoContext* ctx, const PO* v) {
     return isListTag(v) || isSeqObject(ctx, v);
 }

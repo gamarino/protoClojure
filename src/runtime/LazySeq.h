@@ -118,6 +118,23 @@ inline const proto::ProtoObject* seqNext(proto::ProtoContext* ctx, const proto::
     return seqOf(ctx, seqMore(ctx, s));
 }
 
+// ---- Direct reads -------------------------------------------------------------
+//
+// first, rest, next, seq and empty? of the values that are read without
+// running Clojure code: nil, a list, a vector, a cons and a chunk. Each
+// answers false, touching nothing, for any other value (a lazy seq, which
+// may run code to realise; a map, a set, a string, or a value that is not
+// seqable), which the caller then reads through the general path above.
+// The answers are those of the general path. rest, next and seq may
+// allocate (a chunk, a list one shorter, an empty list) in `ctx`; results
+// are unrooted. The primitives and the VM's direct primitive calls share
+// them (ExecutionEngine.cpp, fastPrimitiveCall).
+bool tryFirst(proto::ProtoContext* ctx, const proto::ProtoObject* v, const proto::ProtoObject** out);
+bool tryRest(proto::ProtoContext* ctx, const proto::ProtoObject* v, const proto::ProtoObject** out);
+bool tryNext(proto::ProtoContext* ctx, const proto::ProtoObject* v, const proto::ProtoObject** out);
+bool trySeq(proto::ProtoContext* ctx, const proto::ProtoObject* v, const proto::ProtoObject** out);
+bool tryEmpty(proto::ProtoContext* ctx, const proto::ProtoObject* v, bool* out);
+
 // `seq?`: a list, a lazy seq, a cons or a chunk.
 bool isSeqValue(proto::ProtoContext* ctx, const proto::ProtoObject* v);
 

@@ -87,6 +87,10 @@ const char* binaryOpName(Op op) {
     }
 }
 
+// protoCore's pointer tag of a method value (POINTER_TAG_METHOD,
+// headers/proto_internal.h): every primitive.
+constexpr proto::proto_ulong kTagMethod = 12;
+
 inline bool smallIntFitsLong(long long v) {
     // Same bounds as PROTO_SMALL_INT_MIN/MAX (53-bit).
     constexpr long long kMax =  (1LL << 53) - 1;
@@ -444,6 +448,15 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
                         const proto::ProtoObject* callable,
                         const proto::ProtoObject* const* args,
                         unsigned int argc) {
+    // A primitive that reads its arguments without running Clojure code
+    // and without allocating (fastPrimitiveCall): no context of its own.
+    // Nothing is allocated in `ctx`, which may be a long-lived scope.
+    if ((reinterpret_cast<proto::proto_ulong>(callable) & 0x3F) == kTagMethod) {
+        if (const proto::ProtoObject* r = fastPrimitiveCall(
+                ctx, callable->asMethod(ctx), args, argc, false))
+            return r;
+    }
+
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throwError(ctx, "VM: invoke() called outside a run()");
 
@@ -770,6 +783,23 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
     // args list onto the stack before calling this).
     auto dispatchCall = [&](unsigned int argc) {
         const proto::ProtoObject* callable = peekAt(argc);
+        // A primitive (a protoCore method value) whose arguments it reads
+        // without running Clojure code: answered here, with no context of
+        // its own (fastPrimitiveCall). Its arguments stay rooted in their
+        // slots until the result replaces them, and what it allocates is
+        // this frame's garbage, handed to the collector at the next loop
+        // back-edge, as the arithmetic opcodes' is.
+        if ((reinterpret_cast<proto::proto_ulong>(callable) & 0x3F) == kTagMethod) {
+            const proto::ProtoObject** argSlots =
+                frame.getAutomaticLocals() + stackBase + sp - argc;
+            if (const proto::ProtoObject* r = fastPrimitiveCall(
+                    &frame, callable->asMethod(&frame), argSlots, argc, true)) {
+                for (unsigned int i = 0; i < argc; ++i) argSlots[i] = nullptr;
+                sp -= (argc + 1);
+                pushVal(r);
+                return;
+            }
+        }
         const proto::ProtoObject* proto = callable->getPrototype(&frame);
         const bool isSingle = (proto == env.fnSingleProto);
         const bool isMulti  = (proto == env.fnMultiProto);

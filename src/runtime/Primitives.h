@@ -73,6 +73,22 @@ const proto::ProtoObject* numberAdd(proto::ProtoContext* ctx, const proto::Proto
 int numberCompare(proto::ProtoContext* ctx, const proto::ProtoObject* a,
                   const proto::ProtoObject* b);
 
+// A direct call of primitive `fn` on the `argc` arguments at `argv`, for
+// the VM's calls: the result of inc, dec, two-argument +, first, rest,
+// next, seq, empty?, count and nth on the values they read without running
+// Clojure code and without raising (nil, lists, vectors, cons cells and
+// chunks; SmallInt numbers), the same result the primitive answers.
+// nullptr for any other primitive or argument, which the caller then calls
+// in the general way. It opens no context of its own: whatever it
+// allocates (rest of a vector allocates a chunk) belongs to `ctx`, so with
+// `mayAllocate` `ctx` must be a frame whose garbage reaches the collector
+// (a loop back-edge safepoints the frame); without it only the primitives
+// that never allocate are answered. The arguments must stay rooted by the
+// caller until the result is.
+const proto::ProtoObject* fastPrimitiveCall(proto::ProtoContext* ctx, proto::ProtoMethod fn,
+                                            const proto::ProtoObject* const* argv, unsigned argc,
+                                            bool mayAllocate);
+
 // Install all v0.0.x primitives on the supplied globals object. The globals
 // object must be a mutable protoCore object (typically a child of
 // objectPrototype) so setAttribute is in-place. After this call, references
