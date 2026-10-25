@@ -481,18 +481,16 @@ ExecutionEngine::submitBeforeCall(proto::ProtoContext& frame) const {
 
 [[gnu::noinline]] PROTOCLJ_MSVC_NOINLINE
 void ExecutionEngine::submitBeforeCallSlow(proto::ProtoContext& frame) const {
-    // See the declaration. protoCore's safepoint() submits a context's young
-    // chain only past maxAllocatedCellsPerContext; the count is raised past
-    // it for this one call so that safepoint() itself, with every check and
-    // configuration it applies, makes the submission. If it did not submit
-    // (a critical section, submission disabled), the count is restored.
-    if (!gcSafepointEnabled_) return;
-    const unsigned int threshold = frame.space->maxAllocatedCellsPerContext;
-    if (threshold == 0) return;
-    const proto::proto_ulong saved = frame.allocatedCellsCount;
-    frame.allocatedCellsCount = static_cast<proto::proto_ulong>(threshold) + 1;
+    // See the declaration. The chain is detached and submitted the way
+    // ~ProtoContext does it (ProtoSpace::submitYoungGeneration); the frame
+    // stays alive and keeps allocating into a fresh chain. Skipped inside a
+    // critical section, where a half-built tree may hang off the chain.
+    if (!gcSafepointEnabled_ || frame.criticalSectionDepth != 0) return;
+    proto::Cell* chain = frame.lastAllocatedCell;
+    frame.lastAllocatedCell = nullptr;
+    frame.allocatedCellsCount = 0;
+    frame.space->submitYoungGeneration(chain);
     frame.safepoint();
-    if (frame.lastAllocatedCell) frame.allocatedCellsCount = saved;
 }
 
 void ExecutionEngine::gcSafepointSlow(proto::ProtoContext* ctx) const {
