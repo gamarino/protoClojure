@@ -11,10 +11,11 @@
  * what `ProtoList` is: an immutable AVL list with structural sharing, an
  * O(N) bulk constructor, O(log N) indexed access and ordinary garbage
  * collection. What it cannot have is `ProtoList`'s pointer tag, because a
- * Clojure *list* is already a `ProtoList` and the two must stay
- * distinguishable: `vector?`, `list?`, `conj` and printing (`[1 2]` against
- * `(1 2)`) all depend on it, and protoClojure cannot mint a protoCore tag of
- * its own. The one-entry sparse list is the cheapest immutable box that
+ * Clojure *list* was a `ProtoList` when this was decided and the two had to
+ * stay distinguishable: `vector?`, `list?`, `conj` and printing (`[1 2]`
+ * against `(1 2)`) all depend on it, and protoClojure cannot mint a protoCore
+ * tag of its own. (Lists are chains of list cells now, SeqTypes.h, M44; the
+ * box stays, so that a bare ProtoList is never a Clojure value.) The one-entry sparse list is the cheapest immutable box that
  * carries a distinct tag: one cell per vector (the Small inline form, which
  * a one-entry sparse list never outgrows), an inline scan of up to three
  * slots per unboxing, no wrapper object, no attribute lookup, no entry in

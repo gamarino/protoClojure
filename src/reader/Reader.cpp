@@ -5,6 +5,7 @@
 #include "runtime/Named.h"
 #include "runtime/SetOps.h"
 #include "runtime/Regex.h"
+#include "runtime/SeqTypes.h"
 #include "runtime/StackGuard.h"
 #include "runtime/Utf8String.h"
 #include "runtime/VectorOps.h"
@@ -224,10 +225,10 @@ Reader::readFromToken(proto::ProtoContext* parent, const Token& tok) {
                 params = params->appendLast(&scope, internNamed(&scope, named_, "&"))
                                ->appendLast(&scope, lit.rest);
             scope.setAutomaticLocal(1, newVector(&scope, params));
-            const proto::ProtoObject* form = scope.newList()
-                ->appendLast(&scope, internNamed(&scope, named_, "fn*"))
-                ->appendLast(&scope, scope.getAutomaticLocal(1))
-                ->appendLast(&scope, scope.getAutomaticLocal(0))->asObject(&scope);
+            const proto::ProtoObject* items[3] = {internNamed(&scope, named_, "fn*"),
+                                                  scope.getAutomaticLocal(1),
+                                                  scope.getAutomaticLocal(0)};
+            const proto::ProtoObject* form = listFromArray(&scope, 3, items);
             recordPosition(form, tok.line, tok.column);  // the body: readList
             scope.returnValue = form;
             return form;
@@ -404,21 +405,18 @@ const proto::ProtoObject* Reader::readWrapped(proto::ProtoContext* parent,
     proto::ProtoContext scope(parent->space, parent);
     scope.resizeAutomaticLocals(1);
     scope.setAutomaticLocal(0, readNextForm(&scope, macroTok));
-    return scope.newList()
-        ->appendLast(&scope, internNamed(&scope, named_, head))
-        ->appendLast(&scope, scope.getAutomaticLocal(0))
-        ->asObject(&scope);
+    const proto::ProtoObject* items[2] = {internNamed(&scope, named_, head), scope.getAutomaticLocal(0)};
+    const proto::ProtoObject* form = listFromArray(&scope, 2, items);
+    scope.returnValue = form;
+    return form;
 }
 
 namespace {
 
-constexpr proto::proto_ulong kTagMask      = 0x3F;
-constexpr proto::proto_ulong kTagList      = 2;   // POINTER_TAG_LIST
-constexpr proto::proto_ulong kTagListSmall = 25;  // POINTER_TAG_LIST_SMALL
-
-bool isListValue(const proto::ProtoObject* v) {
-    const proto::proto_ulong tag = reinterpret_cast<proto::proto_ulong>(v) & kTagMask;
-    return v != nullptr && (tag == kTagList || tag == kTagListSmall);
+// The list (a b ...) of the given forms, in `ctx` (SeqTypes.h).
+const proto::ProtoObject* listOf(proto::ProtoContext* ctx,
+                                 std::initializer_list<const proto::ProtoObject*> items) {
+    return listFromArray(ctx, items.size(), items.begin());
 }
 
 } // namespace
@@ -481,34 +479,29 @@ const proto::ProtoObject* Reader::syntaxQuote(proto::ProtoContext* parent,
             const std::string resolved = resolver_(parent, spelling);
             if (resolved != spelling) symbol = internNamed(parent, named_, resolved.c_str());
         }
-        return parent->newList()
-            ->appendLast(parent, sym(parent, "quote"))
-            ->appendLast(parent, symbol)
-            ->asObject(parent);
+        return listOf(parent, {sym(parent, "quote"), symbol});
     }
 
     // The items to splice together: a list's elements, a vector's, or a
     // map's keys and values in source order. Each is reachable from `form`.
     std::vector<const proto::ProtoObject*> items;
     const char* builder = nullptr;  // vector / hash-map: applied to the seq
-    if (isListValue(form)) {
-        const proto::ProtoList* lst = form->asList(parent);
-        const proto::proto_ulong n = lst->getSize(parent);
+    if (isListValue(parent, form)) {
+        const long long n = listCount(parent, form);
         if (n > 0) {
-            const proto::ProtoObject* head = lst->getAt(parent, 0);
+            const proto::ProtoObject* head = listFirst(parent, form);
             if (head == sym(parent, "clojure.core/unquote")) {
                 if (n != 2) throw ReaderError("unquote (~) takes exactly one form", tok.line, tok.column);
-                return lst->getAt(parent, 1);
+                return listFirst(parent, listRest(parent, form));
             }
             if (head == sym(parent, "clojure.core/unquote-splicing")) {
                 throw ReaderError("splice (~@) not in list", tok.line, tok.column);
             }
         } else {
-            return parent->newList()
-                ->appendLast(parent, sym(parent, "clojure.core/list"))
-                ->asObject(parent);
+            return listOf(parent, {sym(parent, "clojure.core/list")});
         }
-        for (proto::proto_ulong i = 0; i < n; ++i) items.push_back(lst->getAt(parent, static_cast<int>(i)));
+        for (const proto::ProtoObject* p = form; p != emptyListValue(); p = listRest(parent, p))
+            items.push_back(listFirst(parent, p));
     } else if (isVector(form)) {
         builder = "clojure.core/vector";
         const proto::ProtoList* lst = vectorItems(parent, form);
@@ -546,10 +539,7 @@ const proto::ProtoObject* Reader::syntaxQuote(proto::ProtoContext* parent,
             });
     } else {
         // Anything else the reader does not yield; quoted as data.
-        return parent->newList()
-            ->appendLast(parent, sym(parent, "quote"))
-            ->appendLast(parent, form)
-            ->asObject(parent);
+        return listOf(parent, {sym(parent, "quote"), form});
     }
 
     // (clojure.core/concat piece...), each piece built in a slot of its own
@@ -563,44 +553,37 @@ const proto::ProtoObject* Reader::syntaxQuote(proto::ProtoContext* parent,
         ListBuilder concat(&outer);
         concat.push(sym(concat.context(), "clojure.core/concat"));
         for (const proto::ProtoObject* item : items) {
-            if (isListValue(item)) {
-                const proto::ProtoList* il = item->asList(concat.context());
-                if (il->getSize(concat.context()) == 2 && il->getAt(concat.context(), 0) == splice) {
-                    concat.push(il->getAt(concat.context(), 1));
+            proto::ProtoContext* c = concat.context();
+            if (isListValue(c, item) && listCount(c, item) == 2) {
+                const proto::ProtoObject* ihead = listFirst(c, item);
+                const proto::ProtoObject* iarg = listFirst(c, listRest(c, item));
+                if (ihead == splice) {
+                    concat.push(iarg);
                     continue;
                 }
-                if (il->getSize(concat.context()) == 2 && il->getAt(concat.context(), 0) == unquote) {
-                    proto::ProtoContext pieceScope(concat.context()->space, concat.context());
-                    concat.push(pieceScope.newList()
-                        ->appendLast(&pieceScope, listSym)
-                        ->appendLast(&pieceScope, il->getAt(&pieceScope, 1))
-                        ->asObject(&pieceScope));
+                if (ihead == unquote) {
+                    proto::ProtoContext pieceScope(c->space, c);
+                    concat.push(listOf(&pieceScope, {listSym, iarg}));
                     continue;
                 }
             }
-            proto::ProtoContext pieceScope(concat.context()->space, concat.context());
+            proto::ProtoContext pieceScope(c->space, c);
             pieceScope.resizeAutomaticLocals(1);
             pieceScope.setAutomaticLocal(0, syntaxQuote(&pieceScope, item, tok));
-            concat.push(pieceScope.newList()
-                ->appendLast(&pieceScope, listSym)
-                ->appendLast(&pieceScope, pieceScope.getAutomaticLocal(0))
-                ->asObject(&pieceScope));
+            concat.push(listOf(&pieceScope, {listSym, pieceScope.getAutomaticLocal(0)}));
         }
-        outer.setAutomaticLocal(0, concat.finish());
+        outer.setAutomaticLocal(0, concat.finishSeq());
     }
     // (clojure.core/seq (concat ...)), applied to the builder for a vector
     // or a map.
-    const proto::ProtoObject* seqForm = outer.newList()
-        ->appendLast(&outer, sym(&outer, "clojure.core/seq"))
-        ->appendLast(&outer, outer.getAutomaticLocal(0))
-        ->asObject(&outer);
-    if (!builder) return seqForm;
+    const proto::ProtoObject* seqForm =
+        listOf(&outer, {sym(&outer, "clojure.core/seq"), outer.getAutomaticLocal(0)});
+    if (!builder) { outer.returnValue = seqForm; return seqForm; }
     outer.setAutomaticLocal(0, seqForm);
-    return outer.newList()
-        ->appendLast(&outer, sym(&outer, "clojure.core/apply"))
-        ->appendLast(&outer, sym(&outer, builder))
-        ->appendLast(&outer, outer.getAutomaticLocal(0))
-        ->asObject(&outer);
+    const proto::ProtoObject* applied = listOf(&outer,
+        {sym(&outer, "clojure.core/apply"), sym(&outer, builder), outer.getAutomaticLocal(0)});
+    outer.returnValue = applied;
+    return applied;
 }
 
 const proto::ProtoObject*
@@ -631,9 +614,12 @@ Reader::readList(proto::ProtoContext* parent, TokenKind closeKind,
             throw ReaderError(what, openLine, openColumn);
         }
         if (tok.kind == closeKind) {
-            if (closeKind == TokenKind::RParen && info_)
-                return recordPosition(items.finish(), openLine, openColumn);  // debugging
-            return items.finish();
+            // A list form is a Clojure list (SeqTypes.h); the elements of a
+            // vector, a map or a set stay a ProtoList, which the caller
+            // boxes or associates.
+            if (closeKind != TokenKind::RParen) return items.finish();
+            if (info_) return recordPosition(items.finishSeq(), openLine, openColumn);  // debugging
+            return items.finishSeq();
         }
         if (tok.kind == TokenKind::HashUnderscore) {
             discardNextForm(items.context(), tok);

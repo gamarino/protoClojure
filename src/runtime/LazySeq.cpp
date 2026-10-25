@@ -53,25 +53,29 @@ inline bool isListTag(const PO* v) {
 inline bool truthy(const PO* v) { return v && v != PROTO_NONE && v != PROTO_FALSE; }
 inline const PO* orNil(const PO* v) { return v ? v : PROTO_NONE; }
 
-// The fields of a cons or a chunk.
+// The fields of a cons, a chunk or a list cell (SeqTypes.h). A cons and a
+// list cell share the layout of their first two fields, [first more], so
+// consFirst and consMore read both.
 const proto::ProtoList* fieldsOf(proto::ProtoContext* ctx, const PO* node) {
-    return node->getLazyValue(ctx)->asList(ctx);
+    return seqNodeFields(ctx, node);
 }
 const PO* consFirst(proto::ProtoContext* ctx, const PO* c) { return orNil(fieldsOf(ctx, c)->getAt(ctx, 0)); }
 const PO* consMore(proto::ProtoContext* ctx, const PO* c)  { return orNil(fieldsOf(ctx, c)->getAt(ctx, 1)); }
 
 // A lazy object of prototype `proto` published at once with `fields`.
 const PO* newNode(proto::ProtoContext* ctx, const PO* proto, unsigned n, const PO* const* fields) {
-    const PO* node = proto->newLazyChild(ctx, PROTO_NONE);
-    node->publishLazy(ctx, ctx->newList(n, fields)->asObject(ctx));
-    return node;
+    return newSeqNode(ctx, proto, n, fields);
 }
 
 long long longOf(proto::ProtoContext* ctx, const PO* v) {
     return v->asLong(ctx);
 }
 
-const PO* emptyList(proto::ProtoContext* ctx) { return ctx->newList()->asObject(ctx); }
+// The empty list `()` (SeqTypes.h).
+const PO* emptyList(proto::ProtoContext*) { return emptyListValue(); }
+// An empty ProtoList, a step's accumulator of the elements it computes (the
+// storage of the chunk it answers); never a Clojure value.
+const PO* newAcc(proto::ProtoContext* ctx) { return ctx->newList()->asObject(ctx); }
 
 const PO* call(proto::ProtoContext* ctx, const PO* f, const PO* const* args, unsigned n) {
     const ActiveCallContext* cc = activeCallContext();
@@ -210,13 +214,9 @@ ChunkSlice sliceOf(proto::ProtoContext* ctx, const PO* chunk, const ChunkView& c
 }
 
 // The rest of `s` for a lazy step that keeps it to itself, as the source it
-// reads next (map, filter, take, ...): seqMore, except that the rest of a
-// list is an unchunked view of the same list one element on, as
-// SeqWalk::remaining makes. Taking the rest of a list with removeFirst
-// rebuilds part of its tree, so a lazy step over a list of n elements paid
-// O(log n) allocations per element; the view costs one object. The view is
-// a seq like the list it reads and never reaches the program: what a step
-// hands out is its own cons or chunk.
+// reads next (map, filter, take, ...): seqMore. (It made an unchunked view
+// of a list one element on while lists were ProtoLists, whose rest rebuilt
+// part of a tree; the rest of a list cell is a field.)
 const PO* walkMore(proto::ProtoContext* ctx, const PO* s);
 inline const PO* walkNext(proto::ProtoContext* ctx, const PO* s) {
     return seqOf(ctx, walkMore(ctx, s));
@@ -232,7 +232,7 @@ const PO* stepMap1(proto::ProtoContext* ctx, const PO*, const StepOperands& o) {
         if (cv.chunked) {
             const ChunkSlice sl = sliceOf(s.ctx(), src, cv);
             s.set(1, sl.after);
-            s.set(2, emptyList(s.ctx()));
+            s.set(2, newAcc(s.ctx()));
             for (long long i = sl.from; i < sl.to; ++i) {
                 const PO* y = call1(s.ctx(), o.a, cv.items->getAt(s.ctx(), static_cast<int>(i)));
                 s.set(2, s.get(2)->asList(s.ctx())->appendLast(s.ctx(), y)->asObject(s.ctx()));
@@ -256,8 +256,8 @@ const PO* stepMapN(proto::ProtoContext* ctx, const PO*, const StepOperands& o) {
     const proto::ProtoList* colls = o.b->asList(ctx);
     const proto::proto_ulong n = colls->getSize(ctx);
     Scope s(ctx, 4);
-    s.set(0, emptyList(s.ctx()));  // seqs, then firsts
-    s.set(1, emptyList(s.ctx()));  // rests
+    s.set(0, newAcc(s.ctx()));  // seqs, then firsts
+    s.set(1, newAcc(s.ctx()));  // rests
     for (proto::proto_ulong i = 0; i < n; ++i) {
         const PO* sq = seqOf(s.ctx(), colls->getAt(s.ctx(), static_cast<int>(i)));
         if (sq == PROTO_NONE) return PROTO_NONE;
@@ -286,7 +286,7 @@ const PO* stepFilter(proto::ProtoContext* ctx, const PO*, const StepOperands& o)
             if (cv.chunked) {
                 const ChunkSlice sl = sliceOf(s.ctx(), src, cv);
                 s.set(1, sl.after);
-                s.set(2, emptyList(s.ctx()));
+                s.set(2, newAcc(s.ctx()));
                 for (long long i = sl.from; i < sl.to; ++i) {
                     const PO* x = cv.items->getAt(s.ctx(), static_cast<int>(i));
                     if (truthy(call1(s.ctx(), o.a, x)) != negate)
@@ -425,7 +425,7 @@ const PO* stepRange(proto::ProtoContext* ctx, const PO*, const StepOperands& o) 
     Scope s(ctx, 3);
     const bool up = numberCompare(s.ctx(), o.c, s.ctx()->fromLong(0)) > 0;
     s.set(0, o.a);
-    s.set(1, emptyList(s.ctx()));
+    s.set(1, newAcc(s.ctx()));
     long long k = 0;
     if (smallInts(o.a, o.b, o.c)) {
         long long x = proto::asSmallInt(o.a);
@@ -480,19 +480,15 @@ const PO* stepConcat(proto::ProtoContext* ctx, const PO*, const StepOperands& o)
 
 const PO* prependSeq(proto::ProtoContext* ctx, const PO* sq, const PO* restColls) {
     // Nothing after: the seq itself.
-    if (restColls == PROTO_NONE || (isListTag(restColls) && restColls->asList(ctx)->getSize(ctx) == 0))
+    if (restColls == PROTO_NONE || restColls == emptyListValue())
         return sq;
     Scope s(ctx, 2);
-    if (isListTag(sq)) {
-        s.set(0, lazy5At(s, 0, StepKind::Concat, PROTO_NONE, restColls, nullptr, nullptr, nullptr));
-        const proto::ProtoList* l = sq->asList(s.ctx());
-        return s.ret(newChunk(s.ctx(), l, 0, static_cast<long long>(l->getSize(s.ctx())), s.get(0), false));
-    }
     if (seqObjectKind(s.ctx(), sq) == SeqObject::Chunk) {
         const ChunkView cv = chunkOf(s.ctx(), sq);
         s.set(0, lazy5At(s, 0, StepKind::Concat, cv.more, restColls, nullptr, nullptr, nullptr));
         return s.ret(newChunk(s.ctx(), cv.items, cv.off, cv.end, s.get(0), cv.chunked));
     }
+    // A cons or a list cell: [first more].
     s.set(0, lazy5At(s, 0, StepKind::Concat, consMore(s.ctx(), sq), restColls,
                    nullptr, nullptr, nullptr));
     return s.ret(newCons(s.ctx(), consFirst(s.ctx(), sq), s.get(0)));
@@ -507,7 +503,7 @@ const PO* stepPartition(proto::ProtoContext* ctx, const PO*, const StepOperands&
     Scope s(ctx, 4);
     s.set(0, seqOf(s.ctx(), o.e));
     if (s.get(0) == PROTO_NONE) return PROTO_NONE;
-    s.set(1, emptyList(s.ctx()));
+    s.set(1, newAcc(s.ctx()));
     long long k = 0;
     {
         SeqWalk w(s.ctx(), 2, s.ctx(), s.get(0));
@@ -525,8 +521,11 @@ const PO* stepPartition(proto::ProtoContext* ctx, const PO*, const StepOperands&
                 w.advance(s.ctx());
             }
         }
+        s.set(1, listFromProtoList(s.ctx(), s.get(1)->asList(s.ctx())));
         return s.ret(newCons(s.ctx(), s.get(1), PROTO_NONE));
     }
+    // A partition is a list, as the seq Clojure's take answers prints.
+    s.set(1, listFromProtoList(s.ctx(), s.get(1)->asList(s.ctx())));
     // The next partition starts `step` elements on.
     {
         SeqWalk w(s.ctx(), 2, s.ctx(), s.get(0));
@@ -544,8 +543,8 @@ const PO* stepInterleave(proto::ProtoContext* ctx, const PO*, const StepOperands
     const proto::proto_ulong n = colls->getSize(ctx);
     if (n == 0) return PROTO_NONE;
     Scope s(ctx, 4);
-    s.set(0, emptyList(s.ctx()));  // firsts
-    s.set(1, emptyList(s.ctx()));  // rests
+    s.set(0, newAcc(s.ctx()));  // firsts
+    s.set(1, newAcc(s.ctx()));  // rests
     for (proto::proto_ulong i = 0; i < n; ++i) {
         s.set(2, seqOf(s.ctx(), colls->getAt(s.ctx(), static_cast<int>(i))));
         if (s.get(2) == PROTO_NONE) return PROTO_NONE;
@@ -574,7 +573,7 @@ const PO* stepFor(proto::ProtoContext* ctx, const PO*, const StepOperands& o) {
             if (cv.chunked) {
                 const ChunkSlice sl = sliceOf(s.ctx(), src, cv);
                 s.set(1, sl.after);
-                s.set(2, emptyList(s.ctx()));
+                s.set(2, newAcc(s.ctx()));
                 bool stopped = false;
                 for (long long i = sl.from; i < sl.to; ++i) {
                     const PO* r = call1(s.ctx(), o.b, cv.items->getAt(s.ctx(), static_cast<int>(i)));
@@ -607,7 +606,7 @@ const PO* stepFor(proto::ProtoContext* ctx, const PO*, const StepOperands& o) {
         s.set(2, seqOf(s.ctx(), s.get(1)));
         if (s.get(2) != PROTO_NONE) {
             s.set(3, lazy5At(s, 3, StepKind::For, walkMore(s.ctx(), s.get(0)), o.b, o.c, o.d, nullptr));
-            s.set(1, s.ctx()->newList()->appendLast(s.ctx(), s.get(3))->asObject(s.ctx()));
+            s.set(1, listCons(s.ctx(), s.get(3), emptyListValue()));
             return s.ret(prependSeq(s.ctx(), s.get(2), s.get(1)));
         }
         s.set(0, walkNext(s.ctx(), s.get(0)));
@@ -767,7 +766,6 @@ bool isChunkedSeq(proto::ProtoContext* ctx, const PO* s) {
 
 const PO* seqOf(proto::ProtoContext* ctx, const PO* v) {
     if (!v || v == PROTO_NONE) return PROTO_NONE;
-    if (isListTag(v)) return v->asList(ctx)->getSize(ctx) == 0 ? PROTO_NONE : v;
     if (isVector(v)) {
         const proto::ProtoList* items = vectorItems(ctx, v);
         const long long n = static_cast<long long>(items->getSize(ctx));
@@ -776,40 +774,39 @@ const PO* seqOf(proto::ProtoContext* ctx, const PO* v) {
     switch (seqObjectKind(ctx, v)) {
         case SeqObject::Lazy:  return realizeLazy(ctx, v);
         case SeqObject::Cons:
-        case SeqObject::Chunk: return v;
+        case SeqObject::Chunk:
+        case SeqObject::List:  return v;
+        case SeqObject::Empty: return PROTO_NONE;
         case SeqObject::None:  break;
     }
+    // A map's entries, a set's elements, a string's characters: a plain
+    // chunk over them (Clojure answers a seq that is not a list).
     const proto::ProtoList* items = nullptr;
-    if (collectionItems(ctx, v, &items))
-        return (items && items->getSize(ctx) > 0) ? items->asObject(ctx) : PROTO_NONE;
+    if (collectionItems(ctx, v, &items)) {
+        if (!items || items->getSize(ctx) == 0) return PROTO_NONE;
+        return newChunk(ctx, items, 0, static_cast<long long>(items->getSize(ctx)), PROTO_NONE, false);
+    }
     throwClassed(ctx, "IllegalArgumentException",
                  "Don't know how to create ISeq from: " + std::string(valueTypeName(ctx, v)));
 }
 
 const PO* seqFirst(proto::ProtoContext* ctx, const PO* s) {
-    if (isListTag(s)) return s->asList(ctx)->getFirst(ctx);
-    if (seqObjectKind(ctx, s) == SeqObject::Cons) return consFirst(ctx, s);
+    const SeqObject k = seqObjectKind(ctx, s);
+    if (k == SeqObject::Cons || k == SeqObject::List) return consFirst(ctx, s);
     const ChunkView cv = chunkOf(ctx, s);
     return cv.items->getAt(ctx, static_cast<int>(cv.off));
 }
 
 namespace {
 const PO* walkMore(proto::ProtoContext* ctx, const PO* s) {
-    if (isListTag(s)) {
-        const proto::ProtoList* l = s->asList(ctx);
-        const long long n = static_cast<long long>(l->getSize(ctx));
-        return n <= 1 ? emptyList(ctx) : newChunk(ctx, l, 1, n, PROTO_NONE, false);
-    }
     return seqMore(ctx, s);
 }
 } // namespace
 
 const PO* seqMore(proto::ProtoContext* ctx, const PO* s) {
-    if (isListTag(s)) {
-        const proto::ProtoList* l = s->asList(ctx);
-        return l->getSize(ctx) <= 1 ? emptyList(ctx) : l->removeFirst(ctx)->asObject(ctx);
-    }
-    if (seqObjectKind(ctx, s) == SeqObject::Cons) {
+    const SeqObject k = seqObjectKind(ctx, s);
+    if (k == SeqObject::List) return consMore(ctx, s);  // a list, () at the end
+    if (k == SeqObject::Cons) {
         const PO* m = consMore(ctx, s);
         return m == PROTO_NONE ? emptyList(ctx) : m;
     }
@@ -822,13 +819,15 @@ const PO* seqMore(proto::ProtoContext* ctx, const PO* s) {
 
 bool tryFirst(proto::ProtoContext* ctx, const PO* v, const PO** out) {
     if (!v || v == PROTO_NONE) { *out = PROTO_NONE; return true; }
-    if (isListTag(v) || isVector(v)) {
-        const proto::ProtoList* l = isVector(v) ? vectorItems(ctx, v) : v->asList(ctx);
+    if (isVector(v)) {
+        const proto::ProtoList* l = vectorItems(ctx, v);
         *out = l->getSize(ctx) == 0 ? PROTO_NONE : orNil(l->getFirst(ctx));
         return true;
     }
     switch (seqObjectKind(ctx, v)) {
-        case SeqObject::Cons: *out = consFirst(ctx, v); return true;
+        case SeqObject::Cons:
+        case SeqObject::List:  *out = consFirst(ctx, v); return true;
+        case SeqObject::Empty: *out = PROTO_NONE; return true;
         case SeqObject::Chunk: {
             const ChunkView cv = chunkOf(ctx, v);
             *out = orNil(cv.items->getAt(ctx, static_cast<int>(cv.off)));
@@ -840,7 +839,6 @@ bool tryFirst(proto::ProtoContext* ctx, const PO* v, const PO** out) {
 
 bool tryRest(proto::ProtoContext* ctx, const PO* v, const PO** out) {
     if (!v || v == PROTO_NONE) { *out = emptyList(ctx); return true; }
-    if (isListTag(v)) { *out = seqMore(ctx, v); return true; }  // seqMore of () is ()
     if (isVector(v)) {
         // seqMore of the vector's chunked seq, without building that seq.
         const proto::ProtoList* items = vectorItems(ctx, v);
@@ -849,6 +847,8 @@ bool tryRest(proto::ProtoContext* ctx, const PO* v, const PO** out) {
         return true;
     }
     switch (seqObjectKind(ctx, v)) {
+        case SeqObject::List:  *out = consMore(ctx, v); return true;
+        case SeqObject::Empty: *out = v; return true;
         case SeqObject::Cons:
         case SeqObject::Chunk: *out = seqMore(ctx, v); return true;
         default: return false;
@@ -857,11 +857,6 @@ bool tryRest(proto::ProtoContext* ctx, const PO* v, const PO** out) {
 
 bool tryNext(proto::ProtoContext* ctx, const PO* v, const PO** out) {
     if (!v || v == PROTO_NONE) { *out = PROTO_NONE; return true; }
-    if (isListTag(v)) {
-        const proto::ProtoList* l = v->asList(ctx);
-        *out = l->getSize(ctx) <= 1 ? PROTO_NONE : l->removeFirst(ctx)->asObject(ctx);
-        return true;
-    }
     if (isVector(v)) {
         const proto::ProtoList* items = vectorItems(ctx, v);
         const long long n = static_cast<long long>(items->getSize(ctx));
@@ -869,6 +864,12 @@ bool tryNext(proto::ProtoContext* ctx, const PO* v, const PO** out) {
         return true;
     }
     switch (seqObjectKind(ctx, v)) {
+        case SeqObject::List: {
+            const PO* m = consMore(ctx, v);
+            *out = m == emptyListValue() ? PROTO_NONE : m;
+            return true;
+        }
+        case SeqObject::Empty: *out = PROTO_NONE; return true;
         case SeqObject::Cons: {
             // seqOf of what follows, unless that is a lazy seq to realise.
             const PO* m = consMore(ctx, v);
@@ -894,38 +895,49 @@ bool tryNext(proto::ProtoContext* ctx, const PO* v, const PO** out) {
 
 bool trySeq(proto::ProtoContext* ctx, const PO* v, const PO** out) {
     if (!v || v == PROTO_NONE) { *out = PROTO_NONE; return true; }
-    if (isListTag(v) || isVector(v)) { *out = seqOf(ctx, v); return true; }
+    if (isVector(v)) { *out = seqOf(ctx, v); return true; }
     switch (seqObjectKind(ctx, v)) {
         case SeqObject::Cons:
-        case SeqObject::Chunk: *out = v; return true;
+        case SeqObject::Chunk:
+        case SeqObject::List:  *out = v; return true;
+        case SeqObject::Empty: *out = PROTO_NONE; return true;
         default: return false;
     }
 }
 
 bool tryEmpty(proto::ProtoContext* ctx, const PO* v, bool* out) {
     if (!v || v == PROTO_NONE) { *out = true; return true; }
-    if (isListTag(v)) { *out = v->asList(ctx)->getSize(ctx) == 0; return true; }
     if (isVector(v)) { *out = vectorItems(ctx, v)->getSize(ctx) == 0; return true; }
     switch (seqObjectKind(ctx, v)) {
+        case SeqObject::Empty: *out = true; return true;
         case SeqObject::Cons:
-        case SeqObject::Chunk: *out = false; return true;  // never empty
+        case SeqObject::Chunk:
+        case SeqObject::List:  *out = false; return true;  // never empty
         default: return false;
     }
 }
 
+bool tryCons(proto::ProtoContext* ctx, const PO* x, const PO* coll, const PO** out) {
+    if (!coll || coll == PROTO_NONE) { *out = listCons(ctx, x, emptyListValue()); return true; }
+    if (!isSeqObject(ctx, coll)) return false;
+    *out = newCons(ctx, x, coll);
+    return true;
+}
+
 bool isSeqValue(proto::ProtoContext* ctx, const PO* v) {
-    return isListTag(v) || isSeqObject(ctx, v);
+    return isSeqObject(ctx, v);
 }
 
 const proto::ProtoList* seqToList(proto::ProtoContext* ctx, const PO* v) {
     if (!v || v == PROTO_NONE) return nullptr;
-    if (isListTag(v)) {
-        const proto::ProtoList* l = v->asList(ctx);
-        return l->getSize(ctx) == 0 ? nullptr : l;
-    }
     if (isVector(v)) {
         const proto::ProtoList* l = vectorItems(ctx, v);
         return l->getSize(ctx) == 0 ? nullptr : l;
+    }
+    switch (seqObjectKind(ctx, v)) {
+        case SeqObject::Empty: return nullptr;
+        case SeqObject::List:  return listToProtoList(ctx, v);
+        default: break;
     }
     if (!isSeqObject(ctx, v)) {
         const proto::ProtoList* items = nullptr;
@@ -935,7 +947,7 @@ const proto::ProtoList* seqToList(proto::ProtoContext* ctx, const PO* v) {
                      "Don't know how to create ISeq from: " + std::string(valueTypeName(ctx, v)));
     }
     Scope s(ctx, 2);
-    s.set(1, emptyList(s.ctx()));
+    s.set(1, newAcc(s.ctx()));
     {
         SeqWalk w(s.ctx(), 0, s.ctx(), v);
         // A list is built by appending, which leaves a path of garbage per
@@ -972,13 +984,13 @@ void SeqWalk::load(proto::ProtoContext* ctx, const PO* node) {
     cons_ = false;
     if (!node || node == PROTO_NONE) { node_ = nullptr; return; }
     node_ = node;
-    if (isListTag(node)) {
-        items_ = node->asList(ctx);
-        i_ = 0;
-        end_ = static_cast<long long>(items_->getSize(ctx));
+    // A cons and a list cell are [first more] (seqOf never answers ()).
+    const SeqObject k = seqObjectKind(ctx, node);
+    if (k == SeqObject::Cons || k == SeqObject::List) {
+        cons_ = true;
+        fields_ = fieldsOf(ctx, node);
         return;
     }
-    if (seqObjectKind(ctx, node) == SeqObject::Cons) { cons_ = true; return; }
     const ChunkView cv = chunkOf(ctx, node);
     items_ = cv.items;
     i_ = cv.off;
@@ -986,20 +998,31 @@ void SeqWalk::load(proto::ProtoContext* ctx, const PO* node) {
 }
 
 const PO* SeqWalk::first(proto::ProtoContext* ctx) const {
-    if (cons_) return consFirst(ctx, node_);
+    if (cons_) return orNil(fields_->getAt(ctx, 0));
     return items_->getAt(ctx, static_cast<int>(i_));
 }
 
 void SeqWalk::advance(proto::ProtoContext* ctx) {
     if (!node_) return;
     if (!cons_ && ++i_ < end_) return;
-    const PO* more = isListTag(node_) ? PROTO_NONE
-        : (cons_ ? consMore(ctx, node_) : chunkOf(ctx, node_).more);
-    if (more == PROTO_NONE) {
+    const PO* more = cons_ ? orNil(fields_->getAt(ctx, 1)) : chunkOf(ctx, node_).more;
+    if (more == PROTO_NONE || more == emptyListValue()) {
         root_->setAutomaticLocal(slot_, PROTO_NONE);
         node_ = nullptr;
         items_ = nullptr;
         return;
+    }
+    // A list cell, a cons or a chunk is its own seq: no realisation, and no
+    // context for it. Only a lazy seq is realised, in a context of its own.
+    switch (seqObjectKind(ctx, more)) {
+        case SeqObject::List:
+        case SeqObject::Cons:
+        case SeqObject::Chunk:
+            root_->setAutomaticLocal(slot_, more);
+            load(ctx, more);
+            return;
+        default:
+            break;
     }
     proto::ProtoContext step(ctx->space, ctx);
     const PO* s = seqOf(&step, more);
@@ -1007,13 +1030,21 @@ void SeqWalk::advance(proto::ProtoContext* ctx) {
     load(&step, s);
 }
 
+bool SeqWalk::counted(proto::ProtoContext* ctx, long long* n) const {
+    if (!node_) { *n = 0; return true; }
+    if (cons_) {
+        if (seqObjectKind(ctx, node_) != SeqObject::List) return false;
+        *n = listCount(ctx, node_);
+        return true;
+    }
+    if (chunkOf(ctx, node_).more != PROTO_NONE) return false;
+    *n = end_ - i_;
+    return true;
+}
+
 const PO* SeqWalk::remaining(proto::ProtoContext* ctx) const {
     if (!node_) return PROTO_NONE;
     if (cons_) return node_;
-    if (isListTag(node_)) {
-        if (i_ == 0) return node_;
-        return newChunk(ctx, items_, i_, end_, PROTO_NONE, false);
-    }
     const ChunkView cv = chunkOf(ctx, node_);
     if (i_ == cv.off) return node_;
     return newChunk(ctx, items_, i_, end_, cv.more, cv.chunked);
@@ -1155,7 +1186,7 @@ LAZYPRIM(prim_range) {
     requireNumber(ctx, end, "range");
     requireNumber(ctx, step, "range");
     if (numberCompare(ctx, step, ctx->fromLong(0)) == 0) {
-        if (numberCompare(ctx, start, end) == 0) return ctx->newList()->asObject(ctx);
+        if (numberCompare(ctx, start, end) == 0) return emptyListValue();
         return lazyStep(ctx, StepKind::Repeat, start, PROTO_NONE);
     }
     return lazyStep(ctx, StepKind::Range, start, end, step);
@@ -1206,7 +1237,7 @@ LAZYPRIM(prim_partition_all) { return partitionPrim(ctx, args, true); }
 
 LAZYPRIM(prim_interleave) {
     const proto::proto_ulong n = argc(ctx, args);
-    if (n == 0) return ctx->newList()->asObject(ctx);
+    if (n == 0) return emptyListValue();
     if (n == 1) return lazyStep(ctx, StepKind::Concat, argAt(ctx, args, 0), PROTO_NONE);
     Scope s(ctx, 1);
     s.set(0, argsFrom(s.ctx(), args, 0));

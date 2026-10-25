@@ -22,26 +22,12 @@ namespace protoClojure {
 
 namespace {
 
-// Pointer-tag constants matching protoCore's internal layout. Defined here
-// to avoid pulling proto_internal.h; copied from headers/proto_internal.h
-// and stable across protoCore versions (they are baked into every cell).
-constexpr unsigned int kTagList      = 2;   // POINTER_TAG_LIST
-constexpr unsigned int kTagListSmall = 25;  // POINTER_TAG_LIST_SMALL
-
-unsigned int tagOf(const proto::ProtoObject* form) {
-    return static_cast<unsigned int>(
-        reinterpret_cast<uintptr_t>(form) & 0x3F);
-}
-
-// True iff the form is a genuine ProtoList — large or small inline form.
-// We do NOT use `asList(ctx)` here because it treats a ProtoString as a
-// sequence of characters and returns a non-null ProtoList, which would
-// make the compiler walk every char of every string literal as if it
-// were a call form. The tag check is precise.
-bool isList(const proto::ProtoObject* form) {
-    if (!form) return false;
-    unsigned int t = tagOf(form);
-    return t == kTagList || t == kTagListSmall;
+// True iff the form is a list form: a Clojure list (SeqTypes.h), empty or
+// not, or any other seq (a cons, a lazy seq, a chunk: what a macro builds
+// with cons, map or concat), as any ISeq is a list form to Clojure's
+// compiler. FormList reads its elements.
+bool isList(proto::ProtoContext* ctx, const proto::ProtoObject* form) {
+    return isSeqObject(ctx, form);
 }
 
 // True iff the form is a symbol or a keyword: a named value
@@ -180,13 +166,25 @@ std::size_t addIntegerConst(proto::ProtoContext* ctx,
 }
 
 // The list form of `items`, in order, for the forms the compiler builds
-// itself. Allocated in `ctx`, whose young generation protects it (and the
-// items) until the caller roots it.
+// itself: a Clojure list, as the reader yields (SeqTypes.h). Allocated in
+// `ctx`, whose young generation protects it until the caller roots it; the
+// items are the caller's rooted values.
 const proto::ProtoObject* listForm(proto::ProtoContext* ctx,
                                    std::initializer_list<const proto::ProtoObject*> items) {
-    const proto::ProtoList* l = ctx->newList();
-    for (const proto::ProtoObject* item : items) l = l->appendLast(ctx, item);
-    return l->asObject(ctx);
+    return listFromArray(ctx, items.size(), items.begin());
+}
+const proto::ProtoObject* listForm(proto::ProtoContext* ctx,
+                                   const std::vector<const proto::ProtoObject*>& items) {
+    return listFromArray(ctx, items.size(), items.data());
+}
+
+// A list form that is not a Clojure list -- a lazy seq, a cons or a chunk a
+// macro answered -- as the Clojure list of its elements, realised in `ctx`;
+// any other form is itself. For the top-level expansion (macroexpandTopLevel),
+// whose result the drivers inspect as a list.
+const proto::ProtoObject* asListForm(proto::ProtoContext* ctx, const proto::ProtoObject* form) {
+    if (!isSeqObject(ctx, form) || isListValue(ctx, form)) return form;
+    return listFromProtoList(ctx, seqToList(ctx, form));
 }
 
 // A fresh generated symbol `prefixN`, as the gensyms clojure.core's
@@ -205,6 +203,31 @@ std::string printedForm(proto::ProtoContext* ctx, const proto::ProtoObject* form
 }
 
 } // namespace
+
+FormList::FormList(proto::ProtoContext* ctx, const proto::ProtoObject* form) : form_(form) {
+    const proto::ProtoObject* empty = emptyListValue();
+    if (isListValue(ctx, form)) {
+        if (form == empty) return;
+        items_.reserve(static_cast<std::size_t>(listCount(ctx, form)));
+        for (const proto::ProtoObject* p = form; p != empty; p = listRest(ctx, p))
+            items_.push_back(listFirst(ctx, p));
+        return;
+    }
+    // Any other seq is walked, realising it: what it realises is held by
+    // `form` (a lazy seq keeps the seq it computed, a cons its rest), so its
+    // elements stay reachable from the form, as a list's do.
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    for (SeqWalk w(&scope, 0, &scope, form); !w.done(); w.advance(&scope))
+        items_.push_back(w.first(&scope));
+}
+
+FormList::FormList(proto::ProtoContext* ctx, const proto::ProtoList* items,
+                   const proto::ProtoObject* form) : form_(form) {
+    const proto::proto_ulong n = items ? items->getSize(ctx) : 0;
+    items_.reserve(static_cast<std::size_t>(n));
+    for (proto::proto_ulong i = 0; i < n; ++i) items_.push_back(items->getAt(ctx, static_cast<int>(i)));
+}
 
 // True iff `form` is a keyword: a named value spelled with a leading `:`.
 // Used to detect a trailing kv-pair suffix at call sites.
@@ -419,7 +442,7 @@ void Compiler::destructure(proto::ProtoContext* ctx, const CompilerMarkers& mark
 
 const proto::ProtoObject* Compiler::destructureBindings(proto::ProtoContext* ctx,
                                                         const CompilerMarkers& markers,
-                                                        const proto::ProtoList* bindings) const {
+                                                        const FormList* bindings) const {
     const proto::proto_ulong n = bindings->getSize(ctx);
     bool simple = true;
     for (proto::proto_ulong i = 0; i < n; i += 2) {
@@ -536,7 +559,7 @@ PROTOCLJ_DEBUG_HELPER void Compiler::markForm(const proto::ProtoObject* form,
     }
 }
 
-PROTOCLJ_DEBUG_HELPER void Compiler::setPendingFn(proto::ProtoContext* ctx, const proto::ProtoList* lst,
+PROTOCLJ_DEBUG_HELPER void Compiler::setPendingFn(proto::ProtoContext* ctx, const FormList* lst,
                                                   const proto::ProtoObject* nameForm,
                                                   const proto::ProtoObject* form,
                                                   const CompilerMarkers& markers, int line) {
@@ -593,7 +616,7 @@ PROTOCLJ_DEBUG_HELPER void Compiler::endDebugBody(BytecodeModule& body) const {
 
 std::unique_ptr<BytecodeModule>
 Compiler::compileFnBody(proto::ProtoContext* ctx,
-                        const proto::ProtoList* fnForm,
+                        const FormList* fnForm,
                         const CompilerMarkers& markers) {
     // Detect whether the form is (fn [params] body...) or
     // (defn name [params] body...). The compileForm dispatcher routes
@@ -620,21 +643,21 @@ Compiler::compileFnBody(proto::ProtoContext* ctx,
         if (n <= paramsAt) throw CompileError("fn: missing parameter vector after name");
         paramsForm = fnForm->getAt(ctx, (int)paramsAt);
     }
-    const proto::ProtoList* params = nullptr;
+    FormList params;
     if (isVector(paramsForm)) {
-        params = vectorItems(ctx, paramsForm);
-    } else if (isList(paramsForm)) {
-        params = paramsForm->asList(ctx);
+        params = FormList(ctx, vectorItems(ctx, paramsForm), paramsForm);
+    } else if (isList(ctx, paramsForm)) {
+        params = FormList(ctx, paramsForm);
     } else {
         throw CompileError("fn/defn: parameter list must be a vector");
     }
-    return compileArity(ctx, params, fnForm, paramsAt + 1, markers);
+    return compileArity(ctx, &params, fnForm, paramsAt + 1, markers);
 }
 
 std::unique_ptr<BytecodeModule>
 Compiler::compileArity(proto::ProtoContext* ctx,
-                       const proto::ProtoList* params,
-                       const proto::ProtoList* arityForm,
+                       const FormList* params,
+                       const FormList* arityForm,
                        proto::proto_ulong bodyStartIdx,
                        const CompilerMarkers& markers) {
     // Destructured parameters, as clojure.core/fn does it: each parameter
@@ -646,6 +669,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     proto::ProtoContext dscope(ctx->space, ctx);
     dscope.resizeAutomaticLocals(2);
     ctx = &dscope;
+    FormList rewrittenParams, rewrittenArity;
     {
         const proto::proto_ulong pc = params->getSize(ctx);
         auto kwPathTakes = [&](const proto::ProtoObject* m) {
@@ -675,7 +699,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
             return keys;
         };
         std::vector<const proto::ProtoObject*> pairs;  // form, generated symbol
-        const proto::ProtoList* effective = ctx->newList();
+        std::vector<const proto::ProtoObject*> effective;
         for (proto::proto_ulong i = 0; i < pc; ++i) {
             const proto::ProtoObject* p = params->getAt(ctx, static_cast<int>(i));
             const bool afterAmp = i > 0 && isNameForm(ctx, markers.named, params->getAt(ctx, static_cast<int>(i - 1))) &&
@@ -687,26 +711,30 @@ Compiler::compileArity(proto::ProtoContext* ctx,
                 const proto::ProtoObject* g = freshSymbol(ctx, markers.named, "p__");
                 pairs.push_back(p);
                 pairs.push_back(g);
-                effective = effective->appendLast(ctx, g);
+                effective.push_back(g);
             } else {
-                effective = effective->appendLast(ctx, p);
+                effective.push_back(p);
             }
         }
         if (!pairs.empty()) {
-            dscope.setAutomaticLocal(0, effective->asObject(ctx));
-            params = dscope.getAutomaticLocal(0)->asList(ctx);
+            // The parameters (interned symbols and the caller's forms) need
+            // no root; the binding vector is rooted in slot 0, the arity
+            // form in slot 1.
+            rewrittenParams = FormList(std::move(effective));
+            params = &rewrittenParams;
             const proto::ProtoList* bvec = ctx->newList();
             for (const proto::ProtoObject* f : pairs) bvec = bvec->appendLast(ctx, f);
-            const proto::ProtoList* letForm = ctx->newList()
-                ->appendLast(ctx, symbolForm(ctx, markers.named, "let"))
-                ->appendLast(ctx, newVector(ctx, bvec));
+            dscope.setAutomaticLocal(0, newVector(ctx, bvec));
+            std::vector<const proto::ProtoObject*> letItems{symbolForm(ctx, markers.named, "let"),
+                                                            dscope.getAutomaticLocal(0)};
             const proto::proto_ulong an = arityForm->getSize(ctx);
             for (proto::proto_ulong i = bodyStartIdx; i < an; ++i)
-                letForm = letForm->appendLast(ctx, arityForm->getAt(ctx, static_cast<int>(i)));
+                letItems.push_back(arityForm->getAt(ctx, static_cast<int>(i)));
             // The arity becomes ([params] (let [...] body...)).
-            dscope.setAutomaticLocal(1, ctx->newList()
-                ->appendLast(ctx, PROTO_NONE)->appendLast(ctx, letForm->asObject(ctx))->asObject(ctx));
-            arityForm = dscope.getAutomaticLocal(1)->asList(ctx);
+            dscope.setAutomaticLocal(1, listForm(ctx, letItems));
+            dscope.setAutomaticLocal(1, listForm(ctx, {PROTO_NONE, dscope.getAutomaticLocal(1)}));
+            rewrittenArity = FormList(ctx, dscope.getAutomaticLocal(1));
+            arityForm = &rewrittenArity;
             bodyStartIdx = 1;
         }
     }
@@ -961,7 +989,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
     return body;
 }
 
-void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
+void Compiler::compileTry(proto::ProtoContext* ctx, const FormList* lst,
                           BytecodeModule& out, const CompilerMarkers& markers) {
     // A try needs local slots (the caught exception), and a top-level form
     // has none: compile a top-level try as the body of a zero-argument fn
@@ -983,38 +1011,41 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
         int classId;
         std::string className;
         std::string binding;
-        const proto::ProtoList* form;   // (catch Class name body...)
+        FormList form;   // (catch Class name body...)
     };
     const proto::proto_ulong n = lst->getSize(ctx);
     std::vector<proto::proto_ulong> bodyIdx;
     std::vector<CatchClause> catches;
-    const proto::ProtoList* finallyForm = nullptr;
+    FormList finallyItems;
+    const FormList* finallyForm = nullptr;
     for (proto::proto_ulong i = 1; i < n; ++i) {
         const proto::ProtoObject* f = lst->getAt(ctx, static_cast<int>(i));
         std::string clause;
-        if (isList(f)) {
-            const proto::ProtoList* fl = f->asList(ctx);
-            if (fl->getSize(ctx) > 0 && isNameForm(ctx, markers.named, fl->getAt(ctx, 0))) {
-                clause = nameOf(ctx, markers.named, fl->getAt(ctx, 0));
+        FormList fl;
+        if (isList(ctx, f)) {
+            fl = FormList(ctx, f);
+            if (fl.getSize(ctx) > 0 && isNameForm(ctx, markers.named, fl.getAt(ctx, 0))) {
+                clause = nameOf(ctx, markers.named, fl.getAt(ctx, 0));
             }
         }
         if (finallyForm) {
             throw CompileError("finally clause must be last in try expression");
         }
         if (clause == "catch") {
-            const proto::ProtoList* cl = f->asList(ctx);
-            if (cl->getSize(ctx) < 3 || !isNameForm(ctx, markers.named, cl->getAt(ctx, 1)) ||
-                !isNameForm(ctx, markers.named, cl->getAt(ctx, 2))) {
+            const FormList& cl = fl;
+            if (cl.getSize(ctx) < 3 || !isNameForm(ctx, markers.named, cl.getAt(ctx, 1)) ||
+                !isNameForm(ctx, markers.named, cl.getAt(ctx, 2))) {
                 throw CompileError(
                     "catch: expects (catch ClassName binding body...)");
             }
-            const std::string className = nameOf(ctx, markers.named, cl->getAt(ctx, 1));
+            const std::string className = nameOf(ctx, markers.named, cl.getAt(ctx, 1));
             // `Object` catches every value, as `Throwable` does.
             const int classId = (className == "Object" || className == "java.lang.Object")
                 ? kThrowableClassId : exceptionClassId(className);
-            catches.push_back({classId, className, nameOf(ctx, markers.named, cl->getAt(ctx, 2)), cl});
+            catches.push_back({classId, className, nameOf(ctx, markers.named, cl.getAt(ctx, 2)), cl});
         } else if (clause == "finally") {
-            finallyForm = f->asList(ctx);
+            finallyItems = fl;
+            finallyForm = &finallyItems;
         } else {
             if (!catches.empty()) {
                 throw CompileError(
@@ -1040,7 +1071,7 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
         out.patchOperand(at, target - (at + 1));
     };
     // Forms [from, size) of `form` as an implicit do: nil when there are none.
-    auto compileDo = [&](const proto::ProtoList* form, proto::proto_ulong from) {
+    auto compileDo = [&](const FormList* form, proto::proto_ulong from) {
         const proto::proto_ulong size = form->getSize(ctx);
         if (from >= size) { out.emit(Op::PUSH_NIL, 0); return; }
         for (proto::proto_ulong i = from; i < size; ++i) {
@@ -1123,7 +1154,7 @@ void Compiler::compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
             }
             const std::size_t catchLocals = localsMark(out);
             bindLocal(out, c.binding, exSlot, out.pos());
-            compileDo(c.form, 3);
+            compileDo(&c.form, 3);
             closeLocals(out, catchLocals);
             {
                 auto& names = scopes_[scopeIdx].nameToSlot;
@@ -1296,17 +1327,12 @@ const proto::ProtoObject* Compiler::macroexpandTopLevel(proto::ProtoContext* ctx
     // Recursive, as Clojure's Compiler.macroexpand is: a macro that always
     // expands into another call of itself ends in StackOverflowError.
     checkNativeStack(StackUse::Source);
-    // A seq object is a list form (see compileForm); the list is anchored in
-    // `ctx`, as the expansions are.
-    if (isSeqObject(ctx, form)) {
-        const proto::ProtoList* l = seqToList(ctx, form);
-        form = (l ? l : ctx->newList())->asObject(ctx);
-    }
-    if (!isList(form)) return form;
-    const proto::ProtoList* lst = form->asList(ctx);
-    if (lst->getSize(ctx) == 0) return form;
+    // A seq that is not a list is a list form (see compileForm); the list is
+    // anchored in `ctx`, as the expansions are.
+    form = asListForm(ctx, form);
+    if (!isList(ctx, form) || form == emptyListValue()) return form;
     std::string name;
-    const proto::ProtoObject* macro = macroForHead(ctx, lst->getAt(ctx, 0), markers, name);
+    const proto::ProtoObject* macro = macroForHead(ctx, listFirst(ctx, form), markers, name);
     if (!macro) return form;
     // The expansion is anchored in `ctx` (expandMacroCall), and so is each
     // intermediate one: they live until the caller's context ends.
@@ -1324,22 +1350,20 @@ void Compiler::compileAsThunk(proto::ProtoContext* ctx, const proto::ProtoObject
                               BytecodeModule& out, const CompilerMarkers& markers) {
     proto::ProtoContext scope(ctx->space, ctx);
     scope.resizeAutomaticLocals(1);
-    scope.setAutomaticLocal(0, scope.newList()
-        ->appendLast(&scope, symbolForm(&scope, markers.named, "fn"))
-        ->appendLast(&scope, form)
-        ->asObject(&scope));
+    scope.setAutomaticLocal(0, listForm(&scope, {symbolForm(&scope, markers.named, "fn"), form}));
     pendingFnName_ = "<top level>";
     pendingFnLine_ = formLineOf(form);
     pendingThunk_ = true;
+    const FormList noParams;
+    const FormList thunk(&scope, scope.getAutomaticLocal(0));
     std::unique_ptr<BytecodeModule> body =
-        compileArity(&scope, scope.newList(), scope.getAutomaticLocal(0)->asList(&scope),
-                     /*bodyStartIdx=*/1, markers);
+        compileArity(&scope, &noParams, &thunk, /*bodyStartIdx=*/1, markers);
     std::size_t blockIdx = out.addBlock(std::move(body));
     out.emit(Op::MAKE_FN, blockIdx);   // no captures at the top level
     out.emit(Op::CALL, 0);
 }
 
-void Compiler::compileDefmacro(proto::ProtoContext* ctx, const proto::ProtoList* lst,
+void Compiler::compileDefmacro(proto::ProtoContext* ctx, const FormList* lst,
                                BytecodeModule& out, const CompilerMarkers& markers) {
     const proto::proto_ulong n = lst->getSize(ctx);
     if (n < 3) throw CompileError("defmacro: expects (defmacro name [params] body...)");
@@ -1372,32 +1396,36 @@ void Compiler::compileDefmacro(proto::ProtoContext* ctx, const proto::ProtoList*
             full = full->appendLast(&scope, items->getAt(&scope, static_cast<int>(k)));
         return newVector(&scope, full);
     };
-    scope.setAutomaticLocal(0, scope.newList()
-        ->appendLast(&scope, symbolForm(&scope, markers.named, "fn"))->asObject(&scope));
+    // The fn form's elements, built in order and made a list at the end:
+    // the rebuilt arities are rooted in a vector in slot 1 meanwhile.
+    std::vector<const proto::ProtoObject*> fnItems{symbolForm(&scope, markers.named, "fn")};
     const proto::ProtoObject* first = lst->getAt(ctx, static_cast<int>(i));
     if (isVector(first)) {
-        const proto::ProtoList* fnForm = scope.getAutomaticLocal(0)->asList(&scope)
-            ->appendLast(&scope, withHidden(first));
+        scope.setAutomaticLocal(1, withHidden(first));
+        fnItems.push_back(scope.getAutomaticLocal(1));
         for (proto::proto_ulong k = i + 1; k < n; ++k)
-            fnForm = fnForm->appendLast(&scope, lst->getAt(&scope, static_cast<int>(k)));
-        scope.setAutomaticLocal(0, fnForm->asObject(&scope));
+            fnItems.push_back(lst->getAt(&scope, static_cast<int>(k)));
+        scope.setAutomaticLocal(0, listForm(&scope, fnItems));
     } else {
+        const proto::ProtoList* arities = scope.newList();
+        scope.setAutomaticLocal(1, arities->asObject(&scope));
         for (proto::proto_ulong k = i; k < n; ++k) {
             const proto::ProtoObject* arity = lst->getAt(&scope, static_cast<int>(k));
-            if (!isList(arity) || arity->asList(&scope)->getSize(&scope) == 0) {
+            if (!isList(&scope, arity) || FormList(&scope, arity).getSize(&scope) == 0) {
                 if (k + 1 == n && isMap(arity)) break;  // a trailing attribute map
                 throw CompileError("defmacro: each arity must be a list ([params] body...)");
             }
-            const proto::ProtoList* al = arity->asList(&scope);
-            const proto::ProtoList* rebuilt = scope.newList()
-                ->appendLast(&scope, withHidden(al->getAt(&scope, 0)));
-            const proto::proto_ulong an = al->getSize(&scope);
+            const FormList al(&scope, arity);
+            std::vector<const proto::ProtoObject*> rebuilt{withHidden(al.getAt(&scope, 0))};
+            const proto::proto_ulong an = al.getSize(&scope);
             for (proto::proto_ulong t = 1; t < an; ++t)
-                rebuilt = rebuilt->appendLast(&scope, al->getAt(&scope, static_cast<int>(t)));
-            scope.setAutomaticLocal(1, rebuilt->asObject(&scope));
-            scope.setAutomaticLocal(0, scope.getAutomaticLocal(0)->asList(&scope)
-                ->appendLast(&scope, scope.getAutomaticLocal(1))->asObject(&scope));
+                rebuilt.push_back(al.getAt(&scope, static_cast<int>(t)));
+            arities = scope.getAutomaticLocal(1)->asList(&scope)->appendLast(&scope, listForm(&scope, rebuilt));
+            scope.setAutomaticLocal(1, arities->asObject(&scope));
         }
+        const proto::proto_ulong na = arities->getSize(&scope);
+        for (proto::proto_ulong k = 0; k < na; ++k) fnItems.push_back(arities->getAt(&scope, static_cast<int>(k)));
+        scope.setAutomaticLocal(0, listForm(&scope, fnItems));
     }
     // (def name (__macro__ (fn ...))): __macro__ returns the fn wrapper with
     // the macro flag set (Macros.h).
@@ -1428,19 +1456,6 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
     if (form == PROTO_TRUE)  { out.emit(Op::PUSH_TRUE,  0); return; }
     if (form == PROTO_FALSE) { out.emit(Op::PUSH_FALSE, 0); return; }
 
-    // A lazy seq, a cons or a chunk is a list form, as any ISeq is to
-    // Clojure's compiler: what a macro builds with map, cons or concat over
-    // a lazy seq. It is compiled as the list of its elements, rooted in a
-    // scope of its own.
-    if (isSeqObject(ctx, form)) {
-        proto::ProtoContext scope(ctx->space, ctx);
-        scope.resizeAutomaticLocals(1);
-        const proto::ProtoList* lst = seqToList(&scope, form);
-        scope.setAutomaticLocal(0, (lst ? lst : scope.newList())->asObject(&scope));
-        compileForm(&scope, scope.getAutomaticLocal(0), out, markers);
-        return;
-    }
-
     // Integer literal — emit PUSH_CONST <addLong>.
     if (form->isInteger(ctx)) {
         std::size_t idx = addIntegerConst(ctx, form, out);
@@ -1457,13 +1472,16 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
 
     // List form: either a special form or a call form. We decide by the
     // head symbol's text: a fixed set of names dispatch as special forms,
-    // anything else is a plain call.
-    if (isList(form)) {
-        const proto::ProtoList* lst = form->asList(ctx);
+    // anything else is a plain call. A list, or any other seq (what a macro
+    // builds with cons, map or concat), as any ISeq is to Clojure's compiler.
+    if (isList(ctx, form)) {
+        const FormList items(ctx, form);
+        const FormList* lst = &items;
         proto::proto_ulong n = lst->getSize(ctx);
         if (n == 0) {
-            // `()` evaluates to the empty list, as in Clojure.
-            out.emit(Op::PUSH_CONST, out.addDatum(ctx, form));
+            // `()` evaluates to the empty list, as in Clojure (an empty seq
+            // a macro answered too).
+            out.emit(Op::PUSH_CONST, out.addDatum(ctx, emptyListValue()));
             return;
         }
         const proto::ProtoObject* head = lst->getAt(ctx, 0);
@@ -1676,11 +1694,10 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 if (skip > 2) {
                     proto::ProtoContext scope(ctx->space, ctx);
                     scope.resizeAutomaticLocals(1);
-                    const proto::ProtoList* rebuilt = scope.newList()
-                        ->appendLast(&scope, head)->appendLast(&scope, lst->getAt(&scope, 1));
+                    std::vector<const proto::ProtoObject*> rebuilt{head, lst->getAt(&scope, 1)};
                     for (proto::proto_ulong k = skip; k < n; ++k)
-                        rebuilt = rebuilt->appendLast(&scope, lst->getAt(&scope, static_cast<int>(k)));
-                    scope.setAutomaticLocal(0, rebuilt->asObject(&scope));
+                        rebuilt.push_back(lst->getAt(&scope, static_cast<int>(k)));
+                    scope.setAutomaticLocal(0, listForm(&scope, rebuilt));
                     compileForm(&scope, scope.getAutomaticLocal(0), out, markers);
                     return;
                 }
@@ -1705,12 +1722,9 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             // vector `[..]`. Multi-arity: a list whose first
             // element is itself a vector — `(fn ([x] ...) ([x y] ...))`.
             bool multiArity = false;
-            if (isList(first)) {
-                const proto::ProtoList* fl = first->asList(ctx);
-                if (fl->getSize(ctx) >= 1 &&
-                    isVector(fl->getAt(ctx, 0))) {
-                    multiArity = true;
-                }
+            if (isList(ctx, first)) {
+                const FormList fl(ctx, first);
+                multiArity = fl.getSize(ctx) >= 1 && isVector(fl.getAt(ctx, 0));
             }
 
             auto emitCapsThenOp = [&](std::size_t blockIdx, Op makeOp,
@@ -1737,25 +1751,25 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 std::vector<std::size_t> blockIdxs;
                 for (proto::proto_ulong i = aritiesStart; i < n; ++i) {
                     const proto::ProtoObject* aobj = lst->getAt(ctx, (int)i);
-                    if (!isList(aobj)) {
+                    if (!isList(ctx, aobj)) {
                         throw CompileError("multi-arity: each arity must be a list");
                     }
-                    const proto::ProtoList* alist = aobj->asList(ctx);
-                    if (alist->getSize(ctx) < 1) {
+                    const FormList alist(ctx, aobj);
+                    if (alist.getSize(ctx) < 1) {
                         throw CompileError("multi-arity: arity missing params");
                     }
-                    const proto::ProtoObject* paramsForm = alist->getAt(ctx, 0);
-                    const proto::ProtoList* params = nullptr;
+                    const proto::ProtoObject* paramsForm = alist.getAt(ctx, 0);
+                    FormList params;
                     if (isVector(paramsForm)) {
-                        params = vectorItems(ctx, paramsForm);
-                    } else if (isList(paramsForm)) {
-                        params = paramsForm->asList(ctx);
+                        params = FormList(ctx, vectorItems(ctx, paramsForm), paramsForm);
+                    } else if (isList(ctx, paramsForm)) {
+                        params = FormList(ctx, paramsForm);
                     } else {
                         throw CompileError("multi-arity: params must be a vector");
                     }
                     if (debugOn()) setPendingFn(ctx, lst, nameForm, form, markers, fnLine);
                     std::unique_ptr<BytecodeModule> body =
-                        compileArity(ctx, params, alist, 1, markers);
+                        compileArity(ctx, &params, &alist, 1, markers);
                     std::size_t blockIdx = out.addBlock(std::move(body));
                     blockIdxs.push_back(blockIdx);
                 }
@@ -1791,14 +1805,15 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (scopes_.empty()) { compileAsThunk(ctx, form, out, markers); return; }
             if (n < 2) throw CompileError("let: expects bindings vector");
             const proto::ProtoObject* bindings = lst->getAt(ctx, 1);
-            const proto::ProtoList* bvec = nullptr;
+            FormList bitems;
             if (isVector(bindings)) {
-                bvec = vectorItems(ctx, bindings);
-            } else if (isList(bindings)) {
-                bvec = bindings->asList(ctx);
+                bitems = FormList(ctx, vectorItems(ctx, bindings), bindings);
+            } else if (isList(ctx, bindings)) {
+                bitems = FormList(ctx, bindings);
             } else {
                 throw CompileError("let: bindings must be a vector");
             }
+            const FormList* bvec = &bitems;
             proto::proto_ulong bn = bvec->getSize(ctx);
             if (bn % 2 != 0) {
                 throw CompileError("let: bindings must come in name/value pairs");
@@ -1811,11 +1826,10 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 scope.resizeAutomaticLocals(1);
                 if (const proto::ProtoObject* flat = destructureBindings(&scope, markers, bvec)) {
                     scope.setAutomaticLocal(0, flat);
-                    const proto::ProtoList* rebuilt = scope.newList()
-                        ->appendLast(&scope, head)->appendLast(&scope, scope.getAutomaticLocal(0));
+                    std::vector<const proto::ProtoObject*> rebuilt{head, scope.getAutomaticLocal(0)};
                     for (proto::proto_ulong i = 2; i < n; ++i)
-                        rebuilt = rebuilt->appendLast(&scope, lst->getAt(&scope, static_cast<int>(i)));
-                    scope.setAutomaticLocal(0, rebuilt->asObject(&scope));
+                        rebuilt.push_back(lst->getAt(&scope, static_cast<int>(i)));
+                    scope.setAutomaticLocal(0, listForm(&scope, rebuilt));
                     compileForm(&scope, scope.getAutomaticLocal(0), out, markers);
                     return;
                 }
@@ -1858,14 +1872,15 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             if (scopes_.empty()) { compileAsThunk(ctx, form, out, markers); return; }
             if (n < 2) throw CompileError("loop: expects bindings vector");
             const proto::ProtoObject* bindings = lst->getAt(ctx, 1);
-            const proto::ProtoList* bvec = nullptr;
+            FormList bitems;
             if (isVector(bindings)) {
-                bvec = vectorItems(ctx, bindings);
-            } else if (isList(bindings)) {
-                bvec = bindings->asList(ctx);
+                bitems = FormList(ctx, vectorItems(ctx, bindings), bindings);
+            } else if (isList(ctx, bindings)) {
+                bitems = FormList(ctx, bindings);
             } else {
                 throw CompileError("loop: bindings must be a vector");
             }
+            const FormList* bvec = &bitems;
             proto::proto_ulong bn = bvec->getSize(ctx);
             if (bn % 2 != 0) {
                 throw CompileError("loop: bindings must come in name/value pairs");
@@ -1899,13 +1914,12 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                         }
                         loopBs = loopBs->appendLast(&scope, g)->appendLast(&scope, g);
                     }
-                    const proto::ProtoList* innerLet = scope.newList()
-                        ->appendLast(&scope, symbolForm(&scope, markers.named, "let"))
-                        ->appendLast(&scope, newVector(&scope, inner));
+                    std::vector<const proto::ProtoObject*> innerLet{
+                        symbolForm(&scope, markers.named, "let"), newVector(&scope, inner)};
                     for (proto::proto_ulong i = 2; i < n; ++i)
-                        innerLet = innerLet->appendLast(&scope, lst->getAt(&scope, static_cast<int>(i)));
+                        innerLet.push_back(lst->getAt(&scope, static_cast<int>(i)));
                     const proto::ProtoObject* loopForm = listForm(&scope,
-                        {head, newVector(&scope, loopBs), innerLet->asObject(&scope)});
+                        {head, newVector(&scope, loopBs), listForm(&scope, innerLet)});
                     scope.setAutomaticLocal(0, listForm(&scope,
                         {symbolForm(&scope, markers.named, "let"), newVector(&scope, outer), loopForm}));
                     compileForm(&scope, scope.getAutomaticLocal(0), out, markers);

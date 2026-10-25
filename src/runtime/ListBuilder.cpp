@@ -1,4 +1,5 @@
 #include "runtime/ListBuilder.h"
+#include "runtime/SeqTypes.h"
 
 #include "protoCore.h"
 
@@ -73,6 +74,17 @@ const proto::ProtoObject* ListBuilder::finish() {
 
 const proto::ProtoList* ListBuilder::finishList() {
     return finish()->asList(holder_);
+}
+
+const proto::ProtoObject* ListBuilder::finishSeq() {
+    flush();
+    // The cells are built in holder_, from the accumulator rooted in its
+    // slot 0, and the result replaces the accumulator there.
+    const proto::ProtoObject* result =
+        listFromProtoList(holder_, holder_->getAutomaticLocal(kSlotAcc)->asList(holder_));
+    holder_->setAutomaticLocal(kSlotAcc, result);
+    holder_->returnValue = result;
+    return result;
 }
 
 } // namespace protoClojure

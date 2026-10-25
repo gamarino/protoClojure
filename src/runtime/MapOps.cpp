@@ -55,23 +55,34 @@ inline bool isListTag(const proto::ProtoObject* v) {
     return tag == kTagList || tag == kTagListSmall;
 }
 
-inline bool isSequential(const proto::ProtoObject* v) {
-    return v != nullptr && (isVector(v) || isListTag(v));
+// A vector, a Clojure list (SeqTypes.h), or the ProtoList a seq object was
+// read into (keyHash, keyEquals): what is matched element by element.
+inline bool isSequential(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    return v != nullptr && (isVector(v) || isListTag(v) || isListValue(ctx, v));
 }
 
-// A list or a vector read by index. A vector's elements are a ProtoList
-// too (VectorOps.h), so one view covers both.
+// The elements of a sequential value in order: a vector's or a ProtoList's
+// by index, a list's along its cells. No allocation.
 struct SequenceView {
-    const proto::ProtoList* list = nullptr;
+    const proto::ProtoList* list = nullptr;  // a vector's elements, or a ProtoList
+    const proto::ProtoObject* cell = nullptr;  // else the next list cell
+    proto::proto_ulong n = 0, i = 0;
 
     static SequenceView of(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
         SequenceView s;
-        s.list = isVector(v) ? vectorItems(ctx, v) : v->asList(ctx);
+        if (isVector(v))          s.list = vectorItems(ctx, v);
+        else if (isListTag(v))    s.list = v->asList(ctx);
+        else                      s.cell = v;
+        s.n = s.list ? s.list->getSize(ctx) : static_cast<proto::proto_ulong>(listCount(ctx, v));
         return s;
     }
-    proto::proto_ulong size(proto::ProtoContext* ctx) const { return list->getSize(ctx); }
-    const proto::ProtoObject* at(proto::ProtoContext* ctx, proto::proto_ulong i) const {
-        return list->getAt(ctx, static_cast<int>(i));
+    proto::proto_ulong size() const { return n; }
+    const proto::ProtoObject* next(proto::ProtoContext* ctx) {
+        if (list) return list->getAt(ctx, static_cast<int>(i++));
+        const proto::ProtoObject* x = listFirst(ctx, cell);
+        cell = listRest(ctx, cell);
+        ++i;
+        return x;
     }
 };
 
@@ -97,10 +108,10 @@ std::uint64_t doubleBits(proto::ProtoContext* ctx, const proto::ProtoObject* key
 }
 
 proto::proto_ulong sequenceHash(proto::ProtoContext* ctx, const proto::ProtoObject* seq) {
-    const SequenceView view = SequenceView::of(ctx, seq);
-    const proto::proto_ulong n = view.size(ctx);
+    SequenceView view = SequenceView::of(ctx, seq);
+    const proto::proto_ulong n = view.size();
     proto::proto_ulong h = combine(kSaltSequence, n);
-    for (proto::proto_ulong i = 0; i < n; ++i) h = combine(h, keyHash(ctx, view.at(ctx, i)));
+    for (proto::proto_ulong i = 0; i < n; ++i) h = combine(h, keyHash(ctx, view.next(ctx)));
     return h;
 }
 
@@ -127,12 +138,12 @@ proto::proto_ulong mapHash(proto::ProtoContext* ctx, const proto::ProtoObject* m
 
 bool sequenceEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
                     const proto::ProtoObject* b) {
-    const SequenceView va = SequenceView::of(ctx, a);
-    const SequenceView vb = SequenceView::of(ctx, b);
-    const proto::proto_ulong n = va.size(ctx);
-    if (n != vb.size(ctx)) return false;
+    SequenceView va = SequenceView::of(ctx, a);
+    SequenceView vb = SequenceView::of(ctx, b);
+    const proto::proto_ulong n = va.size();
+    if (n != vb.size()) return false;
     for (proto::proto_ulong i = 0; i < n; ++i)
-        if (!keyEquals(ctx, va.at(ctx, i), vb.at(ctx, i))) return false;
+        if (!keyEquals(ctx, va.next(ctx), vb.next(ctx))) return false;
     return true;
 }
 
@@ -251,13 +262,15 @@ bool keyIsIdentity(proto::ProtoContext* ctx, const proto::ProtoObject* key) {
             // looks up is found in the named-value cache (Named.h) without
             // reading its prototype, so the set test costs nothing on the
             // common path.
-            // A lazy seq, a cons or a chunk (SeqTypes.h) is sequential and
-            // matched by its elements too.
+            // A list, a lazy seq, a cons or a chunk (SeqTypes.h) is
+            // sequential and matched by its elements too.
             if (isKnownNamed(key)) return true;
+            if (key == g_seqProtos.empty) return false;
             {
                 const proto::ProtoObject* p = key->getPrototype(ctx);
                 return p != g_setPrototype && p != g_seqProtos.lazy &&
-                       p != g_seqProtos.cons && p != g_seqProtos.chunk;
+                       p != g_seqProtos.cons && p != g_seqProtos.chunk &&
+                       p != g_seqProtos.list;
             }
         default:
             // A map and a vector are matched by value; anything else
@@ -305,6 +318,10 @@ proto::proto_ulong keyHash(proto::ProtoContext* ctx, const proto::ProtoObject* k
                 checkNativeStack();
                 return setHash(ctx, key);
             }
+            if (isListValue(ctx, key)) {
+                checkNativeStack();
+                return sequenceHash(ctx, key);
+            }
             if (isSeqObject(ctx, key)) {
                 // A seq hashes as the list of its elements, so it is the same
                 // key as an equal list or vector. Realises it (Clojure's
@@ -334,14 +351,18 @@ bool keyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
     if (aString || bString) return aString && bString && a->partialCompare(ctx, b) == 0;
 
     // A lazy seq, a cons or a chunk is compared as the list of its elements
-    // (SeqTypes.h), each realised in a scope of its own.
-    if (isSeqObject(ctx, a) || isSeqObject(ctx, b)) {
+    // (SeqTypes.h), each realised in a scope of its own; a list is read
+    // along its cells (isSequential).
+    const auto unrealised = [&](const proto::ProtoObject* v) {
+        return isSeqObject(ctx, v) && !isListValue(ctx, v);
+    };
+    if (unrealised(a) || unrealised(b)) {
         proto::ProtoContext scope(ctx->space, ctx);
         scope.resizeAutomaticLocals(2);
         const proto::ProtoObject* both[2] = {a, b};
         for (int i = 0; i < 2; ++i) {
             const proto::ProtoObject* v = both[i];
-            if (isSeqObject(&scope, v)) {
+            if (isSeqObject(&scope, v) && !isListValue(&scope, v)) {
                 const proto::ProtoList* lst = seqObjectToList(&scope, v);
                 v = (lst ? lst : scope.newList())->asObject(&scope);
             }
@@ -351,8 +372,8 @@ bool keyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
     }
 
     // A list and a vector with equal elements are one key.
-    const bool aSeq = isSequential(a);
-    const bool bSeq = isSequential(b);
+    const bool aSeq = isSequential(ctx, a);
+    const bool bSeq = isSequential(ctx, b);
     if (aSeq || bSeq) return aSeq && bSeq && sequenceEquals(ctx, a, b);
 
     const bool aMap = isMap(a);

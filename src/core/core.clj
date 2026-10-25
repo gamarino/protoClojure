@@ -25,6 +25,8 @@
 (defn zero? [n] (= n 0))
 (defn pos? [n] (> n 0))
 (defn neg? [n] (< n 0))
+(defn sequential? [x] (if (seq? x) true (vector? x)))
+(defn coll? [x] (if (seq? x) true (if (vector? x) true (if (map? x) true (set? x)))))
 (defn nnext [coll] (next (next coll)))
 (defn ffirst [coll] (first (first coll)))
 (defn nthnext [coll n]

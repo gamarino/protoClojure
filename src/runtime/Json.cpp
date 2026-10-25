@@ -85,13 +85,6 @@ struct JsonSyntaxError {
 
 bool truthy(const PO* v) { return v && v != PROTO_NONE && v != PROTO_FALSE; }
 
-constexpr proto::proto_ulong kTagMask      = 0x3F;
-constexpr proto::proto_ulong kTagList      = 2;   // POINTER_TAG_LIST
-constexpr proto::proto_ulong kTagListSmall = 25;  // POINTER_TAG_LIST_SMALL
-bool isListValue(const PO* v) {
-    const proto::proto_ulong tag = reinterpret_cast<proto::proto_ulong>(v) & kTagMask;
-    return v != nullptr && (tag == kTagList || tag == kTagListSmall);
-}
 
 // ============================================================== the source
 
@@ -742,7 +735,8 @@ void Writer::value(proto::ProtoContext* ctx, const PO* v) {
         return;
     }
     if (isMap(v)) { map(ctx, v); return; }
-    if (isVector(v) || isListValue(v) || isSeqObject(ctx, v) || isSet(ctx, v)) {
+    // A list is a seq object (SeqTypes.h).
+    if (isVector(v) || isSeqObject(ctx, v) || isSet(ctx, v)) {
         sequence(ctx, v);
         return;
     }

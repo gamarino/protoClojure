@@ -9,14 +9,17 @@
  *     or a native step (an immutable object naming a kind and its operands:
  *     the lazy map, filter, range, ... below);
  *   - a cons holds a first element and `more`, any seq or nil;
- *   - a chunk is the elements [off, end) of a ProtoList followed by `more`.
+ *   - a chunk is the elements [off, end) of a ProtoList followed by `more`;
+ *   - a list cell holds a first element, the rest (a list) and the count
+ *     (SeqTypes.h, "Clojure lists").
  *
  * The seq protocol, as clojure.lang.RT and ISeq:
- *   seqOf(v)      nil, or a non-empty seq: a ProtoList, a cons or a chunk.
- *                 A lazy seq is realised (and the seq it holds answered); a
- *                 vector answers a chunked chunk over its elements; a map, a
- *                 set and a string answer the list of their entries,
- *                 elements and characters.
+ *   seqOf(v)      nil, or a non-empty seq: a list cell, a cons or a chunk.
+ *                 A lazy seq is realised (and the seq it holds answered); the
+ *                 empty list answers nil; a vector answers a chunked chunk
+ *                 over its elements; a map, a set and a string answer an
+ *                 unchunked chunk over their entries, elements and
+ *                 characters.
  *   seqFirst(s)   the first element of a non-empty seq.
  *   seqMore(s)    what follows it, never nil: `()` at the end (Clojure's
  *                 `rest`).
@@ -108,7 +111,7 @@ void registerStep(StepKind kind, StepRealizer fn, bool pure);
 
 // ---- The seq protocol ---------------------------------------------------------
 
-// RT.seq: nil, or a non-empty ProtoList, cons or chunk (see above). Raises
+// RT.seq: nil, or a non-empty list, cons or chunk (see above). Raises
 // IllegalArgumentException "Don't know how to create ISeq from: ..." for a
 // value that is not seqable.
 const proto::ProtoObject* seqOf(proto::ProtoContext* ctx, const proto::ProtoObject* v);
@@ -120,7 +123,7 @@ inline const proto::ProtoObject* seqNext(proto::ProtoContext* ctx, const proto::
 
 // ---- Direct reads -------------------------------------------------------------
 //
-// first, rest, next, seq and empty? of the values that are read without
+// first, rest, next, seq, empty? and cons of the values that are read without
 // running Clojure code: nil, a list, a vector, a cons and a chunk. Each
 // answers false, touching nothing, for any other value (a lazy seq, which
 // may run code to realise; a map, a set, a string, or a value that is not
@@ -134,8 +137,12 @@ bool tryRest(proto::ProtoContext* ctx, const proto::ProtoObject* v, const proto:
 bool tryNext(proto::ProtoContext* ctx, const proto::ProtoObject* v, const proto::ProtoObject** out);
 bool trySeq(proto::ProtoContext* ctx, const proto::ProtoObject* v, const proto::ProtoObject** out);
 bool tryEmpty(proto::ProtoContext* ctx, const proto::ProtoObject* v, bool* out);
+// (cons x coll) onto nil (a one-element list) or a seq object (a cons cell,
+// which realises nothing), as Clojure's RT.cons; false for any other coll.
+bool tryCons(proto::ProtoContext* ctx, const proto::ProtoObject* x,
+             const proto::ProtoObject* coll, const proto::ProtoObject** out);
 
-// `seq?`: a list, a lazy seq, a cons or a chunk.
+// `seq?`: a list (empty or not), a lazy seq, a cons or a chunk.
 bool isSeqValue(proto::ProtoContext* ctx, const proto::ProtoObject* v);
 
 // The seq a lazy seq realises to, realising it on the first call. The
@@ -179,6 +186,10 @@ public:
     // The current element; reachable from the current node until advance.
     const proto::ProtoObject* first(proto::ProtoContext* ctx) const;
     void advance(proto::ProtoContext* ctx);
+    // True, with the count in `*n`, when the number of elements from the
+    // current position to the end is known without walking: the current
+    // node is a list cell (its count) or a chunk with nothing after it.
+    bool counted(proto::ProtoContext* ctx, long long* n) const;
     // What remains, as a seq (nil at the end): the rest of the walked
     // collection from the current position. Allocates for a list or a chunk
     // read part-way; the result is unrooted.
@@ -190,9 +201,10 @@ private:
     proto::ProtoContext*      root_;
     unsigned                  slot_;
     const proto::ProtoObject* node_ = nullptr;  // also in root_'s slot
-    const proto::ProtoList*   items_ = nullptr; // a list's or a chunk's elements
+    const proto::ProtoList*   items_ = nullptr; // a chunk's elements
     long long                 i_ = 0, end_ = 0;
-    bool                      cons_ = false;
+    bool                      cons_ = false;    // a cons or a list cell
+    const proto::ProtoList*   fields_ = nullptr; // its fields, [first more ...]
 };
 
 // Installs the lazy-sequence functions (map, filter, take, range, ...) on

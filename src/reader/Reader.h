@@ -56,7 +56,7 @@ struct ReaderError : std::runtime_error {
 //   foo, a/b          a symbol: the interned named value (runtime/Named.h)
 //   :foo              a keyword: the interned named value spelled ":foo"
 //   nil true false    PROTO_NONE, PROTO_TRUE, PROTO_FALSE
-//   (a b)             a ProtoList
+//   (a b)             a Clojure list (runtime/SeqTypes.h)
 //   [a b]             a vector (runtime/VectorOps.h)
 //   {k v}             a map (runtime/MapOps.h); a repeated key is a read
 //                     error, "Duplicate key: k", as in Clojure. The keys'
@@ -191,10 +191,11 @@ private:
                                           const Token& tok);
 
     // Read the forms up to the closing token, opening bracket already
-    // consumed, as a ProtoList. The caller passes `closeKind` to specify
-    // which closing token closes this sequence (RParen for `(...)`,
-    // RBracket for `[...]`, RBrace for `{...}`); the caller turns the list
-    // into a vector or a map.
+    // consumed. The caller passes `closeKind` to specify which closing
+    // token closes this sequence (RParen for `(...)`, RBracket for `[...]`,
+    // RBrace for `{...}`): a list form is answered as the Clojure list
+    // (runtime/SeqTypes.h); the other forms as a ProtoList, which the
+    // caller turns into a vector, a map or a set.
     //
     // Pushes its own child ProtoContext; uses slot 0 for the building
     // list and slot 1 for the most recently read element. Returns the

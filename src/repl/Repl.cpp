@@ -14,6 +14,7 @@
 #include "runtime/Named.h"
 #include "runtime/Opcodes.h"
 #include "runtime/Primitives.h"
+#include "runtime/SeqTypes.h"
 
 #if defined(PROTOCLJ_NO_READLINE)
 // No libreadline (Windows). The console edits the line and keeps a history of
@@ -390,13 +391,9 @@ struct Session {
     // The name a top-level `(def name ...)`, `(defn name ...)` or
     // `(defmacro name ...)` defines, or "" for any other form.
     std::string definedName(proto::ProtoContext* c, const proto::ProtoObject* form) const {
-        constexpr std::uintptr_t kTagMask = 0x3F, kTagList = 2, kTagListSmall = 25;
-        const std::uintptr_t tag = reinterpret_cast<std::uintptr_t>(form) & kTagMask;
-        if (!form || (tag != kTagList && tag != kTagListSmall)) return "";
-        const proto::ProtoList* l = form->asList(c);
-        if (l->getSize(c) < 2) return "";
-        const proto::ProtoObject* head = l->getAt(c, 0);
-        const proto::ProtoObject* name = l->getAt(c, 1);
+        if (!isListValue(c, form) || listCount(c, form) < 2) return "";
+        const proto::ProtoObject* head = listFirst(c, form);
+        const proto::ProtoObject* name = listFirst(c, listRest(c, form));
         if (!isNamed(c, named, head) || !isNamed(c, named, name)) return "";
         std::string h = namedSpelling(c, named, head)->toStdString(c);
         if (h.rfind("clojure.core/", 0) == 0) h = h.substr(13);

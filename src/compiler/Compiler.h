@@ -67,6 +67,38 @@ struct CompilerMarkers {
 // and member around the first '/'. `/` itself and keywords are not.
 bool isQualifiedName(const std::string& name);
 
+// The elements of a list form, or of a vector form's items, read once into
+// a C++ array so the compiler can index them. Nothing is allocated: the
+// elements stay the form's (a list's cells, SeqTypes.h, or a vector's
+// ProtoList), and the caller keeps the form rooted while the view is used,
+// as it did when it read the form itself. Reads like the ProtoList it
+// replaced in the compiler: getAt answers PROTO_NONE past the end.
+class FormList {
+public:
+    FormList() = default;
+    // The elements of the Clojure list `form` (SeqTypes.h).
+    FormList(proto::ProtoContext* ctx, const proto::ProtoObject* form);
+    // The elements of `items` (a vector's ProtoList, or one the compiler
+    // built); `form` is what asObject answers.
+    FormList(proto::ProtoContext* ctx, const proto::ProtoList* items,
+             const proto::ProtoObject* form = nullptr);
+    // The given elements, which the caller keeps reachable.
+    explicit FormList(std::vector<const proto::ProtoObject*> items)
+        : items_(std::move(items)) {}
+
+    proto::proto_ulong getSize(proto::ProtoContext*) const { return items_.size(); }
+    const proto::ProtoObject* getAt(proto::ProtoContext*, int i) const {
+        if (i < 0) i += static_cast<int>(items_.size());
+        return (i >= 0 && static_cast<std::size_t>(i) < items_.size()) ? items_[i] : PROTO_NONE;
+    }
+    // The form the elements were read from.
+    const proto::ProtoObject* asObject(proto::ProtoContext*) const { return form_; }
+
+private:
+    const proto::ProtoObject* form_ = nullptr;
+    std::vector<const proto::ProtoObject*> items_;
+};
+
 class Compiler {
 public:
     // Compile a single form, appending instructions to `out`. Does NOT
@@ -83,7 +115,7 @@ public:
     // a sub-block of an outer module via addBlock, or stores it elsewhere.
     std::unique_ptr<BytecodeModule>
     compileFnBody(proto::ProtoContext* ctx,
-                  const proto::ProtoList* fnForm,
+                  const FormList* fnForm,
                   const CompilerMarkers& markers);
 
     // Session 8 — compile a SINGLE arity from a multi-arity fn form. The
@@ -93,8 +125,8 @@ public:
     // compileFnBody.
     std::unique_ptr<BytecodeModule>
     compileArity(proto::ProtoContext* ctx,
-                 const proto::ProtoList* paramsForm,
-                 const proto::ProtoList* arityForm,
+                 const FormList* paramsForm,
+                 const FormList* arityForm,
                  proto::proto_ulong bodyStartIdx,
                  const CompilerMarkers& markers);
 
@@ -186,7 +218,7 @@ private:
     };
 
     // Compiles `(try body* (catch Class name body*)* (finally body*)?)`.
-    void compileTry(proto::ProtoContext* ctx, const proto::ProtoList* lst,
+    void compileTry(proto::ProtoContext* ctx, const FormList* lst,
                     BytecodeModule& out, const CompilerMarkers& markers);
 
     // Pushes the type a catch clause names when it is no built-in class,
@@ -212,7 +244,7 @@ private:
     void markForm(const proto::ProtoObject* form, const std::string& headName,
                   BytecodeModule& out);
     // The name of the fn form `lst` (`nameForm`: defn's name, or nullptr).
-    void setPendingFn(proto::ProtoContext* ctx, const proto::ProtoList* lst,
+    void setPendingFn(proto::ProtoContext* ctx, const FormList* lst,
                       const proto::ProtoObject* nameForm, const proto::ProtoObject* form,
                       const CompilerMarkers& markers, int line);
     // A fn body's debug information and entry mark; its parameters and
@@ -277,7 +309,7 @@ private:
 
     // Compiles `(defmacro name doc? attr-map? [params] body*)` or its
     // multi-arity form as `(def name (__macro__ (fn [&form &env params] body*)))`.
-    void compileDefmacro(proto::ProtoContext* ctx, const proto::ProtoList* lst,
+    void compileDefmacro(proto::ProtoContext* ctx, const FormList* lst,
                          BytecodeModule& out, const CompilerMarkers& markers);
 
     // Destructuring (docs/DESIGN.md §10.1, M23), as clojure.core/destructure
@@ -297,7 +329,7 @@ private:
     // `ctx`, or nullptr when every pattern already is a symbol.
     const proto::ProtoObject* destructureBindings(proto::ProtoContext* ctx,
                                                   const CompilerMarkers& markers,
-                                                  const proto::ProtoList* bindings) const;
+                                                  const FormList* bindings) const;
 
     // Compiles `form` as the body of a zero-argument fn called on the spot,
     // `((fn [] form))`: how a top-level form that needs local slots (`let`,

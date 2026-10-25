@@ -75,7 +75,7 @@ int numberCompare(proto::ProtoContext* ctx, const proto::ProtoObject* a,
 
 // A direct call of primitive `fn` on the `argc` arguments at `argv`, for
 // the VM's calls: the result of inc, dec, two-argument +, first, rest,
-// next, seq, empty?, count and nth on the values they read without running
+// next, seq, empty?, count, nth, cons and conj on the values they read without running
 // Clojure code and without raising (nil, lists, vectors, cons cells and
 // chunks; SmallInt numbers), the same result the primitive answers.
 // nullptr for any other primitive or argument, which the caller then calls

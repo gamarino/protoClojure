@@ -118,6 +118,12 @@ public:
     /** `finish()` typed as a `ProtoList*`. Same rooting contract. */
     const proto::ProtoList* finishList();
 
+    /**
+     * The elements pushed as a Clojure list (SeqTypes.h): what a primitive
+     * answers as a list. Same rooting contract; `push()` may not follow.
+     */
+    const proto::ProtoObject* finishSeq();
+
 private:
     /**
      * The parking area starts small — the overwhelming majority of builds in

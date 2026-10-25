@@ -8,6 +8,7 @@
 #include "runtime/Exceptions.h"
 #include "runtime/MapOps.h"
 #include "runtime/Named.h"
+#include "runtime/SeqTypes.h"
 #include "runtime/VectorOps.h"
 #include "runtime/Primitives.h"
 
@@ -31,6 +32,9 @@ struct ValuesFixture : ::testing::Test {
         space.objectPrototype->newChild(ctx),
         space.objectPrototype->newChild(ctx, /*isMutable=*/true),
         proto::ProtoString::createSymbol(ctx, "__spelling__")};
+    // The list prototypes and the empty list (SeqTypes.h), anchored in the
+    // root context.
+    const proto::ProtoObject* seqPrototypes = protoClojure::initSeqTypes(ctx);
 
     // The interned keyword (or, without a leading colon, symbol) `spelling`.
     const proto::ProtoObject* kw(const char* spelling) const {
@@ -48,8 +52,9 @@ struct ValuesFixture : ::testing::Test {
             l = l->appendLast(ctx, i == changeAt ? changed : num(from + i));
         return l;
     }
+    // The Clojure list of the elements of `l` (SeqTypes.h).
     const proto::ProtoObject* obj(const proto::ProtoList* l) const {
-        return l->asObject(ctx);
+        return protoClojure::listFromProtoList(ctx, l);
     }
     // A vector is a protoCore ProtoList in a one-entry sparse-list box
     // (VectorOps.h), not an interned tuple.
@@ -93,6 +98,7 @@ TEST_F(ValuesFixture, ListsAndTuplesCompareElementWiseBeyondTheSmallForm) {
 
 TEST_F(ValuesFixture, EmptySequentialCollectionsAreEqual) {
     const proto::ProtoObject* emptyList = obj(ctx->newList());
+    EXPECT_EQ(emptyList, protoClojure::emptyListValue());
     const proto::ProtoObject* emptyVector = tuple(ctx->newList());
     EXPECT_TRUE(eq(emptyList, emptyVector));
     EXPECT_TRUE(eq(emptyVector, emptyList));
@@ -120,7 +126,7 @@ TEST_F(ValuesFixture, SequentialNeverEqualsMapsStringsOrNumbers) {
         ->appendLast(ctx, kw(":a"))->appendLast(ctx, num(1)));
     const proto::ProtoObject* m = assoc(nullptr, kw(":a"), num(1));
     EXPECT_FALSE(eq(pairs, m));
-    EXPECT_FALSE(eq(m, tuple(pairs->asList(ctx))));
+    EXPECT_FALSE(eq(m, tuple(protoClojure::listToProtoList(ctx, pairs))));
 
     const proto::ProtoObject* ab = ctx->fromUTF8String("ab");
     const proto::ProtoObject* chars = obj(ctx->newList()
@@ -228,7 +234,7 @@ TEST_F(ValuesFixture, EqualValuesAreOneMapKeyExceptAcrossNumericTypes) {
         {list12, 10},
         {tuple(list(1, 2)), 10},
         {floats12, 11},
-        {tuple(floats12->asList(ctx)), 11},
+        {tuple(protoClojure::listToProtoList(ctx, floats12)), 11},
         {obj(ctx->newList()), 12},
         {tuple(ctx->newList()), 12},
         {assoc(nullptr, num(1), list12), 13},

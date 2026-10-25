@@ -7,6 +7,7 @@
 #include "Exceptions.h"
 #include "ExecutionEngine.h"
 #include "Named.h"
+#include "LazySeq.h"
 #include "Primitives.h"
 
 #include "protoCore.h"
@@ -19,12 +20,6 @@
 namespace protoClojure {
 
 namespace {
-
-bool isListValue(const proto::ProtoObject* v) {
-    constexpr std::uintptr_t kTagMask = 0x3F, kTagList = 2, kTagListSmall = 25;
-    const std::uintptr_t tag = reinterpret_cast<std::uintptr_t>(v) & kTagMask;
-    return v != nullptr && (tag == kTagList || tag == kTagListSmall);
-}
 
 std::atomic<EvalHook> gEvalHook{nullptr};
 std::atomic<SyntaxQuoteResolverHook> gResolverHook{nullptr};
@@ -90,15 +85,24 @@ const proto::ProtoObject* expandMacroCall(proto::ProtoContext* ctx,
                                           const std::string& name,
                                           const proto::ProtoObject* form,
                                           const proto::ProtoObject* env) {
-    // The arguments are the call's own forms, reachable from `form`, which
-    // the caller roots; invoke copies them into the macro's frame.
-    const proto::ProtoList* lst = form->asList(ctx);
-    const proto::proto_ulong n = lst->getSize(ctx);
+    // The arguments are the call's own forms after its head: the cells of a
+    // list, or the elements of any other seq a macro built (realised, and
+    // held by `form`). All are reachable from `form`, which the caller
+    // roots; invoke copies them into the macro's frame.
     std::vector<const proto::ProtoObject*> args;
-    args.reserve(n + 1);
     args.push_back(form);
     args.push_back(env ? env : PROTO_NONE);
-    for (proto::proto_ulong i = 1; i < n; ++i) args.push_back(lst->getAt(ctx, static_cast<int>(i)));
+    if (isListValue(ctx, form)) {
+        for (const proto::ProtoObject* p = listRest(ctx, form); p != emptyListValue(); p = listRest(ctx, p))
+            args.push_back(listFirst(ctx, p));
+    } else {
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(1);
+        SeqWalk w(&scope, 0, &scope, form);
+        if (!w.done()) w.advance(&scope);
+        for (; !w.done(); w.advance(&scope)) args.push_back(w.first(&scope));
+    }
+    const proto::proto_ulong n = static_cast<proto::proto_ulong>(args.size() - 1);
     const unsigned int argc = static_cast<unsigned int>(args.size());
     if (!cc.engine->acceptsArgCount(ctx, macro, argc)) {
         throwClassed(ctx, "ArityException",
@@ -111,10 +115,12 @@ const proto::ProtoObject* expandMacroCall(proto::ProtoContext* ctx,
 const proto::ProtoObject* macroexpandOnce(proto::ProtoContext* ctx,
                                           const ActiveCallContext& cc,
                                           const proto::ProtoObject* form) {
-    if (!isListValue(form)) return form;
-    const proto::ProtoList* lst = form->asList(ctx);
-    if (lst->getSize(ctx) == 0) return form;
-    const proto::ProtoObject* head = lst->getAt(ctx, 0);
+    // A seq that is not a list is read as the list of its elements, as
+    // Clojure's macroexpand-1 reads any ISeq; the list is anchored in `ctx`.
+    if (isSeqObject(ctx, form) && !isListValue(ctx, form))
+        form = listFromProtoList(ctx, seqToList(ctx, form));
+    if (!isListValue(ctx, form) || form == emptyListValue()) return form;
+    const proto::ProtoObject* head = listFirst(ctx, form);
     if (!isNamed(ctx, cc.named, head)) return form;
     const std::string spelling = namedSpellingText(ctx, cc.named, head);
     std::string key;

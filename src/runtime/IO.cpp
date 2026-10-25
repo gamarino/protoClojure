@@ -112,12 +112,18 @@ int handleFd(proto::ProtoContext* ctx, const PO* h) {
 
 bool truthy(const PO* v) { return v && v != PROTO_NONE && v != PROTO_FALSE; }
 
-// A list (protoCore ProtoList, large or small inline form: pointer tags 2
-// and 25 of protoCore's headers/proto_internal.h), not a string.
-bool isListTagged(const PO* v) {
-    if (!v) return false;
-    const unsigned t = static_cast<unsigned>(reinterpret_cast<std::uintptr_t>(v) & 0x3F);
-    return t == 2 || t == 25;
+// The elements of a list or a vector, which hold them; false for any other
+// value.
+bool sequentialItems(proto::ProtoContext* ctx, const PO* v, std::vector<const PO*>& out) {
+    if (isVector(v)) {
+        const proto::ProtoList* items = vectorItems(ctx, v);
+        const proto::proto_ulong n = items->getSize(ctx);
+        for (proto::proto_ulong i = 0; i < n; ++i) out.push_back(items->getAt(ctx, static_cast<int>(i)));
+        return true;
+    }
+    if (!isListValue(ctx, v)) return false;
+    for (const PO* p = v; p != emptyListValue(); p = listRest(ctx, p)) out.push_back(listFirst(ctx, p));
+    return true;
 }
 
 bool isString(const PO* v) {
@@ -359,11 +365,9 @@ protoio::http::Headers headersArg(proto::ProtoContext* ctx, const PO* v, const c
         auto* hs = static_cast<protoio::http::Headers*>(self);
         std::string name = isString(k) ? bytesOf(c, k) : namedName(c, k);
         if (name.empty()) name = strOf(c, k);
-        if (isListTagged(val) || isVector(val)) {
-            const proto::ProtoList* items = isVector(val) ? vectorItems(c, val) : val->asList(c);
-            const proto::proto_ulong n = items->getSize(c);
-            for (proto::proto_ulong i = 0; i < n; ++i)
-                hs->push_back({name, strOf(c, items->getAt(c, static_cast<int>(i)))});
+        std::vector<const PO*> items;
+        if (sequentialItems(c, val, items)) {
+            for (const PO* item : items) hs->push_back({name, strOf(c, item)});
         } else {
             hs->push_back({name, strOf(c, val)});
         }
@@ -586,11 +590,8 @@ Answer answerOf(proto::ProtoContext* ctx, const PO* r) {
         if (isHandle(ctx, b) && handleKind(ctx, b) == HandleKind::File) {
             a.fromFile = true;
             a.bodyFile = handlePath(ctx, b);
-        } else if (isListTagged(b) || isVector(b)) {
-            const proto::ProtoList* items = isVector(b) ? vectorItems(ctx, b) : b->asList(ctx);
-            const proto::proto_ulong n = items->getSize(ctx);
-            for (proto::proto_ulong i = 0; i < n; ++i)
-                a.body += strOf(ctx, items->getAt(ctx, static_cast<int>(i)));
+        } else if (std::vector<const PO*> items; sequentialItems(ctx, b, items)) {
+            for (const PO* item : items) a.body += strOf(ctx, item);
         } else {
             a.body = strOf(ctx, b);
         }
@@ -1095,7 +1096,7 @@ IOPRIM(prim_file_seq) {
     });
     ListBuilder out(ctx);
     for (const std::string& p : paths) out.push(newHandle(out.context(), HandleKind::File, -1, p));
-    return out.finish();
+    return out.finishSeq();
 }
 
 // (exists? f), (directory? f): whether something, or a directory, is there.
@@ -1690,9 +1691,11 @@ void setCommandLineArgs(proto::ProtoContext* ctx, proto::ProtoObject* globals,
         defineBuiltin(ctx, globals, "*command-line-args*", PROTO_NONE);
         return;
     }
-    const proto::ProtoList* l = ctx->newList();
-    for (const std::string& a : args) l = l->appendLast(ctx, makeString(ctx, a));
-    defineBuiltin(ctx, globals, "*command-line-args*", l->asObject(ctx));
+    // A list of the strings (Clojure's is a seq), young cells of `ctx` until
+    // the globals hold it.
+    std::vector<const PO*> strings;
+    for (const std::string& a : args) strings.push_back(makeString(ctx, a));
+    defineBuiltin(ctx, globals, "*command-line-args*", listFromArray(ctx, strings.size(), strings.data()));
 }
 
 void shutdownIO(proto::ProtoContext* ctx) {

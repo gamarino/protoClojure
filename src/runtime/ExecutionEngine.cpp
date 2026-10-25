@@ -5,6 +5,7 @@
 #include "Exceptions.h"
 #include "ListBuilder.h"
 #include "MapOps.h"
+#include "SeqTypes.h"
 #include "SetOps.h"
 #include "Named.h"
 #include "Opcodes.h"
@@ -530,13 +531,11 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
                 "(a variadic fn binds its rest arguments as one)");
         for (int i = 0; i < fixed; ++i) callArgs[i] = args[i];
         if (variadic) {
-            // No rest arguments binds the rest parameter to nil, as in Clojure.
-            const proto::ProtoObject* rest = static_cast<unsigned int>(fixed) < posArgc
-                ? ctx->newList()->asObject(ctx) : PROTO_NONE;
-            for (unsigned int i = static_cast<unsigned int>(fixed); i < posArgc; ++i) {
-                rest = rest->asList(ctx)->appendLast(ctx, args[i])->asObject(ctx);
-            }
-            callArgs[fixed] = rest;
+            // The rest arguments as a list (a seq, as Clojure's rest
+            // parameter); none binds the rest parameter to nil, as in Clojure.
+            callArgs[fixed] = static_cast<unsigned int>(fixed) < posArgc
+                ? listFromArray(ctx, posArgc - static_cast<unsigned int>(fixed), args + fixed)
+                : PROTO_NONE;
         } else if (!kwBased) {
             for (unsigned int i = static_cast<unsigned int>(fixed); i < posArgc; ++i) {
                 callArgs[i] = args[i];
@@ -885,22 +884,20 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
             // the rest list, after the kw map has been read.
             const proto::ProtoObject** argSlots =
                 frame.getAutomaticLocals() + stackBase + sp - argc;
+            // The rest arguments as a list (a seq, as Clojure's rest
+            // parameter), built while every argument is still in its slot:
+            // building it allocates. No rest arguments binds the rest
+            // parameter to nil, as in Clojure.
+            const proto::ProtoObject* restList = PROTO_NONE;
+            if (variadic && static_cast<unsigned int>(fixed) < posArgc)
+                restList = listFromArray(&frame, posArgc - static_cast<unsigned int>(fixed),
+                                         argSlots + fixed);
             for (int i = 0; i < fixed; ++i) {
                 callArgs[i] = argSlots[i];
                 argSlots[i] = nullptr;
             }
             if (variadic) {
-                // No rest arguments binds the rest parameter to nil, as in
-                // Clojure.
-                const proto::ProtoObject* rest = static_cast<unsigned int>(fixed) < posArgc
-                    ? frame.newList()->asObject(&frame) : PROTO_NONE;
-                for (unsigned int i = static_cast<unsigned int>(fixed); i < posArgc; ++i) {
-                    const proto::ProtoObject* v =
-                        frame.getAutomaticLocal(stackBase + sp - argc + i);
-                    rest = rest->asList(&frame)
-                        ->appendLast(&frame, v)->asObject(&frame);
-                }
-                callArgs[fixed] = rest;
+                callArgs[fixed] = restList;
                 for (unsigned int i = static_cast<unsigned int>(fixed); i < posArgc; ++i)
                     argSlots[i] = nullptr;
             } else if (!kwBased) {
@@ -1136,15 +1133,23 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 // nil spreads no arguments and a vector its elements, as in
                 // Clojure (`(apply vector (seq ()))` is `[]`).
                 const proto::ProtoObject* listObj = popVal();
+                if (isListValue(&frame, listObj)) {
+                    // A list spreads its cells. Nothing below allocates (the
+                    // stack grows without a cell), so the list stays intact
+                    // while its slot is reused for the first argument.
+                    const long long ln = listCount(&frame, listObj);
+                    reserveStack(static_cast<proto::proto_ulong>(ln));
+                    for (const proto::ProtoObject* p = listObj; p != emptyListValue();
+                         p = listRest(&frame, p))
+                        pushVal(listFirst(&frame, p));
+                    dispatchCall(static_cast<unsigned int>(ln));
+                    break;
+                }
                 const proto::ProtoList* argsList = nullptr;
                 if (!listObj || listObj == PROTO_NONE) {
                     argsList = frame.newList();
                 } else if (isVector(listObj)) {
                     argsList = vectorItems(&frame, listObj);
-                } else if ((reinterpret_cast<proto::proto_ulong>(listObj) & 0x3F) == 2 ||
-                           (reinterpret_cast<proto::proto_ulong>(listObj) & 0x3F) == 25) {
-                    // A ProtoList, large or small (POINTER_TAG_LIST, _LIST_SMALL).
-                    argsList = listObj->asList(&frame);
                 } else {
                     // A map, a set or a string spreads its seq (seqItems).
                     argsList = seqItems(&frame, listObj);

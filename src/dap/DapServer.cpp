@@ -172,11 +172,6 @@ std::set<int> formLines(const std::string& source) {
 // Values, as the Variables view and the Debug Console show them
 // ---------------------------------------------------------------------------
 
-bool isListValue(const proto::ProtoObject* v) {
-    constexpr std::uintptr_t kTagMask = 0x3F, kTagList = 2, kTagListSmall = 25;
-    const std::uintptr_t tag = reinterpret_cast<std::uintptr_t>(v) & kTagMask;
-    return v != nullptr && (tag == kTagList || tag == kTagListSmall);
-}
 
 constexpr std::size_t kMaxItems  = 100;   // elements printed per collection
 constexpr int         kMaxDepth  = 8;     // nesting printed
@@ -191,19 +186,18 @@ constexpr std::size_t kMaxLength = 8000;  // characters per value
 void formatInto(proto::ProtoContext* ctx, std::string& out, const proto::ProtoObject* v, int depth,
                 bool realize) {
     if (out.size() > kMaxLength) { out += "..."; return; }
-    if (depth > kMaxDepth && (isListValue(v) || isVector(v) || isMap(v) || isSet(ctx, v) ||
+    if (depth > kMaxDepth && (isListValue(ctx, v) || isVector(v) || isMap(v) || isSet(ctx, v) ||
                               isSeqObject(ctx, v))) {
         out += "...";
         return;
     }
-    if (isListValue(v)) {
-        const proto::ProtoList* l = v->asList(ctx);
-        const proto::proto_ulong n = l->getSize(ctx);
+    if (isListValue(ctx, v)) {
         out += '(';
-        for (proto::proto_ulong i = 0; i < n; ++i) {
+        std::size_t i = 0;
+        for (const proto::ProtoObject* p = v; p != emptyListValue(); p = listRest(ctx, p), ++i) {
             if (i) out += ' ';
             if (i >= kMaxItems) { out += "..."; break; }
-            formatInto(ctx, out, l->getAt(ctx, static_cast<int>(i)), depth + 1, realize);
+            formatInto(ctx, out, listFirst(ctx, p), depth + 1, realize);
         }
         out += ')';
         return;
@@ -269,8 +263,7 @@ void formatInto(proto::ProtoContext* ctx, std::string& out, const proto::ProtoOb
                 scope.setAutomaticLocal(0, node);
                 continue;
             }
-            if (isListValue(node) && node->asList(&scope)->getSize(&scope) == 0) break;
-            if (!isListValue(node) && !isSeqObject(&scope, node)) break;
+            if (node == emptyListValue() || !isSeqObject(&scope, node)) break;
             if (n) out += ' ';
             if (n++ >= kMaxItems || out.size() > kMaxLength) { out += "..."; break; }
             formatInto(&scope, out, seqFirst(&scope, node), depth + 1, realize);
@@ -302,8 +295,13 @@ using Children = std::vector<std::pair<std::string, const proto::ProtoObject*>>;
 Children childrenOf(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     Children kids;
     constexpr std::size_t kMaxChildren = 1000;
-    if (isListValue(v) || isVector(v)) {
-        const proto::ProtoList* l = isVector(v) ? vectorItems(ctx, v) : v->asList(ctx);
+    if (isListValue(ctx, v)) {
+        std::size_t i = 0;
+        for (const proto::ProtoObject* p = v; p != emptyListValue() && i < kMaxChildren;
+             p = listRest(ctx, p), ++i)
+            kids.emplace_back("[" + std::to_string(i) + "]", listFirst(ctx, p));
+    } else if (isVector(v)) {
+        const proto::ProtoList* l = vectorItems(ctx, v);
         const proto::proto_ulong n = std::min<proto::proto_ulong>(l->getSize(ctx), kMaxChildren);
         for (proto::proto_ulong i = 0; i < n; ++i)
             kids.emplace_back("[" + std::to_string(i) + "]", l->getAt(ctx, static_cast<int>(i)));
@@ -326,7 +324,7 @@ Children childrenOf(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
 }
 
 bool hasChildren(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    if (isListValue(v)) return v->asList(ctx)->getSize(ctx) > 0;
+    if (isListValue(ctx, v)) return v != emptyListValue();
     if (isVector(v)) return vectorItems(ctx, v)->getSize(ctx) > 0;
     if (isMap(v)) return mapCount(ctx, v) > 0;
     if (isSet(ctx, v)) return !setIsEmpty(ctx, v);

@@ -229,12 +229,22 @@ int callComparator(proto::ProtoContext* ctx, const PO* cmp, const PO* x, const P
 const PO* sortedList(proto::ProtoContext* ctx, const PO* keyfn, const PO* cmp, const PO* coll) {
     proto::ProtoContext scope(ctx->space, ctx);
     scope.resizeAutomaticLocals(2);
-    const proto::ProtoList* items = seqToList(&scope, coll);
-    if (!items) return scope.newList()->asObject(&scope);
-    scope.setAutomaticLocal(0, items->asObject(&scope));
-    const proto::proto_ulong n = items->getSize(&scope);
-    std::vector<const PO*> elems(n), keys;
-    for (proto::proto_ulong i = 0; i < n; ++i) elems[i] = items->getAt(&scope, static_cast<int>(i));
+    std::vector<const PO*> elems, keys;
+    if (isListValue(&scope, coll)) {
+        // A list is read along its cells; it is rooted in slot 0.
+        scope.setAutomaticLocal(0, coll);
+        for (const PO* p = coll; p != emptyListValue(); p = listRest(&scope, p))
+            elems.push_back(listFirst(&scope, p));
+    } else {
+        const proto::ProtoList* items = seqToList(&scope, coll);
+        if (!items) return emptyListValue();
+        scope.setAutomaticLocal(0, items->asObject(&scope));
+        const proto::proto_ulong ni = items->getSize(&scope);
+        elems.resize(ni);
+        for (proto::proto_ulong i = 0; i < ni; ++i) elems[i] = items->getAt(&scope, static_cast<int>(i));
+    }
+    const proto::proto_ulong n = elems.size();
+    if (n == 0) return emptyListValue();
     if (keyfn && keyfn != PROTO_NONE) {
         const ActiveCallContext* cc = callContext(&scope, "sort-by");
         // The keys are appended to a list rooted in slot 1 as they are made.
@@ -257,7 +267,8 @@ const PO* sortedList(proto::ProtoContext* ctx, const PO* keyfn, const PO* cmp, c
     });
     std::vector<const PO*> out(n);
     for (std::size_t i = 0; i < n; ++i) out[i] = elems[order[i]];
-    const PO* r = scope.newList(static_cast<unsigned>(n), out.data())->asObject(&scope);
+    // The elements are rooted in the list in slot 0.
+    const PO* r = listFromArray(&scope, n, out.data());
     scope.returnValue = r;
     return r;
 }
@@ -548,12 +559,6 @@ COREPRIM(prim_bigint) {
 
 // ---- number predicates, ==, hash, peek, pop ------------------------------------
 
-bool isListValue(const PO* v) {
-    constexpr proto::proto_ulong kTagMask = 0x3F, kTagList = 2, kTagListSmall = 25;
-    const proto::proto_ulong tag = reinterpret_cast<proto::proto_ulong>(v) & kTagMask;
-    return v != nullptr && (tag == kTagList || tag == kTagListSmall);
-}
-
 const PO* oneArg(proto::ProtoContext* ctx, const proto::ProtoArguments* args, const char* who) {
     if (argc(ctx, args) != 1) arity(ctx, argc(ctx, args), who);
     return argAt(ctx, args, 0);
@@ -607,10 +612,7 @@ COREPRIM(prim_peek) {
         const proto::ProtoList* items = vectorItems(ctx, v);
         return items->getSize(ctx) == 0 ? PROTO_NONE : items->getLast(ctx);
     }
-    if (isListValue(v)) {
-        const proto::ProtoList* l = v->asList(ctx);
-        return l->getSize(ctx) == 0 ? PROTO_NONE : l->getFirst(ctx);
-    }
+    if (isListValue(ctx, v)) return v == emptyListValue() ? PROTO_NONE : listFirst(ctx, v);
     throwClassed(ctx, "ClassCastException",
                  std::string("peek expects a vector or a list, got ") + valueTypeName(ctx, v));
 }
@@ -630,10 +632,9 @@ COREPRIM(prim_pop) {
         scope.returnValue = r;
         return r;
     }
-    if (isListValue(v)) {
-        const proto::ProtoList* l = v->asList(ctx);
-        if (l->getSize(ctx) == 0) throwClassed(ctx, "IllegalStateException", "Can't pop empty list");
-        return l->removeFirst(ctx)->asObject(ctx);
+    if (isListValue(ctx, v)) {
+        if (v == emptyListValue()) throwClassed(ctx, "IllegalStateException", "Can't pop empty list");
+        return listRest(ctx, v);
     }
     throwClassed(ctx, "ClassCastException",
                  std::string("pop expects a vector or a list, got ") + valueTypeName(ctx, v));

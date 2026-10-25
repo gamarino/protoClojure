@@ -12,6 +12,7 @@
 #include "runtime/Macros.h"
 #include "runtime/Opcodes.h"
 #include "runtime/Primitives.h"
+#include "runtime/SeqTypes.h"
 
 #include "protoCore.h"
 
@@ -31,19 +32,11 @@ std::vector<std::unique_ptr<BytecodeModule>>& retained() {
     return modules;
 }
 
-bool isListValue(const proto::ProtoObject* v) {
-    constexpr std::uintptr_t kTagMask = 0x3F, kTagList = 2, kTagListSmall = 25;
-    const std::uintptr_t tag = reinterpret_cast<std::uintptr_t>(v) & kTagMask;
-    return v != nullptr && (tag == kTagList || tag == kTagListSmall);
-}
-
 // True when `form` is `(do ...)` or `(clojure.core/do ...)`.
 bool isDoForm(proto::ProtoContext* ctx, const NamedLayout& named,
               const proto::ProtoObject* form) {
-    if (!isListValue(form)) return false;
-    const proto::ProtoList* lst = form->asList(ctx);
-    if (lst->getSize(ctx) == 0) return false;
-    const proto::ProtoObject* head = lst->getAt(ctx, 0);
+    if (!isListValue(ctx, form) || form == emptyListValue()) return false;
+    const proto::ProtoObject* head = listFirst(ctx, form);
     return head == internNamed(ctx, named, "do") ||
            head == internNamed(ctx, named, "clojure.core/do");
 }
@@ -200,11 +193,11 @@ const proto::ProtoObject* evalTopLevel(proto::ProtoContext* ctx,
     if (isDoForm(&scope, cc->named, expanded)) {
         // A top-level do: each form is expanded, compiled and run before the
         // next is compiled, as in Clojure.
-        const proto::ProtoList* forms = expanded->asList(&scope);
-        const proto::proto_ulong n = forms->getSize(&scope);
+        // The forms are cells of `expanded`, which slot 0 roots.
         scope.setAutomaticLocal(1, PROTO_NONE);
-        for (proto::proto_ulong i = 1; i < n; ++i) {
-            scope.setAutomaticLocal(1, evalTopLevel(&scope, forms->getAt(&scope, static_cast<int>(i)), info));
+        for (const proto::ProtoObject* p = listRest(&scope, expanded); p != emptyListValue();
+             p = listRest(&scope, p)) {
+            scope.setAutomaticLocal(1, evalTopLevel(&scope, listFirst(&scope, p), info));
         }
         scope.returnValue = scope.getAutomaticLocal(1);
         return scope.getAutomaticLocal(1);

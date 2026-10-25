@@ -1,6 +1,7 @@
 #include "reader/Reader.h"
 #include "runtime/MapOps.h"
 #include "runtime/Named.h"
+#include "runtime/SeqTypes.h"
 #include "runtime/SetOps.h"
 #include "runtime/VectorOps.h"
 
@@ -26,6 +27,16 @@ struct ReaderFixture : ::testing::Test {
     NamedLayout markers{space.objectPrototype->newChild(ctx),
                         space.objectPrototype->newChild(ctx, /*isMutable=*/true),
                         proto::ProtoString::createSymbol(ctx, "__spelling__")};
+
+    // The list prototypes and the empty list (SeqTypes.h): the reader yields
+    // Clojure lists. Anchored in the root context, which outlives the test.
+    const proto::ProtoObject* seqPrototypes = protoClojure::initSeqTypes(ctx);
+
+    // The elements of the list `form`, read by index.
+    const proto::ProtoList* listItems(const proto::ProtoObject* form) const {
+        EXPECT_TRUE(protoClojure::isListValue(ctx, form));
+        return protoClojure::listToProtoList(ctx, form);
+    }
 
     // The text of a string, or the spelling of a symbol or keyword.
     std::string asUtf8(const proto::ProtoObject* form) const {
@@ -144,7 +155,7 @@ TEST_F(ReaderFixture, MapLiteralWithAnOddNumberOfFormsIsAReadError) {
 
 TEST_F(ReaderFixture, DerefIsAListOfTheDerefSymbol) {
     Reader r(ctx, "@a", markers);
-    const proto::ProtoList* lst = r.readOne()->asList(ctx);
+    const proto::ProtoList* lst = listItems(r.readOne());
     ASSERT_EQ(lst->getSize(ctx), 2u);
     EXPECT_TRUE(isSymbolNamed(lst->getAt(ctx, 0), "clojure.core/deref"));
     EXPECT_TRUE(isSymbolNamed(lst->getAt(ctx, 1), "a"));
@@ -163,7 +174,9 @@ TEST_F(ReaderFixture, EmptyList) {
     Reader r(ctx, "()", markers);
     const proto::ProtoObject* form = r.readOne();
     ASSERT_NE(form, nullptr);
-    const proto::ProtoList* lst = form->asList(ctx);
+    // The empty list is one value.
+    EXPECT_EQ(form, protoClojure::emptyListValue());
+    const proto::ProtoList* lst = listItems(form);
     ASSERT_NE(lst, nullptr);
     EXPECT_EQ(lst->getSize(ctx), 0u);
 }
@@ -174,7 +187,7 @@ TEST_F(ReaderFixture, HelloWorldShape) {
     const proto::ProtoObject* form = r.readOne();
     ASSERT_NE(form, nullptr);
 
-    const proto::ProtoList* lst = form->asList(ctx);
+    const proto::ProtoList* lst = listItems(form);
     ASSERT_NE(lst, nullptr);
     EXPECT_EQ(lst->getSize(ctx), 2u);
 
@@ -195,12 +208,12 @@ TEST_F(ReaderFixture, NestedLists) {
     Reader r(ctx, "(a (b c) d)", markers);
     const proto::ProtoObject* form = r.readOne();
     ASSERT_NE(form, nullptr);
-    const proto::ProtoList* lst = form->asList(ctx);
+    const proto::ProtoList* lst = listItems(form);
     ASSERT_NE(lst, nullptr);
     EXPECT_EQ(lst->getSize(ctx), 3u);
 
     const proto::ProtoObject* mid = lst->getAt(ctx, 1);
-    const proto::ProtoList* inner = mid->asList(ctx);
+    const proto::ProtoList* inner = listItems(mid);
     ASSERT_NE(inner, nullptr);
     EXPECT_EQ(inner->getSize(ctx), 2u);
 }
@@ -279,7 +292,8 @@ std::string show(proto::ProtoContext* ctx, const NamedLayout& named,
         return "\"" + reinterpret_cast<const proto::ProtoString*>(f)->toStdString(ctx) + "\"";
     if (f->isInteger(ctx)) return std::to_string(f->asLong(ctx));
     const bool vec = protoClojure::isVector(f);
-    const proto::ProtoList* l = vec ? protoClojure::vectorItems(ctx, f) : f->asList(ctx);
+    const proto::ProtoList* l = vec ? protoClojure::vectorItems(ctx, f)
+                                    : protoClojure::listToProtoList(ctx, f);
     std::string out = vec ? "[" : "(";
     for (proto::proto_ulong i = 0; i < l->getSize(ctx); ++i) {
         if (i) out += " ";

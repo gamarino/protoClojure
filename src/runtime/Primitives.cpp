@@ -215,17 +215,20 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
         out += formatDouble(v->asDouble(ctx));
         return;
     }
-    if (isListTag(v)) {
-        const proto::ProtoList* lst = v->asList(ctx);
+    if (isListValue(ctx, v)) {
+        // A list, walked cell by cell (iteratively: a long list nests no
+        // deeper than its elements do).
         out += '(';
-        proto::proto_ulong n = lst->getSize(ctx);
-        for (proto::proto_ulong i = 0; i < n; ++i) {
-            if (i > 0) out += ' ';
-            printTo(ctx, out, lst->getAt(ctx, static_cast<int>(i)), readable);
+        for (const proto::ProtoObject* p = v; p != emptyListValue(); p = listRest(ctx, p)) {
+            if (p != v) out += ' ';
+            printTo(ctx, out, listFirst(ctx, p), readable);
         }
         out += ')';
         return;
     }
+    // A ProtoList is never a Clojure value (SeqTypes.h); one reaching the
+    // printer is a runtime defect, shown as such rather than as a list.
+    if (isListTag(v)) { out += "#<internal list>"; return; }
     if (isSeqObject(ctx, v)) {
         // A lazy seq, a cons or a chunk prints as a list, realised as it is
         // printed (an endless one never finishes, as in Clojure without
@@ -707,9 +710,9 @@ bool pushSeqElements(ListBuilder& out, const proto::ProtoObject* v);
 const proto::ProtoList* asSeqOrNull(proto::ProtoContext* ctx,
                                     const proto::ProtoObject* v) {
     if (!v || v == PROTO_NONE) return nullptr;
-    if (isListTag(v)) return v->asList(ctx);
     if (isVector(v)) return vectorItems(ctx, v);
-    // A lazy seq, a cons or a chunk: realised to its end (LazySeq.h). The
+    // A list, a lazy seq, a cons or a chunk: its elements, realised to its
+    // end (LazySeq.h). The
     // functions that need only a prefix (first, next, nth, take, ...) and
     // those that walk without keeping the elements (count, reduce, dorun)
     // read it through the seq protocol instead.
@@ -729,11 +732,10 @@ const proto::ProtoObject* prim_list(proto::ProtoContext* ctx,
                                     const proto::ParentLink*,
                                     const proto::ProtoArguments* args,
                                     const proto::ProtoKeywordArguments*) {
-    // The arguments as a ProtoList, built once in bulk (asList); the call's
-    // own list when it came with one. Copying element by element rebuilt
-    // the whole tree and left one root-to-leaf path of garbage per element.
-    if (!args) return ctx->newList()->asObject(ctx);
-    return args->asList(ctx)->asObject(ctx);
+    // A list of the arguments, built from the last: one cell per element
+    // and no garbage. The arguments are rooted in the caller's slots.
+    if (!args) return emptyListValue();
+    return listFromArray(ctx, args->count(), args->values());
 }
 
 // `(vector x y z)`, and the bytecode form `[x y z]`, which desugars to a
@@ -818,10 +820,11 @@ const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
 
     const bool vector = isVector(coll);
     if (isSeqObject(ctx, coll)) {
-        // A lazy seq, a cons or a chunk: walked to the index, O(i).
+        // A list, a lazy seq, a cons or a chunk: walked to the index, O(i).
         if (idx < 0) {
             if (notFound) return notFound;
-            throwNthOutOfBounds(ctx, args->getAt(ctx, 1), 0);
+            throwNthOutOfBounds(ctx, args->getAt(ctx, 1),
+                                isListValue(ctx, coll) ? listCount(ctx, coll) : 0);
         }
         proto::ProtoContext scope(ctx->space, ctx);
         scope.resizeAutomaticLocals(1);
@@ -834,15 +837,14 @@ const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
         }
         return w.first(&scope);
     }
-    if (!vector && !isListTag(coll)) {
+    if (!vector) {
         throwClassed(ctx, "UnsupportedOperationException",
             std::string("nth not supported on ") +
             valueTypeName(ctx, coll));
     }
 
-    // Both paths are one indexed read of a ProtoList, O(log N); a vector
-    // costs one unbox on top.
-    const proto::ProtoList* lst = vector ? vectorItems(ctx, coll) : coll->asList(ctx);
+    // One indexed read of the vector's ProtoList, O(log N).
+    const proto::ProtoList* lst = vectorItems(ctx, coll);
     long long sz = static_cast<long long>(lst->getSize(ctx));
     if (idx < 0 || idx >= sz) {
         if (notFound) return notFound;
@@ -870,7 +872,7 @@ const proto::ProtoObject* prim_list_p(proto::ProtoContext* ctx,
     if (!args || args->getSize(ctx) != 1)
         throwError(ctx, "list?: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
-    return (v && isListTag(v)) ? PROTO_TRUE : PROTO_FALSE;
+    return isListValue(ctx, v) ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // Session 13 — map primitives. The representation (a ProtoMap driven
@@ -1030,7 +1032,7 @@ const proto::ProtoObject* prim_contains_p(proto::ProtoContext* ctx,
     return PROTO_FALSE;
 }
 
-// Return a fresh ProtoList of the original keys or of the values of `m`, in
+// Return a fresh list of the original keys or of the values of `m`, in
 // the map's unspecified walk order, which is the same for keys and vals of
 // one map value. The list under construction lives in an automatic local
 // (P1).
@@ -1038,7 +1040,7 @@ static const proto::ProtoObject* mapWalk(proto::ProtoContext* ctx,
                                          const proto::ProtoObject* m,
                                          bool wantValues) {
     if (!isMap(m))
-        return ctx->newList()->asObject(ctx);
+        return emptyListValue();
     // One entry per map entry, so the result grows with user data: chunked.
     ListBuilder out(ctx);
     struct Acc { ListBuilder* out; bool wantValues; }
@@ -1049,7 +1051,7 @@ static const proto::ProtoObject* mapWalk(proto::ProtoContext* ctx,
             auto* a = static_cast<Acc*>(self);
             a->out->push(a->wantValues ? v : k);
         });
-    return out.finish();
+    return out.finishSeq();
 }
 
 const proto::ProtoObject* prim_keys(proto::ProtoContext* ctx,
@@ -1102,7 +1104,7 @@ const proto::ProtoObject* prim_rest(proto::ProtoContext* ctx,
     const proto::ProtoObject* r;
     if (tryRest(ctx, args->getAt(ctx, 0), &r)) return r;
     const proto::ProtoObject* s = seqOf(ctx, args->getAt(ctx, 0));
-    if (s == PROTO_NONE) return ctx->newList()->asObject(ctx);
+    if (s == PROTO_NONE) return emptyListValue();
     return seqMore(ctx, s);
 }
 
@@ -1115,13 +1117,17 @@ const proto::ProtoObject* prim_cons(proto::ProtoContext* ctx,
         throwError(ctx, "cons: expects (cons x coll)");
     const proto::ProtoObject* x    = args->getAt(ctx, 0);
     const proto::ProtoObject* coll = args->getAt(ctx, 1);
-    // Onto a lazy seq, a cons or a chunk: a cons cell, which realises
-    // nothing, as in Clojure. Onto a list (or any other collection, seq'd
-    // into one): the list one longer.
-    if (isSeqObject(ctx, coll)) return newCons(ctx, x, coll);
-    const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
-    if (!lst) lst = ctx->newList();
-    return lst->appendFirst(ctx, x)->asObject(ctx);
+    const proto::ProtoObject* r;
+    if (tryCons(ctx, x, coll, &r)) return r;
+    // Onto any other collection: a cons onto its seq, as Clojure's RT.cons.
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(1);
+    scope.setAutomaticLocal(0, seqOf(&scope, coll));
+    r = scope.getAutomaticLocal(0) == PROTO_NONE
+        ? listCons(&scope, x, emptyListValue())
+        : newCons(&scope, x, scope.getAutomaticLocal(0));
+    scope.returnValue = r;
+    return r;
 }
 
 // Session 15 helper — true iff v is a plain ProtoString (string-tag or
@@ -1149,15 +1155,23 @@ const proto::ProtoObject* prim_count(proto::ProtoContext* ctx,
     // A map: its number of entries; a set: its number of elements (O(n), D25).
     if (isMap(v)) return ctx->fromLong(static_cast<long long>(mapCount(ctx, v)));
     if (isSet(ctx, v)) return ctx->fromLong(static_cast<long long>(setCount(ctx, v)));
+    if (seqObjectKind(ctx, v) == SeqObject::List || v == emptyListValue())
+        return ctx->fromLong(listCount(ctx, v));
     if (isSeqObject(ctx, v)) {
         // Walked, not built: the count of a lazy seq nobody else holds
-        // keeps none of its elements (releaseArg, SeqWalk).
+        // keeps none of its elements (releaseArg, SeqWalk). The walk stops
+        // where the rest is counted (a list, the end of a chunk), as
+        // Clojure's RT.count stops at a Counted.
         proto::ProtoContext scope(ctx->space, ctx);
         scope.resizeAutomaticLocals(1);
         SeqWalk w(&scope, 0, &scope, v);
         releaseArg(args, 0);
         long long n = 0;
-        for (; !w.done(); w.advance(&scope)) ++n;
+        for (; !w.done(); w.advance(&scope)) {
+            long long c;
+            if (w.counted(&scope, &c)) { n += c; break; }
+            ++n;
+        }
         return ctx->fromLong(n);
     }
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
@@ -1224,16 +1238,18 @@ const proto::ProtoObject* prim_reverse(proto::ProtoContext* ctx,
         return reinterpret_cast<const proto::ProtoObject*>(
             makeUtf8ProtoString(ctx, r));
     }
-    const proto::ProtoList* lst = asSeqOrNull(ctx, v);
-    if (!lst) return ctx->newList()->asObject(ctx);
-    // Walk the source backwards and append at the END, which lets the build
-    // run through ListBuilder; appending at the front produces the same list
-    // but has no chunked form.
-    ListBuilder out(ctx);
-    for (proto::proto_ulong i = lst->getSize(out.context()); i-- > 0;) {
-        out.push(lst->getAt(out.context(), static_cast<int>(i)));
+    // A list, as in Clojure: each element consed onto the ones before it,
+    // one cell per element and no garbage.
+    proto::ProtoContext scope(ctx->space, ctx);
+    scope.resizeAutomaticLocals(2);
+    scope.setAutomaticLocal(1, emptyListValue());
+    {
+        SeqWalk w(&scope, 0, &scope, v);
+        for (; !w.done(); w.advance(&scope))
+            scope.setAutomaticLocal(1, listCons(&scope, w.first(&scope), scope.getAutomaticLocal(1)));
     }
-    return out.finish();
+    scope.returnValue = scope.getAutomaticLocal(1);
+    return scope.getAutomaticLocal(1);
 }
 
 // The elements of `v` as a seq builds them, pushed onto `out`: a list's or
@@ -1244,6 +1260,12 @@ const proto::ProtoObject* prim_reverse(proto::ProtoContext* ctx,
 bool pushSeqElements(ListBuilder& out, const proto::ProtoObject* v) {
     proto::ProtoContext* c = out.context();
     if (!v || v == PROTO_NONE) return true;
+    if (isListValue(c, v)) {
+        // Every cell is reachable from `v`.
+        for (const proto::ProtoObject* p = v; p != emptyListValue(); p = listRest(out.context(), p))
+            out.push(listFirst(out.context(), p));
+        return true;
+    }
     if (isSeqObject(c, v)) {
         // Realised to its end in contexts of its own (seqToList), then
         // pushed; the list stays anchored in the builder's context.
@@ -1254,8 +1276,8 @@ bool pushSeqElements(ListBuilder& out, const proto::ProtoObject* v) {
         }
         return true;
     }
-    if (isListTag(v) || isVector(v)) {
-        const proto::ProtoList* lst = isVector(v) ? vectorItems(c, v) : v->asList(c);
+    if (isVector(v)) {
+        const proto::ProtoList* lst = vectorItems(c, v);
         const proto::proto_ulong n = lst->getSize(c);
         for (proto::proto_ulong i = 0; i < n; ++i)
             out.push(lst->getAt(out.context(), static_cast<int>(i)));
@@ -1329,10 +1351,11 @@ const proto::ProtoObject* prim_concat(proto::ProtoContext* ctx,
     // at once: the same elements in the same order, and syntax-quote's
     // expansions, which call concat on lists, stay as cheap as before.
     for (proto::proto_ulong i = 0; i < n; ++i) {
-        if (isSeqObject(ctx, args->getAt(ctx, static_cast<int>(i)))) {
+        const proto::ProtoObject* a = args->getAt(ctx, static_cast<int>(i));
+        if (isSeqObject(ctx, a) && !isListValue(ctx, a)) {
             proto::ProtoContext scope(ctx->space, ctx);
             scope.resizeAutomaticLocals(1);
-            scope.setAutomaticLocal(0, args->asList(&scope)->asObject(&scope));
+            scope.setAutomaticLocal(0, listFromArray(&scope, args->count(), args->values()));
             const proto::ProtoObject* r =
                 lazyStep(&scope, StepKind::Concat, PROTO_NONE, scope.getAutomaticLocal(0));
             scope.returnValue = r;
@@ -1346,7 +1369,7 @@ const proto::ProtoObject* prim_concat(proto::ProtoContext* ctx,
             throwError(out.context(), "Don't know how to create ISeq from: " +
                                       printedValue(out.context(), v));
     }
-    return out.finish();
+    return out.finishSeq();
 }
 
 // (symbol? x) / (keyword? x) — named values (Named.h) told apart by the
@@ -1397,6 +1420,44 @@ const proto::ProtoObject* prim_reduce(proto::ProtoContext* ctx,
         throwError(ctx, "reduce: expects (reduce f coll) or (reduce f init coll)");
     const proto::ProtoObject* f = args->getAt(ctx, 0);
     const proto::ProtoObject* coll = args->getAt(ctx, ac == 2 ? 1 : 2);
+    if (isListValue(ctx, coll)) {
+        // A list, along its cells: the current cell is the walk's only
+        // root (slot 0), so a list nobody else holds is released as it is
+        // reduced; the accumulator lives in slot 1.
+        const ActiveCallContext* cc = activeCallContext();
+        if (!cc) throwError(ctx, "reduce: no active VM context");
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(2);
+        const proto::ProtoObject* p = coll;
+        scope.setAutomaticLocal(0, p);
+        releaseArg(args, ac == 2 ? 1 : 2);
+        if (ac == 3) {
+            scope.setAutomaticLocal(1, args->getAt(ctx, 1));
+        } else {
+            if (p == emptyListValue()) {
+                const proto::ProtoObject* r = cc->engine->invoke(&scope, f, nullptr, 0);
+                scope.returnValue = r;
+                return r;
+            }
+            scope.setAutomaticLocal(1, listFirst(&scope, p));
+            p = listRest(&scope, p);
+            scope.setAutomaticLocal(0, p);
+        }
+        unsigned steps = 0;
+        while (p != emptyListValue()) {
+            const proto::ProtoObject* x;
+            const proto::ProtoObject* next;
+            listSplit(&scope, p, &x, &next);
+            const proto::ProtoObject* two[2] = {scope.getAutomaticLocal(1), x};
+            scope.setAutomaticLocal(1, cc->engine->invoke(&scope, f, two, 2));
+            p = next;
+            scope.setAutomaticLocal(0, p);
+            if (++steps % 64 == 0) scope.safepoint();
+        }
+        const proto::ProtoObject* acc = scope.getAutomaticLocal(1);
+        scope.returnValue = acc;
+        return acc ? acc : PROTO_NONE;
+    }
     if (isSeqObject(ctx, coll)) {
         // Walked: the head is released (releaseArg), so reducing a lazy seq
         // nobody else holds runs in constant memory; the accumulator lives
@@ -1998,9 +2059,14 @@ const proto::ProtoObject* prim_join(proto::ProtoContext* ctx,
     } else {
         coll = args->getAt(ctx, 0);
     }
-    const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
     std::string text;
-    if (lst) {
+    if (isListValue(ctx, coll)) {
+        // A list is read along its cells, which `coll` holds.
+        for (const proto::ProtoObject* p = coll; p != emptyListValue(); p = listRest(ctx, p)) {
+            if (p != coll) text += sep;
+            appendStr(ctx, text, listFirst(ctx, p));
+        }
+    } else if (const proto::ProtoList* lst = asSeqOrNull(ctx, coll)) {
         proto::proto_ulong n = lst->getSize(ctx);
         for (proto::proto_ulong i = 0; i < n; ++i) {
             if (i > 0) text += sep;
@@ -2043,7 +2109,7 @@ const proto::ProtoObject* prim_split(proto::ProtoContext* ctx,
             out.push(reinterpret_cast<const proto::ProtoObject*>(
                 makeUtf8ProtoString(out.context(), one)));
         }
-        return out.finish();
+        return out.finishSeq();
     }
     std::size_t pos = 0;
     while (true) {
@@ -2056,7 +2122,7 @@ const proto::ProtoObject* prim_split(proto::ProtoContext* ctx,
         if (found == std::string::npos) break;
         pos = found + d.size();
     }
-    return out.finish();
+    return out.finishSeq();
 }
 
 static bool isAsciiWs(unsigned char c) {
@@ -2743,7 +2809,7 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
     const proto::ProtoObject* f    = args->getAt(ctx, 0);
     const proto::ProtoObject* coll = args->getAt(ctx, 1);
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
-    if (!lst) return ctx->newList()->asObject(ctx);
+    if (!lst) return emptyListValue();
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throwError(ctx, "pmap: no active VM context");
     proto::proto_ulong n = lst->getSize(ctx);
@@ -2845,7 +2911,7 @@ const proto::ProtoObject* prim_pmap(proto::ProtoContext* ctx,
                 firstFailed = static_cast<proto::proto_long>(i);
             results.push(fut->getAttribute(rctx, cc->resultKey));
         }
-        scope.setAutomaticLocal(kSlotOut, results.finish());
+        scope.setAutomaticLocal(kSlotOut, results.finishSeq());
     }
     if (firstFailed >= 0) {
         // The element stays rooted in the kSlotFs list, and its exception
@@ -3425,7 +3491,7 @@ const proto::ProtoObject* prim_list_star(proto::ProtoContext* ctx,
         throwError(out.context(), "Don't know how to create ISeq from: " +
                                   printedValue(out.context(), tail));
     if (out.size() == 0) return PROTO_NONE;
-    return out.finish();
+    return out.finishSeq();
 }
 
 // (even? n) / (odd? n) — integers only, of any size, as in Clojure.
@@ -3504,6 +3570,11 @@ void collectElements(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
             [](proto::ProtoContext*, void* self, const proto::ProtoObject* e) {
                 static_cast<std::vector<const proto::ProtoObject*>*>(self)->push_back(e);
             });
+        return;
+    }
+    if (isListValue(ctx, coll)) {
+        for (const proto::ProtoObject* p = coll; p != emptyListValue(); p = listRest(ctx, p))
+            out.push_back(listFirst(ctx, p));
         return;
     }
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
@@ -3797,6 +3868,19 @@ const proto::ProtoObject* prim_conj(proto::ProtoContext* ctx,
             items = items->appendLast(ctx, args->getAt(ctx, static_cast<int>(i)));
         return newVector(ctx, items);
     }
+    if (!coll || coll == PROTO_NONE || isListValue(ctx, coll)) {
+        // A list (nil is the empty list) grows at the front: the list one
+        // longer per element, one cell each.
+        proto::ProtoContext scope(ctx->space, ctx);
+        scope.resizeAutomaticLocals(1);
+        scope.setAutomaticLocal(0, (coll && coll != PROTO_NONE) ? coll : emptyListValue());
+        for (proto::proto_ulong i = 1; i < n; ++i)
+            scope.setAutomaticLocal(0, listCons(&scope, args->getAt(&scope, static_cast<int>(i)),
+                                                scope.getAutomaticLocal(0)));
+        const proto::ProtoObject* r = scope.getAutomaticLocal(0);
+        scope.returnValue = r;
+        return r;
+    }
     if (isSeqObject(ctx, coll)) {
         // A seq grows at the front, one cons per element, as in Clojure.
         proto::ProtoContext scope(ctx->space, ctx);
@@ -3809,14 +3893,8 @@ const proto::ProtoObject* prim_conj(proto::ProtoContext* ctx,
         scope.returnValue = r;
         return r;
     }
-    if (coll && coll != PROTO_NONE && !isListTag(coll))
-        throwError(ctx, "ClassCastException: conj expects a collection, got " +
-                        std::string(valueTypeName(ctx, coll)));
-    proto::ProtoContext::CriticalSection guard(ctx);
-    const proto::ProtoList* lst = (coll && coll != PROTO_NONE) ? coll->asList(ctx) : ctx->newList();
-    for (proto::proto_ulong i = 1; i < n; ++i)
-        lst = lst->appendFirst(ctx, args->getAt(ctx, static_cast<int>(i)));
-    return lst->asObject(ctx);
+    throwError(ctx, "ClassCastException: conj expects a collection, got " +
+                    std::string(valueTypeName(ctx, coll)));
 }
 
 // (pr-str x ...) — the arguments printed readably, separated by spaces, as
@@ -4183,12 +4261,18 @@ namespace {
 const proto::ProtoObject* fastIndexed(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
                                       const proto::ProtoObject* i) {
     if (!proto::isSmallInt(i)) return nullptr;
-    const bool vector = isVector(coll);
-    if (!vector && !isListTag(coll)) return nullptr;
-    const proto::ProtoList* lst = vector ? vectorItems(ctx, coll) : coll->asList(ctx);
     const long long idx = proto::asSmallInt(i);
-    if (idx < 0 || idx >= static_cast<long long>(lst->getSize(ctx))) return nullptr;
-    return lst->getAt(ctx, static_cast<int>(idx));
+    if (isVector(coll)) {
+        const proto::ProtoList* lst = vectorItems(ctx, coll);
+        if (idx < 0 || idx >= static_cast<long long>(lst->getSize(ctx))) return nullptr;
+        return lst->getAt(ctx, static_cast<int>(idx));
+    }
+    if (seqObjectKind(ctx, coll) != SeqObject::List) return nullptr;
+    // A list: O(idx) steps along the cells, as in Clojure; no allocation.
+    if (idx < 0 || idx >= listCount(ctx, coll)) return nullptr;
+    const proto::ProtoObject* p = coll;
+    for (long long k = 0; k < idx; ++k) p = listRest(ctx, p);
+    return listFirst(ctx, p);
 }
 } // namespace
 
@@ -4449,9 +4533,8 @@ bool deliverPromise(proto::ProtoContext* ctx, const proto::ProtoString* valueKey
 
 namespace {
 
-// A list or a vector read through one indexed interface, so the sequential
-// rules below treat both concrete types alike. Every sequence the runtime
-// produces (`rest`, `map`, `filter`, `keys`, `cons`, ...) is one of the two.
+// A vector read through an indexed interface (lists and the other seqs are
+// walked, valuesEqual).
 struct SequentialView {
     const proto::ProtoList* list = nullptr;
 
@@ -4467,8 +4550,7 @@ struct SequentialView {
 SequentialView sequentialView(proto::ProtoContext* ctx,
                               const proto::ProtoObject* v) {
     SequentialView s;
-    if (isListTag(v))      s.list = v->asList(ctx);
-    else if (isVector(v))  s.list = vectorItems(ctx, v);
+    if (isVector(v)) s.list = vectorItems(ctx, v);
     return s;
 }
 
@@ -4480,9 +4562,11 @@ const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v)
     if (v->isInteger(ctx))                  return "an integer";
     if (v->isDouble(ctx))                   return "a float";
     if (proto::ProtoObject::isStringTagFast(v)) return "a string";
-    if (isListTag(v))                       return "a list";
+    if (isListTag(v))                       return "an internal list";
     if (isVector(v))                        return "a vector";
     switch (seqObjectKind(ctx, v)) {
+        case SeqObject::List:
+        case SeqObject::Empty: return "a list";
         case SeqObject::Lazy:  return "a lazy seq";
         case SeqObject::Cons:
         case SeqObject::Chunk: return "a seq";
@@ -4645,6 +4729,13 @@ bool valuesEqual(proto::ProtoContext* ctx,
     if (isSeqObject(ctx, a) || isSeqObject(ctx, b)) {
         if (!(isSeqValue(ctx, a) || isVector(a)) || !(isSeqValue(ctx, b) || isVector(b)))
             return false;
+        if (isListValue(ctx, a) && isListValue(ctx, b)) {
+            // Two lists: their counts, then their cells in step.
+            if (listCount(ctx, a) != listCount(ctx, b)) return false;
+            for (; a != emptyListValue(); a = listRest(ctx, a), b = listRest(ctx, b))
+                if (!valuesEqual(ctx, listFirst(ctx, a), listFirst(ctx, b))) return false;
+            return true;
+        }
         proto::ProtoContext scope(ctx->space, ctx);
         scope.resizeAutomaticLocals(2);
         SeqWalk wa(&scope, 0, &scope, a);
@@ -4739,8 +4830,8 @@ const proto::ProtoObject* fastPrimitiveCall(proto::ProtoContext* ctx, proto::Pro
         }
         if (fn == &prim_count) {
             if (!v || v == PROTO_NONE) return proto::makeSmallInt(0);
-            if (isListTag(v))
-                return proto::makeSmallInt(static_cast<long long>(v->asList(ctx)->getSize(ctx)));
+            if (v == emptyListValue() || seqObjectKind(ctx, v) == SeqObject::List)
+                return proto::makeSmallInt(listCount(ctx, v));
             if (isVector(v))
                 return proto::makeSmallInt(static_cast<long long>(vectorItems(ctx, v)->getSize(ctx)));
             return nullptr;
@@ -4749,6 +4840,16 @@ const proto::ProtoObject* fastPrimitiveCall(proto::ProtoContext* ctx, proto::Pro
     }
     if (argc == 2) {
         if (fn == &prim_nth) return fastIndexed(ctx, argv[0], argv[1]);
+        if (fn == &prim_cons && mayAllocate) return tryCons(ctx, argv[0], argv[1], &r) ? r : nullptr;
+        if (fn == &prim_conj && mayAllocate) {
+            // (conj list x) and (conj nil x): the list one longer; (conj
+            // vector x): the vector one longer. Both young cells of `ctx`.
+            const proto::ProtoObject* coll = argv[0];
+            if (!coll || coll == PROTO_NONE) return listCons(ctx, argv[1], emptyListValue());
+            if (isListValue(ctx, coll)) return listCons(ctx, argv[1], coll);
+            if (isVector(coll)) return newVector(ctx, vectorItems(ctx, coll)->appendLast(ctx, argv[1]));
+            return nullptr;
+        }
         if (fn == &prim_plus) {
             if (!proto::isSmallInt(argv[0]) || !proto::isSmallInt(argv[1])) return nullptr;
             const long long n = proto::asSmallInt(argv[0]) + proto::asSmallInt(argv[1]);
