@@ -63,3 +63,20 @@ export PROTOCORE_HEAP_TRACE=1 PROTOCORE_ADAPTIVE_HEAP=0 PROTOCORE_HEAP_LIMIT_CEL
 export PROTOCORE_GC_CONTEXT_THRESHOLD=200
 out=$(program | "$PROTOCLJ" /dev/stdin 2>&1); check file "$out" $?
 out=$(program | "$PROTOCLJ" 2>&1); check repl "$out" $?
+
+# The JSON reader holds a SafepointPermit, so a nested array's builder hands
+# the frame's garbage over while the enclosing object still has entries
+# waiting in a C++ batch (under a SafepointBlock). Names longer than six
+# bytes are heap strings (shorter ones are inline in the pointer word), so an
+# entry the collector freed shows up as a wrong sum. With the block ignored
+# (a sabotaged CallerSlots::safepoint) this run answered wrong sums in 2 of
+# 3 runs (2026-10-25) under this 400,000-cell ceiling; the sums are checked
+# against Babashka 1.12.200.
+json_program() {
+    printf '%s\n' "(require '[cheshire.core :as json] '[clojure.string :as s])"
+    printf '%s\n' '(defn json-mix [] (let [doc (str "[" (s/join "," (map (fn [i] (str "{\"name\":\"a-longer-name-" i "\",\"xs\":[" (s/join "," (range 20)) "],\"tag\":\"a-longer-tag-" i "\"}")) (range 3000))) "]") v (json/parse-string doc true)] (reduce + (map (fn [m] (+ (count (:name m)) (count (:tag m)) (reduce + (:xs m)))) v))))'
+    printf '%s\n' '(println (json-mix) (json-mix) (json-mix) (json-mix))'
+}
+expected="672780 672780 672780 672780"
+export PROTOCORE_HEAP_LIMIT_CELLS=400000
+out=$(json_program | "$PROTOCLJ" /dev/stdin 2>&1); check json "$out" $?
