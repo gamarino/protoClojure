@@ -27,8 +27,31 @@ function defaultInstallPath() {
   return path.join(os.homedir(), ".local", "bin", "protoclj");
 }
 
+function configuredPath() {
+  return vscode.workspace.getConfiguration("protoclj").get("path");
+}
+
+// What is wrong with the `protoclj.path` setting, or null: it names a file
+// (not a bare command looked up in PATH) that does not exist. Checked before
+// the launch, so the user reads which setting is wrong instead of a spawn
+// error.
+function configuredPathProblem() {
+  const configured = configuredPath();
+  if (!configured || !/[\\/]/.test(configured) || fs.existsSync(configured)) return null;
+  return `protoClojure: the protoclj.path setting is "${configured}", which does not exist. ` +
+    "Fix it, or clear it to use the default install location or protoclj from PATH.";
+}
+
+// Shows a message and aborts the launch, without waiting for the user to
+// close the message: a launch that waited would stay pending for as long as
+// the notification is not dismissed.
+function refuse(kind, message) {
+  vscode.window[kind](message);
+  return undefined;
+}
+
 function protocljCommand() {
-  const configured = vscode.workspace.getConfiguration("protoclj").get("path");
+  const configured = configuredPath();
   if (configured) return configured;
   const installed = defaultInstallPath();
   return fs.existsSync(installed) ? installed : "protoclj";
@@ -48,26 +71,27 @@ const configurationProvider = {
       }
     }
     if (!config.program) {
-      return vscode.window
-        .showInformationMessage("protoClojure: open a .clj file or set 'program' in launch.json.")
-        .then(() => undefined);
+      return refuse("showInformationMessage", "protoClojure: open a .clj file or set 'program' in launch.json.");
     }
     if (config.remote !== undefined) {
       const cmd = config.remote && config.remote.command;
       if (!Array.isArray(cmd) || cmd.length === 0 || !cmd.every((a) => typeof a === "string")) {
-        return vscode.window
-          .showErrorMessage('protoClojure: "remote.command" must be a non-empty array of strings, e.g. ["ssh", "-T", "me@host"].')
-          .then(() => undefined);
+        return refuse(
+          "showErrorMessage",
+          'protoClojure: "remote.command" must be a non-empty array of strings, e.g. ["ssh", "-T", "me@host"].'
+        );
       }
       if (!Array.isArray(config.pathMappings) || config.pathMappings.length === 0) {
-        return vscode.window
-          .showErrorMessage(
-            'protoClojure: a "remote" launch needs "pathMappings": [{"localRoot": "${workspaceFolder}", ' +
-              '"remoteRoot": "<the same folder on the remote machine>"}], so that breakpoints and the ' +
-              "call stack name the same files on both sides."
-          )
-          .then(() => undefined);
+        return refuse(
+          "showErrorMessage",
+          'protoClojure: a "remote" launch needs "pathMappings": [{"localRoot": "${workspaceFolder}", ' +
+            '"remoteRoot": "<the same folder on the remote machine>"}], so that breakpoints and the ' +
+            "call stack name the same files on both sides."
+        );
       }
+    } else {
+      const problem = configuredPathProblem();
+      if (problem) return refuse("showErrorMessage", problem);
     }
     return config;
   },

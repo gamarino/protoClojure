@@ -617,7 +617,7 @@ the extension (Node.js for `npx`):
 ```bash
 cd editor-integration/vscode
 npx @vscode/vsce@3.2.1 package --skip-license
-code --install-extension protoclj-debug-0.4.0.vsix
+code --install-extension protoclj-debug-0.4.1.vsix
 ```
 
 **Start a session.** Open a `.clj` file, click in the gutter to set breakpoints,

@@ -21,12 +21,12 @@ small VS Code extension, `editor-integration/vscode/`, that registers the
    ```bash
    cd editor-integration/vscode
    npx @vscode/vsce@3.2.1 package --skip-license
-   code --install-extension protoclj-debug-0.4.0.vsix
+   code --install-extension protoclj-debug-0.4.1.vsix
    ```
 
    On Linux and macOS a symlink also works, and picks up edits after
    **Developer: Reload Window**:
-   `ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protoclj-debug-0.4.0`.
+   `ln -s "$(pwd)/editor-integration/vscode" ~/.vscode/extensions/protoclj-debug-0.4.1`.
 
 Syntax highlighting of `.clj`, `.cljs`, `.cljc` and `.edn` files is VS Code's own
 (language id `clojure`); the extension adds no grammar and no language, only the
