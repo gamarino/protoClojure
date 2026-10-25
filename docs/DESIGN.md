@@ -1729,18 +1729,19 @@ does (`src/runtime/CallerSlots.h`; about 80 construction sites removed):
   failed). The VM now submits the frame's chain before it calls a Clojure
   fn, while every value the frame holds is in its slots
   (`ExecutionEngine::submitBeforeCall`): one test when the frame allocated
-  nothing. protoCore's `safepoint()` submits only past the per-context
-  threshold, so the call raises `allocatedCellsCount` past it for that one
-  call and lets `safepoint()` itself submit, with all its checks; a direct
-  `ProtoContext::submitYoungGeneration()` in protoCore would say this
-  plainly (proposal, not done: protoCore is not changed by this work).
+  nothing. The chain is detached and handed to
+  `ProtoSpace::submitYoungGeneration`, the call `~ProtoContext` makes, and
+  the frame then parks at `safepoint()`; skipped inside a critical section.
+  (The first version raised `allocatedCellsCount` past the per-context
+  threshold so that `safepoint()` would submit; the maintainer pointed out
+  that the public call already exists.)
 - **Remaining contexts that are not method activations**, all host code:
   the reader (`ScopedListBuilder`, the reader's scopes), the compiler and
   `evalTopLevel`, the REPL, the debugger (`debugFrameCatches`, the DAP
   server) and the script driver's per-form scope. `read-string` and `eval`
-  reach them from a primitive. Proposal: the driver submits between
-  top-level forms and the compiler roots its intermediate forms in
-  CallerSlots-style slots of the evaluating frame.
+  reach them from a primitive. The maintainer accepts `eval` (and `load`,
+  the REPL) as an exception to the rule: what an eval does is
+  indeterminate, so it may build its own context.
 
 Measured (`benchmarks/reports/2026-10-25-primitive-context`, interleaved,
 fresh copies, quiet gate): a call of a primitive outside M43's set costs
