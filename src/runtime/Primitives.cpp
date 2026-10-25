@@ -717,8 +717,18 @@ const proto::ProtoList* asSeqOrNull(proto::ProtoContext* ctx,
     // those that walk without keeping the elements (count, reduce, dorun)
     // read it through the seq protocol instead.
     if (isSeqObject(ctx, v)) {
+        // A long realisation hands its garbage to the collector as it goes
+        // (CallerSlots.h). Every caller holds, across this call, only values
+        // reachable from its arguments (vec, count, empty?, reduce, join,
+        // pmap, destructuring, collectElements, second, last, seqItems for
+        // CALL_APPLY), which is the permit's promise; a caller that holds
+        // more must not call it.
+        SafepointPermit permit(ctx);
+        CallerSlots slots(ctx, 1);
         const proto::ProtoList* lst = seqToList(ctx, v);
-        return lst ? lst : ctx->newList();
+        if (!lst) return ctx->newList();
+        slots.set(0, lst->asObject(ctx));
+        return slots.ret(lst->asObject(ctx))->asList(ctx);
     }
     ListBuilder out(ctx);
     if (!pushSeqElements(out, v))
@@ -826,10 +836,11 @@ const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
             throwNthOutOfBounds(ctx, args->getAt(ctx, 1),
                                 isListValue(ctx, coll) ? listCount(ctx, coll) : 0);
         }
+        SafepointPermit permit(ctx);   // the walk is in a slot, the rest in arguments
         CallerSlots scope(ctx, 1);
         SeqWalk w(scope, 0, ctx, coll);
         long long i = 0;
-        for (; i < idx && !w.done(); ++i) w.advance(ctx);
+        for (; i < idx && !w.done(); ++i, scope.tick()) w.advance(ctx);
         if (w.done()) {
             if (notFound) return notFound;
             throwNthOutOfBounds(ctx, args->getAt(ctx, 1), i);
@@ -1233,14 +1244,15 @@ const proto::ProtoObject* prim_reverse(proto::ProtoContext* ctx,
     }
     // A list, as in Clojure: each element consed onto the ones before it,
     // one cell per element and no garbage.
+    SafepointPermit permit(ctx);   // the walk and the list are in slots
     CallerSlots scope(ctx, 2);
     scope.set(1, emptyListValue());
     {
         SeqWalk w(scope, 0, ctx, v);
-        for (; !w.done(); w.advance(ctx))
+        for (; !w.done(); w.advance(ctx), scope.tick())
             scope.set(1, listCons(ctx, w.first(ctx), scope.get(1)));
     }
-    return scope.get(1);
+    return scope.ret(scope.get(1));
 }
 
 // The elements of `v` as a seq builds them, pushed onto `out`: a list's or

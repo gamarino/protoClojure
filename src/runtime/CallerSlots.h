@@ -65,7 +65,7 @@ namespace protoClojure {
 
 // Spare slots every VM frame keeps above its operand stack for the
 // primitives it calls (CallerSlots).
-constexpr unsigned int kPrimitiveSlots = 16;
+constexpr unsigned int kPrimitiveSlots = 8;
 
 // The free traced slots of the frame whose primitive is running.
 struct PrimitiveWindow {

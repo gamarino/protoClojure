@@ -11,7 +11,7 @@
  *
  * The accumulator lives in a CallerSlots slot, and so do up to kMaxPending
  * elements waiting to be folded into it when the slots are traced (a
- * PrimitiveWindow). After each fold the builder calls safepoint(), so a long
+ * PrimitiveWindow). After each fold the builder ticks (CallerSlots::tick), so a long
  * build inside a primitive that holds a SafepointPermit hands its garbage
  * over chunk by chunk. Without traced slots (host code: the reader, an actor
  * turn) each element is appended at once, so it is referenced by a young
@@ -80,7 +80,7 @@ private:
     // A build of at most kMaxPending elements is built straight from the
     // parked elements when it finishes as a Clojure list, with no ProtoList
     // in between.
-    static constexpr unsigned int kMaxPending = CallerSlots::kMaxSlots - 1;
+    static constexpr unsigned int kMaxPending = 5;
     static constexpr unsigned int kSlotAcc = 0;
     static constexpr unsigned int kSlotPending0 = 1;
 

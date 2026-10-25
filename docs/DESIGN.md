@@ -82,9 +82,9 @@ program controls must:
    with a `SafepointPermit`.
 
 `src/runtime/ListBuilder.{h,cpp}` implements (2) for primitives and is the
-type to reach for: it builds in the caller's context, parks up to seven
-elements in traced slots, folds them into the accumulator and then calls
-`CallerSlots::safepoint()`, which submits only under a permit. `map`,
+type to reach for: it builds in the caller's context, parks up to five
+elements in traced slots, folds them into the accumulator and ticks
+(`CallerSlots::tick()`), which submits only under a permit. `map`,
 `filter`, `reverse`, `keys` / `vals`, `split`, `pmap`, `send`, the JSON
 reader and the VM's argument packing all build through it. The reader (host
 code, not a primitive) keeps the earlier builder, which opens a context per
@@ -592,7 +592,7 @@ have. Decision (2026-09-30): the server does not use the actor pool.
 - Each accepted connection gets a **connection thread** of its own, also a
   ProtoThread, which reads the request with protoIO's limits (400, 414,
   431 and 413 are answered before the handler runs), builds the Ring
-  request map in a per-request child context, calls the handler through the
+  request map in the connection thread's own context, calls the handler through the
   ExecutionEngine with the ActiveCallContext of the thread that started the
   server, converts and validates the response (a header value with a line
   break, or an answer that is not a map, becomes a plain 500; a handler
@@ -614,9 +614,11 @@ have. Decision (2026-09-30): the server does not use the actor pool.
   stop its own server: the call returns at once (the join would wait for
   the calling thread itself), and `shutdownIO` joins the threads at exit.
 - **GC.** The handler is pinned in a `ProtoRootSet` for as long as the
-  server runs. A connection thread's request map, the handler's garbage
-  and the response live in a child context destroyed when the request
-  ends, so a long-running server's garbage is collected
+  server runs. A connection thread's request map and the response are young
+  cells of the connection thread's context (one request per connection,
+  M45), handed to the collector when the thread ends, and the handler's
+  garbage is its own frame's; the accept thread safepoints after each
+  spawn. So a long-running server's garbage is collected
   (`tests/cli/http-server-under-heap-limit.sh`: 400 requests under a
   200,000-cell ceiling, about 20 collection cycles).
 - **Exit.** `shutdownIO` stops every server still running before
@@ -1476,11 +1478,12 @@ dropped), and raises `Exception`. The behaviour of Cheshire was checked
 against Babashka 1.4.192, which bundles it: the cheshire fixtures of
 `tests/conformance/39-data-formats` pass under `bb` too. clojure.data.json
 is not in Babashka, so its behaviour follows its documentation and source
-as remembered, not a run against the JVM library (D57). GC: each container
-is built in a context of its own, an array through a `ListBuilder` and an
-object in a scope whose slots hold the map so far and up to 64 pending
-entries, folded into the map inside a short-lived context; a key fn or a
-value fn runs with the key and the value in slots. A 20,000-record document
+as remembered, not a run against the JVM library (D57). GC (M45): each
+container is built in the caller's context, an array through a
+`ListBuilder` and an object with the map so far in a slot and up to 16
+pending entries in a C++ batch under a SafepointBlock; the reading
+primitive holds a SafepointPermit, so the builders hand their garbage over
+as the document is read. A 20,000-record document
 parses under a 600,000-cell ceiling and 200,000 newline-delimited records
 stream through a 300,000-cell one (`tests/cli/json-under-heap-limit.sh`).
 Alternatives: (a) JSON in Clojure in `core.clj`, rejected: a character per
@@ -1675,6 +1678,95 @@ and N traced slots in one cell), which would make a list cell, a cons and
 a chunk one cell instead of four and halve the cache lines a walk touches:
 not done, protoCore is not changed by this work; it is the extension this
 decision asks of protoCore (a new type, no existing model changed).
+
+**M45. A primitive runs in its caller's context** (*agent, pending
+review*). The maintainer's rule: a `ProtoContext` belongs to a method
+activation, a Clojure fn frame, because only a frame has local variables of
+its own; a primitive (a C++ `ProtoMethod`) and every helper it calls run in
+the caller's context, and calling a primitive constructs none. Until now
+the VM built one per call of a primitive outside M43's direct set (`CALL`,
+`CALL_MEMBER`, `ExecutionEngine::invoke`), and about 75 primitives and
+helpers opened scopes of their own, as did `SeqWalk` (one per lazy step),
+`ListBuilder` (one per build and one per chunk of 256), `MapBuilder` (one
+per `assoc`), actor turns, HTTP requests and connection spawns. Now none
+does (`src/runtime/CallerSlots.h`):
+
+- What a primitive allocates is a young cell of the caller's context, and a
+  young chain is live until its context submits it, so the primitive's
+  values are protected across its own allocations and callbacks without
+  slots: nothing submits the caller's chain while a primitive runs, except
+  the primitive itself (below). A callback runs in a frame of its own, whose
+  safepoints submit only that frame's chain, and its result is anchored in
+  the caller's chain by the callee frame's ReturnReference.
+- **CallerSlots** are traced slots for what must survive a submission, or a
+  value read from shared mutable state (`pin`, the atom primitives): every
+  VM frame keeps kPrimitiveSlots (8) spare slots above its operand stack,
+  and the VM installs a **PrimitiveWindow** over the free part of the stack
+  around each primitive call; taking slots is a pointer bump. Without a
+  window (a primitive called from host code) or with the window used up,
+  CallerSlots holds its values in a C++ array and submissions are blocked.
+- **Bounded memory** needs submissions inside long loops (reduce over 10^8
+  elements, a walk of a lazy seq, the JSON reader). A primitive may submit
+  the caller frame's chain (`CallerSlots::tick`, `safepoint`) only when it
+  is the frame's outermost primitive activation (a primitive called through
+  `invoke` by another one never submits), while its body holds a
+  **SafepointPermit** (its promise that everything it holds across a call
+  is in CallerSlots or its arguments) and no **SafepointBlock** is held
+  (values parked in C++ storage). Permits: `reduce`, `count`, `last`,
+  `dorun` / `doall`, `run!`, the JSON reader, and `CALL_APPLY`'s
+  realisation of a lazy seq. A helper returns a result through
+  `CallerSlots::ret`, which anchors it with one cell when a submission
+  happened meanwhile.
+- **The frame's young chain is a root**, so a primitive's result kept the
+  frame's whole allocation alive until the frame's next safepoint. A lazy
+  seq built in a frame and walked to the end by a callee (`(walk (map inc
+  (range 1000000)))`) was retained with every element realised, which
+  locals clearing (M30) exists to prevent (tests/cli/lazy-head-retention.sh
+  failed). The VM now submits the frame's chain before it calls a Clojure
+  fn, while every value the frame holds is in its slots
+  (`ExecutionEngine::submitBeforeCall`): one test when the frame allocated
+  nothing. protoCore's `safepoint()` submits only past the per-context
+  threshold, so the call raises `allocatedCellsCount` past it for that one
+  call and lets `safepoint()` itself submit, with all its checks; a direct
+  `ProtoContext::submitYoungGeneration()` in protoCore would say this
+  plainly (proposal, not done: protoCore is not changed by this work).
+- **Remaining contexts that are not method activations**, all host code:
+  the reader (`ScopedListBuilder`, the reader's scopes), the compiler and
+  `evalTopLevel`, the REPL, the debugger (`debugFrameCatches`, the DAP
+  server) and the script driver's per-form scope. `read-string` and `eval`
+  reach them from a primitive. Proposal: the driver submits between
+  top-level forms and the compiler roots its intermediate forms in
+  CallerSlots-style slots of the evaluating frame.
+
+Measured (`benchmarks/reports/2026-10-25-primitive-context`, interleaved,
+fresh copies, quiet gate): TBD-NUMBERS. M43's direct calls: TBD-DECISION.
+Alternatives: (a) one inner scope per long-loop primitive (the brief's
+first version), rejected by the maintainer's rule; (b) a ProtoRootSet as
+the fallback store, rejected: a mutex per pin, and a stale set after a
+space is destroyed; (c) submitting only the part of a young chain allocated
+since a marker, which would let a nested primitive submit its own garbage
+without the permit protocol: needs a protoCore function (proposal).
+
+**M46. Inlined operators honour a redefined global** (*agent, pending
+review*). After `(def + -)`, `(+ 5 3)` answered 8: the compiler emitted
+`ADD` for `+` whenever `+` was not a local, while `(+ 5)` and `apply` called
+the global. Now the compiler emits `ADD` .. `EQ` only while the global of
+the name holds the built-in (`clojure.core/<name>` keeps it, D37), and
+`STORE_GLOBAL` of one of the eight names keeps a process-wide bit per
+operator, set while the global holds something else; the opcode tests the
+bits (one relaxed load, zero in every program that does not redefine an
+operator) and, when its bit is set, calls the global with the operands as
+`PUSH_VAR` + `CALL 2` would. Operand 1 marks a form that named
+`clojure.core/+`, which always computes the built-in. Code compiled before
+the redefinition honours it too (the platform is late-binding); JVM Clojure
+keeps `clojure.core/+` there, and a `(+ a b c)` compiled before calls the
+new value pairwise (STATUS D61). Measured: TBD-OPS. In the same change a
+keyword-argument arity of a multi-arity fn takes key/value pairs:
+`pickArity` gained a third pass, and `CALL`, `CALL_APPLY`, `CALL_KW` and
+`invoke` fold the pairs into the kwArgs map. Alternative: a guard opcode
+before each inlined form, jumping to a compiled general call, rejected:
+twice the code for every arithmetic form, for a case almost no program
+reaches.
 
 ## 11. The standard library
 

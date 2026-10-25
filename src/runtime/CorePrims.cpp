@@ -293,6 +293,10 @@ COREPRIM(prim_sort_by) {
 // collection, and the map is built at the end.
 COREPRIM(prim_frequencies) {
     if (argc(ctx, args) != 1) arity(ctx, argc(ctx, args), "frequencies");
+    // The walk is in slot 0 and every distinct element in the list in slot
+    // 1, which also keeps the C++ table's keys alive: the walk may hand its
+    // garbage to the collector as it goes (CallerSlots.h).
+    SafepointPermit permit(ctx);
     CallerSlots scope(ctx, 2);
     scope.set(1, ctx->newList()->asObject(ctx));
     struct Hash {
@@ -308,7 +312,7 @@ COREPRIM(prim_frequencies) {
     {
         SeqWalk w(scope, 0, ctx, argAt(ctx, args, 0));
         releaseArg(args, 0);
-        for (; !w.done(); w.advance(ctx)) {
+        for (; !w.done(); w.advance(ctx), scope.tick()) {
             const PO* x = w.first(ctx);
             auto it = counts.find(x);
             if (it != counts.end()) { ++it->second; continue; }

@@ -26,10 +26,11 @@ void ListBuilder::push(const proto::ProtoObject* value) {
     slots_.set(kSlotPending0 + npending_++, value);
     if (npending_ == kMaxPending) {
         flush();
-        // Nothing is parked: the folded chunk's garbage may go now, when the
-        // primitive at the bottom holds a SafepointPermit (protoCore submits
-        // once the context is past its threshold).
-        slots_.safepoint();
+        // Nothing is parked: every CallerSlots::kTickStride folds the
+        // garbage may go, when the primitive at the bottom holds a
+        // SafepointPermit (protoCore submits once the context is past its
+        // threshold).
+        slots_.tick();
     }
 }
 

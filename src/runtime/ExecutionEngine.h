@@ -238,7 +238,8 @@ private:
     // next safepoint, which cannot come while it waits for the call (locals
     // clearing, M30). Costs one test when the frame allocated nothing since
     // its last submission.
-    void submitBeforeCall(proto::ProtoContext& frame) const;
+    void submitBeforeCall(proto::ProtoContext& frame) const;   // inline in the .cpp
+    void submitBeforeCallSlow(proto::ProtoContext& frame) const;
 
     // The strided path: resets the countdown and, unless disabled, calls
     // `ProtoContext::safepoint()` on `ctx`. Defined in ExecutionEngine.cpp,

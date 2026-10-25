@@ -101,6 +101,23 @@ constexpr const char* kCoreOperatorNames[8] = {"+", "-", "*", "<", "<=", ">", ">
 // answer.
 std::atomic<unsigned int> g_coreOperatorRedefined{0};
 
+// The global an operator opcode must call instead of computing (its bit is
+// set and the form did not name clojure.core's), or nullptr. Out of line: it
+// runs only in a program that redefined an operator.
+[[gnu::noinline, gnu::cold]] PROTOCLJ_MSVC_NOINLINE
+const proto::ProtoObject* redefinedOperator(proto::ProtoContext* ctx,
+                                            const proto::ProtoObject* globals,
+                                            Op op, std::uint32_t operand) {
+    const unsigned int bit = static_cast<unsigned int>(op) - static_cast<unsigned int>(Op::ADD);
+    if ((operand & 1) != 0 ||
+        (g_coreOperatorRedefined.load(std::memory_order_relaxed) & (1u << bit)) == 0)
+        return nullptr;
+    const proto::ProtoObject* f = globals->getOwnAttributeDirect(
+        ctx, proto::ProtoString::createSymbol(ctx, kCoreOperatorNames[bit]));
+    if (!f) throwError(ctx, std::string("VM: unable to resolve symbol: ") + kCoreOperatorNames[bit]);
+    return f;
+}
+
 // STORE_GLOBAL of `name` = `val`: updates the operator's bit.
 void noteGlobalStore(proto::ProtoContext* ctx, const proto::ProtoObject* globals,
                      const std::string& name, const proto::ProtoObject* val) {
@@ -455,13 +472,21 @@ const bool ExecutionEngine::gcSafepointEnabled_ =
 
 thread_local unsigned ExecutionEngine::gcSafepointCountdown_ = 1;
 
-void ExecutionEngine::submitBeforeCall(proto::ProtoContext& frame) const {
+// See the declaration: one test when the frame allocated nothing since its
+// last submission, inlined into the call path.
+[[gnu::always_inline]] PROTOCLJ_INLINE void
+ExecutionEngine::submitBeforeCall(proto::ProtoContext& frame) const {
+    if (frame.lastAllocatedCell) [[unlikely]] submitBeforeCallSlow(frame);
+}
+
+[[gnu::noinline]] PROTOCLJ_MSVC_NOINLINE
+void ExecutionEngine::submitBeforeCallSlow(proto::ProtoContext& frame) const {
     // See the declaration. protoCore's safepoint() submits a context's young
     // chain only past maxAllocatedCellsPerContext; the count is raised past
     // it for this one call so that safepoint() itself, with every check and
     // configuration it applies, makes the submission. If it did not submit
     // (a critical section, submission disabled), the count is restored.
-    if (!gcSafepointEnabled_ || !frame.lastAllocatedCell) return;
+    if (!gcSafepointEnabled_) return;
     const unsigned int threshold = frame.space->maxAllocatedCellsPerContext;
     if (threshold == 0) return;
     const proto::proto_ulong saved = frame.allocatedCellsCount;
@@ -1104,6 +1129,9 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
     // The dispatch loop. Returns the frame's value at RETURN or at the end
     // of the code.
     auto dispatchLoop = [&]() PROTOCLJ_LAMBDA_ALWAYS_INLINE -> const proto::ProtoObject* {
+    // The argument count of the CALL being dispatched; an operator opcode
+    // whose global was redefined jumps to CALL's dispatch with 2.
+    unsigned int callArgc = 0;
     while (ip < codeEnd) {
         const Instr word = *ip++;
         const Op op = static_cast<Op>(word & 0xFF);
@@ -1208,10 +1236,11 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
             }
 
             case Op::CALL: {
-                unsigned int argc = operand;
-                if (sp < argc + 1u)
+                callArgc = operand;
+                if (sp < callArgc + 1u)
                     throwError(&frame, "VM: CALL with insufficient stack");
-                dispatchCall(argc);
+            callDispatch:
+                dispatchCall(callArgc);
                 break;
             }
 
@@ -1485,22 +1514,19 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 // The global of this operator was redefined (and the form
                 // did not name clojure.core's): call it with the operands,
                 // as PUSH_VAR + CALL would (noteGlobalStore).
-                if (g_coreOperatorRedefined.load(std::memory_order_relaxed) != 0 &&
-                    (operand & 1) == 0) [[unlikely]] {
-                    const unsigned int bit = static_cast<unsigned int>(op) -
-                                             static_cast<unsigned int>(Op::ADD);
-                    if (g_coreOperatorRedefined.load(std::memory_order_relaxed) & (1u << bit)) {
-                        const proto::ProtoObject* f = env.globals->getOwnAttributeDirect(
-                            &frame, proto::ProtoString::createSymbol(&frame, kCoreOperatorNames[bit]));
-                        if (!f) throwError(&frame, std::string("VM: unable to resolve symbol: ") +
-                                                       kCoreOperatorNames[bit]);
+                if (g_coreOperatorRedefined.load(std::memory_order_relaxed) != 0) [[unlikely]] {
+                    // `f` is held by the globals object.
+                    if (const proto::ProtoObject* f =
+                            redefinedOperator(&frame, env.globals, op, operand)) {
+                        // Stack [a b] -> [f a b], then CALL 2.
                         reserveStack(1);
-                        frame.setAutomaticLocal(stackBase + sp, frame.getAutomaticLocal(stackBase + sp - 1));
-                        frame.setAutomaticLocal(stackBase + sp - 1, frame.getAutomaticLocal(stackBase + sp - 2));
-                        frame.setAutomaticLocal(stackBase + sp - 2, f);
+                        const proto::ProtoObject** st = frame.getAutomaticLocals() + stackBase;
+                        st[sp] = st[sp - 1];
+                        st[sp - 1] = st[sp - 2];
+                        st[sp - 2] = f;
                         ++sp;
-                        dispatchCall(2);
-                        break;
+                        callArgc = 2;
+                        goto callDispatch;
                     }
                 }
                 const proto::ProtoObject* a =
