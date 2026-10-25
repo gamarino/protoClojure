@@ -44,15 +44,23 @@
 # Usage: loop-garbage-is-reclaimed.sh <path-to-protoclj>
 set -u
 PROTOCLJ="${1:?usage: loop-garbage-is-reclaimed.sh <protoclj>}"
+. "$(dirname "$0")/gc-workload.sh"
 
-ITERATIONS=400000
 LIMIT=400000
-# (count "garbage-0") + ... + (count "garbage-399999"): 8 + the digit count.
-EXPECTED=5488890
+# 400,000 iterations at the reference 4.0 cells each, scaled to what this
+# protoCore allocates per iteration (gc-workload.sh): about 1,600,000 cells of
+# garbage whatever the kernel's cell accounting.
+gc_calibrate "$PROTOCLJ"
+ITERATIONS=$(gc_scale 400000)
+# (count "garbage-0") + ... : 8 + the digit count per iteration.
+EXPECTED=$(gc_garbage_sum "$ITERATIONS")
 
-# The workload allocates 4.0 cells per iteration, about 1,600,000 in all
-# (counted at protoCore's cell allocator, 1,000 and 2,000 iterations,
-# 2026-10-20). Before protoCore 3.0.0 it allocated 6.0: each call to a C++
+# The workload allocates about 1,600,000 cells: 400,000 iterations at the 4.0
+# cells per iteration protoCore 3.0-3.1 allocate (counted at protoCore's cell
+# allocator, 1,000 and 2,000 iterations, 2026-10-20), or proportionally more
+# iterations on a kernel that allocates fewer (2.6 from 3.2.0: a heap string
+# is its own rope root, with no header cell). Before protoCore 3.0.0 it
+# allocated 6.0: each call to a C++
 # primitive (`str`, `count`) packed its arguments into a fresh ProtoList, and
 # the primitives now read them from the operand stack. Of that garbage the
 # ceiling leaves at most ~1,200,000 cells reclaimable; this bar is 75 % of it,

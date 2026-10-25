@@ -45,6 +45,14 @@
 # Usage: blocking-joins-park-for-gc.sh <path-to-protoclj>
 set -u
 PROTOCLJ="${1:?usage: blocking-joins-park-for-gc.sh <protoclj>}"
+. "$(dirname "$0")/gc-workload.sh"
+# The cases' iteration counts are sized for 4.0 cells per iteration; scaled to
+# what this protoCore allocates, so the garbage (and with it the premise) is
+# the same on every kernel (gc-workload.sh).
+gc_calibrate "$PROTOCLJ"
+N_FUTURE=$(gc_scale 1000000)
+N_PMAP=$(gc_scale 300000)
+N_ACTOR=$(gc_scale 200000)
 
 LIMIT=500000
 DEADLINE=90          # seconds; each case takes about 3 on a working build
@@ -104,31 +112,31 @@ check() {
 }
 
 # 1. `deref` of a future, while the future still needs collections to finish.
-check "deref-future" 13888890 "$BODY
-(def f (future (allocate 1000000)))
+check "deref-future" "$(gc_garbage_sum $N_FUTURE)" "$BODY
+(def f (future (allocate $N_FUTURE)))
 (println @f)"
 
 # 2. `pmap`, which joins one thread per element in order: without the guard the
 #    first element that needs a cycle deadlocks the whole call.
-check "pmap" 12266670 "$BODY
-(println (reduce + 0 (pmap allocate (list 300000 300000 300000))))"
+check "pmap" "$(( 3 * $(gc_garbage_sum $N_PMAP) ))" "$BODY
+(println (reduce + 0 (pmap allocate (list $N_PMAP $N_PMAP $N_PMAP))))"
 
 # 3. ActorScheduler::shutdown, joining workers that are still draining. Only
 #    the first message is awaited, so two are in flight when the script ends
 #    and shutdown joins the pool.
-check "actor-shutdown" 2688890 '(defn work [state n]
+check "actor-shutdown" "$(gc_garbage_sum $N_ACTOR)" "(defn work [state n]
   (loop [i 0 acc state]
-    (if (>= i n) acc (recur (+ i 1) (+ acc (count (str "garbage-" i)))))))
+    (if (>= i n) acc (recur (+ i 1) (+ acc (count (str \"garbage-\" i)))))))
 (def a (actor 0))
-(println @(send a work 200000))
-(send a work 200000)
-(send a work 200000)'
+(println @(send a work $N_ACTOR))
+(send a work $N_ACTOR)
+(send a work $N_ACTOR)"
 
 # 4. shutdownFutures, which joins every future the script started whether or
 #    not it was dereferenced. The future here is never awaited, so it is still
 #    allocating when the script's last form has run.
-check "shutdown-futures" 1288890 "$BODY
-(def f (future (allocate 1000000)))
+check "shutdown-futures" "$(gc_garbage_sum 100000)" "$BODY
+(def f (future (allocate $N_FUTURE)))
 (println (allocate 100000))"
 
 if (( failures )); then

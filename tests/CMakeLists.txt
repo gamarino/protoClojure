@@ -43,6 +43,15 @@ if(WIN32)
         find_program(PROTOCLJ_BASH bash)
     endif()
     set(PROTOCLJ_SH "${PROTOCLJ_BASH}")
+    # Git's POSIX tools (tr, ls, wc, ...), which documentation snippets run
+    # through clojure.java.shell/sh; the bash scripts have them on PATH
+    # already. Git/bin/bash.exe -> Git/usr/bin; usr/bin/bash.exe -> itself.
+    get_filename_component(_protoclj_bash_dir "${PROTOCLJ_BASH}" DIRECTORY)
+    if(EXISTS "${_protoclj_bash_dir}/tr.exe")
+        set(PROTOCLJ_POSIX_TOOLS "${_protoclj_bash_dir}")
+    else()
+        get_filename_component(PROTOCLJ_POSIX_TOOLS "${_protoclj_bash_dir}/../usr/bin" ABSOLUTE)
+    endif()
 else()
     set(PROTOCLJ_SH "")
 endif()
@@ -165,6 +174,10 @@ if(Python3_FOUND)
     add_test(NAME docs/snippets
         COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/docs/check_snippets.py" "$<TARGET_FILE:protoclj>")
     set_tests_properties(docs/snippets PROPERTIES TIMEOUT 300)
+    if(WIN32 AND PROTOCLJ_POSIX_TOOLS)
+        set_tests_properties(docs/snippets PROPERTIES
+            ENVIRONMENT_MODIFICATION "PATH=path_list_append:${PROTOCLJ_POSIX_TOOLS}")
+    endif()
     # `protoclj --dap`, driven as VS Code drives it (docs/debugging.md).
     add_test(NAME cli/dap-session
         COMMAND ${Python3_EXECUTABLE} -I "${CMAKE_CURRENT_SOURCE_DIR}/cli/dap-session.py" "$<TARGET_FILE:protoclj>")

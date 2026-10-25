@@ -9,6 +9,27 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Fixed — GC checks on protoCore 3.2.0; CI on protoCore 3.2.0 (2026-10-24)
+
+- `cli/loop-garbage-is-reclaimed`, `cli/blocking-joins-park-for-gc` and
+  `cli/waiters-park-for-gc` failed their premise (too few collection cycles)
+  on protoCore 3.2.0 although the collector works: the same loop allocates
+  1.5-1.9 cells per iteration there against 3.7-3.9 on 3.1.0 (a heap
+  string is its own rope root), so the fixed workloads made less than half
+  the garbage. Per cycle the collector reclaims the same (360-440 K cells
+  under the same ceilings), and the old kernel passes all three. The checks
+  now measure cells per iteration at run time (tests/cli/gc-workload.sh) and
+  scale their iteration counts to the garbage they were designed for; their
+  thresholds and assertions are unchanged.
+- `docs/snippets` on Windows: Git for Windows' POSIX tools (`tr`, `ls`) are
+  on PATH for the test (ENVIRONMENT_MODIFICATION, as protoST does), and a
+  snippet that fetches a URL whose server answers 5xx (example.com's
+  occasional 503) is skipped as a transient network failure, with the
+  server's answer.
+- CI builds against protoCore 3.2.0 (master bb2d581a, untagged) on Linux,
+  macOS and Windows; the Windows floor job stays on 3.1.0, the declared
+  minimum.
+
 ### Added — debugger: sources, path mappings, remote launch (2026-10-24)
 
 - clojure.core's Clojure part, embedded in the binary, is compiled with debug

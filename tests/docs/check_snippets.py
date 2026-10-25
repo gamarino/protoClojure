@@ -12,7 +12,13 @@ comment `<!-- not run: reason -->` (planned features, fragments, programs
 that need a network or run forever), or `<!-- not run on Windows: reason -->`
 on Windows only (POSIX paths and commands), or when one of the first lines of the
 file is `<!-- snippets: not run (reason) -->` (a chapter about a planned
-feature); every skip is listed with its reason.
+feature); every skip is listed with its reason. A block that fetches an
+http(s) URL and fails because the server answered 5xx (example.com's
+occasional 503) is skipped as a transient network failure, with the server's
+answer as the reason: the server's state is not protoclj's.
+
+On Windows the POSIX tools some snippets run (`tr`, `ls`) come from Git for
+Windows: tests/CMakeLists.txt appends its usr/bin to PATH for this test.
 
 Exit status 0 when every block that is run passes.
 """
@@ -73,6 +79,11 @@ def main():
                     ok, err = r.returncode == 0, (r.stderr or r.stdout).strip().splitlines()[-1:] 
                 except subprocess.TimeoutExpired:
                     ok, err = False, ["timeout"]
+            if (not ok and re.search(r"https?://", body) and err
+                    and re.search(r"HTTP response code: 5\d\d", err[0])):
+                skipped += 1
+                print(f"SKIP {where}: transient network failure, the server answered: {err[0]}")
+                continue
             if not ok:
                 failed += 1
                 print(f"FAIL {where}: {err[0] if err else ''}")

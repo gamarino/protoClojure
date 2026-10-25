@@ -23,6 +23,11 @@
 # Usage: waiters-park-for-gc.sh <path-to-protoclj>
 set -u
 PROTOCLJ="${1:?usage: waiters-park-for-gc.sh <protoclj>}"
+. "$(dirname "$0")/gc-workload.sh"
+# Sized for 4.0 cells per iteration, scaled to this protoCore (gc-workload.sh).
+gc_calibrate "$PROTOCLJ"
+N=$(gc_scale 1000000)
+EXPECTED=$(gc_garbage_sum $N)
 
 LIMIT=500000
 DEADLINE=90
@@ -75,17 +80,17 @@ check() {
 # 1. The main thread reads a lazy seq the future has claimed: the thunk
 #    delivers `started` first, so by the time the main thread reads `s` the
 #    future is realising it, and the realisation needs collections.
-check "lazy-seq-claimed-by-another-thread" 13888890 "$BODY
+check "lazy-seq-claimed-by-another-thread" "$EXPECTED" "$BODY
 (def started (promise))
-(def s (lazy-seq (do (deliver started true) (cons (allocate 1000000) nil))))
+(def s (lazy-seq (do (deliver started true) (cons (allocate $N) nil))))
 (def f (future (first s)))
 @started
 (println (first s))"
 
 # 2. deref of a promise delivered by a future that needs collections first.
-check "promise-deref" 13888890 "$BODY
+check "promise-deref" "$EXPECTED" "$BODY
 (def p (promise))
-(future (deliver p (allocate 1000000)))
+(future (deliver p (allocate $N)))
 (println @p)"
 
 if (( failures )); then
