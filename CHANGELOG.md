@@ -9,6 +9,32 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Changed — primitives run in the caller's context (2026-10-25)
+
+- A primitive (a C++ built-in) runs in its caller's context: calling one
+  creates no `ProtoContext`, on any path (`CALL`, `CALL_MEMBER`, `apply`,
+  primitives calling primitives). Only a Clojure fn frame has a context
+  (DESIGN.md M45). The inner scopes of the built-ins and helpers, the lazy
+  seq walker's per-step contexts, the list and map builders' contexts, and
+  the per-turn, per-request and per-spawn contexts of actors and the HTTP
+  server are gone; what a primitive must keep across a submission lives in
+  `CallerSlots`, spare slots of the calling frame
+  (`src/runtime/CallerSlots.h`).
+- Long walks (`reduce`, `count`, `last`, `dorun`, `doall`, `run!`,
+  `frequencies`, `reverse`, `nth`, `vec` and the other functions that
+  realise a whole seq, the JSON reader) hand the frame's garbage to the
+  collector as they go; the VM hands a frame's garbage over before it calls
+  a Clojure fn.
+- New check `cli/primitive-callbacks-survive-gc`.
+
+### Fixed — redefined operators, keyword arguments of multi-arity fns (2026-10-25)
+
+- After `(def + -)`, `(+ 5 3)` is 2: the inlined operators `+ - * < <= > >=
+  =` honour a redefinition of their global (DESIGN.md M46; STATUS D61 for
+  code compiled before the redefinition).
+- A multi-arity fn with a `[a & {:keys ...}]` arity takes keyword arguments,
+  directly, through `apply` and from a primitive.
+
 ### Added — VM documentation and `protoclj --disasm` (2026-10-25)
 
 - `docs/VM.md`: the bytecode VM for contributors — a reading order through

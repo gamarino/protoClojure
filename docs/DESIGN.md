@@ -1610,7 +1610,11 @@ direct call allocates (the chunk of `rest` of a vector, a cons cell) is a
 young cell of the frame, handed to the collector at the next loop
 back-edge (the safepoint the arithmetic opcodes already rely on).
 `ExecutionEngine::invoke` (map, filter, reduce calling a primitive) uses
-the subset that never allocates, its context being a long-lived scope. The
+the subset that never allocates, its context being a long-lived scope.
+*Update 2026-10-25 (M45):* no primitive call builds a context any more, and
+the general path is 11-23 % cheaper; the direct calls stay because they are
+still 26 % cheaper than the general path for `first` (185 against 250
+cycles). The
 primitives and the direct calls share one implementation (`tryFirst`,
 `tryRest`, `tryNext`, `trySeq`, `tryEmpty`, `tryCons`, `tryCount`,
 `src/runtime/LazySeq.h`). Alternatives: (a) opcodes for the seq functions,
@@ -1685,11 +1689,11 @@ activation, a Clojure fn frame, because only a frame has local variables of
 its own; a primitive (a C++ `ProtoMethod`) and every helper it calls run in
 the caller's context, and calling a primitive constructs none. Until now
 the VM built one per call of a primitive outside M43's direct set (`CALL`,
-`CALL_MEMBER`, `ExecutionEngine::invoke`), and about 75 primitives and
-helpers opened scopes of their own, as did `SeqWalk` (one per lazy step),
+`CALL_MEMBER`, `ExecutionEngine::invoke`), and the primitives and helpers
+opened scopes of their own, as did `SeqWalk` (one per lazy step),
 `ListBuilder` (one per build and one per chunk of 256), `MapBuilder` (one
 per `assoc`), actor turns, HTTP requests and connection spawns. Now none
-does (`src/runtime/CallerSlots.h`):
+does (`src/runtime/CallerSlots.h`; about 80 construction sites removed):
 
 - What a primitive allocates is a young cell of the caller's context, and a
   young chain is live until its context submits it, so the primitive's
@@ -1739,7 +1743,18 @@ does (`src/runtime/CallerSlots.h`):
   CallerSlots-style slots of the evaluating frame.
 
 Measured (`benchmarks/reports/2026-10-25-primitive-context`, interleaved,
-fresh copies, quiet gate): TBD-NUMBERS. M43's direct calls: TBD-DECISION.
+fresh copies, quiet gate): a call of a primitive outside M43's set costs
+11-23 % fewer cycles (`str` 1935 -> 1489, `assoc` 2016 -> 1772, `get` 391 ->
+349, `max` 421 -> 371); `reduce` over a list 82 -> 42 ns per element; the
+showcase `json` -5 % time and -18 % peak RSS, `word-freq` -5 % and -9 %;
+start-up -2 % cycles; `tak` -7 % cycles, `fib` +0.2 to +1.6 %, `sum-loop`
++3 % (the spare slots, the before-call test and M46's check; a first version
+with 16 slots and both paths inline cost fib +7 %). An earlier run found
+`word-freq` at 5.2 GB peak (main 159 MB): `frequencies` walked a lazy seq
+with no permit; it has one now, as do `reverse`, `nth` and `asSeqOrNull`.
+**M43's direct calls stay**: with them compiled out, `first` costs 250
+cycles instead of 185; the test costs the other primitives 15-50 cycles.
+`invoke` keeps answering only the subset that never allocates.
 Alternatives: (a) one inner scope per long-loop primitive (the brief's
 first version), rejected by the maintainer's rule; (b) a ProtoRootSet as
 the fallback store, rejected: a mutex per pin, and a stale set after a
@@ -1760,7 +1775,10 @@ operator) and, when its bit is set, calls the global with the operands as
 `clojure.core/+`, which always computes the built-in. Code compiled before
 the redefinition honours it too (the platform is late-binding); JVM Clojure
 keeps `clojure.core/+` there, and a `(+ a b c)` compiled before calls the
-new value pairwise (STATUS D61). Measured: TBD-OPS. In the same change a
+new value pairwise (STATUS D61). Measured with M45 (`perf stat -r 10`):
+`fib` +0.2 to +1.6 % cycles, `sum-loop` +3 %, `tak` -7 %; the redefinition
+path itself is out of line and only reached after a redefinition. In the
+same change a
 keyword-argument arity of a multi-arity fn takes key/value pairs:
 `pickArity` gained a third pass, and `CALL`, `CALL_APPLY`, `CALL_KW` and
 `invoke` fold the pairs into the kwArgs map. Alternative: a guard opcode

@@ -1,0 +1,10 @@
+date: 2026-10-25T17:23:48Z
+host: Linux 7.0.0-38-generic x86_64, 12 cpus
+main: /home/gamarino/Documentos/proyectos/.agent_scratch/prim-ctx/bins/protoclj-main (83cbf91aaed035b1)
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/list-cost/prefix/lib/libprotoCore.so.4 (0x00007b241ffec000)
+nofast: /home/gamarino/Documentos/proyectos/.agent_scratch/prim-ctx/bins/protoclj-nofast3 (ffa2acd677c78b99)
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/list-cost/prefix/lib/libprotoCore.so.4 (0x000074fecd28d000)
+branch: /home/gamarino/Documentos/proyectos/.agent_scratch/prim-ctx/bins/protoclj-branch3 (31bb2df8e0534bed)
+	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/list-cost/prefix/lib/libprotoCore.so.4 (0x0000738e81128000)
+library: /home/gamarino/Documentos/proyectos/.agent_scratch/list-cost/prefix/lib/libprotoCore.so.3.2.0 (17b592fc4c9c67e9)
+bb: /home/gamarino/Documentos/proyectos/.agent_scratch/list-cost/bb-dl/bb (babashka v1.12.200)
