@@ -94,7 +94,7 @@ long long listCount(proto::ProtoContext* ctx, const proto::ProtoObject* l) {
     return proto::asSmallInt(seqNodeFields(ctx, l)->getAt(ctx, 2));
 }
 
-const proto::ProtoObject* listFromArray(proto::ProtoContext* ctx, unsigned long n,
+const proto::ProtoObject* listFromArray(proto::ProtoContext* ctx, std::size_t n,
                                         const proto::ProtoObject* const* items) {
     if (n == 0) return g_seqProtos.empty;
     // Built from the end; each new cell is rooted in the slot, and holds the
@@ -102,7 +102,7 @@ const proto::ProtoObject* listFromArray(proto::ProtoContext* ctx, unsigned long 
     proto::ProtoContext scope(ctx->space, ctx);
     scope.resizeAutomaticLocals(1);
     const proto::ProtoObject* acc = g_seqProtos.empty;
-    for (unsigned long i = n; i-- > 0;) {
+    for (std::size_t i = n; i-- > 0;) {
         acc = listCons(&scope, items[i], acc);
         scope.setAutomaticLocal(0, acc);
     }

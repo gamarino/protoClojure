@@ -873,7 +873,7 @@ bool tryNext(proto::ProtoContext* ctx, const PO* v, const PO** out) {
         case SeqObject::Cons: {
             // seqOf of what follows, unless that is a lazy seq to realise.
             const PO* m = consMore(ctx, v);
-            const PO* s;
+            const PO* s = nullptr;
             if (!trySeq(ctx, m, &s)) return false;
             *out = s;
             return true;
@@ -884,7 +884,7 @@ bool tryNext(proto::ProtoContext* ctx, const PO* v, const PO** out) {
                 *out = newChunk(ctx, cv.items, cv.off + 1, cv.end, cv.more, cv.chunked);
                 return true;
             }
-            const PO* s;
+            const PO* s = nullptr;
             if (!trySeq(ctx, cv.more, &s)) return false;
             *out = s;
             return true;

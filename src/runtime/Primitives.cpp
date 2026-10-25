@@ -1086,7 +1086,7 @@ const proto::ProtoObject* prim_first(proto::ProtoContext* ctx,
     if (!args || args->getSize(ctx) != 1)
         throwError(ctx, "first: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
-    const proto::ProtoObject* r;
+    const proto::ProtoObject* r = nullptr;
     if (tryFirst(ctx, v, &r)) return r;
     const proto::ProtoObject* s = seqOf(ctx, v);
     return s == PROTO_NONE ? PROTO_NONE : seqFirst(ctx, s);
@@ -1101,7 +1101,7 @@ const proto::ProtoObject* prim_rest(proto::ProtoContext* ctx,
         throwError(ctx, "rest: expects 1 arg");
     // Clojure's rest: what follows the first element, `()` when nothing
     // does (seqMore); a vector's is a chunked seq, as Clojure's ChunkedSeq.
-    const proto::ProtoObject* r;
+    const proto::ProtoObject* r = nullptr;
     if (tryRest(ctx, args->getAt(ctx, 0), &r)) return r;
     const proto::ProtoObject* s = seqOf(ctx, args->getAt(ctx, 0));
     if (s == PROTO_NONE) return emptyListValue();
@@ -1117,7 +1117,7 @@ const proto::ProtoObject* prim_cons(proto::ProtoContext* ctx,
         throwError(ctx, "cons: expects (cons x coll)");
     const proto::ProtoObject* x    = args->getAt(ctx, 0);
     const proto::ProtoObject* coll = args->getAt(ctx, 1);
-    const proto::ProtoObject* r;
+    const proto::ProtoObject* r = nullptr;
     if (tryCons(ctx, x, coll, &r)) return r;
     // Onto any other collection: a cons onto its seq, as Clojure's RT.cons.
     proto::ProtoContext scope(ctx->space, ctx);
@@ -1155,7 +1155,7 @@ const proto::ProtoObject* prim_count(proto::ProtoContext* ctx,
     // A map: its number of entries; a set: its number of elements (O(n), D25).
     if (isMap(v)) return ctx->fromLong(static_cast<long long>(mapCount(ctx, v)));
     if (isSet(ctx, v)) return ctx->fromLong(static_cast<long long>(setCount(ctx, v)));
-    if (long long c; isSeqObject(ctx, v) && tryCount(ctx, v, &c)) return ctx->fromLong(c);
+    if (long long c = 0; isSeqObject(ctx, v) && tryCount(ctx, v, &c)) return ctx->fromLong(c);
     if (isSeqObject(ctx, v)) {
         // Walked, not built: the count of a lazy seq nobody else holds
         // keeps none of its elements (releaseArg, SeqWalk). The walk stops
@@ -1167,7 +1167,7 @@ const proto::ProtoObject* prim_count(proto::ProtoContext* ctx,
         releaseArg(args, 0);
         long long n = 0;
         for (; !w.done(); w.advance(&scope)) {
-            long long c;
+            long long c = 0;
             if (w.counted(&scope, &c)) { n += c; break; }
             ++n;
         }
@@ -1185,7 +1185,7 @@ const proto::ProtoObject* prim_empty_p(proto::ProtoContext* ctx,
     if (!args || args->getSize(ctx) != 1)
         throwError(ctx, "empty?: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
-    bool e;
+    bool e = false;
     if (tryEmpty(ctx, v, &e)) return e ? PROTO_TRUE : PROTO_FALSE;
     if (isStringLike(v)) {
         return asProtoString(v)->getSize(ctx) == 0 ? PROTO_TRUE : PROTO_FALSE;
@@ -1444,8 +1444,8 @@ const proto::ProtoObject* prim_reduce(proto::ProtoContext* ctx,
         }
         unsigned steps = 0;
         while (p != emptyListValue()) {
-            const proto::ProtoObject* x;
-            const proto::ProtoObject* next;
+            const proto::ProtoObject* x = nullptr;
+            const proto::ProtoObject* next = nullptr;
             listSplit(&scope, p, &x, &next);
             const proto::ProtoObject* two[2] = {scope.getAutomaticLocal(1), x};
             scope.setAutomaticLocal(1, cc->engine->invoke(&scope, f, two, 2));
@@ -2727,6 +2727,8 @@ const proto::ProtoObject* prim_realized_p(proto::ProtoContext* ctx,
         case SeqObject::Lazy:  return lazyIsRealized(ctx, v) ? PROTO_TRUE : PROTO_FALSE;
         case SeqObject::Cons:
         case SeqObject::Chunk: return PROTO_TRUE;
+        case SeqObject::List:
+        case SeqObject::Empty:  // not pending, as before lists were cells
         case SeqObject::None:  break;
     }
     const proto::ProtoObject* proto = v->getPrototype(ctx);
@@ -3778,7 +3780,7 @@ const proto::ProtoObject* prim_next(proto::ProtoContext* ctx,
                                     const proto::ProtoArguments* args,
                                     const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1) arityError(ctx, args, "next");
-    const proto::ProtoObject* r;
+    const proto::ProtoObject* r = nullptr;
     if (tryNext(ctx, args->getAt(ctx, 0), &r)) return r;
     const proto::ProtoObject* s = seqOf(ctx, args->getAt(ctx, 0));
     if (s == PROTO_NONE) return PROTO_NONE;
@@ -4824,14 +4826,14 @@ const proto::ProtoObject* fastPrimitiveCall(proto::ProtoContext* ctx, proto::Pro
         if (fn == &prim_next)  return tryNext(ctx, v, &r) ? r : nullptr;
         if (fn == &prim_seq)   return trySeq(ctx, v, &r) ? r : nullptr;
         if (fn == &prim_empty_p) {
-            bool e;
+            bool e = false;
             return tryEmpty(ctx, v, &e) ? (e ? PROTO_TRUE : PROTO_FALSE) : nullptr;
         }
         if (fn == &prim_count) {
             // nil, a vector, a list, and cons chains and chunks ending in
             // one of them (tryCount); strings, maps and sets go the general
             // way.
-            long long c;
+            long long c = 0;
             if (!isVector(v) && v && v != PROTO_NONE && !isSeqObject(ctx, v)) return nullptr;
             return tryCount(ctx, v, &c) ? proto::makeSmallInt(c) : nullptr;
         }

@@ -40,6 +40,8 @@
 
 #include "protoCore.h"  // proto::proto_ulong
 
+#include <cstddef>
+
 namespace proto {
 class ProtoContext;
 class ProtoObject;
@@ -118,7 +120,7 @@ long long listCount(proto::ProtoContext* ctx, const proto::ProtoObject* l);
 
 // The list of the `n` values at `items`, in that order; the values must be
 // rooted by the caller (a frame's slots, a rooted ProtoList's elements).
-const proto::ProtoObject* listFromArray(proto::ProtoContext* ctx, unsigned long n,
+const proto::ProtoObject* listFromArray(proto::ProtoContext* ctx, std::size_t n,
                                         const proto::ProtoObject* const* items);
 // The list of the elements of `items` (nullptr: the empty list), which the
 // caller roots.
