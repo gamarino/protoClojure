@@ -9,6 +9,10 @@ all on protoCore master bb2d581a (3.2.0) in a scratch prefix (`ldd` in
   context (DESIGN.md M43);
 - **B**: `563cf14`, lists as chains of immutable cells (M44) on top of A.
 
+The branch was then rebased onto `main` 46d8f1c (test sizing, CI and
+editor changes only; no source file differs): A is `dd1ba9e` and B
+`47f4c50` there.
+
 `run.sh` ran every section in 5 rounds, the variant order rotated each
 round, each run on a fresh copy of its binary and of the library. The
 machine was 82-87 % idle with no build running at every round

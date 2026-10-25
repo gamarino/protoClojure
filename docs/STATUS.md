@@ -7,12 +7,11 @@
 **Branch `perf/seq-cost-cons-lists` (2026-10-24).** `ctest` registers 868
 test cases: 683 conformance fixtures, 138 GoogleTest unit tests and module
 checks, 46 CLI checks and the documentation snippet check; all pass locally
-on Linux against protoCore 3.1.0 (34eca79f, the version CI builds). Against
-protoCore master 3.2.0 (bb2d581a) three CLI checks fail, on `main` as well:
-`loop-garbage-is-reclaimed`, `blocking-joins-park-for-gc` and
-`waiters-park-for-gc` count fewer collection cycles under 3.2.0's collector
-than their premise requires. Lists are chains of cells (DESIGN.md M44) and
-the VM answers the hot seq primitives directly (M43).
+on Linux against protoCore 3.2.0 (bb2d581a, CI's pin) and 3.1.0 (34eca79f,
+the floor). `cli/lazy-head-retention` failed once in five parallel runs of
+the whole suite on 3.2.0 and passed in every other run (six times alone);
+not isolated. Lists are chains of cells (DESIGN.md M44) and the VM answers
+the hot seq primitives directly (M43).
 The paragraph below describes the 0.0.3 tag.
 
 **Current state.** Version 0.0.3 (2026-10-22), a preview tag. The interpreter runs
