@@ -11,7 +11,12 @@ all on protoCore master bb2d581a (3.2.0) in a scratch prefix (`ldd` in
 
 The branch was then rebased onto `main` 46d8f1c (test sizing, CI and
 editor changes only; no source file differs): A is `dd1ba9e` and B
-`47f4c50` there.
+`47f4c50` there. Two commits followed for CI (a `-Werror=switch` case, and
+the reader's and compiler's recursive frames moved out of line for
+`cli/deeply-nested-source` on macOS and Windows, 92d7d53). Re-checked
+against the measured B, 5 interleaved runs of `perf stat`: start-up 64.9
+against 65.6 Mcycles (A: 63.4, so +2.3 % over A where the table below says
++3.9 %), the loop and seq cases within -2.4 % to +1.6 %.
 
 `run.sh` ran every section in 5 rounds, the variant order rotated each
 round, each run on a fresh copy of its binary and of the library. The
