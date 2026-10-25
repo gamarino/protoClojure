@@ -229,8 +229,7 @@ const PO* sortedList(proto::ProtoContext* ctx, const PO* keyfn, const PO* cmp, c
     if (isListValue(ctx, coll)) {
         // A list is read along its cells; it is rooted in slot 0.
         scope.set(0, coll);
-        for (const PO* p = coll; p != emptyListValue(); p = listRest(ctx, p))
-            elems.push_back(listFirst(ctx, p));
+        for (ListCursor c(coll); c.hasNext();) elems.push_back(c.next());
     } else {
         const proto::ProtoList* items = seqToList(ctx, coll);
         if (!items) return emptyListValue();

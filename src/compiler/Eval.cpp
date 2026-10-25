@@ -196,10 +196,9 @@ const proto::ProtoObject* evalTopLevel(proto::ProtoContext* ctx,
         // next is compiled, as in Clojure.
         // The forms are cells of `expanded`, which slot 0 roots.
         scope.setAutomaticLocal(1, PROTO_NONE);
-        for (const proto::ProtoObject* p = listRest(&scope, expanded); p != emptyListValue();
-             p = listRest(&scope, p)) {
-            scope.setAutomaticLocal(1, evalTopLevel(&scope, listFirst(&scope, p), info));
-        }
+        ListCursor c(expanded);
+        c.next();  // `do`
+        while (c.hasNext()) scope.setAutomaticLocal(1, evalTopLevel(&scope, c.next(), info));
         scope.returnValue = scope.getAutomaticLocal(1);
         return scope.getAutomaticLocal(1);
     }

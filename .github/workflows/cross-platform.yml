@@ -3,10 +3,9 @@ name: Cross-platform
 # macOS and Windows. Linux is ci.yml's; this workflow adds the two platforms
 # nobody here can run locally, against an INSTALLED protoCore package (the
 # supported mode on Windows) and the sibling protoIO source tree. Refs pinned:
-# protoCore 3.2.0 on macOS and Windows, as ci.yml on Linux, and a second
-# Windows job on protoCore 3.1.0, the minimum CMakeLists.txt declares: the
-# repository's only floor job. (No macOS floor job: below 2.8.0 protoCore's
-# threads get 512 KiB stacks there, ProtoSpace::setThreadStackBytes.)
+# protoCore 3.3.0 on macOS and Windows, as ci.yml on Linux. 3.3.0 is also the
+# minimum CMakeLists.txt declares, so these jobs are the floor jobs too; a
+# separate floor job returns when the minimum falls behind the pinned release.
 
 on:
   push:
@@ -39,17 +38,12 @@ jobs:
         include:
           - name: macOS (Apple clang, arm64)
             os: macos-14
-            # protoCore 3.2.0 (master bb2d581a, untagged)
-            protocore_ref: bb2d581a9e52a796c0c2dd1f682e0c75dc61d2d1
+            # protoCore 3.3.0 (tag v3.3.0)
+            protocore_ref: aedc3b6368fa0c9eda9e4ca3647ba666cf2f13bb
           - name: Windows (MSVC, x64)
             os: windows-2022
-            # protoCore 3.2.0 (master bb2d581a, untagged)
-            protocore_ref: bb2d581a9e52a796c0c2dd1f682e0c75dc61d2d1
-          - name: Windows (MSVC, x64), protoCore 3.1.0 minimum
-            os: windows-2022
-            # THE FLOOR JOB, the only one: protoCore 3.1.0,
-            # PROTOCORE_MIN_VERSION in CMakeLists.txt
-            protocore_ref: 34eca79fd16191497971714228f5e5c65f005b76
+            # protoCore 3.3.0 (tag v3.3.0)
+            protocore_ref: aedc3b6368fa0c9eda9e4ca3647ba666cf2f13bb
     defaults:
       run:
         shell: bash

@@ -1257,9 +1257,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                     // while its slot is reused for the first argument.
                     const long long ln = listCount(&frame, listObj);
                     reserveStack(static_cast<proto::proto_ulong>(ln));
-                    for (const proto::ProtoObject* p = listObj; p != emptyListValue();
-                         p = listRest(&frame, p))
-                        pushVal(listFirst(&frame, p));
+                    for (ListCursor c(listObj); c.hasNext();) pushVal(c.next());
                     dispatchCall(static_cast<unsigned int>(ln));
                     break;
                 }

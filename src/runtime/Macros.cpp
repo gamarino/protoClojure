@@ -94,8 +94,9 @@ const proto::ProtoObject* expandMacroCall(proto::ProtoContext* ctx,
     args.push_back(form);
     args.push_back(env ? env : PROTO_NONE);
     if (isListValue(ctx, form)) {
-        for (const proto::ProtoObject* p = listRest(ctx, form); p != emptyListValue(); p = listRest(ctx, p))
-            args.push_back(listFirst(ctx, p));
+        ListCursor c(form);
+        c.next();  // the macro's name
+        while (c.hasNext()) args.push_back(c.next());
     } else {
         CallerSlots scope(ctx, 1);
         SeqWalk w(scope, 0, ctx, form);

@@ -393,7 +393,7 @@ struct Session {
     std::string definedName(proto::ProtoContext* c, const proto::ProtoObject* form) const {
         if (!isListValue(c, form) || listCount(c, form) < 2) return "";
         const proto::ProtoObject* head = listFirst(c, form);
-        const proto::ProtoObject* name = listFirst(c, listRest(c, form));
+        const proto::ProtoObject* name = listNth(c, form, 1);
         if (!isNamed(c, named, head) || !isNamed(c, named, name)) return "";
         std::string h = namedSpelling(c, named, head)->toStdString(c);
         if (h.rfind("clojure.core/", 0) == 0) h = h.substr(13);

@@ -1,14 +1,13 @@
 /*
- * SeqTypes — the representation of protoClojure's sequence objects: lazy
- * seqs, cons cells and chunks (docs/DESIGN.md §10.2, M28).
+ * SeqTypes — the representation of protoClojure's sequence objects: lists,
+ * lazy seqs, cons cells and chunks (docs/DESIGN.md §10.2, M28, M46).
  *
- * Vectors stay protoCore's own structure (a boxed ProtoList, VectorOps.h).
- * Four object types are added beside them, each an object cell whose
- * prototype tells it apart, as a set is (SetOps.h), and one value:
+ * Vectors stay protoCore's own structure (a boxed ProtoList, VectorOps.h),
+ * and so do lists: a Clojure list is a protoCore ProtoLinkedList (see
+ * "Clojure lists" below), the empty list `()` included. Three object types
+ * are added beside them, each an object cell whose prototype tells it apart,
+ * as a set is (SetOps.h):
  *
- *   - a list cell: a non-empty Clojure list, holding its first element, its
- *     rest and its count (see "Clojure lists" below); the empty list `()` is
- *     a value of its own;
  *   - a lazy seq: a protoCore lazy object (ProtoObject::newLazyChild,
  *     protoCore 3.1), an immutable object whose lazy slot holds the thunk
  *     that computes it and, once realised by compare-and-set, the seq it
@@ -34,7 +33,7 @@
  *
  * GC: the prototypes are created once per ProtoSpace by initSeqTypes and
  * must be rooted by its caller (installPrimitives stores them on the
- * globals).
+ * globals). The empty list is protoCore's, perennial.
  */
 #pragma once
 
@@ -46,6 +45,7 @@ namespace proto {
 class ProtoContext;
 class ProtoObject;
 class ProtoList;
+class ProtoLinkedList;
 }
 
 namespace protoClojure {
@@ -54,8 +54,7 @@ struct SeqPrototypes {
     const proto::ProtoObject* lazy  = nullptr;  // lazy seqs (lazy children)
     const proto::ProtoObject* cons  = nullptr;  // cons cells
     const proto::ProtoObject* chunk = nullptr;  // chunks
-    const proto::ProtoObject* list  = nullptr;  // non-empty lists (list cells)
-    const proto::ProtoObject* empty = nullptr;  // THE empty list `()` itself
+    const proto::ProtoObject* empty = nullptr;  // THE empty list `()` (not a prototype)
 };
 
 // The prototypes of the current ProtoSpace. Written by initSeqTypes before
@@ -71,7 +70,7 @@ const proto::ProtoObject* initSeqTypes(proto::ProtoContext* ctx);
 enum class SeqObject { None, Lazy, Cons, Chunk, List, Empty };
 
 // Which sequence object `v` is, if any: one pointer-tag test and, for an
-// object cell, one prototype read.
+// object cell, one prototype read; a list is told by its tag alone.
 SeqObject seqObjectKind(proto::ProtoContext* ctx, const proto::ProtoObject* v);
 
 // True when `v` is a lazy seq, a cons, a chunk or a list (empty or not).
@@ -81,26 +80,41 @@ inline bool isSeqObject(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
 
 // ---- Clojure lists ------------------------------------------------------------
 //
-// A Clojure list (`list?`, PersistentList) is a chain of immutable list
-// cells ending in the empty list. A cell holds its first element, the rest
-// (a list: another cell or the empty list) and its count, so first, rest,
-// count and cons onto a list are O(1) and allocate nothing but the new cell,
-// as in Clojure; nth is O(n). A cell is a protoCore lazy object of prototype
-// `g_seqProtos.list` published at birth with the list [first rest count],
-// the layout of a cons (LazySeq.cpp). The empty list is one value per
-// ProtoSpace, `g_seqProtos.empty`, told apart by identity.
+// A Clojure list (`list?`, PersistentList) is a protoCore ProtoLinkedList
+// (protoCore 3.3.0): an immutable chain of 64-byte cells of up to four
+// elements, every cell full except the head, each holding the count of its
+// suffix. The handle is a tagged word of its own (pointer tag 29), so a list
+// is recognised by its tag alone, with no prototype read. The empty list
+// `()` is protoCore's one empty list of the process, told apart by identity.
+//
+// Costs: first and count read the head cell; conj onto a list allocates one
+// cell; rest allocates nothing when the head holds one element and one cell
+// otherwise (three steps in four); nth walks n / 4 cells. A list of n
+// elements takes ceil(n / 4) cells. Walks that do not hand the rest list to
+// Clojure code go through ListCursor or listNth and allocate nothing.
 //
 // The reader yields these lists, the compiler and the macros read them, and
-// every primitive that answers a list answers one (docs/DESIGN.md, M44). A
-// protoCore ProtoList is never a Clojure value: it is the element storage of
-// a vector (VectorOps.h) and an internal container.
+// every primitive that answers a list answers one (docs/DESIGN.md, M44, M46).
+// A protoCore ProtoList is never a Clojure value: it is the element storage
+// of a vector (VectorOps.h) and an internal container.
 //
 // GC: operands are rooted by the caller; results are unrooted. A cell
-// references its rest, so a chain is collected from its head as the head
+// references the next, so a list is collected from its head as the head
 // becomes unreachable.
 
-// True when `v` is a Clojure list, empty or not.
-bool isListValue(proto::ProtoContext* ctx, const proto::ProtoObject* v);
+// protoCore's pointer tag for a ProtoLinkedList (headers/proto_internal.h,
+// POINTER_TAG_LINKED_LIST).
+constexpr proto::proto_ulong kTagLinkedList = 29;
+
+// True when `v` is a Clojure list, empty or not: its pointer tag.
+inline bool isListValue(proto::ProtoContext*, const proto::ProtoObject* v) {
+    return (reinterpret_cast<proto::proto_ulong>(v) & 0x3F) == kTagLinkedList;
+}
+
+// The list behind a value isListValue accepted: the handle is the word.
+inline const proto::ProtoLinkedList* asLinkedList(const proto::ProtoObject* l) {
+    return reinterpret_cast<const proto::ProtoLinkedList*>(l);
+}
 
 // The empty list `()`.
 inline const proto::ProtoObject* emptyListValue() { return g_seqProtos.empty; }
@@ -108,15 +122,32 @@ inline const proto::ProtoObject* emptyListValue() { return g_seqProtos.empty; }
 // The list `x` followed by the elements of the list `rest`.
 const proto::ProtoObject* listCons(proto::ProtoContext* ctx, const proto::ProtoObject* x,
                                    const proto::ProtoObject* rest);
-// The first element, the rest and the count of a NON-EMPTY list.
+// The first element, the rest and the count of a NON-EMPTY list. listRest
+// allocates one cell unless the head holds a single element.
 const proto::ProtoObject* listFirst(proto::ProtoContext* ctx, const proto::ProtoObject* cell);
 const proto::ProtoObject* listRest(proto::ProtoContext* ctx, const proto::ProtoObject* cell);
-// The first element and the rest of a NON-EMPTY list, read together (one
-// read of the cell's fields).
+// The first element and the rest of a NON-EMPTY list, read together.
 void listSplit(proto::ProtoContext* ctx, const proto::ProtoObject* cell,
                const proto::ProtoObject** first, const proto::ProtoObject** rest);
 // The number of elements of a list (0 for the empty list). O(1).
 long long listCount(proto::ProtoContext* ctx, const proto::ProtoObject* l);
+// The element at `index` of a list, 0 <= index < count; walks index / 4
+// cells and allocates nothing.
+const proto::ProtoObject* listNth(proto::ProtoContext* ctx, const proto::ProtoObject* l,
+                                  long long index);
+
+// The list `l` without its first `count` elements, 0 < count <= count of
+// `l`. Allocates nothing when `count` is the number of elements of the head
+// cell (listHeadCount), and one cell otherwise.
+const proto::ProtoObject* listDrop(proto::ProtoContext* ctx, const proto::ProtoObject* l,
+                                   long long count);
+// The number of elements in the head cell of a non-empty list: every cell of
+// a ProtoLinkedList but the head holds four elements, so the head holds
+// ((count - 1) mod 4) + 1. Only a cost depends on it: dropping any other
+// number of elements allocates one cell.
+inline long long listHeadCount(proto::ProtoContext* ctx, const proto::ProtoObject* l) {
+    return (listCount(ctx, l) - 1) % 4 + 1;
+}
 
 // The list of the `n` values at `items`, in that order; the values must be
 // rooted by the caller (a frame's slots, a rooted ProtoList's elements).
@@ -128,8 +159,23 @@ const proto::ProtoObject* listFromProtoList(proto::ProtoContext* ctx, const prot
 // The elements of the list `l` as a ProtoList, for reading by index.
 const proto::ProtoList* listToProtoList(proto::ProtoContext* ctx, const proto::ProtoObject* l);
 
-// The fields of a seq node (a cons, a chunk or a list cell): the list it was
-// published with. For the seq modules only.
+// Walks the elements of a list in order without allocating. A C++ value in
+// a local; the list must stay reachable (rooted by the caller) for the walk.
+class ListCursor {
+public:
+    explicit ListCursor(const proto::ProtoObject* l) : c_(asLinkedList(l)) {}
+    bool hasNext() const { return c_.hasNext(); }
+    const proto::ProtoObject* next() {
+        const proto::ProtoObject* x = c_.next();
+        return x ? x : PROTO_NONE;
+    }
+
+private:
+    proto::ProtoLinkedListCursor c_;
+};
+
+// The fields of a seq node (a cons or a chunk): the list it was published
+// with. For the seq modules only.
 const proto::ProtoList* seqNodeFields(proto::ProtoContext* ctx, const proto::ProtoObject* node);
 // A node of prototype `proto` holding the `n` values at `fields`.
 const proto::ProtoObject* newSeqNode(proto::ProtoContext* ctx, const proto::ProtoObject* proto,
