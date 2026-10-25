@@ -73,17 +73,22 @@ program controls must:
    `newTupleFromList` builds a whole tuple in one bottom-up pass, and the
    positional arguments a primitive is handed already *are* a `ProtoList` —
    so `(vector …)` and `(list …)` need no rebuild at all.
-2. **Where the size is not known ahead, keep the accumulator in an automatic
-   local (P1) and let each chunk's young generation be reclaimed as the build
-   proceeds**, by folding the elements in inside a short-lived child context.
+2. **Where the size is not known ahead, keep the accumulator in a traced
+   slot and hand each chunk's garbage to the collector as the build
+   proceeds.** A primitive does this without a context of its own (M45): the
+   accumulator lives in a `CallerSlots` slot (`src/runtime/CallerSlots.h`),
+   and the build hands the caller frame's young chain over at a point where
+   everything the primitive holds is in slots, which the primitive declares
+   with a `SafepointPermit`.
 
-`src/runtime/ListBuilder.{h,cpp}` implements (2) and is the type to reach for.
-`map`, `filter`, `reverse`, `keys` / `vals`, `split`, `pmap`, `send`, the
-reader and the VM's argument packing all build through it. Its header
-documents the single ordering rule it imposes: a thread's contexts are a LIFO
-stack, so while a builder is open every nested call must be passed
-`builder.context()`, and the builder must be closed before the caller hands
-its own context back to code that pushes contexts.
+`src/runtime/ListBuilder.{h,cpp}` implements (2) for primitives and is the
+type to reach for: it builds in the caller's context, parks up to seven
+elements in traced slots, folds them into the accumulator and then calls
+`CallerSlots::safepoint()`, which submits only under a permit. `map`,
+`filter`, `reverse`, `keys` / `vals`, `split`, `pmap`, `send`, the JSON
+reader and the VM's argument packing all build through it. The reader (host
+code, not a primitive) keeps the earlier builder, which opens a context per
+build and one per chunk: `ScopedListBuilder`.
 
 Two habits follow, and neither is optional: never let a C++ local be the only
 reference to a value across an allocation (P1), and never assume that an

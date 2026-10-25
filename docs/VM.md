@@ -16,9 +16,9 @@ Contents:
 - [5. How to add a primitive](#5-how-to-add-a-primitive)
 - [6. Known oddities](#6-known-oddities)
 
-The call path described here is `main` at commit `721e5c3`. The primitive
-call path is being changed on branch `perf/primitives-caller-context`;
-sections 1.5 and 5 reflect `main` at `721e5c3`.
+The call path described here is `main` after the merge of
+`perf/primitives-caller-context` (2026-10-25): a primitive runs in its
+caller's context (docs/DESIGN.md §10.2, M45).
 
 ## Start here
 
@@ -211,9 +211,6 @@ Keywords, quoted symbols, maps, sets and vectors are also callable (1.5).
 
 ### 1.5 Calling conventions
 
-This section reflects `main` at `721e5c3`. The primitive call path is being
-changed on branch `perf/primitives-caller-context`.
-
 `CALL n` expects `[callable, arg1 .. argn]` on the stack (callable deepest)
 and replaces them with the result. The dispatch (`dispatchCall` in
 `executeFrame`) tries, in order:
@@ -224,19 +221,25 @@ and replaces them with the result. The dispatch (`dispatchCall` in
    `conj` on the values they read without running Clojure code): answered
    in the caller's frame, **no context created**. What it allocates is the
    caller frame's garbage.
-2. **User fn** (prototype `fnSingleProto` or `fnMultiProto`). Picks the arity
-   (multi: exact fixed arity first, then a variadic arity whose fixed part
-   `n` covers), checks the count, builds the rest list, moves the arguments
-   out of their stack slots (clearing the slots, so a lazy seq passed down is
-   held by the callee alone) and runs the body in a new frame (1.3).
+2. **User fn** (prototype `fnSingleProto` or `fnMultiProto`). First the
+   caller frame's young chain is handed to the collector
+   (`submitBeforeCall`; 1.6). Then it picks the arity (multi: exact fixed
+   arity first, then a variadic arity whose fixed part `n` covers, then a
+   keyword-argument arity whose fixed part is followed by key/value pairs or
+   one map), folds key/value pairs into the kwArgs map for a
+   keyword-argument arity, checks the count, builds the rest list, moves the
+   arguments out of their stack slots (clearing the slots, so a lazy seq
+   passed down is held by the callee alone) and runs the body in a new frame
+   (1.3).
 3. **Lookup.** A keyword or quoted symbol called on a map or set, or a map or
    set called on a key, with an optional not-found: the semantics of `get`
    (`callLookup`). One or two arguments.
 4. **General primitive path.** `asMethod` gives the C function; it is called
-   with a **new `ProtoContext` (`callScope`) chained to the frame** and a
-   `ProtoArguments` view over the argument slots of the frame's operand
-   stack (protoCore's array call form; nothing is copied). The argument
-   slots are cleared afterwards.
+   **in the frame itself, with no context of its own**, a `ProtoArguments`
+   view over the argument slots of the frame's operand stack (protoCore's
+   array call form; nothing is copied), and a `PrimitiveWindow` over the
+   frame's free slots above the arguments, from which the primitive takes
+   `CallerSlots` (1.6). The argument slots are cleared afterwards.
 5. A **vector** called on an index: `nth` without default.
 6. Anything else raises `VM: value is not callable in CALL`.
 
@@ -246,19 +249,22 @@ Other call opcodes:
   `:keyword value` pairs. If the callee is a single-arity keyword-argument
   fn, the VM folds the trailing pairs into a map (last duplicate wins) and
   passes it as one extra trailing argument; any other callee receives the
-  `n` arguments unchanged, exactly as with `CALL`.
+  `n` arguments unchanged, exactly as with `CALL` (a multi-arity fn's
+  keyword-argument arity folds them in step 2).
 - **`CALL_APPLY`** (`(apply f args)`): spreads a list, vector, nil, map, set
   or string onto the stack, then dispatches as `CALL`. `(apply f x y coll)`
   first builds the list with `clojure.core/list*`.
 - **`CALL_MEMBER n`** (`(alias/member args...)`, a module export or a member
   of a global object such as `System`): reads the member from the receiver
   (prototype chain included). A protoCore method is called with the receiver
-  as `self` in a new `callScope`; any other value is called through
-  `ExecutionEngine::invoke`.
+  as `self`, in the frame, with a `PrimitiveWindow` like step 4; any other
+  value is called through `ExecutionEngine::invoke`.
 - **`ExecutionEngine::invoke`** is the same dispatch for C++ code that calls
-  a Clojure callable (`reduce`, `map`, `swap!`, ...). Its general primitive
-  path copies the arguments into the slots of a new `callScope` first,
-  because its caller's argument array need not be traced memory.
+  a Clojure callable (`reduce`, `map`, `swap!`, ...). A primitive callee
+  runs in the context `invoke` was given, with no context of its own; its
+  caller roots `callable` and the arguments. It counts as a nested
+  activation on the current `PrimitiveWindow`, so it never submits a young
+  chain its caller relies on (1.6).
 
 ### 1.6 Safepoints and rooting
 
@@ -272,6 +278,23 @@ points, where every live value is in a traced frame slot:
   allocation-free recursion still parks for a stop-the-world;
 - **`JUMP_BACK`** (every `recur`), because a `loop` is one frame and its
   garbage would otherwise never reach the collector.
+
+Two more submissions, not strided:
+
+- **Before a call of a Clojure fn** (`submitBeforeCall`), when the frame
+  allocated since its last submission. The frame is suspended for the call
+  with every value in its slots; primitives allocate in their caller's
+  frame, and a young chain is a root, so without it a lazy seq built here
+  and walked by the callee would stay alive, every element realised, until
+  the call returns (locals clearing, M30).
+- **Inside a primitive**, through `CallerSlots::tick()` / `safepoint()`:
+  only for the frame's outermost primitive activation (depth 1 of the
+  `PrimitiveWindow`), only while its body holds a `SafepointPermit` (its
+  promise that everything it holds across a call is in `CallerSlots` or its
+  arguments), and only while no `SafepointBlock` is held (values parked in
+  C++ storage, such as the JSON reader's batch of object entries). `reduce`,
+  `count`, `last`, `dorun`, `doall`, `run!`, the JSON reader and
+  `CALL_APPLY`'s realisation of a lazy seq hold a permit.
 
 Both are strided: one real poll per 64 events per thread
 (`kGcSafepointStride`). `PROTOCLJ_NO_GC_SAFEPOINT=1` disables the hook (for
@@ -402,14 +425,14 @@ of the mutable globals object, keyed by an interned symbol.
 
 | Op | # | Operand | Stack | Semantics |
 |---|---|---|---|---|
-| `ADD` | 20 | reserved (0) | `a b -> a+b` | |
-| `SUB` | 21 | reserved (0) | `a b -> a-b` | |
-| `MUL` | 22 | reserved (0) | `a b -> a*b` | |
-| `LT` | 23 | reserved (0) | `a b -> bool` | |
-| `LE` | 24 | reserved (0) | `a b -> bool` | |
-| `GT` | 25 | reserved (0) | `a b -> bool` | |
-| `GE` | 26 | reserved (0) | `a b -> bool` | |
-| `EQ` | 27 | reserved (0) | `a b -> bool` | |
+| `ADD` | 20 | 0, or 1 for `clojure.core/` | `a b -> a+b` | |
+| `SUB` | 21 | 0, or 1 for `clojure.core/` | `a b -> a-b` | |
+| `MUL` | 22 | 0, or 1 for `clojure.core/` | `a b -> a*b` | |
+| `LT` | 23 | 0, or 1 for `clojure.core/` | `a b -> bool` | |
+| `LE` | 24 | 0, or 1 for `clojure.core/` | `a b -> bool` | |
+| `GT` | 25 | 0, or 1 for `clojure.core/` | `a b -> bool` | |
+| `GE` | 26 | 0, or 1 for `clojure.core/` | `a b -> bool` | |
+| `EQ` | 27 | 0, or 1 for `clojure.core/` | `a b -> bool` | |
 
 Semantics, common to all eight:
 
@@ -423,8 +446,15 @@ Semantics, common to all eight:
   through protoCore's `add` / `subtract` / `multiply` / `partialCompare`
   (exact across SmallInteger, LargeInteger and double; IEEE for NaN). `EQ`
   accepts any values and uses `valuesEqual`, the `=` primitive's equality.
+- **Redefinition:** while the global of the name holds something other than
+  the built-in (`(def + -)` after the form was compiled), the opcode calls
+  the global with the two operands, as `PUSH_VAR` + `CALL 2` would. Operand
+  1 marks a form that named `clojure.core/+` (and the like), which always
+  computes the built-in. A `(+ a b c)` compiled before the redefinition
+  calls the new value pairwise (STATUS D61).
 - **Emitted by:** a call whose head is `+`, `-`, `*`, `<`, `<=`, `>`, `>=`
-  or `=` (or `clojure.core/+`, ...) when the name is not a local binding:
+  or `=` (or `clojure.core/+`, ...) when the name is not a local binding and
+  its global holds the built-in at compile time:
   `+`, `-`, `*` with two or more arguments fold left (`(+ a b c)` is
   `a b ADD c ADD`); comparisons only with exactly two arguments. One
   argument, chained comparisons and a locally shadowed operator compile to
@@ -1265,9 +1295,9 @@ module form2: arity 0, locals 0, max stack 5
 - A primitive is called exactly like a user fn: `PUSH_VAR first`, the
   argument, `CALL 1`. The difference is at run time: the global holds a
   protoCore method value, and `first` on a vector is answered by
-  `fastPrimitiveCall` without creating a context (1.5, step 1). A primitive
-  without a fast path is called with a new `callScope` context on `main`
-  (1.5, step 4; being changed on `perf/primitives-caller-context`).
+  `fastPrimitiveCall` (1.5, step 1). A primitive without a direct answer is
+  called on the general path (1.5, step 4), also in the caller's frame: no
+  primitive call creates a context.
 - `form2`: the vector literal `[1 2 3]` is a `CALL 3` of `vector` on every
   evaluation, even though its elements are constants (a set of constants,
   by contrast, is a single `PUSH_CONST`).
@@ -2061,18 +2091,13 @@ The model is `JUMP_IF_TRUE` (value 18), added together with `DUP` to compile
 
 ## 5. How to add a primitive
 
-A primitive is a C++ function installed as a global. This section reflects
-`main` at `721e5c3`; the primitive call path is being changed on branch
-`perf/primitives-caller-context`.
+A primitive is a C++ function installed as a global.
 
 **The context rule (maintainer's rule).** A `ProtoContext` is created only
 when a method, that is interpreted code with its own locals, is activated;
-a primitive runs in its caller's context. On `main` the VM follows this rule
-for the fast primitive path only (`fastPrimitiveCall`, 1.5 step 1). The
-general primitive path and `CALL_MEMBER` still create a `callScope` context
-per call (1.5 step 4); `perf/primitives-caller-context` is changing that.
-Write new primitives so that they are correct either way: allocate only in
-the `ctx` you are given, and root what you hold (below).
+a primitive runs in its caller's context, and so does every helper it
+calls. **Never construct a `ProtoContext` in a primitive.** Allocate in the
+`ctx` you are given, and root what you hold with `CallerSlots` (below).
 
 1. **Write the function** with protoCore's `ProtoMethod` signature. A
    built-in reads its arguments from `args` and raises errors with
@@ -2102,7 +2127,7 @@ the `ctx` you are given, and root what you hold (below).
    `defineBuiltin`, which also binds `clojure.core/name`, so the built-in
    stays reachable after a program `def`s the same name.
 3. **Calling convention.** Arguments arrive positionally in `args` (the
-   VM's operand-stack slots, or the slots of a scope that `invoke` filled);
+   VM's operand-stack slots, or storage the caller of `invoke` roots);
    `kwArgs` is always null (keyword arguments are a property of Clojure fns,
    not of primitives). A primitive that calls back into Clojure (`reduce`,
    `swap!`) uses `activeCallContext()->engine->invoke(ctx, f, argv, n)`,
@@ -2110,10 +2135,18 @@ the `ctx` you are given, and root what you hold (below).
 4. **Rooting** (protoCore EMBEDDER-CONFORMANCE rule 3): no `ProtoObject*` may
    be held only in a C++ local across an allocation, or across a
    `safepoint()`. The arguments are rooted by the caller for the whole call.
-   A value you create and then keep while you allocate again must sit in a
-   traced slot: open a scope, `proto::ProtoContext scope(ctx->space, ctx);
-   scope.resizeAutomaticLocals(n);`, and `scope.setAutomaticLocal(i, v)`.
-   Return the result unrooted; the VM roots it in the caller's slot.
+   What you allocate is a young cell of `ctx`, live until `ctx`'s chain is
+   submitted, and nothing submits it while your primitive runs unless you
+   ask (below), so values you build are safe across your own allocations
+   and callbacks. Put in `CallerSlots slots(ctx, n)` (`src/runtime/
+   CallerSlots.h`, at most 8; `set`, `get`, `data`) what must survive a
+   submission, and `pin` a value read from shared mutable state (an atom)
+   that another thread may drop. A long loop hands the frame's garbage to the
+   collector with `slots.tick()`, which works only while your body holds a
+   `SafepointPermit permit(ctx)`: declare it only where every value you hold
+   across a call is in `CallerSlots` or your arguments, and return a result
+   computed before a submission through `slots.ret(v)`. Return the result
+   unrooted; the VM roots it in the caller's slot.
 5. **Fast path (optional).** If the primitive is hot and can answer some
    inputs without running Clojure code, add a case to `fastPrimitiveCall`
    (end of `Primitives.cpp`); return `nullptr` for anything it does not
@@ -2143,25 +2176,17 @@ None is a dead opcode: all 41 are emitted.
   the compiler adds it as a `Symbol` (a global-name constant, interned). The
   VM reads only its spelling, for the error message, so the effect is the
   same, but the pool holds an interned symbol that is never used as a key.
-- **The arithmetic fast paths ignore a global redefinition.** `ADD` and its
-  siblings are emitted whenever `+` (etc.) is not a *local*. A program that
-  `def`s its own `+` still gets the built-in semantics for every two-or-more
-  argument call of `+`, while a one-argument call and `(apply + ...)` call
-  the redefinition. Checked: after `(def + -)`, `(+ 5 3)` is `8`, `(+ 5)` is
-  `-5` and `(apply + [5 3])` is `2`. In JVM Clojure the `def` replaces the
-  referred `clojure.core/+` in `user` (with a warning), so all three would
-  call `-`: `2`, `-5`, `2`. The comment "falls back to the primitive on globals" in
-  `compileForm` is inaccurate: the slow path computes with protoCore
-  directly, with the same results as the primitive.
-- **`CALL_KW` and multi-arity fns.** `CALL_KW` folds keyword pairs only for
-  a single-arity keyword-argument fn (it tests `fnSingleProto`), and
-  `pickArity` selects a multi-arity fn's arity by fixed count only, ignoring
-  `isKwBased`. So a keyword-argument arity of a multi-arity fn cannot be
-  called with keyword arguments: with
-  `(defn m ([a] a) ([a & {:keys [k]}] [a k]))`, `(m 1 :k 2)` raises
-  `VM: no matching arity for argc=3` (checked on `721e5c3` plus this
-  branch's disassembler, which does not touch the VM). Not listed in
-  docs/STATUS.md.
+- **Fixed 2026-10-25: the arithmetic fast paths ignored a global
+  redefinition** (after `(def + -)`, `(+ 5 3)` was `8`). The compiler now
+  emits `ADD` .. `EQ` only while the global holds the built-in, and the
+  opcode calls the global when it was redefined later (2.7; DESIGN.md M46).
+  The comment "falls back to the primitive on globals" in `compileForm` is
+  inaccurate: the slow path computes with protoCore directly, with the same
+  results as the primitive.
+- **Fixed 2026-10-25: `CALL_KW` and multi-arity fns.** A keyword-argument
+  arity of a multi-arity fn could not be called with keyword arguments
+  (`VM: no matching arity for argc=3`); `pickArity` now has a third pass for
+  it and the VM folds the pairs (1.5, step 2).
 - **`__arity__`.** The key `arityKey` (`__arity__`) is created and passed to
   `ExecutionEngine::run` and through `ActiveCallContext`, but no code reads
   or writes it: fn values carry their arity in their module.
