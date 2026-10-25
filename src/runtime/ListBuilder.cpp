@@ -77,11 +77,18 @@ const proto::ProtoList* ListBuilder::finishList() {
 }
 
 const proto::ProtoObject* ListBuilder::finishSeq() {
-    flush();
-    // The cells are built in holder_, from the accumulator rooted in its
-    // slot 0, and the result replaces the accumulator there.
-    const proto::ProtoObject* result =
-        listFromProtoList(holder_, holder_->getAutomaticLocal(kSlotAcc)->asList(holder_));
+    const proto::ProtoObject* result;
+    if (size_ == pending_) {
+        // Nothing was folded yet (at most kMaxPending elements, the common
+        // case): the cells are built straight from the parked elements,
+        // which stay rooted in holder_'s slots, with no ProtoList between.
+        result = listFromArray(holder_, pending_, holder_->getAutomaticLocals() + kSlotPending0);
+    } else {
+        // The cells are built in holder_, from the accumulator rooted in
+        // its slot 0.
+        flush();
+        result = listFromProtoList(holder_, holder_->getAutomaticLocal(kSlotAcc)->asList(holder_));
+    }
     holder_->setAutomaticLocal(kSlotAcc, result);
     holder_->returnValue = result;
     return result;

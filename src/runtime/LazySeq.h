@@ -137,6 +137,11 @@ bool tryRest(proto::ProtoContext* ctx, const proto::ProtoObject* v, const proto:
 bool tryNext(proto::ProtoContext* ctx, const proto::ProtoObject* v, const proto::ProtoObject** out);
 bool trySeq(proto::ProtoContext* ctx, const proto::ProtoObject* v, const proto::ProtoObject** out);
 bool tryEmpty(proto::ProtoContext* ctx, const proto::ProtoObject* v, bool* out);
+// (count v) of nil, a vector, a list, and a chain of cons cells and chunks
+// that ends in nil, a vector or a list (the count of a list or a vector is
+// O(1), the chain is walked, as Clojure's RT.count walks to a Counted); false,
+// with nothing realised, when the chain reaches a lazy seq.
+bool tryCount(proto::ProtoContext* ctx, const proto::ProtoObject* v, long long* out);
 // (cons x coll) onto nil (a one-element list) or a seq object (a cons cell,
 // which realises nothing), as Clojure's RT.cons; false for any other coll.
 bool tryCons(proto::ProtoContext* ctx, const proto::ProtoObject* x,

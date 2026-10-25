@@ -1155,8 +1155,7 @@ const proto::ProtoObject* prim_count(proto::ProtoContext* ctx,
     // A map: its number of entries; a set: its number of elements (O(n), D25).
     if (isMap(v)) return ctx->fromLong(static_cast<long long>(mapCount(ctx, v)));
     if (isSet(ctx, v)) return ctx->fromLong(static_cast<long long>(setCount(ctx, v)));
-    if (seqObjectKind(ctx, v) == SeqObject::List || v == emptyListValue())
-        return ctx->fromLong(listCount(ctx, v));
+    if (long long c; isSeqObject(ctx, v) && tryCount(ctx, v, &c)) return ctx->fromLong(c);
     if (isSeqObject(ctx, v)) {
         // Walked, not built: the count of a lazy seq nobody else holds
         // keeps none of its elements (releaseArg, SeqWalk). The walk stops
@@ -4829,12 +4828,12 @@ const proto::ProtoObject* fastPrimitiveCall(proto::ProtoContext* ctx, proto::Pro
             return tryEmpty(ctx, v, &e) ? (e ? PROTO_TRUE : PROTO_FALSE) : nullptr;
         }
         if (fn == &prim_count) {
-            if (!v || v == PROTO_NONE) return proto::makeSmallInt(0);
-            if (v == emptyListValue() || seqObjectKind(ctx, v) == SeqObject::List)
-                return proto::makeSmallInt(listCount(ctx, v));
-            if (isVector(v))
-                return proto::makeSmallInt(static_cast<long long>(vectorItems(ctx, v)->getSize(ctx)));
-            return nullptr;
+            // nil, a vector, a list, and cons chains and chunks ending in
+            // one of them (tryCount); strings, maps and sets go the general
+            // way.
+            long long c;
+            if (!isVector(v) && v && v != PROTO_NONE && !isSeqObject(ctx, v)) return nullptr;
+            return tryCount(ctx, v, &c) ? proto::makeSmallInt(c) : nullptr;
         }
         return nullptr;
     }

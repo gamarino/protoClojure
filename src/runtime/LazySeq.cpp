@@ -917,6 +917,26 @@ bool tryEmpty(proto::ProtoContext* ctx, const PO* v, bool* out) {
     }
 }
 
+bool tryCount(proto::ProtoContext* ctx, const PO* v, long long* out) {
+    long long n = 0;
+    for (;;) {
+        if (!v || v == PROTO_NONE) { *out = n; return true; }
+        if (isVector(v)) { *out = n + static_cast<long long>(vectorItems(ctx, v)->getSize(ctx)); return true; }
+        switch (seqObjectKind(ctx, v)) {
+            case SeqObject::List:
+            case SeqObject::Empty: *out = n + listCount(ctx, v); return true;
+            case SeqObject::Cons:  ++n; v = consMore(ctx, v); continue;
+            case SeqObject::Chunk: {
+                const ChunkView cv = chunkOf(ctx, v);
+                n += cv.end - cv.off;
+                v = cv.more;
+                continue;
+            }
+            default: return false;  // a lazy seq to realise, or not a seq
+        }
+    }
+}
+
 bool tryCons(proto::ProtoContext* ctx, const PO* x, const PO* coll, const PO** out) {
     if (!coll || coll == PROTO_NONE) { *out = listCons(ctx, x, emptyListValue()); return true; }
     if (!isSeqObject(ctx, coll)) return false;
@@ -973,6 +993,21 @@ const proto::ProtoList* seqToList(proto::ProtoContext* ctx, const PO* v) {
 SeqWalk::SeqWalk(proto::ProtoContext* root, unsigned slot, proto::ProtoContext* ctx,
                  const PO* coll)
     : root_(root), slot_(slot) {
+    // A list cell, a cons or a chunk is its own seq, and the empty list has
+    // none: no realisation, and no context for it.
+    switch (seqObjectKind(ctx, coll)) {
+        case SeqObject::List:
+        case SeqObject::Cons:
+        case SeqObject::Chunk:
+            root_->setAutomaticLocal(slot_, coll);
+            load(ctx, coll);
+            return;
+        case SeqObject::Empty:
+            root_->setAutomaticLocal(slot_, PROTO_NONE);
+            return;
+        default:
+            break;
+    }
     proto::ProtoContext step(ctx->space, ctx);
     const PO* s = seqOf(&step, coll);
     root_->setAutomaticLocal(slot_, s);
