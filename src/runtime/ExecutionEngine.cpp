@@ -17,6 +17,7 @@
 #include "protoCore.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
@@ -86,6 +87,30 @@ const char* binaryOpName(Op op) {
         case Op::GE:  return ">=";
         case Op::EQ:  return "=";
         default:      return "operator";
+    }
+}
+
+// The operators the compiler inlines as opcodes (ADD .. EQ), by opcode.
+constexpr const char* kCoreOperatorNames[8] = {"+", "-", "*", "<", "<=", ">", ">=", "="};
+
+// One bit per inlined operator (bit op - ADD): set while the global of that
+// name holds something other than the built-in. STORE_GLOBAL keeps it; an
+// operator opcode whose bit is set calls the global instead of computing
+// (so `(def + -)` is honoured by code compiled before it). Process-wide and
+// only ever conservative: a stale bit costs a global lookup, never a wrong
+// answer.
+std::atomic<unsigned int> g_coreOperatorRedefined{0};
+
+// STORE_GLOBAL of `name` = `val`: updates the operator's bit.
+void noteGlobalStore(proto::ProtoContext* ctx, const proto::ProtoObject* globals,
+                     const std::string& name, const proto::ProtoObject* val) {
+    for (unsigned int i = 0; i < 8; ++i) {
+        if (name != kCoreOperatorNames[i]) continue;
+        const proto::ProtoObject* core = globals->getOwnAttributeDirect(
+            ctx, proto::ProtoString::createSymbol(ctx, ("clojure.core/" + name).c_str()));
+        if (val != core) g_coreOperatorRedefined.fetch_or(1u << i, std::memory_order_relaxed);
+        else             g_coreOperatorRedefined.fetch_and(~(1u << i), std::memory_order_relaxed);
+        return;
     }
 }
 
@@ -410,6 +435,17 @@ static int pickArity(proto::ProtoContext* ctx,
         bool variadic = spec->getAt(ctx, 2) == PROTO_TRUE;
         if (variadic && static_cast<long long>(argc) >= a) return (int)k;
     }
+    // Third pass: a keyword-argument arity (`[a & {:keys ...}]`) takes its
+    // fixed parameters and then key/value pairs, or one trailing map.
+    for (proto::proto_ulong k = 0; k < N; ++k) {
+        const proto::ProtoList* spec =
+            aritiesList->getAt(ctx, (int)k)->asList(ctx);
+        const auto* sub = reinterpret_cast<const BytecodeModule*>(spec->getAt(ctx, 1)->asLong(ctx));
+        if (!sub->isKwBased()) continue;
+        const long long a = sub->arity();
+        const long long extra = static_cast<long long>(argc) - a;
+        if (extra >= 0 && (extra % 2 == 0 || extra == 1)) return (int)k;
+    }
     return -1;
 }
 
@@ -528,7 +564,12 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
         const proto::ProtoObject* kwArgsMap = nullptr;
         unsigned int posArgc = argc;
         if (kwBased) {
-            if (static_cast<int>(posArgc) == fixed + 1) {
+            if (static_cast<int>(posArgc) > fixed + 1 && (posArgc - fixed) % 2 == 0) {
+                // Key/value pairs after the fixed arguments (apply, or a
+                // primitive calling the fn): folded into the kwArgs map.
+                kwArgsMap = mapAssocPairs(ctx, nullptr, args + fixed, posArgc - fixed);
+                posArgc = static_cast<unsigned int>(fixed);
+            } else if (static_cast<int>(posArgc) == fixed + 1) {
                 kwArgsMap = args[posArgc - 1];
                 posArgc -= 1;
             } else if (static_cast<int>(posArgc) != fixed) {
@@ -868,6 +909,20 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
             int fixed = subMod->arity();
             bool variadic = subMod->isVariadic();
             bool kwBased  = subMod->isKwBased();
+
+            // A keyword-argument callee given key/value pairs after its
+            // fixed arguments by CALL or CALL_APPLY, or by CALL_KW to a
+            // multi-arity fn: the pairs are folded into the kwArgs map in
+            // the first pair's slot, as CALL_KW does for a single-arity fn.
+            if (kwBased && argc > static_cast<unsigned int>(fixed) + 1 &&
+                (argc - static_cast<unsigned int>(fixed)) % 2 == 0) {
+                const unsigned int kv = argc - static_cast<unsigned int>(fixed);
+                foldKeywordPairs(&frame, stackBase + sp - kv, kv);
+                for (unsigned int i = 1; i < kv; ++i)
+                    frame.setAutomaticLocal(stackBase + sp - kv + i, nullptr);
+                sp -= kv - 1;
+                argc = static_cast<unsigned int>(fixed) + 1;
+            }
 
             const proto::ProtoObject* kwArgsMap = nullptr;
             unsigned int posArgc = argc;
@@ -1291,6 +1346,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                     frame.getAutomaticLocal(stackBase + sp - 1);
                 const_cast<proto::ProtoObject*>(env.globals)
                     ->setAttribute(&frame, key, val);
+                if (c.sval.size() <= 2) noteGlobalStore(&frame, env.globals, c.sval, val);
                 break;
             }
 
@@ -1426,6 +1482,27 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
             case Op::GE:
             case Op::EQ: {
                 if (sp < 2) throwError(&frame, "VM: binop underflow");
+                // The global of this operator was redefined (and the form
+                // did not name clojure.core's): call it with the operands,
+                // as PUSH_VAR + CALL would (noteGlobalStore).
+                if (g_coreOperatorRedefined.load(std::memory_order_relaxed) != 0 &&
+                    (operand & 1) == 0) [[unlikely]] {
+                    const unsigned int bit = static_cast<unsigned int>(op) -
+                                             static_cast<unsigned int>(Op::ADD);
+                    if (g_coreOperatorRedefined.load(std::memory_order_relaxed) & (1u << bit)) {
+                        const proto::ProtoObject* f = env.globals->getOwnAttributeDirect(
+                            &frame, proto::ProtoString::createSymbol(&frame, kCoreOperatorNames[bit]));
+                        if (!f) throwError(&frame, std::string("VM: unable to resolve symbol: ") +
+                                                       kCoreOperatorNames[bit]);
+                        reserveStack(1);
+                        frame.setAutomaticLocal(stackBase + sp, frame.getAutomaticLocal(stackBase + sp - 1));
+                        frame.setAutomaticLocal(stackBase + sp - 1, frame.getAutomaticLocal(stackBase + sp - 2));
+                        frame.setAutomaticLocal(stackBase + sp - 2, f);
+                        ++sp;
+                        dispatchCall(2);
+                        break;
+                    }
+                }
                 const proto::ProtoObject* a =
                     frame.getAutomaticLocal(stackBase + sp - 2);
                 const proto::ProtoObject* b =

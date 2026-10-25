@@ -2106,6 +2106,21 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
             int shadowSlot = (binOp != Op::NOP && !coreQualified) ? resolveLocal(headName) : -1;
             proto::proto_ulong argc = n - 1;
 
+            // A redefined global (`(def + -)`) is called, not inlined: the
+            // opcode is emitted only while the global still holds the
+            // built-in, which `clojure.core/<name>` keeps. A redefinition
+            // after this form is compiled is caught by the opcode itself
+            // (ExecutionEngine.cpp, coreOperatorRedefined).
+            if (binOp != Op::NOP && shadowSlot < 0 && !coreQualified) {
+                if (const ActiveCallContext* cc = activeCallContext()) {
+                    const proto::ProtoObject* now = cc->globals->getOwnAttributeDirect(
+                        ctx, proto::ProtoString::createSymbol(ctx, headName.c_str()));
+                    const proto::ProtoObject* core = cc->globals->getOwnAttributeDirect(
+                        ctx, proto::ProtoString::createSymbol(ctx, ("clojure.core/" + headName).c_str()));
+                    if (now != core) binOp = Op::NOP;
+                }
+            }
+
             if (binOp != Op::NOP && shadowSlot < 0 && argc >= 2) {
                 // Arithmetic: left-fold pairs. (op a b c d) emits
                 // a; b; OP; c; OP; d; OP. Comparisons fold the same way
@@ -2119,10 +2134,12 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
                 if (isCompare && argc != 2) {
                     // Defer to general path for chained comparisons.
                 } else {
+                    // Operand 1: `clojure.core/+` and the like, which name
+                    // the built-in even when the global is redefined.
                     compileForm(ctx, lst->getAt(ctx, 1), out, markers);
                     for (proto::proto_ulong i = 2; i < n; ++i) {
                         compileForm(ctx, lst->getAt(ctx, (int)i), out, markers);
-                        out.emit(binOp, 0);
+                        out.emit(binOp, coreQualified ? 1 : 0);
                     }
                     return;
                 }

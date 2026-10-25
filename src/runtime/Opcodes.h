@@ -71,7 +71,11 @@ enum class Op : uint8_t {
     // matching primitive. The compiler emits these ONLY for the standard
     // operator symbols and ONLY when those symbols are not shadowed by a
     // local binding — so the call-site semantics under shadowing stay
-    // unchanged. Operand byte is reserved (must be 0).
+    // unchanged. The compiler emits them only while the global of the name
+    // holds the built-in; when the global is redefined later the opcode calls
+    // it (ExecutionEngine.cpp, noteGlobalStore). Operand 1 marks a form that
+    // named `clojure.core/<op>`, which always computes the built-in; 0
+    // otherwise.
     ADD             = 20,
     SUB             = 21,
     MUL             = 22,
