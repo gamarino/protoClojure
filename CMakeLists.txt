@@ -249,6 +249,21 @@ add_library(protoclj_runtime STATIC
 target_link_libraries(protoclj_runtime PUBLIC ${PROTOCORE_LIBRARY} protoclj_support protoclj_reader
                                         PRIVATE protoIO::protoio)
 target_compile_options(protoclj_runtime PRIVATE ${PROTOCLJ_WARNINGS})
+# Investigation prototype (benchmarks/reports/2026-10-25-grep-gap): re-find
+# through PCRE2 instead of std::regex. Off by default.
+option(PROTOCLJ_PCRE2_PROTOTYPE "Prototype: re-find through PCRE2" OFF)
+if(PROTOCLJ_PCRE2_PROTOTYPE)
+    # On the support library (Regex.cpp), PUBLIC: CompiledPattern's layout
+    # must agree in every library that includes Regex.h.
+    target_compile_definitions(protoclj_support PUBLIC PROTOCLJ_PCRE2_PROTOTYPE=1)
+    target_link_libraries(protoclj_support PUBLIC pcre2-8)
+endif()
+# Investigation prototype: line-seq takes a buffered line without an
+# UnmanagedScope. Needs the protoIO prototype readBufferedLine. Off by default.
+option(PROTOCLJ_BUFFERED_LINE_PROTOTYPE "Prototype: line-seq buffered fast path" OFF)
+if(PROTOCLJ_BUFFERED_LINE_PROTOTYPE)
+    target_compile_definitions(protoclj_runtime PRIVATE PROTOCLJ_BUFFERED_LINE_PROTOTYPE=1)
+endif()
 
 # --- protoClojure compiler library ---
 # core.clj, the part of clojure.core written in Clojure, is embedded in the

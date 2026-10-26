@@ -72,6 +72,11 @@ struct CompiledPattern {
     // (_REGEX_MAX_STACK_COUNT) and throws regex_error(error_stack) first
     // (runRegex), so none is recursive there either.
     bool        recursive;
+#if defined(PROTOCLJ_PCRE2_PROTOTYPE)
+    // Investigation prototype: the same Java source compiled by PCRE2 (JIT
+    // when available), or null when PCRE2 rejects it. Used by re-find only.
+    void*       pcre = nullptr;
+#endif
 };
 
 // The match flags for a search that starts at byte `pos` of `subject` and

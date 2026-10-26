@@ -14,6 +14,11 @@
 #include "Macros.h"
 #include "SetOps.h"
 #include "Regex.h"
+
+#if defined(PROTOCLJ_PCRE2_PROTOTYPE)
+#define PCRE2_CODE_UNIT_WIDTH 8
+#include <pcre2.h>
+#endif
 #include "VectorOps.h"
 #include "StackGuard.h"
 
@@ -1792,6 +1797,29 @@ const proto::ProtoObject* prim_re_find(proto::ProtoContext* ctx,
     if (n != 2) throwError(ctx, "re-find: expects (re-find re s) or (re-find matcher)");
     const CompiledPattern* cp = patternArg(ctx, args, 0, "re-find");
     const std::string subject = stringArgOf(ctx, args, 1, "re-find");
+#if defined(PROTOCLJ_PCRE2_PROTOTYPE)
+    if (cp->pcre) {
+        // Investigation prototype: one PCRE2 match, the result built as
+        // matchValue builds it from std::smatch.
+        auto* re = static_cast<pcre2_code*>(cp->pcre);
+        thread_local pcre2_match_data* md = pcre2_match_data_create(64, nullptr);
+        const int rc = pcre2_match(re, reinterpret_cast<PCRE2_SPTR>(subject.data()), subject.size(),
+                                   0, 0, md, nullptr);
+        if (rc < 0) return PROTO_NONE;
+        const PCRE2_SIZE* ov = pcre2_get_ovector_pointer(md);
+        auto part = [&](unsigned g) -> const proto::ProtoObject* {
+            if (static_cast<int>(g) >= rc || ov[2 * g] == PCRE2_UNSET) return PROTO_NONE;
+            return reinterpret_cast<const proto::ProtoObject*>(
+                makeUtf8ProtoString(ctx, subject.substr(ov[2 * g], ov[2 * g + 1] - ov[2 * g])));
+        };
+        if (cp->groups == 0) return part(0);
+        CallerSlots scope(ctx, 1);
+        scope.set(0, ctx->newList()->asObject(ctx));
+        for (unsigned g = 0; g <= cp->groups; ++g)
+            scope.set(0, scope.get(0)->asList(ctx)->appendLast(ctx, part(g))->asObject(ctx));
+        return newVector(ctx, scope.get(0)->asList(ctx));
+    }
+#endif
     std::smatch match;
     guardRecursiveMatch(cp, subject.size());
     if (!runRegex(cp, [&] { return std::regex_search(subject, match, cp->regex); })) return PROTO_NONE;

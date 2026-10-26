@@ -1,0 +1,25 @@
+    14.10%  libc.so.6              [.] __memmove_avx_unaligned_erms                                                                                                       
+     7.51%  [unknown]              [k] 0xffffffffa9b3bde8                                                                                                                 
+     3.97%  libprotoCore.so.3.3.0  [.] proto::ProtoString::toUTF8String(..) const                                                                                       - 
+     3.88%  libprotoCore.so.3.3.0  [.] proto::buildAVL(..)                                                                                                                
+     2.11%  libprotoCore.so.3.3.0  [.] void proto::sweep::(anonymous namespace)::sweepLoop<false, true, false>(proto::sweep::SegmentSource&, proto::sweep::SweeperLocal&, 
+     1.57%  libprotoCore.so.3.3.0  [.] proto::ProtoContext::allocCell()                                                                                                   
+     1.53%  libprotoCore.so.3.3.0  [.] proto::RopeCharacterIterator::next()                                                                                               
+     1.43%  libc.so.6              [.] __memmove_avx_unaligned                                                                                                            
+     1.18%  libprotoCore.so.3.3.0  [.] proto::ProtoObject::isString(..) const                                                                                             
+     1.17%  libprotoCore.so.3.3.0  [.] proto::wellFormedUTF8Prefix(unsigned char const*, unsigned long)                                                                   
+     1.14%  libc.so.6              [.] pthread_mutex_lock@@GLIBC_2.2.5                                                                                                    
+     1.13%  libc.so.6              [.] pthread_mutex_unlock@@GLIBC_2.2.5                                                                                                  
+     1.01%  libc.so.6              [.] __memcmp_avx2_movbe                                                                                                                
+     0.97%  [unknown]              [k] 0xffffffffa9b3db20                                                                                                                 
+     0.92%  libprotoCore.so.3.3.0  [.] proto::SymbolTable::lookupUTF8(..) const                                                                                           
+     0.80%  libprotoCore.so.3.3.0  [.] proto::ProtoList::getAt(..) const                                                                                                  
+     0.74%  libprotoCore.so.3.3.0  [.] proto::multispace::comeBack(proto::ProtoSpace*, proto::ProtoContext*)                                                              
+     0.66%  ld-linux-x86-64.so.2   [.] __tls_get_addr                                                                                                                     
+     0.64%  libprotoCore.so.3.3.0  [.] memcpy@plt                                                                                                                         
+     0.63%  libprotoCore.so.3.3.0  [.] proto::ProtoListSmallImplementation::ProtoListSmallImplementation(..)                                                              
+     0.62%  protoclj               [.] protoClojure::realizeLazy(..)                                                                                                      
+     0.61%  [unknown]              [k] 0xffffffffa9b3db05                                                                                                                 
+     0.61%  [unknown]              [k] 0xffffffffa8400080                                                                                                                 
+     0.51%  protoclj               [.] protoClojure::(anonymous namespace)::runThunk(..)                                                                                  
+     0.51%  libc.so.6              [.] cfree@GLIBC_2.2.5                                                                                                                  

@@ -1030,6 +1030,16 @@ IOPRIM(prim_writer) {
 // The next line of a reader or a socket handle, or nil at its end.
 const PO* nextLine(proto::ProtoContext* ctx, const PO* h) {
     const int fd = openFd(ctx, h, "line-seq", {HandleKind::Reader, HandleKind::Socket});
+#if defined(PROTOCLJ_BUFFERED_LINE_PROTOTYPE)
+    // Investigation prototype: a line already in protoIO's buffer is taken
+    // without leaving the collector's quorum (blocking() enters an
+    // UnmanagedScope, about 330 ns per line); only a line that needs a read
+    // goes through blocking().
+    {
+        std::string buffered;
+        if (protoio::readBufferedLine(fd, buffered)) return makeString(ctx, buffered);
+    }
+#endif
     const std::optional<std::string> line = blocking(ctx, [&] { return protoio::readLine(fd); });
     return line ? makeString(ctx, *line) : PROTO_NONE;
 }

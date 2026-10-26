@@ -1,0 +1,25 @@
+    13.29%  protoclj               [.] std::__detail::_Executor<...>::_M_main_dispatch(...)  [libstdc++ std::regex]
+     5.39%  libprotoCore.so.3.3.0  [.] proto::ProtoString::toUTF8String(..) const                                                                                         
+     5.28%  libc.so.6              [.] __memmove_avx_unaligned_erms                                                                                                       
+     3.55%  libc.so.6              [.] cfree@GLIBC_2.2.5                                                                                                                  
+     2.93%  libprotoCore.so.3.3.0  [.] proto::RopeCharacterIterator::next()                                                                                               
+     2.79%  protoclj               [.] std::__detail::_Executor<...>::_M_handle_match(...)  [libstdc++ std::regex]
+     2.78%  libc.so.6              [.] malloc                                                                                                                             
+     2.70%  libc.so.6              [.] __memmove_avx_unaligned                                                                                                            
+     2.28%  libstdc++.so.6.0.35    [.] operator new(unsigned long)                                                                                                        
+     2.22%  protoclj               [.] std::__detail::_Executor<...>::_M_dfs(...)  [libstdc++ std::regex]
+     2.02%  libc.so.6              [.] __memset_avx2_unaligned_erms                                                                                                       
+     1.92%  [unknown]              [k] 0xffffffffa9b3bde8                                                                                                                 
+     1.76%  libprotoCore.so.3.3.0  [.] proto::ProtoObject::isString(..) const                                                                                             
+     1.29%  libprotoCore.so.3.3.0  [.] proto::buildAVL(..)                                                                                                                
+     1.23%  protoclj               [.] bool std::__detail::__regex_algo_impl<__gnu_cxx::__normal_iterator<char const*, std::string >, std::allocator<std::__cxx11::sub_mat
+     0.84%  [unknown]              [k] 0xffffffffa9b3db20                                                                                                                 
+     0.65%  libprotoCore.so.3.3.0  [.] void proto::sweep::(anonymous namespace)::sweepLoop<false, true, false>(proto::sweep::SegmentSource&, proto::sweep::SweeperLocal&, 
+     0.64%  libstdc++.so.6.0.35    [.] operator delete(void*)@plt                                                                                                         
+     0.63%  libprotoCore.so.3.3.0  [.] proto::wellFormedUTF8Prefix(unsigned char const*, unsigned long)                                                                   
+     0.62%  libstdc++.so.6.0.35    [.] operator delete(void*, unsigned long)                                                                                              
+     0.60%  [unknown]              [k] 0xffffffffa9b3db05                                                                                                                 
+     0.56%  libprotoCore.so.3.3.0  [.] memcpy@plt                                                                                                                         
+     0.55%  protoclj               [.] proto::ProtoObject const* protoClojure::ExecutionEngine::executeFrame<false>(..)                                                   
+     0.55%  protoclj               [.] operator new(unsigned long)@plt                                                                                                    
+     0.54%  libstdc++.so.6.0.35    [.] malloc@plt                                                                                                                         

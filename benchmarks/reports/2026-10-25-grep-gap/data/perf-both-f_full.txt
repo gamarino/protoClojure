@@ -1,0 +1,25 @@
+    10.13%  libprotoCore.so.3.3.0  [.] proto::ProtoString::toUTF8String(..) const                                                                                         
+     7.73%  libprotoCore.so.3.3.0  [.] void proto::sweep::(anonymous namespace)::sweepLoop<false, true, false>(proto::sweep::SegmentSource&, proto::sweep::SweeperLocal&, 
+     6.37%  libprotoCore.so.3.3.0  [.] proto::RopeCharacterIterator::next()                                                                                               
+     6.27%  libc.so.6              [.] __memmove_avx_unaligned                                                                                                            
+     5.19%  libprotoCore.so.3.3.0  [.] proto::buildAVL(..)                                                                                                                
+     3.59%  protoclj               [.] proto::ProtoObject const* protoClojure::ExecutionEngine::executeFrame<false>(..)                                  -      -         
+     3.56%  libprotoCore.so.3.3.0  [.] proto::ProtoContext::allocCell()                                                                                                   
+     3.53%  libprotoCore.so.3.3.0  [.] proto::ProtoObject::isString(..) const                                                                                             
+     3.04%  libc.so.6              [.] __memmove_avx_unaligned_erms                                                                                                       
+     2.90%  libprotoCore.so.3.3.0  [.] proto::Cell::Cell(..)                                                                                                              
+     2.59%  libprotoCore.so.3.3.0  [.] proto::ProtoObjectCell::finalize(..) const                                                                                         
+     2.54%  libprotoCore.so.3.3.0  [.] proto::Cell::finalize(..) const                                                                                                    
+     1.48%  libprotoCore.so.3.3.0  [.] memcpy@plt                                                                                                                         
+     1.31%  protoclj               [.] protoClojure::ExecutionEngine::executeFrame<false>(..)::{lambda(unsigned int)#2}::operator()(unsigned int) const  -      -         
+     1.26%  libprotoCore.so.3.3.0  [.] proto::ProtoList::getAt(..) const                                                                                                  
+     1.20%  libprotoCore.so.3.3.0  [.] proto::wellFormedUTF8Prefix(unsigned char const*, unsigned long)                                                                   
+     1.15%  libprotoCore.so.3.3.0  [.] proto::ProtoSparseListImplementation const* proto::sparse_avl::(anonymous namespace)::setAt<proto::ProtoSparseListImplementation>(.
+     1.11%  libprotoCore.so.3.3.0  [.] proto::ProtoObject::newLazyChild(..) const                                                                                         
+     1.11%  libprotoCore.so.3.3.0  [.] proto::ProtoListSmallImplementation::ProtoListSmallImplementation(..)                                                              
+     1.07%  libprotoCore.so.3.3.0  [.] proto::StringInternalNode::StringInternalNode(..)                                                                                  
+     1.01%  libprotoCore.so.3.3.0  [.] proto::ProtoThreadImplementation::implAllocCell(..)                                                                                
+     0.99%  libprotoCore.so.3.3.0  [.] proto::ProtoSparseListImplementation::ProtoSparseListImplementation(..)                                                            
+     0.98%  libprotoCore.so.3.3.0  [.] proto::ProtoObject::getOwnAttributeDirect(..) const                                                                                
+     0.98%  libc.so.6              [.] __memcmp_avx2_movbe                                                                                                                
+     0.97%  libprotoCore.so.3.3.0  [.] proto::sweep::mutatorsShort(proto::ProtoSpace*, bool, long long)                                                                   

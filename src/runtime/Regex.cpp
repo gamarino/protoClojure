@@ -4,6 +4,11 @@
 
 #include "protoCore.h"
 
+#if defined(PROTOCLJ_PCRE2_PROTOTYPE)
+#define PCRE2_CODE_UNIT_WIDTH 8
+#include <pcre2.h>
+#endif
+
 #include <cctype>
 #include <memory>
 #include <mutex>
@@ -165,6 +170,18 @@ const CompiledPattern* compilePattern(const std::string& source) {
         throw PatternSyntaxError(std::string(e.what()) + ": " + source);
     }
     compiled->groups = countGroups(compiled->regex);
+#if defined(PROTOCLJ_PCRE2_PROTOTYPE)
+    {
+        int err = 0;
+        PCRE2_SIZE off = 0;
+        pcre2_code* re = pcre2_compile(reinterpret_cast<PCRE2_SPTR>(source.data()), source.size(),
+                                       0, &err, &off, nullptr);
+        if (re) {
+            pcre2_jit_compile(re, PCRE2_JIT_COMPLETE);  // falls back to the interpreter
+            compiled->pcre = re;
+        }
+    }
+#endif
     const CompiledPattern* result = compiled.get();
     g_cache.emplace(source, std::move(compiled));
     return result;

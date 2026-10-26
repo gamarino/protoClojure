@@ -1,0 +1,124 @@
+diff --git a/include/protoio/stream.h b/include/protoio/stream.h
+index e3c48e7..31bec50 100644
+--- a/include/protoio/stream.h
++++ b/include/protoio/stream.h
+@@ -54,6 +54,11 @@ private:
+ // `max` bytes throws LineTooLong.
+ std::optional<std::string> readLine(int fd, std::size_t max = 0);
+ 
++// The next line into `line` when the stream's buffer already holds a complete
++// one: never reads, never blocks. False when a read would be needed (the
++// caller then uses readLine). Investigation prototype.
++bool readBufferedLine(int fd, std::string& line, std::size_t max = 0);
++
+ // Everything up to the end of the stream (possibly empty).
+ std::string readAll(int fd);
+ 
+diff --git a/src/internal.h b/src/internal.h
+index 326082e..8f6c347 100644
+--- a/src/internal.h
++++ b/src/internal.h
+@@ -135,6 +135,7 @@ struct FdState {
+     std::mutex writeMutex;
+     std::mutex sslMutex;
+     std::string buf;                  // guarded by readMutex
++    std::size_t head = 0;             // bytes of buf already consumed; guarded by readMutex
+     bool eof = false;                 // guarded by readMutex
+     std::atomic<SSL*> ssl{nullptr};
+     std::atomic<int> timeoutMs{-1};   // -1: block without limit
+diff --git a/src/stream.cpp b/src/stream.cpp
+index a7ef376..10e9d47 100644
+--- a/src/stream.cpp
++++ b/src/stream.cpp
+@@ -444,8 +444,18 @@ void rawWrite(FdState& st, const char* data, std::size_t size) {
+     }
+ }
+ 
++// Drops the consumed bytes at the front of the buffer, so the buffer starts
++// at the next unread byte. takeLine only advances `head`: erasing the front
++// of a 64 KiB buffer for every line moved the rest of it each time.
++void compact(FdState& st) {
++    if (st.head == 0) return;
++    st.buf.erase(0, st.head);
++    st.head = 0;
++}
++
+ bool fill(FdState& st) {
+     if (st.eof) return false;
++    compact(st);
+     char chunk[65536];
+     const ssize_t r = rawRead(st, chunk, sizeof chunk);
+     if (r < 0) {
+@@ -458,7 +468,7 @@ bool fill(FdState& st) {
+ }
+ 
+ bool takeLine(FdState& st, std::size_t max, std::string& line) {
+-    std::size_t pos, scanned = 0;
++    std::size_t pos, scanned = st.head;
+     for (;;) {
+         pos = st.buf.find('\n', scanned);
+         if (pos != std::string::npos) break;
+@@ -466,20 +476,24 @@ bool takeLine(FdState& st, std::size_t max, std::string& line) {
+         // A line of `max` bytes may still be followed by CR LF, so only more
+         // than max + 1 bytes without a LF prove the line too long. The stream
+         // is left where it was.
+-        if (max && scanned > max + 1) lineTooLong(max);
++        if (max && scanned - st.head > max + 1) lineTooLong(max);
++        const std::size_t before = st.head;
+         if (!fill(st)) break;
++        scanned -= before;  // fill compacted the buffer
+     }
+     const bool complete = pos != std::string::npos;
+-    std::size_t len = complete ? pos : st.buf.size();
++    std::size_t len = (complete ? pos : st.buf.size()) - st.head;
+     if (!complete && len == 0) return false;
+-    if (len > 0 && st.buf[len - 1] == '\r') --len;
++    if (len > 0 && st.buf[st.head + len - 1] == '\r') --len;
+     if (max && len > max) lineTooLong(max);
+-    line.assign(st.buf, 0, len);
+-    st.buf.erase(0, complete ? pos + 1 : st.buf.size());
++    line.assign(st.buf, st.head, len);
++    st.head = complete ? pos + 1 : st.buf.size();
++    if (st.head == st.buf.size()) { st.buf.clear(); st.head = 0; }
+     return true;
+ }
+ 
+ std::string takeBytes(FdState& st, std::size_t n) {
++    compact(st);
+     while (st.buf.size() < n && fill(st)) {}
+     const std::size_t take = std::min(st.buf.size(), n);
+     std::string got = st.buf.substr(0, take);
+@@ -501,9 +515,17 @@ std::optional<std::string> readLine(int fd, std::size_t max) {
+     return line;
+ }
+ 
++bool readBufferedLine(int fd, std::string& line, std::size_t max) {
++    auto st = fdState(fd);
++    std::lock_guard<std::mutex> lock(st->readMutex);
++    if (st->buf.find('\n', st->head) == std::string::npos) return false;
++    return detail::takeLine(*st, max, line);
++}
++
+ std::string readAll(int fd) {
+     auto st = fdState(fd);
+     std::lock_guard<std::mutex> lock(st->readMutex);
++    detail::compact(*st);
+     while (detail::fill(*st)) {}
+     std::string all;
+     all.swap(st->buf);
+@@ -536,6 +558,7 @@ std::optional<std::string> readChars(int fd, std::size_t n) {
+         }
+         return i;
+     };
++    detail::compact(*st);
+     std::size_t take;
+     while ((take = prefix(st->buf)) == std::string::npos && detail::fill(*st)) {}
+     if (take == std::string::npos) take = st->buf.size();  // end of stream: what is left
+@@ -548,6 +571,7 @@ std::optional<std::string> readChars(int fd, std::size_t n) {
+ bool atEnd(int fd) {
+     auto st = fdState(fd);
+     std::lock_guard<std::mutex> lock(st->readMutex);
++    detail::compact(*st);
+     return st->buf.empty() && !detail::fill(*st);
+ }
+ 
