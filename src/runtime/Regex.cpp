@@ -54,7 +54,7 @@ int hexValue(char c) {
 }
 
 std::string hexEscape(unsigned long cp) {
-    char buf[16];
+    char buf[32];
     std::snprintf(buf, sizeof buf, "\\x{%lx}", cp);
     return buf;
 }
