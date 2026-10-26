@@ -1,0 +1,8 @@
+date: 2026-10-26T01:31:18Z
+host: Linux 7.0.0-38-generic x86_64, 12 cpus
+protoclj: /home/gamarino/Documentos/proyectos/.agent_scratch/clj-bench-1025/clj-build/protoclj (protoClojure 0.0.3)
+  	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/clj-bench-1025/prefix/lib/libprotoCore.so.4 (0x00007a4966e9e000)
+bb: /home/gamarino/Documentos/proyectos/tools/bb-1.4.192/bb (babashka v1.4.192)
+input access.log: 115343436 bytes, sha256 bde9ba63cd40f529
+input orders.json: 42829421 bytes, sha256 9cd9afdfcbb5b0b7
+input corpus.txt: 31457314 bytes, sha256 f46a8f92773db080

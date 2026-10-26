@@ -1,0 +1,9 @@
+workload    protoclj s     bb s  ratio  protoclj MB   bb MB  output
+startup           0.02     0.00    inf           24      15  same: (empty)
+factorial         0.02     0.01    2.0           24      18  same: digits 2568 digit-sum 10539 head 402387260077093773543702433
+grep             16.69     1.93    8.6          140     134  same: matches 1588 latency-ms-total 2053520
+json              4.13     2.51    1.6         1424     338  same: orders 300000 kept 106469
+wordfreq         17.20     4.67    3.7          143     143  same: 381941 ribagori
+start-up protoclj: task-clock 18.4 ms (median of 3 passes x 50 runs: 18.4, 18.5, 17.3)
+start-up bb: task-clock 7.4 ms (median of 3 passes x 50 runs: 6.9, 7.6, 7.4)
+all outputs identical across runtimes and runs

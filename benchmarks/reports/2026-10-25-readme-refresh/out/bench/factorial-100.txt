@@ -1,0 +1,2 @@
+protoclj factorial-100: rc=0 digits=158
+bb factorial-100: rc=1 first line: Message:  long overflow

@@ -1,0 +1,5 @@
+hello  protoclj  wall median   20.9 ms (per-pass medians 21.2, 20.7, 20.9; p10-p90 19.7-24.1) | peak RSS median  24.2 MB (min 23.8, max 24.7) | runs 150
+hello  bb        wall median    9.7 ms (per-pass medians 9.7, 9.6, 9.8; p10-p90 9.0-10.9) | peak RSS median  15.4 MB (min 15.2, max 15.7) | runs 150
+empty  protoclj  wall median   20.9 ms (per-pass medians 21.7, 21.1, 20.5; p10-p90 19.4-25.4) | peak RSS median  24.2 MB (min 23.9, max 24.6) | runs 150
+empty  bb        wall median    9.7 ms (per-pass medians 9.9, 9.7, 9.5; p10-p90 8.8-11.4) | peak RSS median  15.4 MB (min 15.2, max 15.6) | runs 150
+failures: 0

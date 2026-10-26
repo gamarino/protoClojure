@@ -15,7 +15,7 @@ The Clojure community is small, technically demanding, and shares three convicti
 What protoClojure offers that JVM Clojure does not:
 
 - **Native interop with Python and JavaScript modules (planned).** The design routes a `(:require [py/numpy :as np])` form through the same UMD plumbing protoPython and protoJS use, so the result is a real protoCore object — no FFI marshalling, no copy at the boundary, no separate process. The module system is not implemented yet; see [docs/INTEROP.md](docs/INTEROP.md) and the archived [foreign-dispatch design](docs/archive/design-specs/2026-06-14-foreign-dispatch.md).
-- **Fast startup, small footprint.** No JVM warm-up: on the benchmark machine (AMD Ryzen 5 5500U), `build_release/protoclj examples/01-hello.clj` has a median wall time of 21.6 ms over 50 runs and a peak resident set size of about 20 MB (`/usr/bin/time -f %M`), measured on 2026-09-15; on the macros branch (2026-10-24) the bootstrap `core.clj` brings an empty script to about 24 ms, against Babashka's 11 ms on the same machine. Scripts and CLI tools are a viable form factor without GraalVM AOT: a script starting with `#!/usr/bin/env protoclj` runs as a command and chains in pipelines ([`examples/13-filter-grep.clj`](examples/13-filter-grep.clj)).
+- **Fast startup, small footprint.** No JVM warm-up: on the benchmark machine (AMD Ryzen 5 5500U), `protoclj examples/01-hello.clj` has a median wall time of 20.9 ms over 150 runs and a peak resident set size of 24 MB (what `/usr/bin/time -f %M` reports), `core.clj` loaded at start-up included, against Babashka's 9.7 ms and 15 MB on the same machine (2026-10-25, `main` 1e7b612 on protoCore 3.3.0; [report](benchmarks/reports/2026-10-25-readme-refresh/README.md)). Scripts and CLI tools are a viable form factor without GraalVM AOT: a script starting with `#!/usr/bin/env protoclj` runs as a command and chains in pipelines ([`examples/13-filter-grep.clj`](examples/13-filter-grep.clj)).
 - **Arbitrary-precision integers by default.** When `(* acc n)` overflows a SmallInteger, protoCore's promoting `multiply` returns a LargeInteger and the program keeps going. `(factorial 100)` runs out of the box with plain `*`. Clojure's `*` uses long arithmetic and throws on overflow, so Babashka 1.4 fails on `(factorial 21)` written with `*`; written the portable Clojure way, with `*'`, it runs in Babashka too, and in protoClojure, where `*'` is the same function as `*` ([`examples/showcase/factorial.clj`](examples/showcase/factorial.clj)).
 - **Real parallelism without a GIL.** Every protoCore-hosted runtime shares the same GIL-free concurrency model. Atoms are a protoCore compare-and-set; futures run on OS threads; actors run on a worker pool.
 
@@ -201,165 +201,41 @@ The per-actor mailbox is **lock-free and GC-visible**: three protoCore `ProtoMPS
 
 #### Benchmark — actors
 
-Numbers below were measured on 2026-09-24 on an AMD Ryzen 5 5500U (6 cores, 12 threads), on a machine shared with a desktop session (load average 5.8 at the start of the run, no other benchmark running). Each row is **1,000,000 messages** with the trivial body `(inc v)`; runs take 2-5 seconds. The runner is [`benchmarks/actor-bench.sh`](benchmarks/actor-bench.sh), which verifies that every script reports the expected message count before computing a rate. The peak column is the best of the worker counts 1, 2, 4, 6, 8 and 16, with the count in brackets.
+Measured on 2026-10-25 (`main` 1e7b612, protoCore 3.3.0) on an AMD Ryzen 5 5500U (6 cores, 12 threads) with a desktop session running (load average 5.4-5.8 at the round starts). Each row is **1,000,000 messages** with the trivial body `(inc v)`; runs take 2-8 seconds. The runner is [`benchmarks/actor-bench.sh`](benchmarks/actor-bench.sh), which verifies that every script reports the expected message count before computing a rate. Three rounds; the peak column is the best median over the worker counts 1, 2, 4, 6, 8 and 16, with the count in brackets.
 
-| mode      | what it measures                                              | peak msg/s |
-|-----------|---------------------------------------------------------------|-----------:|
-| `single`  | 1 sender × 1 actor — per-actor pipeline floor                 | 222,074 (w=2) |
-| `fan-out` | 1 sender × 1000 actors (1000 msgs each) — ready queue stress  | 552,486 (w=8) |
-| `MPSC`    | 4 senders × 1 actor — per-actor sender contention             | 201,329 (w=1) |
-| `MPMC`    | 4 senders × 4 actors (round-robin) — both contention paths    | 329,817 (w=16) |
+| mode      | what it measures                                              | peak msg/s | 2026-09-24 |
+|-----------|---------------------------------------------------------------|-----------:|-----------:|
+| `single`  | 1 sender × 1 actor — per-actor pipeline floor                 | 207,082 (w=16) | 222,074 (w=2) |
+| `fan-out` | 1 sender × 1000 actors (1000 msgs each) — ready queue stress  | 448,632 (w=2) | 552,486 (w=8) |
+| `MPSC`    | 4 senders × 1 actor — per-actor sender contention             | 210,704 (w=4) | 201,329 (w=1) |
+| `MPMC`    | 4 senders × 4 actors (round-robin) — both contention paths    | 280,113 (w=4) | 329,817 (w=16) |
 
-These are upper bounds for a single-operation message body. Worker-count scaling on this machine: `single` and `MPSC` are flat across worker counts (the single consumer is the bound); `fan-out` peaks at 4-8 workers and stays within 4% of the peak up to 16; `MPMC` grows with the worker count.
-
-Against the pre-migration mailbox (three atomic-pointer stacks of C++ heap nodes), measured back to back on the same machine: **fan-out is 34-80% faster** — a push now takes one cell from protoCore's per-thread arena instead of one `new` from the process-wide allocator — while **single, MPSC and MPMC are 6-33% slower**, because all three are bounded by one consumer and the consumer now materialises each batch as a `ProtoList`. The full before/after tables, the contention notes and the mechanism are in [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md). What the migration bought is mailboxes the collector can see: the old nodes held the message's function, arguments and promise as pointers nothing rooted.
-
-Measured on 2026-06-14, the move from a per-actor `std::mutex` + `std::deque` to the lock-free atomic-pointer stacks (the representation the queues replaced) had measured **+4-17% (single)**, **+30-41% (fan-out at 2-4 workers)**, **+11-19% (MPSC at 2 or more workers)** and **±0-3% (MPMC)**.
+These are upper bounds for a single-operation message body. Against 2026-09-24 (one run per worker count, so its peaks are favoured), `fan-out` is 19 % and `MPMC` 15 % lower, `single` 7 % lower and `MPSC` 5 % higher; the cause is not isolated. A cell varies by up to 1.6x between rounds, so the worker count at which a mode peaks is not stable; `MPMC` now peaks at 4 workers and falls to 171 k at 16. Tables with every worker count: [`benchmarks/reports/2026-10-25-readme-refresh/`](benchmarks/reports/2026-10-25-readme-refresh/README.md). The mailbox's history (the migration from atomic-pointer stacks to `ProtoMPSCQueue`s, and from a mutex before that) is in [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md).
 
 ## Performance — what is measured
 
-**Seq cost and cons lists (measured 2026-10-24).** `main` e1a4136 against
-the VM's direct seq primitives (A, e2b1e53, rebased as dd1ba9e) and lists
-as cells (B, 563cf14, rebased as 47f4c50), clean Release worktrees on
-protoCore 3.2.0, fresh copies of each
-binary and library per run, 5 rotated rounds, the machine 82-87 % idle.
-The list-cost cases at n = 10^6, ns per element (each case's own timer):
-
-| case | main | A | B | Babashka |
-|---|---:|---:|---:|---:|
-| list walk with `rest` | 1304 | 1181 | **288** | 175 |
-| vector `(seq v)` walk | 848 | 567 | 608 | 252 |
-| `reduce +` over a list | 161 | 117 | **85** | 24 |
-| cons-build, then count | 993 | 1027 | **432** | 319 |
-| sequential `nth` (vector) | 389 | 292 | 292 | 273 |
-| random `nth` (vector) | 2141 | 2081 | 2003 | 783 |
-| `empty?` + `first` (list) | 331 | 211 | 195 | 186 |
-
-`bench.sh` moved by -3 % to +0 % (`reduce-list` -10 %); start-up is +3.9 %
-cycles (core.clj's lists are four protoCore cells per element), and
-`(vec list)` is O(n log n) where it was O(1). Details, profiles and what got
-slower: [`benchmarks/reports/2026-10-24-seq-cost/`](benchmarks/reports/2026-10-24-seq-cost/README.md).
-
-**The macros branch end to end, after the regression fixes (measured
-2026-10-24).** Baseline `main` 8b7938a against `feature/macros` before
-(3b75e41) and after (eb274bb) the fixes, clean Release worktrees on
-protoCore 3.1.0 (the baseline also on 3.0.0, which changes nothing), fresh
-copies of each binary and library per run, 5 rotated rounds behind a quiet
-gate. Run phase = a long variant of each workload minus an empty file,
-`perf stat` cycles:
-
-| | baseline | before fixes | after fixes | after vs baseline |
-|---|---:|---:|---:|---:|
-| start-up (empty file) | 47.3 Mcycles | 67.9 Mcycles | 64.1 Mcycles | **+35.7 %** (about +4 ms) |
-| `fib` run phase | 3049 Mcycles | 3224 | 3184 | +4.4 % |
-| `tak` | 1705 | 1777 | 1734 | +1.7 % |
-| `sum-loop` | 1471 | 1492 | 1489 | +1.2 % |
-| `reduce-list` | 1661 | 1649 | 1666 | +0.3 % |
-| `sum-squares` (lazy `map`) | 878 | 1199 | 987 | +12.3 % |
-| map-loop (keyword `get` / `assoc`) | 3553 | 3862 | 3714 | +4.5 % |
-
-`benchmarks/bench.sh` (ms, one process per run, start-up included): fib
-336 / 354 / 348, tak 33 / 39 / 38, sum-loop 63 / 69 / 67, reduce-list
-27 / 33 / 31, sum-squares 22 / 29 / 27 (baseline / before / after); these
-short programs mostly measure start-up.
-
-What costs what: start-up is `core.clj`, read and compiled at every start
-(the intern caches took 4 M cycles off it; the rest needs a snapshot or
-on-demand compilation, STATUS.md "Known issues"). `sum-squares` pays for
-`map` being lazy, as in Clojure (a lazy object, a cons and a context per
-element). map-loop crosses the collector's initial 2 M-cell soft limit,
-which the baseline missed by 66 k cells, and runs one cycle. `fib` and `tak`
-run 1-2 % more instructions; the rest of their difference is the dispatch
-loop's code layout, which moves either way with unrelated edits (not
-isolated). Bisect, profiles and the two reverted experiments:
-[`benchmarks/reports/2026-10-24-regression/`](benchmarks/reports/2026-10-24-regression/README.md).
-
-**protoCore's unified exception model (measured 2026-10-22).**
-- Branch `feature/protocore-3-calling-convention` at `bef23b0`, against
-  `4c5d3aa` (protoCore `cf52f9f5`). Both Release builds, interleaved, three rounds. The machine had 2-4 busy CPUs, so only the ratios count, not the milliseconds.
-
-| | AFTER / BEFORE |
-|---|---:|
-| `bench.sh` geomean | 0.962 (`fib` −10 %, rounds do not overlap; AFTER / Babashka 1.00x) |
-| `try` that does not throw | 0.99 |
-| `throw` and `catch`, same function | **0.87** (confirmed in a reversed pass: 0.86) |
-| throw caught 5 frames up | 1.02 |
-| `(/ 1 0)` caught | **1.10** (confirmed: 1.09), about +2,200 cycles; likely the error factory building the `ArithmeticException`, not isolated |
-
-- No JVM Clojure was available. Babashka is the comparable, at 42,910
-  cycles for a same-function catch and 10,736 for a caught `(/ 1 0)`.
-- Raw results: [`benchmarks/reports/2026-10-22-unified-exceptions/`](benchmarks/reports/2026-10-22-unified-exceptions/).
-
-**protoCore 2.14.8 and the call path (measured 2026-10-20).**
-`benchmarks/bench.sh` against Babashka 1.4.192, three rounds, each run behind
-a quiet gate (1.0-2.4 busy CPUs) and on a fresh copy of protoCore 2.14.8;
-`main` before (`354e728`) and after (`ef3b328`) merging `perf/call-path`,
-alternating, Release; medians of the three rounds (each round is bench.sh's
-best of three).
-
-| Workload | protoclj ms | bb ms | ratio | before the merge | 2.14.7 (2026-10-19) |
-|---|---:|---:|---:|---:|---:|
-| `fib` | 424 | 423 | **1.00x** | 437 ms, 1.03x | 489 ms, 1.20x |
-| `tak` | 43 | 27 | 1.59x | 45 ms, 1.67x | 46 ms, 1.74x |
-| `sum-loop` | 65 | 162 | **0.40x** | 67 ms, 0.41x | 64 ms, 0.41x |
-| `reduce-list` | 30 | 18 | 1.67x | 30 ms, 1.67x | 30 ms, 1.67x |
-| `sum-squares` | 23 | 17 | 1.39x | 22 ms, 1.33x | 23 ms, 1.35x |
-
-`fib` now matches Babashka: 489 -> 437 ms comes from protoCore 2.14.8's
-context slot stack (a call's 64-127 slots no longer go through
-`new`/`delete`), 437 -> 424 ms from the call path. The call path's changes
-(own reads of the function wrapper's attributes and of globals, one
-argument copy, the result rooted in the caller's stack slot) move every
-workload by -4 % to +4.5 %, within the spread; what they fix is that a
-returned object was reachable from no root between the callee's return and
-the caller's next store. The JVM figures of 2026-10-19 below are unchanged.
-Raw results: [`benchmarks/reports/2026-10-20/`](benchmarks/reports/2026-10-20/).
-
-**protoCore 2.14.7 (measured 2026-10-19).** 2.14.7 changes the write path: a
-new value for an existing key copies the root-to-key path without rebalancing,
-and allocating a cell no longer takes a spinlock. The same binaries on
-protoCore 2.14.6 and 2.14.7, each run loading a fresh copy of the library,
-three rounds: `benchmarks/bench.sh` against Babashka 1.4.192 with 2.14.7:
-`fib` 489 ms (1.20x bb), `tak` 46 ms (1.74x), `sum-loop` 64 ms (0.41x),
-`reduce-list` 30 ms (1.67x), `sum-squares` 23 ms (1.35x), unchanged from
-2.14.6 (geomean 0.0 %). The same five programs on Clojure 1.12.0 on OpenJDK 25
-(first measured here, median of three): 813-864 ms as a process (JVM
-start-up), 6-30 ms in steady state inside one process, 3-16x faster than
-protoClojure once warm. An `assoc` costs about 1,225 cycles. Measured under
-TLP's battery power profile (powersave, EPP balance_power): compare ratios,
-not absolute times, with older figures. Details: [protoCore's
-report](https://github.com/numaes/protoCore/blob/master/docs/reports/2026-10-18-write-path.md).
-
-**protoCore 2.14.6 (measured 2026-10-13).**  `/` on two integers reaches
-protoCore's `divide`, which no longer allocates a temporary: a loop of
-2,000,000 divisions, the same commit (`359d8f6`) built against protoCore
-2.14.5 and 2.14.6, -36 % cycles (A/A +1.9 %).  `benchmarks/bench.sh` (none
-of its workloads divides) against Babashka 1.4.192, three rounds, with
-2.14.6: `fib` 471 ms (1.17x bb), `tak` 45 ms (1.73x), `sum-loop` 64 ms
-(0.41x), `reduce-list` 29 ms (1.61x), `sum-squares` 22 ms (1.38x); only
-`fib` moved (-7 %, not explained by this change).  These differ from the
-table below, which was measured in June at an older commit. Measured under TLP's battery power profile (powersave, EPP balance_power): compare ratios, not absolute times, with older figures.  Details:
-[protoCore's report](https://github.com/numaes/protoCore/blob/master/docs/reports/2026-10-12-cross-runtime-int-compare.md).
-
-**On call-dispatch-bound recursion (`fib`, `tak`), protoClojure is 1.2-1.4× slower than Babashka 1.4.192. On `loop`/`recur` arithmetic, `reduce` over a list and `map` + `reduce` it is faster (0.36-0.75× Babashka's time). On LargeInteger workloads Babashka does not finish with default `*` (it does with `*'`).** The harness is [`benchmarks/bench.sh`](benchmarks/bench.sh): three runs per workload, best wall-clock time of three, each run a single process invocation including start-up. Babashka is GraalVM-native; both runtimes ran on the same machine.
+**Measured on 2026-10-25, `main` 1e7b612 on protoCore 3.3.0, against Babashka 1.4.192: protoClojure is faster than Babashka on call-dispatch-bound `fib` (0.93x its time) and on `loop`/`recur` arithmetic (0.45x), and slower on `tak` (1.41x), `reduce` over a list (1.54x) and `map` + `reduce` (1.61x), the last three short enough that protoclj's 11 ms of extra start-up weighs. On LargeInteger workloads Babashka does not finish with default `*` (it does with `*'`).** The harness is [`benchmarks/bench.sh`](benchmarks/bench.sh)'s method: three process runs per workload, best wall-clock time, start-up included; here repeated over five interleaved rounds with every output checked, medians of the rounds with their range. Babashka is GraalVM-native; both ran on the same machine, a desktop with a 1-minute load average of 5-7 on 12 CPUs, so compare the ratios rather than the milliseconds.
 
 | Workload | protoclj (ms) | bb (ms) | ratio | Notes |
 |---|---:|---:|---:|---|
-| `fib(30)` (pure recursion) | 712 | 524 | 1.36× | call-dispatch bound |
-| `tak(18,12,6)` (Takeuchi) | 52 | 43 | 1.21× | call-dispatch bound |
-| `sum-loop(1M)` (`loop`/`recur` arithmetic) | 79 | 219 | **0.36×** | tight SmallInteger loop |
-| `reduce-list(10K)` (reduce + over list) | 27 | 36 | 0.75× | allocation + reduce |
-| `sum-squares(1K)` (map + reduce) | 19 | 31 | 0.61× | start-up bound at this size |
+| `fib(30)` (pure recursion) | 421 [402-454] | 455 [423-469] | **0.93×** | call-dispatch bound |
+| `tak(18,12,6)` (Takeuchi) | 41 [38-46] | 29 [28-45] | 1.41× | call-dispatch bound, short |
+| `sum-loop(1M)` (`loop`/`recur` arithmetic) | 77 [73-81] | 172 [165-198] | **0.45×** | tight SmallInteger loop |
+| `reduce-list(10K)` (reduce + over list) | 29 [28-33] | 19 [19-20] | 1.54× | start-up bound at this size |
+| `sum-squares(1K)` (lazy map + reduce) | 28 [27-34] | 17 [17-18] | 1.61× | start-up bound at this size |
 | `factorial(100)` (158-digit result) | runs | **fails** with `*`; runs with `*'` | — | LargeInteger by default |
 
-These are the most recent numbers in [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md), measured after maps, strings and the concurrency primitives were added. Two earlier changes shaped the trajectory:
+Against the previous README figures: from the June table (`ce9819d`), `fib` is 41 % and `tak` 21 % faster, while `reduce-list` and `sum-squares` went from faster than Babashka (0.75x, 0.61x) to slower (Babashka got faster on both, and protoclj's `sum-squares` pays for lazy `map` and for `core.clj` at start-up). From 2026-10-20 (protoCore 2.14.8, before macros), `fib`, `tak` and `reduce-list` moved by -5 % to -1 %, and **`sum-loop` is 18 % slower (65 -> 77 ms) and `sum-squares` 22 % slower (23 -> 28 ms)**; part of that is the about 4 ms `core.clj` adds to every start, the rest is not isolated. Raw runs, start-up, showcase and actor tables, and the load log: [`benchmarks/reports/2026-10-25-readme-refresh/`](benchmarks/reports/2026-10-25-readme-refresh/README.md).
 
-- **SmallInteger fast-path opcodes** (commit `700f352`): the VM short-circuits `(+ x y)`, `(< x y)` and the other arithmetic and comparison operators when both operands are tagged SmallIntegers, and routes everything else through protoCore's promoting `add` / `compare` / `multiply`. `fib(30)` went from 4113 ms to 720 ms.
-- **Fewer attribute lookups per call** (commit `a099b45`): separate prototypes for single- and multi-arity function wrappers let the dispatcher pick the path with `getPrototype` alone, and the captures attribute is read only when a body has captures. `fib(30)` went to 620 ms, with 15% fewer instructions and 32% fewer L1-d cache misses (per `perf stat`).
+Earlier measurements, each with its report (the README's text of 2026-10-24 for these is kept in [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md#earlier-readme-performance-sections-moved-2026-10-25)):
 
-The features added afterwards cost about 15% on `fib(30)` (620 ms → 712 ms); the extra parameters threaded through every recursive VM call are the likely cause, and recovering that cost is on the [roadmap](docs/ROADMAP.md).
+- 2026-10-25, lists as `ProtoLinkedList`s (M47): [`reports/2026-10-25-linked-list/`](benchmarks/reports/2026-10-25-linked-list/README.md); primitives in the caller's context: [`reports/2026-10-25-primitive-context/`](benchmarks/reports/2026-10-25-primitive-context/).
+- 2026-10-24, seq cost and cons lists: [`reports/2026-10-24-seq-cost/`](benchmarks/reports/2026-10-24-seq-cost/README.md); the macros branch end to end and its regression fixes (start-up +35.7 % in cycles): [`reports/2026-10-24-regression/`](benchmarks/reports/2026-10-24-regression/README.md).
+- 2026-10-22, protoCore's unified exception model: [`reports/2026-10-22-unified-exceptions/`](benchmarks/reports/2026-10-22-unified-exceptions/).
+- 2026-10-20, protoCore 2.14.8 and the call path: [`reports/2026-10-20/`](benchmarks/reports/2026-10-20/).
+- 2026-10-19 and 2026-10-13, protoCore 2.14.7 and 2.14.6, with JVM Clojure 1.12.0 (813-864 ms as a process, 3-16x faster than protoClojure once warm): protoCore's [write-path](https://github.com/numaes/protoCore/blob/master/docs/reports/2026-10-18-write-path.md) and [integer-compare](https://github.com/numaes/protoCore/blob/master/docs/reports/2026-10-12-cross-runtime-int-compare.md) reports.
+- June 2026, the first tables and the `fib(30)` trajectory (4113 -> 720 -> 620 -> 712 ms through the SmallInteger fast path and fewer lookups per call): [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md).
 
-JVM Clojure was first measured on 2026-10-19 (the protoCore 2.14.7 paragraph above): 813-864 ms per program as a process, dominated by JVM start-up, and 3-16x faster than protoClojure once its JIT is warm inside one process.
 
 ## Showcase — the same scripts under protoclj and Babashka
 
@@ -377,23 +253,29 @@ protoclj examples/showcase/json-transform.clj /tmp/data/orders.json
 protoclj examples/showcase/word-freq.clj < /tmp/data/corpus.txt
 ```
 
-Measured on 2026-10-24 (5 interleaved rounds, medians, wall time and peak
-RSS from `/usr/bin/time -v`, behind a quiet gate on a desktop with 2 busy
-CPUs; protoclj `feature/macros` on protoCore 3.1.0, Babashka 1.4.192):
+Measured on 2026-10-25 (5 interleaved rounds, medians, wall time and peak
+RSS from `/usr/bin/time -v`, on a desktop with a load average of 3.6-4.9;
+protoclj `main` 1e7b612 on protoCore 3.3.0, Babashka 1.4.192; start-up from
+150 alternating runs):
 
 | script | protoclj | bb | protoclj RSS | bb RSS |
 |---|---:|---:|---:|---:|
-| start-up (empty file) | 24 ms | 11 ms | 23 MB | 17 MB |
-| grep over a 115 MB log on stdin | 18.0 s | 2.1 s | 146 MB | 136 MB |
-| JSON transform, 300,000 records (43 MB) | 5.2 s | 2.6 s | 1,967 MB | 339 MB |
-| word frequencies, 31 MB of text | 19.2 s | 4.7 s | 159 MB | 144 MB |
-| `(factorial 1000)` with `*'` | 30 ms | 10 ms | 24 MB | 20 MB |
+| start-up (empty file) | 21 ms | 10 ms | 24 MB | 15 MB |
+| grep over a 115 MB log on stdin | 16.7 s | 1.9 s | 140 MB | 134 MB |
+| JSON transform, 300,000 records (43 MB) | 4.1 s | 2.5 s | 1,424 MB | 338 MB |
+| word frequencies, 31 MB of text | 17.2 s | 4.7 s | 143 MB | 143 MB |
+| `(factorial 1000)` with `*'` (10 ms resolution) | 20 ms | 10 ms | 24 MB | 18 MB |
 
-Raw results and the runner: [`benchmarks/reports/2026-10-23-showcase/`](benchmarks/reports/2026-10-23-showcase/).
+Against 2026-10-24 (`feature/macros` on protoCore 3.1.0) protoclj is 7-20 %
+faster on the three scripts and the JSON transform's peak RSS fell from
+1,967 MB (it varies by 60 % between rounds); relative to bb, only the JSON
+transform (2.0x -> 1.6x) and the word count (4.1x -> 3.7x) moved. Runner:
+[`benchmarks/reports/2026-10-23-showcase/`](benchmarks/reports/2026-10-23-showcase/);
+this run's results: [`benchmarks/reports/2026-10-25-readme-refresh/`](benchmarks/reports/2026-10-25-readme-refresh/README.md).
 
 **Where bb wins, plainly:** start-up (about 2x), speed on these scripts
-(2-9x: the grep's regular expressions run on `std::regex`, which is slow),
-memory for large parsed data (protoCore's 64-byte cells: 6x on the JSON
+(1.6-9x: the grep's regular expressions run on `std::regex`, which is slow),
+memory for large parsed data (protoCore's 64-byte cells: 4x on the JSON
 document), and above all the ecosystem: bb has hundreds of libraries, pods,
 tasks and Java classes; protoclj has what this README lists.
 
@@ -489,7 +371,7 @@ protoClojure runs scripts and an interactive REPL, both one top-level form at a 
 | Full namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **873 test cases: 686 conformance fixtures, 138 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics, value lifetime, the vector representation, value equality and hashing, native stack guard, double printer, exception values, rethrow) **and 49 CLI checks, counting the documentation checks** (`--help`, three checks of the adaptive heap controller -- on by default, off with `PROTOCORE_ADAPTIVE_HEAP=0`, peak RSS bounded under a small budget --, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, the reader's values under a heap limit, the garbage a `loop` makes under a heap limit, joins that park for the collector, threads waiting for a claimed lazy seq or a promise while the collector runs, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, literals and quote in the REPL, several forms per REPL line and `:load`, quoted data under a heap limit, macros at the REPL, macro expansion under a heap limit, destructuring under a heap limit, sets under a heap limit, regular expressions under a heap limit, `for` / `doseq` / `format` under a heap limit, the scripting vocabulary at the REPL, the embedded core.clj, scripts run form by form, deeply nested source, an uncaught exception, exceptions under a heap limit, `read-line` in pipelines, `*command-line-args*`, exit statuses, `sh` with `:dir` and `:env` and no shell on `PATH`, `localhost` requests to a server started without a host, an HTTP server under a heap limit, scripts run as commands through a `#!` line, lazy sequences under a heap limit, holding and not holding the head of a lazy seq, a grep over a stream larger than the heap ceiling, lazy seqs at the REPL, the tutorial's twenty-line script in a pipeline, JSON and EDN at the REPL, JSON parsed, written and streamed under heap limits, `pmap` joining every worker, and a list of 2 x 10^6 reclaimed cell by cell as it is walked under a heap limit; plus `docs/snippets`, which runs every Clojure snippet of this README, LANGUAGE.md and the tutorial). All 873 pass locally on Linux against protoCore 3.3.0 (2026-10-25, branch `feature/linked-list-lists`). The benchmark numbers above are reproduced by `./benchmarks/bench.sh`, the actor throughput numbers by `./benchmarks/actor-bench.sh`.
+`ctest` registers **873 test cases: 686 conformance fixtures, 138 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics, value lifetime, the vector representation, value equality and hashing, native stack guard, double printer, exception values, rethrow) **and 49 CLI checks, counting the documentation checks** (`--help`, three checks of the adaptive heap controller -- on by default, off with `PROTOCORE_ADAPTIVE_HEAP=0`, peak RSS bounded under a small budget --, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, the reader's values under a heap limit, the garbage a `loop` makes under a heap limit, joins that park for the collector, threads waiting for a claimed lazy seq or a promise while the collector runs, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, literals and quote in the REPL, several forms per REPL line and `:load`, quoted data under a heap limit, macros at the REPL, macro expansion under a heap limit, destructuring under a heap limit, sets under a heap limit, regular expressions under a heap limit, `for` / `doseq` / `format` under a heap limit, the scripting vocabulary at the REPL, the embedded core.clj, scripts run form by form, deeply nested source, an uncaught exception, exceptions under a heap limit, `read-line` in pipelines, `*command-line-args*`, exit statuses, `sh` with `:dir` and `:env` and no shell on `PATH`, `localhost` requests to a server started without a host, an HTTP server under a heap limit, scripts run as commands through a `#!` line, lazy sequences under a heap limit, holding and not holding the head of a lazy seq, a grep over a stream larger than the heap ceiling, lazy seqs at the REPL, the tutorial's twenty-line script in a pipeline, JSON and EDN at the REPL, JSON parsed, written and streamed under heap limits, `pmap` joining every worker, and a list of 2 x 10^6 reclaimed cell by cell as it is walked under a heap limit; plus `docs/snippets`, which runs every Clojure snippet of this README, LANGUAGE.md and the tutorial). All 873 pass locally on Linux against protoCore 3.3.0 (2026-10-25, `main` 1e7b612). The benchmark numbers above are reproduced by `benchmarks/reports/2026-10-25-readme-refresh/run-all.sh`, which repeats `./benchmarks/bench.sh`'s measurement, the showcase runner and `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 

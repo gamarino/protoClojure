@@ -1,0 +1,27 @@
+date: 2026-10-26T01:23:41Z
+host: Linux 7.0.0-38-generic x86_64; 12 logical CPUs; AMD Ryzen 5 5500U with Radeon Graphics
+memory: 62 GB
+cpufreq governor: powersave; EPP: balance_power
+power: no battery listed under /sys/class/power_supply
+compiler: c++ (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+protoClojure: 1e7b6121afaccbe6d62f9b7490b59e7f59b6013d (branch docs/bench-refresh from origin/main 1e7b612), Release build
+protoclj --version: protoClojure 0.0.3
+protoCore: tag v3.3.0 = aedc3b6368fa0c9eda9e4ca3647ba666cf2f13bb, Release, installed to .agent_scratch/clj-bench-1025/prefix
+libprotoCore sha256: 240b8ce67a5c5a1c
+protoIO: 1611ff9cf8d499cdc42a6e108e42ecfc36fd8164 (0.2.2, the CI pin), built in as the sibling tree
+ldd protoclj:
+  	linux-vdso.so.1 (0x00007c0b4b706000)
+  	libprotoCore.so.4 => /home/gamarino/Documentos/proyectos/.agent_scratch/clj-bench-1025/prefix/lib/libprotoCore.so.4 (0x00007c0b4b481000)
+  	libssl.so.3 => /usr/lib/x86_64-linux-gnu/libssl.so.3 (0x00007c0b4b355000)
+  	libcrypto.so.3 => /usr/lib/x86_64-linux-gnu/libcrypto.so.3 (0x00007c0b4ad3b000)
+  	libreadline.so.8 => /usr/lib/x86_64-linux-gnu/libreadline.so.8 (0x00007c0b4ace1000)
+  	libstdc++.so.6 => /usr/lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007c0b4aa41000)
+  	libm.so.6 => /usr/lib/x86_64-linux-gnu/libm.so.6 (0x00007c0b4a919000)
+  	libgcc_s.so.1 => /usr/lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007c0b4a8eb000)
+  	libc.so.6 => /usr/lib/x86_64-linux-gnu/libc.so.6 (0x00007c0b4a6ca000)
+  	/lib64/ld-linux-x86-64.so.2 (0x00007c0b4b708000)
+  	libz.so.1 => /usr/lib/x86_64-linux-gnu/libz.so.1 (0x00007c0b4a6ac000)
+  	libzstd.so.1 => /usr/lib/x86_64-linux-gnu/libzstd.so.1 (0x00007c0b4a5e9000)
+  	libtinfo.so.6 => /usr/lib/x86_64-linux-gnu/libtinfo.so.6 (0x00007c0b4a5b2000)
+bb: /home/gamarino/Documentos/proyectos/tools/bb-1.4.192/bb, babashka v1.4.192, sha256 56216a3404b82ec1
+ctest before measuring: 100% tests passed, 0 tests failed out of 873
