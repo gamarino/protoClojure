@@ -123,7 +123,7 @@ bool sequentialItems(proto::ProtoContext* ctx, const PO* v, std::vector<const PO
         return true;
     }
     if (!isListValue(ctx, v)) return false;
-    for (const PO* p = v; p != emptyListValue(); p = listRest(ctx, p)) out.push_back(listFirst(ctx, p));
+    for (ListCursor c(v); c.hasNext();) out.push_back(c.next());
     return true;
 }
 

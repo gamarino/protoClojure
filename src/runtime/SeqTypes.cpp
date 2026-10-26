@@ -6,6 +6,7 @@
 #include "protoCore.h"
 
 #include <stdexcept>
+#include <vector>
 
 namespace protoClojure {
 
@@ -21,21 +22,22 @@ const proto::ProtoObject* initSeqTypes(proto::ProtoContext* ctx) {
     CallerSlots scope(ctx, 1);
     const proto::ProtoObject* root = ctx->space->objectPrototype;
     const proto::ProtoList* holder = ctx->newList();
-    for (const proto::ProtoObject** p : {&g_seqProtos.lazy, &g_seqProtos.cons, &g_seqProtos.chunk,
-                                         &g_seqProtos.list, &g_seqProtos.empty}) {
+    for (const proto::ProtoObject** p : {&g_seqProtos.lazy, &g_seqProtos.cons, &g_seqProtos.chunk}) {
         *p = root->newChild(ctx, /*isMutable=*/false);
         holder = holder->appendLast(ctx, *p);
         scope.set(0, holder->asObject(ctx));
     }
+    // One value per process, never collected (protoCore 3.3.0).
+    g_seqProtos.empty = ctx->newLinkedList()->asObject(ctx);
     return scope.get(0);
 }
 
 SeqObject seqObjectKind(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    if (!v || (reinterpret_cast<proto::proto_ulong>(v) & 0x3F) != 0 || !g_seqProtos.lazy)
-        return SeqObject::None;
-    if (v == g_seqProtos.empty) return SeqObject::Empty;
+    if (!v || !g_seqProtos.lazy) return SeqObject::None;
+    const proto::proto_ulong tag = reinterpret_cast<proto::proto_ulong>(v) & 0x3F;
+    if (tag == kTagLinkedList) return v == g_seqProtos.empty ? SeqObject::Empty : SeqObject::List;
+    if (tag != 0) return SeqObject::None;
     const proto::ProtoObject* p = v->getPrototype(ctx);
-    if (p == g_seqProtos.list)  return SeqObject::List;
     if (p == g_seqProtos.lazy)  return SeqObject::Lazy;
     if (p == g_seqProtos.cons)  return SeqObject::Cons;
     if (p == g_seqProtos.chunk) return SeqObject::Chunk;
@@ -60,74 +62,82 @@ const proto::ProtoObject* newSeqNode(proto::ProtoContext* ctx, const proto::Prot
 
 // ---- Clojure lists ----------------------------------------------------------------
 
-bool isListValue(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    if (!v || (reinterpret_cast<proto::proto_ulong>(v) & 0x3F) != 0 || !g_seqProtos.empty)
-        return false;
-    return v == g_seqProtos.empty || v->getPrototype(ctx) == g_seqProtos.list;
+namespace {
+// The values at `items` with nullptr read as nil: protoCore's builders skip
+// a nullptr, and a Clojure list keeps a nil element.
+template <typename Fn>
+const proto::ProtoObject* withNils(std::size_t n, const proto::ProtoObject* const* items, Fn build) {
+    for (std::size_t i = 0; i < n; ++i) {
+        if (items[i]) continue;
+        std::vector<const proto::ProtoObject*> copy(items, items + n);
+        for (auto& x : copy) x = orNil(x);
+        return build(copy.data());
+    }
+    return build(items);
 }
+} // namespace
 
 const proto::ProtoObject* listCons(proto::ProtoContext* ctx, const proto::ProtoObject* x,
                                    const proto::ProtoObject* rest) {
-    const proto::ProtoObject* fields[3] = {orNil(x), rest,
-                                           proto::makeSmallInt(listCount(ctx, rest) + 1)};
-    return newSeqNode(ctx, g_seqProtos.list, 3, fields);
+    return asLinkedList(rest)->prepend(ctx, orNil(x))->asObject(ctx);
 }
 
 const proto::ProtoObject* listFirst(proto::ProtoContext* ctx, const proto::ProtoObject* cell) {
-    return orNil(seqNodeFields(ctx, cell)->getAt(ctx, 0));
+    return orNil(asLinkedList(cell)->getFirst(ctx));
 }
 
 const proto::ProtoObject* listRest(proto::ProtoContext* ctx, const proto::ProtoObject* cell) {
-    return seqNodeFields(ctx, cell)->getAt(ctx, 1);
+    return asLinkedList(cell)->getRest(ctx)->asObject(ctx);
 }
 
 void listSplit(proto::ProtoContext* ctx, const proto::ProtoObject* cell,
                const proto::ProtoObject** first, const proto::ProtoObject** rest) {
-    const proto::ProtoList* f = seqNodeFields(ctx, cell);
-    *first = orNil(f->getAt(ctx, 0));
-    *rest = f->getAt(ctx, 1);
+    const proto::ProtoLinkedList* l = asLinkedList(cell);
+    *first = orNil(l->getFirst(ctx));
+    *rest = l->getRest(ctx)->asObject(ctx);
 }
 
 long long listCount(proto::ProtoContext* ctx, const proto::ProtoObject* l) {
-    if (l == g_seqProtos.empty) return 0;
-    return proto::asSmallInt(seqNodeFields(ctx, l)->getAt(ctx, 2));
+    return static_cast<long long>(asLinkedList(l)->getSize(ctx));
+}
+
+const proto::ProtoObject* listNth(proto::ProtoContext* ctx, const proto::ProtoObject* l,
+                                  long long index) {
+    return orNil(asLinkedList(l)->getAt(ctx, static_cast<proto::proto_ulong>(index)));
+}
+
+const proto::ProtoObject* listDrop(proto::ProtoContext* ctx, const proto::ProtoObject* l,
+                                   long long count) {
+    return asLinkedList(l)->removeFirst(ctx, static_cast<proto::proto_ulong>(count))->asObject(ctx);
 }
 
 const proto::ProtoObject* listFromArray(proto::ProtoContext* ctx, std::size_t n,
                                         const proto::ProtoObject* const* items) {
     if (n == 0) return g_seqProtos.empty;
-    // Built from the end; each new cell is rooted in the slot, and holds the
-    // ones built before it. Nothing built here becomes garbage.
-    CallerSlots scope(ctx, 1);
-    const proto::ProtoObject* acc = g_seqProtos.empty;
-    for (std::size_t i = n; i-- > 0;) {
-        acc = listCons(ctx, items[i], acc);
-        scope.set(0, acc);
-    }
-    return acc;
+    // protoCore roots the cells while it builds them.
+    return withNils(n, items, [&](const proto::ProtoObject* const* values) {
+        return ctx->newLinkedListFromArray(n, values)->asObject(ctx);
+    });
 }
 
 const proto::ProtoObject* listFromProtoList(proto::ProtoContext* ctx, const proto::ProtoList* items) {
     const proto::proto_ulong n = items ? items->getSize(ctx) : 0;
     if (n == 0) return g_seqProtos.empty;
-    CallerSlots scope(ctx, 1);
-    const proto::ProtoObject* acc = g_seqProtos.empty;
-    for (proto::proto_ulong i = n; i-- > 0;) {
-        acc = listCons(ctx, items->getAt(ctx, static_cast<int>(i)), acc);
-        scope.set(0, acc);
-    }
-    return acc;
+    std::vector<const proto::ProtoObject*> values(n);
+    for (proto::proto_ulong i = 0; i < n; ++i) values[i] = orNil(items->getAt(ctx, static_cast<int>(i)));
+    return ctx->newLinkedListFromArray(n, values.data())->asObject(ctx);
 }
 
 const proto::ProtoList* listToProtoList(proto::ProtoContext* ctx, const proto::ProtoObject* l) {
     if (l == g_seqProtos.empty) return ctx->newList();
-    // The list is rooted by the caller, and so is every cell of it the walk
-    // reads; the builder roots what it has built.
+    // The list is rooted by the caller, and so is every cell the cursor
+    // reads; the builder roots what it has built. (ProtoLinkedList::asList
+    // goes through ProtoContext::newList(n, items), which copies a path per
+    // element: (vec list) measured 20-40 % slower with it.)
     const proto::ProtoObject* out;
     {
         ListBuilder b(ctx);
-        for (const proto::ProtoObject* p = l; p != g_seqProtos.empty; p = listRest(b.context(), p))
-            b.push(listFirst(b.context(), p));
+        for (ListCursor c(l); c.hasNext();) b.push(c.next());
         out = b.finish();
     }
     return out->asList(ctx);

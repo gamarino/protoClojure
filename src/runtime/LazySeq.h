@@ -10,11 +10,10 @@
  *     the lazy map, filter, range, ... below);
  *   - a cons holds a first element and `more`, any seq or nil;
  *   - a chunk is the elements [off, end) of a ProtoList followed by `more`;
- *   - a list cell holds a first element, the rest (a list) and the count
- *     (SeqTypes.h, "Clojure lists").
+ *   - a list is a protoCore ProtoLinkedList (SeqTypes.h, "Clojure lists").
  *
  * The seq protocol, as clojure.lang.RT and ISeq:
- *   seqOf(v)      nil, or a non-empty seq: a list cell, a cons or a chunk.
+ *   seqOf(v)      nil, or a non-empty seq: a list, a cons or a chunk.
  *                 A lazy seq is realised (and the seq it holds answered); the
  *                 empty list answers nil; a vector answers a chunked chunk
  *                 over its elements; a map, a set and a string answer an
@@ -192,7 +191,7 @@ public:
     void advance(proto::ProtoContext* ctx);
     // True, with the count in `*n`, when the number of elements from the
     // current position to the end is known without walking: the current
-    // node is a list cell (its count) or a chunk with nothing after it.
+    // node is a list (its count) or a chunk with nothing after it.
     bool counted(proto::ProtoContext* ctx, long long* n) const;
     // What remains, as a seq (nil at the end): the rest of the walked
     // collection from the current position. Allocates for a list or a chunk
@@ -202,13 +201,17 @@ public:
 private:
     void load(proto::ProtoContext* ctx, const proto::ProtoObject* node);
 
+    // What the current node is: a chunk (read by index in items_), a cons
+    // (fields_) or a list (its head cell read by index).
+    enum class Mode { Chunk, Cons, List };
+
     CallerSlots&              roots_;
     unsigned                  slot_;
     const proto::ProtoObject* node_ = nullptr;  // also in roots_'s slot
     const proto::ProtoList*   items_ = nullptr; // a chunk's elements
-    long long                 i_ = 0, end_ = 0;
-    bool                      cons_ = false;    // a cons or a list cell
-    const proto::ProtoList*   fields_ = nullptr; // its fields, [first more ...]
+    long long                 i_ = 0, end_ = 0; // position in a chunk or a list's head
+    Mode                      mode_ = Mode::Chunk;
+    const proto::ProtoList*   fields_ = nullptr; // a cons's fields, [first more ...]
 };
 
 // Installs the lazy-sequence functions (map, filter, take, range, ...) on

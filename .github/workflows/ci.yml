@@ -53,13 +53,11 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 3.2.0 (master commit bb2d581a, untagged), SOVERSION 4: the
-  # release users install (string interning, a heap string is its own rope
-  # root).  The minimum CMakeLists.txt declares is 3.1.0 (PROTOCORE_MIN_VERSION:
-  # lazy objects, which lazy sequences are built on), which the floor job in
-  # cross-platform.yml (Windows) tests.  Bump this deliberately; move it to a
-  # tag once protoCore tags the release.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'bb2d581a9e52a796c0c2dd1f682e0c75dc61d2d1' }}
+  # protoCore 3.3.0 (tag v3.3.0, commit aedc3b63), SOVERSION 4: the release
+  # users install, and the minimum CMakeLists.txt declares
+  # (PROTOCORE_MIN_VERSION: ProtoLinkedList, which Clojure lists are).  Bump
+  # this deliberately.
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'aedc3b6368fa0c9eda9e4ca3647ba666cf2f13bb' }}
   PROTOIO_REPO: gamarino/protoIO
   # protoIO 0.2.2 (main, 2026-10-02): RunOptions for sh :dir/:env, the
   # dual-stack wildcard listener.  Bump this deliberately.

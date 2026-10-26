@@ -194,10 +194,10 @@ void formatInto(proto::ProtoContext* ctx, std::string& out, const proto::ProtoOb
     if (isListValue(ctx, v)) {
         out += '(';
         std::size_t i = 0;
-        for (const proto::ProtoObject* p = v; p != emptyListValue(); p = listRest(ctx, p), ++i) {
+        for (ListCursor c(v); c.hasNext(); ++i) {
             if (i) out += ' ';
             if (i >= kMaxItems) { out += "..."; break; }
-            formatInto(ctx, out, listFirst(ctx, p), depth + 1, realize);
+            formatInto(ctx, out, c.next(), depth + 1, realize);
         }
         out += ')';
         return;
@@ -297,9 +297,8 @@ Children childrenOf(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     constexpr std::size_t kMaxChildren = 1000;
     if (isListValue(ctx, v)) {
         std::size_t i = 0;
-        for (const proto::ProtoObject* p = v; p != emptyListValue() && i < kMaxChildren;
-             p = listRest(ctx, p), ++i)
-            kids.emplace_back("[" + std::to_string(i) + "]", listFirst(ctx, p));
+        for (ListCursor c(v); c.hasNext() && i < kMaxChildren; ++i)
+            kids.emplace_back("[" + std::to_string(i) + "]", c.next());
     } else if (isVector(v)) {
         const proto::ProtoList* l = vectorItems(ctx, v);
         const proto::proto_ulong n = std::min<proto::proto_ulong>(l->getSize(ctx), kMaxChildren);

@@ -24,6 +24,7 @@ constexpr proto::proto_ulong kTagList         = 2;
 constexpr proto::proto_ulong kTagLargeInteger = 14;
 constexpr proto::proto_ulong kTagDouble       = 15;
 constexpr proto::proto_ulong kTagListSmall    = 25;
+// kTagLinkedList (29), a Clojure list, comes from SeqTypes.h.
 
 // One salt per key class, so keys of different classes never share a hash by
 // construction: a string, a one-element vector and a big integer that happen
@@ -63,28 +64,27 @@ inline bool isSequential(proto::ProtoContext* ctx, const proto::ProtoObject* v) 
 }
 
 // The elements of a sequential value in order: a vector's or a ProtoList's
-// by index, a list's along its cells. No allocation.
+// by index, a list's along its cells. No allocation; the value must stay
+// reachable while it is read.
 struct SequenceView {
     const proto::ProtoList* list = nullptr;  // a vector's elements, or a ProtoList
-    const proto::ProtoObject* cell = nullptr;  // else the next list cell
     proto::proto_ulong n = 0, i = 0;
 
     static SequenceView of(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
         SequenceView s;
         if (isVector(v))          s.list = vectorItems(ctx, v);
         else if (isListTag(v))    s.list = v->asList(ctx);
-        else                      s.cell = v;
+        else                      s.cursor = ListCursor(v);
         s.n = s.list ? s.list->getSize(ctx) : static_cast<proto::proto_ulong>(listCount(ctx, v));
         return s;
     }
     proto::proto_ulong size() const { return n; }
     const proto::ProtoObject* next(proto::ProtoContext* ctx) {
-        if (list) return list->getAt(ctx, static_cast<int>(i++));
-        const proto::ProtoObject* x = listFirst(ctx, cell);
-        cell = listRest(ctx, cell);
         ++i;
-        return x;
+        return list ? list->getAt(ctx, static_cast<int>(i - 1)) : cursor.next();
     }
+
+    ListCursor cursor{emptyListValue()};  // a list's elements
 };
 
 // One round of the SplitMix64 finaliser: cheap, and it spreads the low bits,
@@ -268,13 +268,14 @@ bool keyIsIdentity(proto::ProtoContext* ctx, const proto::ProtoObject* key) {
             // A list, a lazy seq, a cons or a chunk (SeqTypes.h) is
             // sequential and matched by its elements too.
             if (isKnownNamed(key)) return true;
-            if (key == g_seqProtos.empty) return false;
             {
                 const proto::ProtoObject* p = key->getPrototype(ctx);
                 return p != g_setPrototype && p != g_seqProtos.lazy &&
-                       p != g_seqProtos.cons && p != g_seqProtos.chunk &&
-                       p != g_seqProtos.list;
+                       p != g_seqProtos.cons && p != g_seqProtos.chunk;
             }
+        case kTagLinkedList:
+            // A list (SeqTypes.h), empty or not: matched by its elements.
+            return false;
         default:
             // A map and a vector are matched by value; anything else
             // protoCore may hand out (a method, a thread, a byte buffer) is

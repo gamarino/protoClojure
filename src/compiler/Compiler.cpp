@@ -210,8 +210,7 @@ FormList::FormList(proto::ProtoContext* ctx, const proto::ProtoObject* form) : f
     if (isListValue(ctx, form)) {
         if (form == empty) return;
         items_.reserve(static_cast<std::size_t>(listCount(ctx, form)));
-        for (const proto::ProtoObject* p = form; p != empty; p = listRest(ctx, p))
-            items_.push_back(listFirst(ctx, p));
+        for (ListCursor c(form); c.hasNext();) items_.push_back(c.next());
         return;
     }
     // Any other seq is walked, realising it: what it realises is held by

@@ -54,9 +54,7 @@ inline bool isListTag(const PO* v) {
 inline bool truthy(const PO* v) { return v && v != PROTO_NONE && v != PROTO_FALSE; }
 inline const PO* orNil(const PO* v) { return v ? v : PROTO_NONE; }
 
-// The fields of a cons, a chunk or a list cell (SeqTypes.h). A cons and a
-// list cell share the layout of their first two fields, [first more], so
-// consFirst and consMore read both.
+// The fields of a cons or a chunk (SeqTypes.h); a cons is [first more].
 const proto::ProtoList* fieldsOf(proto::ProtoContext* ctx, const PO* node) {
     return seqNodeFields(ctx, node);
 }
@@ -211,7 +209,7 @@ ChunkSlice sliceOf(proto::ProtoContext* ctx, const PO* chunk, const ChunkView& c
 // The rest of `s` for a lazy step that keeps it to itself, as the source it
 // reads next (map, filter, take, ...): seqMore. (It made an unchunked view
 // of a list one element on while lists were ProtoLists, whose rest rebuilt
-// part of a tree; the rest of a list cell is a field.)
+// part of a tree; the rest of a ProtoLinkedList is one cell at most.)
 const PO* walkMore(proto::ProtoContext* ctx, const PO* s);
 inline const PO* walkNext(proto::ProtoContext* ctx, const PO* s) {
     return seqOf(ctx, walkMore(ctx, s));
@@ -483,10 +481,11 @@ const PO* prependSeq(proto::ProtoContext* ctx, const PO* sq, const PO* restColls
         s.set(0, lazy5At(s, 0, StepKind::Concat, cv.more, restColls, nullptr, nullptr, nullptr));
         return s.ret(newChunk(s.ctx(), cv.items, cv.off, cv.end, s.get(0), cv.chunked));
     }
-    // A cons or a list cell: [first more].
-    s.set(0, lazy5At(s, 0, StepKind::Concat, consMore(s.ctx(), sq), restColls,
-                   nullptr, nullptr, nullptr));
-    return s.ret(newCons(s.ctx(), consFirst(s.ctx(), sq), s.get(0)));
+    // A cons, [first more], or a list.
+    const bool list = seqObjectKind(s.ctx(), sq) == SeqObject::List;
+    s.set(0, lazy5At(s, 0, StepKind::Concat, list ? listRest(s.ctx(), sq) : consMore(s.ctx(), sq),
+                   restColls, nullptr, nullptr, nullptr));
+    return s.ret(newCons(s.ctx(), list ? listFirst(s.ctx(), sq) : consFirst(s.ctx(), sq), s.get(0)));
 }
 
 // partition / partition-all: o.a = n, o.b = step, o.c = pad (mode 1), o.d =
@@ -787,7 +786,8 @@ const PO* seqOf(proto::ProtoContext* ctx, const PO* v) {
 
 const PO* seqFirst(proto::ProtoContext* ctx, const PO* s) {
     const SeqObject k = seqObjectKind(ctx, s);
-    if (k == SeqObject::Cons || k == SeqObject::List) return consFirst(ctx, s);
+    if (k == SeqObject::List) return listFirst(ctx, s);
+    if (k == SeqObject::Cons) return consFirst(ctx, s);
     const ChunkView cv = chunkOf(ctx, s);
     return cv.items->getAt(ctx, static_cast<int>(cv.off));
 }
@@ -800,7 +800,7 @@ const PO* walkMore(proto::ProtoContext* ctx, const PO* s) {
 
 const PO* seqMore(proto::ProtoContext* ctx, const PO* s) {
     const SeqObject k = seqObjectKind(ctx, s);
-    if (k == SeqObject::List) return consMore(ctx, s);  // a list, () at the end
+    if (k == SeqObject::List) return listRest(ctx, s);  // a list, () at the end
     if (k == SeqObject::Cons) {
         const PO* m = consMore(ctx, s);
         return m == PROTO_NONE ? emptyList(ctx) : m;
@@ -820,8 +820,8 @@ bool tryFirst(proto::ProtoContext* ctx, const PO* v, const PO** out) {
         return true;
     }
     switch (seqObjectKind(ctx, v)) {
-        case SeqObject::Cons:
-        case SeqObject::List:  *out = consFirst(ctx, v); return true;
+        case SeqObject::List:  *out = listFirst(ctx, v); return true;
+        case SeqObject::Cons:  *out = consFirst(ctx, v); return true;
         case SeqObject::Empty: *out = PROTO_NONE; return true;
         case SeqObject::Chunk: {
             const ChunkView cv = chunkOf(ctx, v);
@@ -842,7 +842,7 @@ bool tryRest(proto::ProtoContext* ctx, const PO* v, const PO** out) {
         return true;
     }
     switch (seqObjectKind(ctx, v)) {
-        case SeqObject::List:  *out = consMore(ctx, v); return true;
+        case SeqObject::List:  *out = listRest(ctx, v); return true;
         case SeqObject::Empty: *out = v; return true;
         case SeqObject::Cons:
         case SeqObject::Chunk: *out = seqMore(ctx, v); return true;
@@ -859,11 +859,9 @@ bool tryNext(proto::ProtoContext* ctx, const PO* v, const PO** out) {
         return true;
     }
     switch (seqObjectKind(ctx, v)) {
-        case SeqObject::List: {
-            const PO* m = consMore(ctx, v);
-            *out = m == emptyListValue() ? PROTO_NONE : m;
+        case SeqObject::List:
+            *out = listCount(ctx, v) == 1 ? PROTO_NONE : listRest(ctx, v);
             return true;
-        }
         case SeqObject::Empty: *out = PROTO_NONE; return true;
         case SeqObject::Cons: {
             // seqOf of what follows, unless that is a lazy seq to realise.
@@ -986,8 +984,8 @@ const proto::ProtoList* seqToList(proto::ProtoContext* ctx, const PO* v) {
 SeqWalk::SeqWalk(CallerSlots& roots, unsigned slot, proto::ProtoContext* ctx,
                  const PO* coll)
     : roots_(roots), slot_(slot) {
-    // A list cell, a cons or a chunk is its own seq, and the empty list has
-    // none: no realisation.
+    // A list, a cons or a chunk is its own seq, and the empty list has none:
+    // no realisation.
     switch (seqObjectKind(ctx, coll)) {
         case SeqObject::List:
         case SeqObject::Cons:
@@ -1008,14 +1006,22 @@ SeqWalk::SeqWalk(CallerSlots& roots, unsigned slot, proto::ProtoContext* ctx,
 
 void SeqWalk::load(proto::ProtoContext* ctx, const PO* node) {
     items_ = nullptr;
-    cons_ = false;
+    mode_ = Mode::Chunk;
     if (!node || node == PROTO_NONE) { node_ = nullptr; return; }
     node_ = node;
-    // A cons and a list cell are [first more] (seqOf never answers ()).
+    // seqOf never answers ().
     const SeqObject k = seqObjectKind(ctx, node);
-    if (k == SeqObject::Cons || k == SeqObject::List) {
-        cons_ = true;
+    if (k == SeqObject::Cons) {
+        mode_ = Mode::Cons;
         fields_ = fieldsOf(ctx, node);
+        return;
+    }
+    if (k == SeqObject::List) {
+        // The head cell's elements are read in place; the cells after it
+        // are reached without allocating (listHeadCount).
+        mode_ = Mode::List;
+        i_ = 0;
+        end_ = listHeadCount(ctx, node);
         return;
     }
     const ChunkView cv = chunkOf(ctx, node);
@@ -1025,23 +1031,28 @@ void SeqWalk::load(proto::ProtoContext* ctx, const PO* node) {
 }
 
 const PO* SeqWalk::first(proto::ProtoContext* ctx) const {
-    if (cons_) return orNil(fields_->getAt(ctx, 0));
+    if (mode_ == Mode::Cons) return orNil(fields_->getAt(ctx, 0));
+    if (mode_ == Mode::List) return listNth(ctx, node_, i_);
     return items_->getAt(ctx, static_cast<int>(i_));
 }
 
 void SeqWalk::advance(proto::ProtoContext* ctx) {
     if (!node_) return;
-    if (!cons_ && ++i_ < end_) return;
-    const PO* more = cons_ ? orNil(fields_->getAt(ctx, 1)) : chunkOf(ctx, node_).more;
+    if (mode_ != Mode::Cons && ++i_ < end_) return;
+    const PO* more = mode_ == Mode::Cons  ? orNil(fields_->getAt(ctx, 1))
+                   : mode_ == Mode::List  ? listDrop(ctx, node_, end_)
+                   : chunkOf(ctx, node_).more;
     if (more == PROTO_NONE || more == emptyListValue()) {
         roots_.set(slot_, PROTO_NONE);
         node_ = nullptr;
         items_ = nullptr;
         return;
     }
-    // A list cell, a cons or a chunk is its own seq: no realisation. A lazy
-    // seq is realised in `ctx` (`more` stays reachable from the node in the
-    // slot while it runs); its garbage goes when the walker ticks.
+    // A list, a cons or a chunk is its own seq: no realisation. A lazy seq
+    // is realised in `ctx` (`more` stays reachable from the node in the slot
+    // while it runs); its garbage goes when the walker ticks. The slot holds
+    // the current node only, so a list nobody else holds is collected cell
+    // by cell behind the walk.
     switch (seqObjectKind(ctx, more)) {
         case SeqObject::List:
         case SeqObject::Cons:
@@ -1059,9 +1070,9 @@ void SeqWalk::advance(proto::ProtoContext* ctx) {
 
 bool SeqWalk::counted(proto::ProtoContext* ctx, long long* n) const {
     if (!node_) { *n = 0; return true; }
-    if (cons_) {
-        if (seqObjectKind(ctx, node_) != SeqObject::List) return false;
-        *n = listCount(ctx, node_);
+    if (mode_ == Mode::Cons) return false;
+    if (mode_ == Mode::List) {
+        *n = listCount(ctx, node_) - i_;
         return true;
     }
     if (chunkOf(ctx, node_).more != PROTO_NONE) return false;
@@ -1071,7 +1082,8 @@ bool SeqWalk::counted(proto::ProtoContext* ctx, long long* n) const {
 
 const PO* SeqWalk::remaining(proto::ProtoContext* ctx) const {
     if (!node_) return PROTO_NONE;
-    if (cons_) return node_;
+    if (mode_ == Mode::Cons) return node_;
+    if (mode_ == Mode::List) return i_ == 0 ? node_ : listDrop(ctx, node_, i_);
     const ChunkView cv = chunkOf(ctx, node_);
     if (i_ == cv.off) return node_;
     return newChunk(ctx, items_, i_, end_, cv.more, cv.chunked);

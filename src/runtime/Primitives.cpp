@@ -220,9 +220,9 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
         // A list, walked cell by cell (iteratively: a long list nests no
         // deeper than its elements do).
         out += '(';
-        for (const proto::ProtoObject* p = v; p != emptyListValue(); p = listRest(ctx, p)) {
-            if (p != v) out += ' ';
-            printTo(ctx, out, listFirst(ctx, p), readable);
+        for (ListCursor c(v); c.hasNext();) {
+            printTo(ctx, out, c.next(), readable);
+            if (c.hasNext()) out += ' ';
         }
         out += ')';
         return;
@@ -1265,8 +1265,7 @@ bool pushSeqElements(ListBuilder& out, const proto::ProtoObject* v) {
     if (!v || v == PROTO_NONE) return true;
     if (isListValue(c, v)) {
         // Every cell is reachable from `v`.
-        for (const proto::ProtoObject* p = v; p != emptyListValue(); p = listRest(out.context(), p))
-            out.push(listFirst(out.context(), p));
+        for (ListCursor cur(v); cur.hasNext();) out.push(cur.next());
         return true;
     }
     if (isSeqObject(c, v)) {
@@ -1431,9 +1430,12 @@ const proto::ProtoObject* prim_reduce(proto::ProtoContext* ctx,
         // loop may hand its garbage over (CallerSlots.h).
         SafepointPermit permit(ctx);
         CallerSlots scope(ctx, 2);
+        // The elements of the current cell are read by index and the next
+        // cell is reached without allocating (listHeadCount).
         const proto::ProtoObject* p = coll;
         scope.set(0, p);
         releaseArg(args, ac == 2 ? 1 : 2);
+        long long i = 0;  // position in p's head cell
         if (ac == 3) {
             scope.set(1, args->getAt(ctx, 1));
         } else {
@@ -1442,18 +1444,18 @@ const proto::ProtoObject* prim_reduce(proto::ProtoContext* ctx,
                 return r;
             }
             scope.set(1, listFirst(ctx, p));
-            p = listRest(ctx, p);
-            scope.set(0, p);
+            i = 1;
         }
         while (p != emptyListValue()) {
-            const proto::ProtoObject* x = nullptr;
-            const proto::ProtoObject* next = nullptr;
-            listSplit(ctx, p, &x, &next);
-            const proto::ProtoObject* two[2] = {scope.get(1), x};
-            scope.set(1, cc->engine->invoke(ctx, f, two, 2));
-            p = next;
+            const long long h = listHeadCount(ctx, p);
+            for (; i < h; ++i) {
+                const proto::ProtoObject* two[2] = {scope.get(1), listNth(ctx, p, i)};
+                scope.set(1, cc->engine->invoke(ctx, f, two, 2));
+                scope.tick();
+            }
+            p = listDrop(ctx, p, h);
+            i = 0;
             scope.set(0, p);
-            scope.tick();
         }
         const proto::ProtoObject* acc = scope.get(1);
         return acc ? acc : PROTO_NONE;
@@ -2050,9 +2052,9 @@ const proto::ProtoObject* prim_join(proto::ProtoContext* ctx,
     std::string text;
     if (isListValue(ctx, coll)) {
         // A list is read along its cells, which `coll` holds.
-        for (const proto::ProtoObject* p = coll; p != emptyListValue(); p = listRest(ctx, p)) {
-            if (p != coll) text += sep;
-            appendStr(ctx, text, listFirst(ctx, p));
+        for (ListCursor c(coll); c.hasNext();) {
+            appendStr(ctx, text, c.next());
+            if (c.hasNext()) text += sep;
         }
     } else if (const proto::ProtoList* lst = asSeqOrNull(ctx, coll)) {
         proto::proto_ulong n = lst->getSize(ctx);
@@ -3552,8 +3554,7 @@ void collectElements(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
         return;
     }
     if (isListValue(ctx, coll)) {
-        for (const proto::ProtoObject* p = coll; p != emptyListValue(); p = listRest(ctx, p))
-            out.push_back(listFirst(ctx, p));
+        for (ListCursor c(coll); c.hasNext();) out.push_back(c.next());
         return;
     }
     const proto::ProtoList* lst = asSeqOrNull(ctx, coll);
@@ -4239,11 +4240,9 @@ const proto::ProtoObject* fastIndexed(proto::ProtoContext* ctx, const proto::Pro
         return lst->getAt(ctx, static_cast<int>(idx));
     }
     if (seqObjectKind(ctx, coll) != SeqObject::List) return nullptr;
-    // A list: O(idx) steps along the cells, as in Clojure; no allocation.
+    // A list: idx / 4 cells walked (O(n), as in Clojure); no allocation.
     if (idx < 0 || idx >= listCount(ctx, coll)) return nullptr;
-    const proto::ProtoObject* p = coll;
-    for (long long k = 0; k < idx; ++k) p = listRest(ctx, p);
-    return listFirst(ctx, p);
+    return listNth(ctx, coll, idx);
 }
 } // namespace
 
@@ -4702,8 +4701,8 @@ bool valuesEqual(proto::ProtoContext* ctx,
         if (isListValue(ctx, a) && isListValue(ctx, b)) {
             // Two lists: their counts, then their cells in step.
             if (listCount(ctx, a) != listCount(ctx, b)) return false;
-            for (; a != emptyListValue(); a = listRest(ctx, a), b = listRest(ctx, b))
-                if (!valuesEqual(ctx, listFirst(ctx, a), listFirst(ctx, b))) return false;
+            for (ListCursor ca(a), cb(b); ca.hasNext();)
+                if (!valuesEqual(ctx, ca.next(), cb.next())) return false;
             return true;
         }
         CallerSlots scope(ctx, 2);

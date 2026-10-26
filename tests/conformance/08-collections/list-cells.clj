@@ -1,5 +1,5 @@
 ;; EXPECT: ok
-;; A list is a chain of cells (docs/DESIGN.md, M44); every answer here is
+;; A list is a chain of cells (docs/DESIGN.md, M44, M47); every answer here is
 ;; JVM Clojure's (checked against Babashka 2026-10-24).
 (defn f [a & r] [r (seq? r) (count r)])
 (defmacro m1 [& xs] (cons 'list (map (fn [x] (list 'quote x)) xs)))

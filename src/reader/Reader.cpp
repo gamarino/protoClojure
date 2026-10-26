@@ -526,7 +526,7 @@ const proto::ProtoObject* Reader::syntaxQuote(proto::ProtoContext* parent,
             const proto::ProtoObject* head = listFirst(parent, form);
             if (head == sym(parent, "clojure.core/unquote")) {
                 if (n != 2) throw ReaderError("unquote (~) takes exactly one form", tok.line, tok.column);
-                return listFirst(parent, listRest(parent, form));
+                return listNth(parent, form, 1);
             }
             if (head == sym(parent, "clojure.core/unquote-splicing")) {
                 throw ReaderError("splice (~@) not in list", tok.line, tok.column);
@@ -534,8 +534,7 @@ const proto::ProtoObject* Reader::syntaxQuote(proto::ProtoContext* parent,
         } else {
             return listOf(parent, {sym(parent, "clojure.core/list")});
         }
-        for (const proto::ProtoObject* p = form; p != emptyListValue(); p = listRest(parent, p))
-            items.push_back(listFirst(parent, p));
+        for (ListCursor c(form); c.hasNext();) items.push_back(c.next());
     } else if (isVector(form)) {
         builder = "clojure.core/vector";
         const proto::ProtoList* lst = vectorItems(parent, form);
@@ -590,7 +589,7 @@ const proto::ProtoObject* Reader::syntaxQuote(proto::ProtoContext* parent,
             proto::ProtoContext* c = concat.context();
             if (isListValue(c, item) && listCount(c, item) == 2) {
                 const proto::ProtoObject* ihead = listFirst(c, item);
-                const proto::ProtoObject* iarg = listFirst(c, listRest(c, item));
+                const proto::ProtoObject* iarg = listNth(c, item, 1);
                 if (ihead == splice) {
                     concat.push(iarg);
                     continue;
