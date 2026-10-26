@@ -200,6 +200,72 @@ else()
         "https://github.com/gamarino/protoIO next to protoClojure (../protoIO).")
 endif()
 
+# --- PCRE2: the regular-expression engine (src/runtime/Regex.cpp, M48) -------
+# The 8-bit library, 10.34 or later (PCRE2_MATCH_INVALID_UTF), with its JIT
+# where the platform has one. Resolution order: the system's library through
+# pkg-config (libpcre2-dev on Debian / Ubuntu, pcre2-devel on Fedora / RHEL,
+# pcre2 from Homebrew), then an installed PCRE2 CMake package (vcpkg, a
+# prefix given with -DCMAKE_PREFIX_PATH), else PCRE2's pinned release built
+# here as a static library (the Windows build, and any system without the
+# package; -DPROTOCLJ_BUNDLED_PCRE2=ON forces it). The bundled copy is linked
+# in, so it adds no file to any package; its install rules are kept out of
+# protoClojure's component.
+option(PROTOCLJ_BUNDLED_PCRE2 "Build PCRE2's pinned release instead of using the system's" OFF)
+set(PROTOCLJ_PCRE2_TARGET "")
+if(NOT PROTOCLJ_BUNDLED_PCRE2)
+    find_package(PkgConfig QUIET)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(PROTOCLJ_PCRE2 QUIET IMPORTED_TARGET libpcre2-8>=10.34)
+        if(PROTOCLJ_PCRE2_FOUND)
+            set(PROTOCLJ_PCRE2_TARGET PkgConfig::PROTOCLJ_PCRE2)
+            message(STATUS "protoClojure: PCRE2 ${PROTOCLJ_PCRE2_VERSION} from pkg-config")
+        endif()
+    endif()
+    if(NOT PROTOCLJ_PCRE2_TARGET)
+        find_package(PCRE2 10.34 CONFIG QUIET COMPONENTS 8BIT)
+        if(TARGET PCRE2::8BIT)
+            set(PROTOCLJ_PCRE2_TARGET PCRE2::8BIT)
+            message(STATUS "protoClojure: PCRE2 ${PCRE2_VERSION} CMake package from ${PCRE2_DIR}")
+        endif()
+    endif()
+endif()
+if(NOT PROTOCLJ_PCRE2_TARGET)
+    include(FetchContent)
+    if(POLICY CMP0135)
+        cmake_policy(SET CMP0135 NEW)
+    endif()
+    set(PCRE2_BUILD_PCRE2_8 ON CACHE BOOL "" FORCE)
+    set(PCRE2_BUILD_PCRE2_16 OFF CACHE BOOL "" FORCE)
+    set(PCRE2_BUILD_PCRE2_32 OFF CACHE BOOL "" FORCE)
+    set(PCRE2_SUPPORT_JIT ON CACHE BOOL "" FORCE)
+    set(PCRE2_BUILD_PCRE2GREP OFF CACHE BOOL "" FORCE)
+    set(PCRE2_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(PCRE2_SUPPORT_LIBBZ2 OFF CACHE BOOL "" FORCE)
+    set(PCRE2_SUPPORT_LIBZ OFF CACHE BOOL "" FORCE)
+    set(PCRE2_SUPPORT_LIBEDIT OFF CACHE BOOL "" FORCE)
+    set(PCRE2_SUPPORT_LIBREADLINE OFF CACHE BOOL "" FORCE)
+    set(PCRE2_STATIC_PIC ON CACHE BOOL "" FORCE)
+    # Its install rules (headers, the archive, man pages) go to a component
+    # of their own, which CPACK_COMPONENTS_ALL leaves out.
+    set(_protoclj_default_component "${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME}")
+    set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME pcre2-bundled)
+    # EXCLUDE_FROM_ALL (CMake 3.28): only what protoclj links is built.
+    set(_protoclj_pcre2_exclude "")
+    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+        set(_protoclj_pcre2_exclude EXCLUDE_FROM_ALL)
+    endif()
+    FetchContent_Declare(pcre2
+        URL https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.46/pcre2-10.46.tar.bz2
+        URL_HASH SHA256=15fbc5aba6beee0b17aecb04602ae39432393aba1ebd8e39b7cabf7db883299f
+        ${_protoclj_pcre2_exclude})
+    unset(_protoclj_pcre2_exclude)
+    FetchContent_MakeAvailable(pcre2)
+    set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME "${_protoclj_default_component}")
+    unset(_protoclj_default_component)
+    set(PROTOCLJ_PCRE2_TARGET pcre2-8-static)
+    message(STATUS "protoClojure: PCRE2 10.46 built from its release (static, JIT)")
+endif()
+
 # --- protoClojure support library (native stack guard, bulk list builder,
 # value representation) ---
 # Used by the reader, the compiler and the runtime alike, so the reader does
@@ -218,7 +284,7 @@ add_library(protoclj_support STATIC
     src/runtime/StackGuard.cpp
     src/runtime/VectorOps.cpp
 )
-target_link_libraries(protoclj_support PUBLIC ${PROTOCORE_LIBRARY})
+target_link_libraries(protoclj_support PUBLIC ${PROTOCORE_LIBRARY} PRIVATE ${PROTOCLJ_PCRE2_TARGET})
 target_compile_options(protoclj_support PRIVATE ${PROTOCLJ_WARNINGS})
 
 # --- protoClojure reader library ---

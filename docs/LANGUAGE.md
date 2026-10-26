@@ -58,7 +58,7 @@ tell at a glance which parts of the surface are runnable today. The
 | Vectors `[...]` | Implemented (a `ProtoList` in a one-entry sparse-list box, distinct from list) |
 | Maps `{...}` | Implemented (`hash-map`, `assoc`, `dissoc`, `get`, `contains?`, `keys`, `vals`; `count` and `empty?` accept maps) |
 | `format`, `printf`, `for`, `range` | Implemented (`format` follows Java's `String.format`, D47; `for` and `range` are lazy, §10) |
-| Regular expressions `#"..."`, `re-pattern`, `re-find`, `re-matches`, `re-seq`, `re-matcher`, `re-groups`; `replace`, `replace-first` and `split` with a pattern | Implemented on `std::regex` ECMAScript, with Java's inline flags translated (§2.10, D45) |
+| Regular expressions `#"..."`, `re-pattern`, `re-find`, `re-matches`, `re-seq`, `re-matcher`, `re-groups`; `replace`, `replace-first` and `split` with a pattern | Implemented on PCRE2, which reads Java's syntax (§2.10, D45) |
 | Sets `#{...}` | Implemented (`hash-set`, `set`, `set?`, `conj`, `disj`, `contains?`, `get`, a set as a function; `union`, `intersection`, `difference`, `subset?`, `superset?` as globals; §4.4) |
 | `def`, `defn`, `fn`, `let`, `loop`, `recur` | Implemented (`let` and `loop` also at the top level; docstrings accepted) |
 | Multi-arity `defn` | Implemented |
@@ -403,18 +403,20 @@ patterns compare by identity.
 - `clojure.string/split`, `clojure.string/replace` and the other
   `clojure.string` and `clojure.set` functions can be written with their
   namespace, with no `require` (there are no namespaces yet, D28).
-- The engine is the C++ standard library's `std::regex` in its ECMAScript
-  grammar, matching the UTF-8 bytes of the string. Java's leading inline
-  flags `(?i)`, `(?m)` and `(?s)`, named groups `(?<name>...)` (numbered),
-  `\Q...\E` and `\A` / `\z` are translated; lookbehind, possessive
-  quantifiers, atomic groups, `\p{...}` classes and flags in mid-pattern are
-  a `PatternSyntaxException` (an `IllegalArgumentException`), at read time
-  for a literal. The full list of differences is D45 in `STATUS.md`.
-- A long subject is safe: a pattern without back-references runs on the
-  engine's breadth-first executor, whose stack use does not grow with the
-  subject; a pattern with back-references backtracks on the native stack,
-  and a match that could exhaust it raises `StackOverflowError` before it
-  starts (about 32 KB of subject on the 32 MiB thread stack).
+- The engine is PCRE2, JIT-compiled, the same on every platform (DESIGN.md
+  M48). It reads Java's syntax: inline flags anywhere in the pattern, named
+  groups and `\k<name>`, lookbehind, possessive quantifiers, atomic groups,
+  `\Q...\E`, `\A` / `\z` / `\Z`, `\uXXXX`, Unicode properties (`\p{Lu}`)
+  and Java's POSIX classes (`\p{Punct}`). `.` and a character class match
+  one character, not one byte; `\w`, `\d` and `\s` are ASCII, as in Java,
+  unless the pattern starts with `(?U)`. What it rejects (class
+  intersection `&&`, `\N{name}`, Unicode blocks) is a
+  `PatternSyntaxException` (an `IllegalArgumentException`), at read time for
+  a literal. The full list of differences is D45 in `STATUS.md`.
+- A long subject is safe: the engine backtracks on a stack of its own, up
+  to 64 MiB a thread (`(a|b)*` matches about two million characters), never
+  on the native stack. A match past its limits raises `StackOverflowError`;
+  it is never answered as no match.
 
 ---
 

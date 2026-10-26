@@ -253,15 +253,6 @@ foreach(conf_file ${PROTOCLJ_CONFORMANCE_FILES})
     endif()
 endforeach()
 
-# Known to fail with MSVC's standard library, which bounds its regex engine's
-# recursion: `(a|b)*` over 300 KB raises StackOverflowError there
-# (regex_error(error_stack)), where libstdc++ and libc++ match it. Recorded in
-# docs/STATUS.md ("Known issues", regular expressions); a fix is a choice of
-# regex engine. WILL_FAIL keeps it visible: if it starts passing, ctest says so.
-if(MSVC AND TEST "conformance/35-regex/long-subject.clj")
-    set_tests_properties("conformance/35-regex/long-subject.clj" PROPERTIES WILL_FAIL TRUE)
-endif()
-
 # --- Module exceptions (protoCore's example geometry module) -------------------
 # A Clojure program run by protoclj_geometry (CMakeLists.txt), which links the
 # module's provider: it imports `example/geometry` and catches the module's

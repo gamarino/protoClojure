@@ -104,14 +104,15 @@ jobs:
             echo "protoClojure at \`$(git -C protoClojure rev-parse HEAD)\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Install libreadline and OpenSSL
+      - name: Install libreadline, OpenSSL and PCRE2
         # protoClojure's REPL links readline; CMakeLists.txt fails the configure
-        # without it.  protoIO needs OpenSSL for TLS sockets and https.  python3
-        # (preinstalled on the runner) serves the raw chunked response of
-        # tests/conformance/27-io/http-chunked-utf8-split.clj.
+        # without it.  protoIO needs OpenSSL for TLS sockets and https.  PCRE2
+        # is the regular-expression engine (M48), found through pkg-config.
+        # python3 (preinstalled on the runner) serves the raw chunked response
+        # of tests/conformance/27-io/http-chunked-utf8-split.clj.
         run: |
           sudo apt-get update
-          sudo apt-get install -y libreadline-dev libssl-dev
+          sudo apt-get install -y libreadline-dev libssl-dev libpcre2-dev pkg-config
 
       - name: Build protoCore
         # Only the library: protoCore's own test binary is protoCore's CI's job,

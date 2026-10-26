@@ -1186,7 +1186,8 @@ functions are globals (D28). Also in this stage, as a prerequisite of
 functions accept maps, sets and strings, as `seq` already did.
 
 **M25. Regular expressions on `std::regex` ECMAScript, Java's syntax
-translated where it has an equivalent** (*agent, pending review*).
+translated where it has an equivalent** (*agent, pending review*; the
+engine is superseded by M48).
 `src/runtime/Regex.h`. The engines considered, as the brief allows: (a)
 `std::regex` ECMAScript, chosen: no dependency, on every platform the CI
 builds; (b) PCRE2, the closest dialect to Java's (lookbehind, possessive
@@ -1832,6 +1833,57 @@ record type in protoCore (M44's request), not chosen by protoCore: a list
 type also gives counted suffixes and four elements per cache line; (c) walk
 lists with `rest` everywhere, rejected: one garbage cell per three steps
 where a cursor allocates nothing.
+
+**M48. Regular expressions on PCRE2 (JIT), the same engine everywhere**
+(*agent, pending review*). Supersedes M25's engine. Found by
+`benchmarks/reports/2026-10-25-grep-gap`: libstdc++'s `std::regex` with the
+breadth-first `__polynomial` executor (chosen in M25 so that matching never
+recursed on the native stack) set up an executor at every start position,
+about 90 ns per subject byte whatever the pattern, 7.3 s of the showcase
+grep's 16.7 s; outside any runtime, PCRE2's JIT ran the same 1.45 million
+searches in 76 ms against 7,200. M25 had excluded PCRE2 because no runtime
+of the ecosystem depended on it; it is now a dependency, obtained as
+`CMakeLists.txt` says: the system's library through pkg-config
+(`libpcre2-dev`, Homebrew's `pcre2`), an installed PCRE2 CMake package, or
+else PCRE2 10.46's release, pinned by SHA-256, built here as a static
+library (the Windows build; `-DPROTOCLJ_BUNDLED_PCRE2=ON` forces it), so
+the Windows ZIP and installer gain no DLL. A DEB gains `libpcre2-8-0`
+through dpkg-shlibdeps. `src/runtime/Regex.h`: a pattern is compiled in UTF
+mode with `PCRE2_MATCH_INVALID_UTF` (a string with invalid bytes matches
+around them instead of failing), newlines LF, CR and CRLF (`(?d)`: LF), and
+JIT-compiled; `re-matches` uses a second code compiled with
+`PCRE2_ANCHORED | PCRE2_ENDANCHORED` on its first use, since the JIT does
+not take those at match time. PCRE2's dialect is close to Java's, so the
+translation layer shrank to the differences (`(?u)` dropped, a leading
+`(?U)` as `PCRE2_UCP`, `(?x)` as `(?xx)`, `\uXXXX` and Java's `\0` octal
+as `\x{...}`, Java's POSIX `\p{Alpha}` classes, `\p{IsX}`, nested class
+unions flattened) and what PCRE2 cannot express is a
+`PatternSyntaxException` (D45). Lookbehind, possessive quantifiers, atomic
+groups, inline flags in mid-pattern and Unicode properties now work; `.`
+matches a character, not a byte. A search from an offset sees the text
+before it (`^`, `\b`, lookbehind), as Java's `Matcher.find(from)`, which
+removed the libc++ flags of M25; successive matches walk as
+`Matcher.find` does (one character on after an empty match), for `re-seq`,
+a matcher, `replace` and `split`. Matching state is per thread
+(`thread_local` match data, match context and JIT stack, created on a
+thread's first match; no thread API), used only inside one `pcre2_match`
+call, which never runs Clojure code: the offsets are copied into a `Match`
+before a replacement fn may match again on the same thread. The JIT stack
+grows to 64 MiB (`(a|b)*` takes 32 bytes per character, so about two
+million characters; PCRE2's default 32 KiB failed
+`conformance/35-regex/long-subject.clj` in the investigation's prototype);
+the match limit is 10^9 (Java has none; only a runaway exponential match
+reaches it). Any limit error raises `StackOverflowError`, never a silent
+nil, so the native-stack estimate of M25 (`guardRecursiveMatch`) is gone.
+Measured end to end, with M49, in
+`benchmarks/reports/2026-10-26-grep-fixes`. Alternatives: (a) keep `std::regex` with a required-literal
+prefilter (`memmem` before `regex_search`), estimated 7.2 -> 0.6 s on the
+grep's engine time, rejected because it helps only patterns with a literal
+and keeps three engines with three dialects (STATUS "Known issues", closed
+by this decision); (b) vcpkg on Windows, rejected: a pinned source build
+needs no package manager on the runner and gives the same static library;
+(c) PCRE2 without the JIT, rejected: its interpreter is 1.6x slower (125
+against 76 ms) and the JIT is available on every CI platform.
 
 **M49. `line-seq` and `read-line` take a buffered line without leaving the
 quorum** (*agent, pending review*). Each line went through `blocking()`,

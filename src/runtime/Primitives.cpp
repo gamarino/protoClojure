@@ -1688,16 +1688,16 @@ std::string stringArgOf(proto::ProtoContext* ctx, const proto::ProtoArguments* a
 // What re-find and re-matches answer for a match: the matched string when
 // the pattern has no groups, else the vector [whole g1 g2 ...] with nil for
 // a group that did not participate, as in Clojure.
-const proto::ProtoObject* matchValue(proto::ProtoContext* ctx, const std::smatch& m,
-                                     unsigned groups) {
+const proto::ProtoObject* matchValue(proto::ProtoContext* ctx, std::string_view subject,
+                                     const Match& m, unsigned groups) {
     if (groups == 0)
         return reinterpret_cast<const proto::ProtoObject*>(
-            makeUtf8ProtoString(ctx, m.str(0)));
+            makeUtf8ProtoString(ctx, m.str(subject, 0)));
     CallerSlots scope(ctx, 1);
     scope.set(0, ctx->newList()->asObject(ctx));
     for (unsigned g = 0; g <= groups; ++g) {
-        const proto::ProtoObject* part = m[g].matched
-            ? reinterpret_cast<const proto::ProtoObject*>(makeUtf8ProtoString(ctx, m.str(g)))
+        const proto::ProtoObject* part = m.matched(g)
+            ? reinterpret_cast<const proto::ProtoObject*>(makeUtf8ProtoString(ctx, m.str(subject, g)))
             : PROTO_NONE;
         scope.set(0, scope.get(0)->asList(ctx)
             ->appendLast(ctx, part)->asObject(ctx));
@@ -1756,19 +1756,16 @@ const proto::ProtoObject* matcherFind(proto::ProtoContext* ctx, const proto::Pro
     const std::string subject = asProtoString(m->getOwnAttributeDirect(ctx, mSubjectKey(ctx)))->toStdString(ctx);
     const long long pos = m->getOwnAttributeDirect(ctx, mPosKey(ctx))->asLong(ctx);
     if (pos > static_cast<long long>(subject.size())) return PROTO_NONE;
-    std::smatch match;
-    const auto flags = continuationFlags(cp, subject, static_cast<std::size_t>(pos));
-    guardRecursiveMatch(cp, subject.size() - static_cast<std::size_t>(pos));
-    if (!runRegex(cp, [&] { return std::regex_search(subject.begin() + pos, subject.end(), match,
-                                                     cp->regex, flags); })) {
+    Match match;
+    if (!regexSearch(cp, subject, static_cast<std::size_t>(pos), match)) {
         m->setAttribute(ctx, mPosKey(ctx), ctx->fromLong(static_cast<long long>(subject.size()) + 1));
         return PROTO_NONE;
     }
-    const long long start = pos + match.position(0);
-    long long next = start + match.length(0);
-    if (match.length(0) == 0) ++next;
+    // After an empty match the next find starts one character further on.
+    const long long next = static_cast<long long>(
+        match.length() == 0 ? nextCharacter(subject, match.end()) : match.end());
     CallerSlots scope(ctx, 1);
-    scope.set(0, matchValue(ctx, match, cp->groups));
+    scope.set(0, matchValue(ctx, subject, match, cp->groups));
     m->setAttribute(ctx, mGroupsKey(ctx), scope.get(0));
     m->setAttribute(ctx, mPosKey(ctx), ctx->fromLong(next));
     return scope.get(0);
@@ -1792,10 +1789,9 @@ const proto::ProtoObject* prim_re_find(proto::ProtoContext* ctx,
     if (n != 2) throwError(ctx, "re-find: expects (re-find re s) or (re-find matcher)");
     const CompiledPattern* cp = patternArg(ctx, args, 0, "re-find");
     const std::string subject = stringArgOf(ctx, args, 1, "re-find");
-    std::smatch match;
-    guardRecursiveMatch(cp, subject.size());
-    if (!runRegex(cp, [&] { return std::regex_search(subject, match, cp->regex); })) return PROTO_NONE;
-    return matchValue(ctx, match, cp->groups);
+    Match match;
+    if (!regexSearch(cp, subject, 0, match)) return PROTO_NONE;
+    return matchValue(ctx, subject, match, cp->groups);
 }
 
 // (re-matches re s) — the match of the whole of `s`, or nil.
@@ -1807,10 +1803,9 @@ const proto::ProtoObject* prim_re_matches(proto::ProtoContext* ctx,
     if (!args || args->getSize(ctx) != 2) throwError(ctx, "re-matches: expects (re-matches re s)");
     const CompiledPattern* cp = patternArg(ctx, args, 0, "re-matches");
     const std::string subject = stringArgOf(ctx, args, 1, "re-matches");
-    std::smatch match;
-    guardRecursiveMatch(cp, subject.size());
-    if (!runRegex(cp, [&] { return std::regex_match(subject, match, cp->regex); })) return PROTO_NONE;
-    return matchValue(ctx, match, cp->groups);
+    Match match;
+    if (!regexMatchWhole(cp, subject, match)) return PROTO_NONE;
+    return matchValue(ctx, subject, match, cp->groups);
 }
 
 // (re-seq re s) — every successive match of `re` in `s`, or nil when there is
@@ -1825,16 +1820,11 @@ const proto::ProtoObject* reSeqFrom(proto::ProtoContext* ctx, const proto::Proto
     const auto* subject = static_cast<const std::string*>(
         subjectBox->asExternalPointer(ctx)->getPointer(ctx));
     if (pos > subject->size()) return PROTO_NONE;
-    std::smatch m;
-    const auto flags = continuationFlags(cp, *subject, pos);
-    if (!runRegex(cp, [&] { return std::regex_search(subject->cbegin() + static_cast<std::ptrdiff_t>(pos),
-                                                     subject->cend(), m, cp->regex, flags); }))
-        return PROTO_NONE;
-    const std::size_t start = static_cast<std::size_t>(m[0].first - subject->cbegin());
-    const std::size_t end = start + static_cast<std::size_t>(m.length(0));
-    const std::size_t next = m.length(0) == 0 ? end + 1 : end;
+    Match m;
+    if (!regexSearch(cp, *subject, pos, m)) return PROTO_NONE;
+    const std::size_t next = m.length() == 0 ? nextCharacter(*subject, m.end()) : m.end();
     CallerSlots scope(ctx, 2);
-    scope.set(0, matchValue(ctx, m, cp->groups));
+    scope.set(0, matchValue(ctx, *subject, m, cp->groups));
     scope.set(1, lazyStep(ctx, StepKind::ReSeq, pattern, subjectBox,
                                         ctx->fromLong(static_cast<long long>(next))));
     const proto::ProtoObject* r = newCons(ctx, scope.get(0), scope.get(1));
@@ -1858,9 +1848,8 @@ const proto::ProtoObject* prim_re_seq(proto::ProtoContext* ctx,
                                       const proto::ProtoArguments* args,
                                       const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 2) throwError(ctx, "re-seq: expects (re-seq re s)");
-    const CompiledPattern* cp = patternArg(ctx, args, 0, "re-seq");
+    patternArg(ctx, args, 0, "re-seq");
     std::string subject = stringArgOf(ctx, args, 1, "re-seq");
-    guardRecursiveMatch(cp, subject.size());
     CallerSlots scope(ctx, 1);
     scope.set(0, ctx->fromExternalPointer(
         new std::string(std::move(subject)),
@@ -1888,13 +1877,13 @@ const proto::ProtoObject* prim_re_groups(proto::ProtoContext* ctx,
 // The replacement text for one match: a fn of the match (re-find's value)
 // whose result is rendered by str, or a string where `$n` is group n (the
 // longest number that names a group, as Java reads it) and `\x` is x.
-void appendReplacement(proto::ProtoContext* ctx, std::string& out, const std::smatch& m,
-                       unsigned groups, const proto::ProtoObject* repl) {
+void appendReplacement(proto::ProtoContext* ctx, std::string& out, std::string_view subject,
+                       const Match& m, unsigned groups, const proto::ProtoObject* repl) {
     if (!isStringLike(repl)) {
         const ActiveCallContext* cc = activeCallContext();
         if (!cc) throwError(ctx, "replace: no active VM context");
         CallerSlots scope(ctx, 1);
-        scope.set(0, matchValue(ctx, m, groups));
+        scope.set(0, matchValue(ctx, subject, m, groups));
         const proto::ProtoObject* one[1] = {scope.get(0)};
         appendStr(ctx, out, cc->engine->invoke(ctx, repl, one, 1));
         return;
@@ -1915,7 +1904,7 @@ void appendReplacement(proto::ProtoContext* ctx, std::string& out, const std::sm
         }
         if (g > groups)
             throwClassed(ctx, "IndexOutOfBoundsException", "No group " + std::to_string(g));
-        if (m[g].matched) out += m.str(g);
+        if (m.matched(g)) out += subject.substr(m.start(g), m.length(g));
     }
 }
 
@@ -1923,17 +1912,16 @@ void appendReplacement(proto::ProtoContext* ctx, std::string& out, const std::sm
 const proto::ProtoObject* replaceWithPattern(proto::ProtoContext* ctx, const std::string& s,
                                              const CompiledPattern* cp,
                                              const proto::ProtoObject* repl, bool firstOnly) {
-    guardRecursiveMatch(cp, s.size());
     std::string out;
     out.reserve(s.size());
-    auto last = s.begin();
-    forEachMatch(s, cp, [&](const std::smatch& m) {
-        out.append(last, m[0].first);
-        appendReplacement(ctx, out, m, cp->groups, repl);
-        last = m[0].second;
+    std::size_t last = 0;
+    forEachMatch(s, cp, [&](const Match& m) {
+        out.append(s, last, m.start() - last);
+        appendReplacement(ctx, out, s, m, cp->groups, repl);
+        last = m.end();
         return !firstOnly;
     });
-    out.append(last, s.end());
+    out.append(s, last, std::string::npos);
     return reinterpret_cast<const proto::ProtoObject*>(makeUtf8ProtoString(ctx, out));
 }
 
@@ -1965,13 +1953,12 @@ const proto::ProtoObject* prim_replace_first(proto::ProtoContext* ctx,
 // pieces are made (the last holds the rest), with a negative one all are kept.
 const proto::ProtoObject* splitWithPattern(proto::ProtoContext* ctx, const std::string& s,
                                            const CompiledPattern* cp, long long limit) {
-    guardRecursiveMatch(cp, s.size());
     std::vector<std::string> pieces;
     std::size_t from = 0;
-    forEachMatch(s, cp, [&](const std::smatch& m) {
+    forEachMatch(s, cp, [&](const Match& m) {
         if (limit > 0 && static_cast<long long>(pieces.size()) == limit - 1) return false;
-        const std::size_t at = static_cast<std::size_t>(m[0].first - s.cbegin());
-        const std::size_t len = static_cast<std::size_t>(m.length(0));
+        const std::size_t at = m.start();
+        const std::size_t len = m.length();
         if (at == 0 && len == 0) return true;        // no leading empty piece
         if (len == 0 && at >= s.size()) return false; // the empty match at the end
         pieces.push_back(s.substr(from, at - from));
@@ -4230,6 +4217,7 @@ const proto::ProtoObject* prim_prn(proto::ProtoContext* ctx,
 // The VM's direct primitive calls (Primitives.h, fastPrimitiveCall): the
 // values each of these primitives reads without running Clojure code.
 namespace {
+
 const proto::ProtoObject* fastIndexed(proto::ProtoContext* ctx, const proto::ProtoObject* coll,
                                       const proto::ProtoObject* i) {
     if (!proto::isSmallInt(i)) return nullptr;

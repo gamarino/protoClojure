@@ -134,7 +134,7 @@ Part B of the macros brief, the scripting vocabulary, on the same branch:
 7. [x] Destructuring in `let`, `loop`, `fn`, `defn`, `defmacro` and the
    binding macros (DESIGN.md §10.2, M23).
 8. [x] Sets and `clojure.set` (DESIGN.md §10.2, M24).
-9. [x] Regular expressions (DESIGN.md §10.2, M25, M26; D45).
+9. [x] Regular expressions (DESIGN.md §10.2, M25, M26, M48; D45).
 10. [x] `format` / `printf`, `doseq` modifiers, `for`, `range`
     (DESIGN.md §10.2, M27; D47).
 11. [x] Lazy sequences (DESIGN.md §7, §10.2, M28-M31; D48-D51), on

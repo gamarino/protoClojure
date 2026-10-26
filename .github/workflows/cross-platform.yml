@@ -70,7 +70,9 @@ jobs:
       - name: Dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
-          for f in readline openssl@3 ninja coreutils; do brew list "$f" >/dev/null 2>&1 || brew install "$f"; done
+          # pcre2 and pkgconf: the regular-expression engine, found through
+          # pkg-config (M48). Windows builds PCRE2's pinned release instead.
+          for f in readline openssl@3 ninja coreutils pcre2 pkgconf; do brew list "$f" >/dev/null 2>&1 || brew install "$f"; done
           echo "OPENSSL_ROOT_DIR=$(brew --prefix openssl@3)" >> "$GITHUB_ENV"
           echo "EXTRA_PREFIX=;$(brew --prefix readline)" >> "$GITHUB_ENV"
           # The test scripts use GNU timeout, which macOS does not ship.

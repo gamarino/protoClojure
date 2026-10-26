@@ -282,7 +282,7 @@ collector chosen. Peak RSS here says how much the process held, not how much
 it needed.
 
 **Where bb wins, plainly:** start-up (about 2x), speed on these scripts
-(1.6-9x: the grep's regular expressions run on `std::regex`, which is slow),
+(1.6-9x before the 2026-10-26 fixes, when the grep's regular expressions ran on `std::regex`, which is slow; they run on PCRE2's JIT now),
 and above all the ecosystem: bb has hundreds of libraries, pods,
 tasks and Java classes; protoclj has what this README lists.
 
@@ -370,7 +370,7 @@ protoClojure runs scripts and an interactive REPL, both one top-level form at a 
 | `clojure.core` macros (`when-let`, `if-let`, `->`, `->>`, `some->`, `cond->`, `doto`, `doseq`, `dotimes`, `case`, `condp`, ...) in a bootstrap `core.clj` | Implemented (branch `feature/macros`; no `letfn`) |
 | Destructuring (`[a b & r :as all]`, `{x :x :keys [...] :strs [...] :syms [...] :or {...} :as m}`, nested) in `let`, `loop`, `fn`, `defn`, `defmacro` and the binding macros | Implemented (branch `feature/macros`) |
 | Sets `#{...}`, `hash-set`, `set`, `disj`, `into`, `union` / `intersection` / `difference` | Implemented (branch `feature/macros`; `clojure.set` functions are globals) |
-| Regular expressions `#"..."`, `re-find`, `re-matches`, `re-seq`, `re-matcher`, `re-groups`, `replace` / `split` with a pattern | Implemented (branch `feature/macros`; `std::regex` ECMAScript with Java's inline flags translated, D45) |
+| Regular expressions `#"..."`, `re-find`, `re-matches`, `re-seq`, `re-matcher`, `re-groups`, `replace` / `split` with a pattern | Implemented (PCRE2, which reads Java's syntax, M48; D45) |
 | `format`, `printf`, `for` and `doseq` with `:let` / `:when` / `:while`, `range` | Implemented (branch `feature/macros`) |
 | Lazy sequences: `lazy-seq`, lazy `map` `filter` `take` `range` `iterate` `concat` `mapcat` `partition` `for` `line-seq` `re-seq` ..., `doall` / `dorun` / `realized?`, chunked as in Clojure; walks that do not hold the head run in constant memory | Implemented (branch `feature/macros`; needs protoCore 3.1.0's lazy objects, branch `feature/lazy-object`; [LANGUAGE.md §10](docs/LANGUAGE.md)) |
 | `#(...)`; `ns` / `require` with `:as` aliases for clojure.string, clojure.set, clojure.java.io, clojure.java.shell; `letfn`; the everyday vocabulary (`quot rem mod sort sort-by frequencies group-by update update-in assoc-in get-in merge merge-with select-keys zipmap partial comp juxt some every? max-key min-key ...`) | Implemented (branch `feature/macros`; no full namespaces, D52) |

@@ -32,6 +32,14 @@ dependency on protoCore's own package instead of shipping a copy.
   `:env` without a shell) and a dual-stack listener for servers started
   without a host; 0.2.3 the first with `readBufferedLine`, which `line-seq`
   and `read-line` use.
+- **PCRE2** 10.34 or newer, 8-bit (`libpcre2-dev` on Debian/Ubuntu,
+  `pcre2-devel` on Fedora/RHEL, `brew install pcre2 pkgconf` on macOS), the
+  regular-expression engine (DESIGN.md M48), found through `pkg-config` or
+  an installed PCRE2 CMake package. Without either (the Windows build), the
+  configure step downloads PCRE2 10.46's release (pinned by its SHA-256) and
+  builds it as a static library linked into `protoclj`;
+  `-DPROTOCLJ_BUNDLED_PCRE2=ON` forces that anywhere. A system PCRE2 becomes
+  a runtime dependency (`libpcre2-8-0`); the bundled one adds none.
 - **OpenSSL 3** development files (`libssl-dev` on Debian/Ubuntu,
   `openssl-devel` on Fedora/RHEL, `brew install openssl@3` on macOS), for
   TLS sockets and `https`. `libssl` becomes a runtime dependency of

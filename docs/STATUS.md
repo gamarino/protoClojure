@@ -121,7 +121,7 @@ The design specifications written during development are archived under
 - [x] Regular expressions `#"..."` (compiled when read; DESIGN.md §10.2,
       M25), `re-pattern`, `re-find`, `re-matches`, `re-seq`, `re-matcher`,
       `re-groups`, and `replace`, `replace-first`, `split` with a pattern,
-      on `std::regex` ECMAScript (D45); `clojure.string/x` and
+      on PCRE2 (M48, D45); `clojure.string/x` and
       `clojure.set/x` name the built-ins (M26)
 - [x] Sets `#{...}` — a repeated element is a read error, `Duplicate key: :a`;
       a set of constants is built once, at compile time (DESIGN.md §10.2, M24)
@@ -634,7 +634,8 @@ On branch `feature/macros` (DESIGN.md §10.2, ROADMAP.md).
       and the binding macros (M23)
 - [x] Stage 8: sets, `clojure.set`'s `union` / `intersection` /
       `difference` / `subset?` / `superset?`, `into` (M24)
-- [x] Stage 9: regular expressions on `std::regex` ECMAScript (M25, D45);
+- [x] Stage 9: regular expressions on `std::regex` ECMAScript (M25, D45;
+      PCRE2 since M48);
       `clojure.string/x` and `clojure.set/x` name the built-ins (M26)
 - [x] Stage 10: `format`, `printf`, `for` and `doseq` with `:let` /
       `:when` / `:while`, a finite `range`, `apply` with leading arguments
@@ -712,7 +713,7 @@ See `LANGUAGE.md` for the full discussion. Summary:
 | D42 | There are two namespaces only, `user` (the program: every file, the REPL, `eval`) and `clojure.core` (the built-ins and, from stage 6, `core.clj`), and no `ns` form (D28). Syntax-quote qualifies a name the program has not defined and no built-in has as `user/x`; `user/x` names the global `x` and `clojure.core/x` the built-in, and neither is ever resolved to a local. A built-in exception class name in a template stays a simple name (`Exception`; JVM Clojure writes `java.lang.Exception`). `user/x` cannot name a module alias called `user` | (perm until namespaces) |
 | D43 | Symbols are interned and never collected, generated ones included: a program that calls `gensym` or `symbol` on fresh names without end grows by one symbol per name (JVM Clojure collects unreferenced symbols) | (perm) |
 | D44 | `case` tests its constants in order with `=` (O(n) in the number of clauses; JVM Clojure dispatches on a hash in constant time), so numbers of different types match (D15); the result is otherwise Clojure's, including `IllegalArgumentException: No matching clause: x` | (perm) |
-| D45 | Regular expressions run on the C++ standard library's `std::regex`, ECMAScript grammar, over the UTF-8 bytes of the string (JVM Clojure: `java.util.regex` over UTF-16). Translated from Java: the leading inline flags `(?i)` `(?m)` `(?s)` (`(?u)` `(?U)` accepted, no effect), named groups `(?<n>X)` (numbered; `\k<n>` is not supported), `\Q...\E`, `\A` / `\z` / `\Z` outside multiline mode. Not supported, a `PatternSyntaxException`: lookbehind `(?<=` `(?<!`, possessive quantifiers `*+`, atomic groups `(?>`, `\p{...}` / `\P{...}` classes, class intersection `[a&&b]`, flags in mid-pattern, `(?x)` comments, `(?d)`. Different: `.`, `\w`, `\s` and character classes see bytes, so a multi-byte UTF-8 character is several (D17); `$` in non-multiline mode matches only at the very end (Java also before a final line terminator); case folding is ASCII; the captures of a group repeated by `*` that matched empty may differ (`(a*)*b`). Every distinct pattern source is compiled once and kept for the process (like interned symbols, D43). A pattern with back-references backtracks on the native stack, so a match that could exhaust it raises `StackOverflowError` beforehand (about 32 KB of subject); others are not limited. No `Matcher` interop beyond `re-matcher` / `re-find` / `re-groups` | (perm: engine) |
+| D45 | Regular expressions run on PCRE2 (DESIGN.md M48), the same engine on every platform, over the UTF-8 string in UTF mode (JVM Clojure: `java.util.regex` over UTF-16). Java's syntax is read as Java reads it, including inline flags anywhere, named groups and `\k<name>`, lookbehind, possessive quantifiers, atomic groups, `\Q...\E`, `\A` / `\z` / `\Z`, `\uXXXX`, Unicode properties (`\p{Lu}`, `\p{IsAlphabetic}`, `\p{IsLatin}`) and the POSIX classes `\p{Alpha}`, `\p{Punct}`, ...; `.` and a class match one character (a code point); `\w`, `\d`, `\s` and `\b` are ASCII unless the pattern starts with `(?U)`. Not supported, a `PatternSyntaxException`: class intersection `[a&&b]`, a negated nested class (`[a[^b]]`; a nested union such as `[a-c[x-z]]` works), Unicode blocks `\p{InGreek}`, the `java*` properties, `\N{name}`, and the flags `(?d)` and `(?U)` anywhere but at the start of the pattern. Different: with `(?i)`, case folding is Unicode for non-ASCII letters even without `(?u)` (Java: ASCII only unless `(?u)`); line terminators are LF, CR and CRLF (Java also U+0085, U+2028 and U+2029); PCRE2 accepts a few forms Java rejects (`(?#comment)`, `x{` as a literal, `{,n}`); a group repeated by a quantifier keeps the captures of its last iteration (as Java). Every distinct pattern source is compiled once and kept for the process (like interned symbols, D43). A match that goes past the engine's limits (a 64 MiB backtracking stack per thread, which `(a|b)*` fills at about two million characters, or a match limit only a runaway exponential match reaches) raises `StackOverflowError` (Java overflows its thread stack far earlier on such a match). No `Matcher` interop beyond `re-matcher` / `re-find` / `re-groups` | (perm: engine) |
 | ~~D46~~ | *Closed in Part B stage 11*: `for`, `range` and `re-seq` are lazy, and `(range)` counts without end | closed |
 | D48 | `(str lazy-seq)` is `clojure.lang.LazySeq@` followed by a hash of the elements in hexadecimal, as JVM Clojure renders it, but the digits differ from the JVM's (protoClojure's hash, D25). `pr-str`, `println` and the REPL print the elements, as in Clojure | (perm) |
 | D49 | Lazy sequences, as built (DESIGN.md M29): no transducers (`(map f)`, `(filter p)`, `(mapcat f)`, `(partition n)` with no collection raise `UnsupportedOperationException`), no chunk API beyond `chunked-seq?` (`chunk-first`, `chunk-rest`, `chunk-cons`, `chunk-buffer`); a vector's chunks start where its seq starts (JVM Clojure: at its 32-element tree leaves, so `(rest v)` begins with a 31-element chunk there and a 32-element one here); `realized?` answers true for a cons or a chunk (JVM Clojure: ClassCastException for a Cons) and false for any other non-pending value; `apply` and `pmap` realise their sequence argument to its end (JVM Clojure's `apply` passes an endless seq to a variadic fn lazily); a seq read while its own body computes it raises `StackOverflowError` at once (JVM Clojure recurses until the stack overflows) | (perm) |
@@ -733,30 +734,11 @@ See `LANGUAGE.md` for the full discussion. Summary:
 
 ## Known issues
 
-- **Regular expressions differ by standard library (std::regex), found by
-  the first macOS and Windows CI runs of the macros branch, 2026-10-24.
-  Severity: low.** The engine is each platform's `std::regex` (D45).
-  - libc++ (macOS) ignores `match_prev_avail` for `^`, so a continued search
-    (re-seq, a matcher's re-find, replace, split) is given `match_not_bol`
-    and `match_not_bow` from the byte before it instead (Regex.h,
-    `continuationFlags`). One case cannot be said with those flags: `\b`
-    right after a word byte and before a non-word byte, at the start of a
-    continued search, does not match there. libc++ backtracks on the heap,
-    so the native-stack guard never refuses a pattern; a back-reference
-    pattern on a huge subject matches (and may use much memory) where
-    libstdc++ raises StackOverflowError.
-  - MSVC's standard library has no `std::regex::multiline`, and its
-    ECMAScript `^` (and `$`) match at line terminators whatever the flags:
-    on Windows every pattern behaves as if `(?m)` were given, so `^\w` finds
-    a match at the start of each line where Java finds one only at the start
-    of the input. Its engine bounds its own recursion and work; a match that
-    goes past those bounds raises StackOverflowError (as Java's overflows),
-    so long subjects with long matches may fail there: `(a|b)*` over
-    300 KB does (`.*` passes), and `conformance/35-regex/long-subject.clj`
-    is registered WILL_FAIL with MSVC (tests/CMakeLists.txt) until the
-    engine decision below.
-  A single engine everywhere (a bundled one) would remove all three
-  differences; that is a dependency decision left to the maintainer.
+- ~~**Regular expressions differ by standard library (std::regex)**~~
+  *Closed 2026-10-26 (DESIGN.md M48):* every platform runs PCRE2, so
+  libc++'s continued-search flags, MSVC's always-multiline `^` and bounded
+  recursion, and the WILL_FAIL registration of
+  `conformance/35-regex/long-subject.clj` with MSVC are gone.
 
 - **Start-up reads and compiles core.clj every time: about +17 M cycles
   (about 4 ms of CPU) over the baseline before macros. Severity: low. Needs a
