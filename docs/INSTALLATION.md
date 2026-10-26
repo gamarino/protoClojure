@@ -247,7 +247,13 @@ dependency on protoCore's own package:
 `CPACK_DEBIAN_PACKAGE_SHLIBDEPS` is enabled, so `dpkg-shlibdeps` adds the
 shared libraries `protoclj` links to the DEB's `Depends`: `libc6`,
 `libstdc++6`, `libgcc-s1`, `libreadline8t64` and, since input and output
-landed, `libssl3t64` (OpenSSL, pulled in by the statically linked protoIO).
+landed, `libssl3t64` (OpenSSL, pulled in by the statically linked protoIO)
+and, since regular expressions moved to PCRE2 (M48), `libpcre2-8-0` when
+the build found a system PCRE2 (a bundled PCRE2 is linked statically and
+adds nothing). Verified 2026-10-26 with `cpack -G DEB` on Ubuntu 24.04:
+`Depends: protocore (>= 3.3.0), protocore (<< 4.0.0), libc6 (>= 2.38),
+libgcc-s1 (>= 3.0), libpcre2-8-0 (>= 10.32), libreadline8t64 (>= 6.0),
+libssl3t64 (>= 3.0.0), libstdc++6 (>= 14), protocore (>= 3.0.0)`.
 protoIO itself is not a dependency: `protoio-dev` is needed to build, never
 to run. Verified 2026-09-30 with `cpack -G DEB`: `Depends: protocore (>=
 2.6.1), protocore (<< 3.0.0), libc6 (>= 2.38), libgcc-s1 (>= 3.0),

@@ -9,6 +9,28 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Changed — regular expressions on PCRE2; buffered line reading (2026-10-26)
+
+- Regular expressions run on PCRE2 with its JIT on every platform, instead
+  of `std::regex` (DESIGN.md M48; D45 rewritten). Java's syntax is read as
+  Java reads it: lookbehind, possessive quantifiers, atomic groups, inline
+  flags anywhere, Unicode properties, `\uXXXX`, Java's POSIX classes; `.`
+  matches a character. A match past the engine's limits raises
+  `StackOverflowError`, never a silent nil. The libc++ and MSVC
+  differences, and the MSVC WILL_FAIL of `long-subject.clj`, are gone.
+- PCRE2 is a build dependency: `libpcre2-dev` / Homebrew `pcre2`, or
+  PCRE2 10.46 downloaded (SHA-256 pinned) and linked statically (Windows,
+  `-DPROTOCLJ_BUNDLED_PCRE2=ON`). The DEB gains `libpcre2-8-0`.
+- `line-seq` and `read-line` take a line already in protoIO's buffer
+  without leaving the collector's quorum (M49); requires protoIO 0.2.3
+  (CI pinned to 7920332), which also stopped erasing its buffer's front
+  for every line.
+- Showcase (`benchmarks/reports/2026-10-26-grep-fixes`, 5 interleaved
+  rounds): grep 18.9 -> 7.9 s (bb 1.9 s), word count 17.0 -> 13.5 s (bb
+  4.6 s), JSON transform unchanged; `bench.sh` within noise.
+- New fixtures: `35-regex/java-constructs.clj`, `engine-limit.clj`,
+  `matching-on-several-threads.clj`, `27-io/line-seq-read-line-interleaved.clj`.
+
 ### Changed — lists are protoCore `ProtoLinkedList`s; requires protoCore 3.3.0 (2026-10-25)
 
 - A Clojure list is a protoCore `ProtoLinkedList` (protoCore 3.3.0): cells

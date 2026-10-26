@@ -261,9 +261,9 @@ protoclj `main` 1e7b612 on protoCore 3.3.0, Babashka 1.4.192; start-up from
 | script | protoclj | bb | protoclj RSS | bb RSS |
 |---|---:|---:|---:|---:|
 | start-up (empty file) | 21 ms | 10 ms | 24 MB | 15 MB |
-| grep over a 115 MB log on stdin | 16.7 s | 1.9 s | 140 MB | 134 MB |
+| grep over a 115 MB log on stdin (2026-10-26) | 7.9 s | 1.9 s | 140 MB | 132 MB |
 | JSON transform, 300,000 records (43 MB) | 4.1 s | 2.5 s | 1,424 MB | 338 MB |
-| word frequencies, 31 MB of text | 17.2 s | 4.7 s | 143 MB | 143 MB |
+| word frequencies, 31 MB of text (2026-10-26) | 13.5 s | 4.6 s | 142 MB | 140 MB |
 | `(factorial 1000)` with `*'` (10 ms resolution) | 20 ms | 10 ms | 24 MB | 18 MB |
 
 Against 2026-10-24 (`feature/macros` on protoCore 3.1.0) protoclj is 7-20 %
@@ -272,6 +272,13 @@ faster on the three scripts and the JSON transform's peak RSS fell from
 transform (2.0x -> 1.6x) and the word count (4.1x -> 3.7x) moved. Runner:
 [`benchmarks/reports/2026-10-23-showcase/`](benchmarks/reports/2026-10-23-showcase/);
 this run's results: [`benchmarks/reports/2026-10-25-readme-refresh/`](benchmarks/reports/2026-10-25-readme-refresh/README.md).
+The grep and word-frequency rows are from 2026-10-26 (5 interleaved rounds
+of the previous binary, the new one and bb, load average about 3-8), after
+regular expressions moved to PCRE2's JIT (DESIGN.md M48) and `line-seq`
+stopped leaving the collector's quorum for every line (M49): in that run
+the grep went from 18.9 to 7.9 s and the word count from 17.0 to 13.5 s,
+the JSON transform did not move (4.8 s both); bb was 1.9, 4.6 and 2.7 s.
+Results: [`benchmarks/reports/2026-10-26-grep-fixes/`](benchmarks/reports/2026-10-26-grep-fixes/README.md).
 
 **The RSS columns are indicative, not conclusive, and possibly not
 comparable.** protoCore keeps memory until it is needed and adjusts its heap
@@ -282,7 +289,8 @@ collector chosen. Peak RSS here says how much the process held, not how much
 it needed.
 
 **Where bb wins, plainly:** start-up (about 2x), speed on these scripts
-(1.6-9x before the 2026-10-26 fixes, when the grep's regular expressions ran on `std::regex`, which is slow; they run on PCRE2's JIT now),
+(1.6-4.1x; the grep was 9x before the 2026-10-26 fixes, when its regular
+expressions ran on `std::regex`),
 and above all the ecosystem: bb has hundreds of libraries, pods,
 tasks and Java classes; protoclj has what this README lists.
 
@@ -378,7 +386,7 @@ protoClojure runs scripts and an interactive REPL, both one top-level form at a 
 | Full namespaces and UMD interop providers (`py/`, `js/`, `pst/`) | Planned |
 | nREPL server for CIDER / Calva / Conjure | Planned for v0.1 |
 
-`ctest` registers **873 test cases: 686 conformance fixtures, 138 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics, value lifetime, the vector representation, value equality and hashing, native stack guard, double printer, exception values, rethrow) **and 49 CLI checks, counting the documentation checks** (`--help`, three checks of the adaptive heap controller -- on by default, off with `PROTOCORE_ADAPTIVE_HEAP=0`, peak RSS bounded under a small budget --, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, the reader's values under a heap limit, the garbage a `loop` makes under a heap limit, joins that park for the collector, threads waiting for a claimed lazy seq or a promise while the collector runs, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, literals and quote in the REPL, several forms per REPL line and `:load`, quoted data under a heap limit, macros at the REPL, macro expansion under a heap limit, destructuring under a heap limit, sets under a heap limit, regular expressions under a heap limit, `for` / `doseq` / `format` under a heap limit, the scripting vocabulary at the REPL, the embedded core.clj, scripts run form by form, deeply nested source, an uncaught exception, exceptions under a heap limit, `read-line` in pipelines, `*command-line-args*`, exit statuses, `sh` with `:dir` and `:env` and no shell on `PATH`, `localhost` requests to a server started without a host, an HTTP server under a heap limit, scripts run as commands through a `#!` line, lazy sequences under a heap limit, holding and not holding the head of a lazy seq, a grep over a stream larger than the heap ceiling, lazy seqs at the REPL, the tutorial's twenty-line script in a pipeline, JSON and EDN at the REPL, JSON parsed, written and streamed under heap limits, `pmap` joining every worker, and a list of 2 x 10^6 reclaimed cell by cell as it is walked under a heap limit; plus `docs/snippets`, which runs every Clojure snippet of this README, LANGUAGE.md and the tutorial). All 873 pass locally on Linux against protoCore 3.3.0 (2026-10-25, `main` 1e7b612). The benchmark numbers above are reproduced by `benchmarks/reports/2026-10-25-readme-refresh/run-all.sh`, which repeats `./benchmarks/bench.sh`'s measurement, the showcase runner and `./benchmarks/actor-bench.sh`.
+`ctest` registers **885 test cases: 690 conformance fixtures, 146 unit tests** (lexer, reader, bytecode module, runtime map, map key semantics, value lifetime, the vector representation, value equality and hashing, native stack guard, double printer, exception values, rethrow) **and 49 CLI checks, counting the documentation checks** (`--help`, three checks of the adaptive heap controller -- on by default, off with `PROTOCORE_ADAPTIVE_HEAP=0`, peak RSS bounded under a small budget --, a generated program with 70,000 distinct literals of each kind, bulk collection builders under a heap limit, the reader's values under a heap limit, the garbage a `loop` makes under a heap limit, joins that park for the collector, threads waiting for a claimed lazy seq or a promise while the collector runs, actor message payloads under a heap limit, a stack overflow in the REPL, nil-valued globals in the REPL, literals and quote in the REPL, several forms per REPL line and `:load`, quoted data under a heap limit, macros at the REPL, macro expansion under a heap limit, destructuring under a heap limit, sets under a heap limit, regular expressions under a heap limit, `for` / `doseq` / `format` under a heap limit, the scripting vocabulary at the REPL, the embedded core.clj, scripts run form by form, deeply nested source, an uncaught exception, exceptions under a heap limit, `read-line` in pipelines, `*command-line-args*`, exit statuses, `sh` with `:dir` and `:env` and no shell on `PATH`, `localhost` requests to a server started without a host, an HTTP server under a heap limit, scripts run as commands through a `#!` line, lazy sequences under a heap limit, holding and not holding the head of a lazy seq, a grep over a stream larger than the heap ceiling, lazy seqs at the REPL, the tutorial's twenty-line script in a pipeline, JSON and EDN at the REPL, JSON parsed, written and streamed under heap limits, `pmap` joining every worker, and a list of 2 x 10^6 reclaimed cell by cell as it is walked under a heap limit; plus `docs/snippets`, which runs every Clojure snippet of this README, LANGUAGE.md and the tutorial). All 885 pass locally on Linux against protoCore 3.3.0 (2026-10-26, branch `perf/grep-path`), also with `PROTOCORE_GC_CONTEXT_THRESHOLD=200`. The benchmark numbers above are reproduced by `benchmarks/reports/2026-10-25-readme-refresh/run-all.sh`, which repeats `./benchmarks/bench.sh`'s measurement, the showcase runner and `./benchmarks/actor-bench.sh`.
 
 What is implemented:
 
