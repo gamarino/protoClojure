@@ -15,7 +15,7 @@ The Clojure community is small, technically demanding, and shares three convicti
 What protoClojure offers that JVM Clojure does not:
 
 - **Native interop with Python and JavaScript modules (planned).** The design routes a `(:require [py/numpy :as np])` form through the same UMD plumbing protoPython and protoJS use, so the result is a real protoCore object — no FFI marshalling, no copy at the boundary, no separate process. The module system is not implemented yet; see [docs/INTEROP.md](docs/INTEROP.md) and the archived [foreign-dispatch design](docs/archive/design-specs/2026-06-14-foreign-dispatch.md).
-- **Fast startup, small footprint.** No JVM warm-up: on the benchmark machine (AMD Ryzen 5 5500U), `protoclj examples/01-hello.clj` has a median wall time of 20.9 ms over 150 runs and a peak resident set size of 24 MB (what `/usr/bin/time -f %M` reports), `core.clj` loaded at start-up included, against Babashka's 9.7 ms and 15 MB on the same machine (2026-10-25, `main` 1e7b612 on protoCore 3.3.0; [report](benchmarks/reports/2026-10-25-readme-refresh/README.md)). Scripts and CLI tools are a viable form factor without GraalVM AOT: a script starting with `#!/usr/bin/env protoclj` runs as a command and chains in pipelines ([`examples/13-filter-grep.clj`](examples/13-filter-grep.clj)).
+- **Fast startup, small footprint.** No JVM warm-up: on the benchmark machine (AMD Ryzen 5 5500U), `protoclj examples/01-hello.clj` has a median wall time of 20.9 ms over 150 runs and a peak resident set size of 24 MB (what `/usr/bin/time -f %M` reports), `core.clj` loaded at start-up included, against Babashka's 9.7 ms and 15 MB on the same machine (RSS figures are indicative, not conclusive: see the showcase section) (2026-10-25, `main` 1e7b612 on protoCore 3.3.0; [report](benchmarks/reports/2026-10-25-readme-refresh/README.md)). Scripts and CLI tools are a viable form factor without GraalVM AOT: a script starting with `#!/usr/bin/env protoclj` runs as a command and chains in pipelines ([`examples/13-filter-grep.clj`](examples/13-filter-grep.clj)).
 - **Arbitrary-precision integers by default.** When `(* acc n)` overflows a SmallInteger, protoCore's promoting `multiply` returns a LargeInteger and the program keeps going. `(factorial 100)` runs out of the box with plain `*`. Clojure's `*` uses long arithmetic and throws on overflow, so Babashka 1.4 fails on `(factorial 21)` written with `*`; written the portable Clojure way, with `*'`, it runs in Babashka too, and in protoClojure, where `*'` is the same function as `*` ([`examples/showcase/factorial.clj`](examples/showcase/factorial.clj)).
 - **Real parallelism without a GIL.** Every protoCore-hosted runtime shares the same GIL-free concurrency model. Atoms are a protoCore compare-and-set; futures run on OS threads; actors run on a worker pool.
 
@@ -273,10 +273,17 @@ transform (2.0x -> 1.6x) and the word count (4.1x -> 3.7x) moved. Runner:
 [`benchmarks/reports/2026-10-23-showcase/`](benchmarks/reports/2026-10-23-showcase/);
 this run's results: [`benchmarks/reports/2026-10-25-readme-refresh/`](benchmarks/reports/2026-10-25-readme-refresh/README.md).
 
+**The RSS columns are indicative, not conclusive, and possibly not
+comparable.** protoCore keeps memory until it is needed and adjusts its heap
+ceiling to the program's behaviour, so memory a process has taken remains
+available to its later work; a JVM collector returns memory and runs more
+deterministically in some cases, and its behaviour changes with the
+collector chosen. Peak RSS here says how much the process held, not how much
+it needed.
+
 **Where bb wins, plainly:** start-up (about 2x), speed on these scripts
 (1.6-9x: the grep's regular expressions run on `std::regex`, which is slow),
-memory for large parsed data (protoCore's 64-byte cells: 4x on the JSON
-document), and above all the ecosystem: bb has hundreds of libraries, pods,
+and above all the ecosystem: bb has hundreds of libraries, pods,
 tasks and Java classes; protoclj has what this README lists.
 
 **Factorial, without spin:** with plain `*`, `(reduce * (range 1 1001))`

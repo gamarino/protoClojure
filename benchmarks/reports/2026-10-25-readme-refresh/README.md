@@ -38,6 +38,12 @@ to 7 % between the earlier reports and this one.
 
 ## Results and comparison with the previous README
 
+Peak RSS figures below are indicative, not conclusive, and possibly not
+comparable across runtimes: protoCore keeps memory until it is needed and
+adapts its heap ceiling, while a JVM collector returns memory and behaves
+differently with each collector. Read them as what the process held, not
+what it needed.
+
 ### bench.sh workloads (`bench-rounds.sh`)
 
 Five rounds, the runtime order alternating per round; each round is
