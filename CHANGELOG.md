@@ -9,6 +9,15 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Changed — CI on protoCore 3.3.1 (2026-10-26)
+
+- CI builds protoCore 3.3.1 (tag v3.3.1) on Linux, macOS and Windows:
+  unmanaged regions and string conversion are cheaper (figures in
+  protoCore's CHANGELOG); no protoClojure source changes. The minimum
+  stays 3.3.0 (`PROTOCORE_MIN_VERSION`, `Depends: protocore (>= 3.3.0)`),
+  and the Windows floor job on 3.3.0 returns now that the minimum is behind
+  the pinned release.
+
 ### Changed — regular expressions on PCRE2; buffered line reading (2026-10-26)
 
 - Regular expressions run on PCRE2 with its JIT on every platform, instead

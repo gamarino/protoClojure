@@ -53,11 +53,12 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 3.3.0 (tag v3.3.0, commit aedc3b63), SOVERSION 4: the release
-  # users install, and the minimum CMakeLists.txt declares
-  # (PROTOCORE_MIN_VERSION: ProtoLinkedList, which Clojure lists are).  Bump
-  # this deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'aedc3b6368fa0c9eda9e4ca3647ba666cf2f13bb' }}
+  # protoCore 3.3.1 (tag v3.3.1, commit 5a8cd7c7), SOVERSION 4: the release
+  # users install.  The minimum CMakeLists.txt declares stays 3.3.0
+  # (PROTOCORE_MIN_VERSION: ProtoLinkedList, which Clojure lists are), built
+  # by the floor job in cross-platform.yml; 3.3.1 only makes unmanaged
+  # regions and string conversion cheaper.  Bump this deliberately.
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '5a8cd7c7aae68edbb34720445736b14685efae6f' }}
   PROTOIO_REPO: gamarino/protoIO
   # protoIO 0.2.3 (main, 7920332): readBufferedLine, which line-seq and
   # read-line use, and line reading without a per-line move of the read
