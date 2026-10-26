@@ -1833,6 +1833,25 @@ type also gives counted suffixes and four elements per cache line; (c) walk
 lists with `rest` everywhere, rejected: one garbage cell per three steps
 where a cursor allocates nothing.
 
+**M49. `line-seq` and `read-line` take a buffered line without leaving the
+quorum** (*agent, pending review*). Each line went through `blocking()`,
+which enters a protoCore `UnmanagedScope` (two passes through
+`ProtoSpace::globalMutex` and a wake-up of the collector thread, about
+330 ns), although a 64 KiB read holds hundreds of lines; and protoIO erased
+the front of its buffer for every line. protoIO 0.2.3 keeps an offset into
+the buffer and adds `readBufferedLine`, which answers a line only when the
+buffer already holds all of it and never reads or waits (it gives up when
+another thread holds the descriptor's read lock). `readLineOf`
+(`src/runtime/IO.cpp`) tries it first and calls `readLine` inside
+`blocking()` only when a read is needed. Clojure's semantics are
+unchanged: `line-seq` still reads its first line at once and each next one
+when the seq is read, one line per step (Clojure's `line-seq` is not
+chunked), without holding its head, and `read-line` and `line-seq` on one
+reader take each line exactly once, in order, from the same buffer
+(`conformance/27-io/line-seq-read-line-interleaved.clj`). Alternative: a
+chunk of lines per native call, rejected: lines read ahead into a Clojure
+chunk would be lost to a `read-line` interleaved on the same reader.
+
 ## 11. The standard library
 
 Two phases:

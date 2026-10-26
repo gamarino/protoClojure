@@ -59,9 +59,11 @@ env:
   # this deliberately.
   PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || 'aedc3b6368fa0c9eda9e4ca3647ba666cf2f13bb' }}
   PROTOIO_REPO: gamarino/protoIO
-  # protoIO 0.2.2 (main, 2026-10-02): RunOptions for sh :dir/:env, the
-  # dual-stack wildcard listener.  Bump this deliberately.
-  PROTOIO_REF: ${{ github.event_name == 'schedule' && 'main' || '1611ff9cf8d499cdc42a6e108e42ecfc36fd8164' }}
+  # protoIO 0.2.3 (main, 7920332): readBufferedLine, which line-seq and
+  # read-line use, and line reading without a per-line move of the read
+  # buffer; the floor find_package(protoIO 0.2.3) requires.  Bump this
+  # deliberately.
+  PROTOIO_REF: ${{ github.event_name == 'schedule' && 'main' || '792033281f77d4a771e4e417a7173a0e6d0a42fa' }}
 
 jobs:
   test:

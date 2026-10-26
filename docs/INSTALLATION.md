@@ -22,7 +22,7 @@ dependency on protoCore's own package instead of shipping a copy.
   its install prefix with `-DPROTO_CORE_PREFIX=<prefix>` if it is not in a
   system prefix), installed, with its CMake package configuration. See
   protoCore's `docs/INSTALLATION.md`.
-- **protoIO 0.2.2 or a later 0.2** (the input and output library shared by the protoCore
+- **protoIO 0.2.3 or a later 0.2** (the input and output library shared by the protoCore
   runtimes), either installed (the `protoio-dev` package, or any prefix
   given with `-DCMAKE_PREFIX_PATH`, or a build tree given with
   `-DprotoIO_DIR=<path>/protoIO/build_release`) or checked out next to
@@ -30,7 +30,8 @@ dependency on protoCore's own package instead of shipping a copy.
   protoClojure's build. It is linked statically: the installed `protoclj`
   does not need it. 0.2.2 is the first with `RunOptions` (`sh`'s `:dir` and
   `:env` without a shell) and a dual-stack listener for servers started
-  without a host.
+  without a host; 0.2.3 the first with `readBufferedLine`, which `line-seq`
+  and `read-line` use.
 - **OpenSSL 3** development files (`libssl-dev` on Debian/Ubuntu,
   `openssl-devel` on Fedora/RHEL, `brew install openssl@3` on macOS), for
   TLS sockets and `https`. `libssl` becomes a runtime dependency of

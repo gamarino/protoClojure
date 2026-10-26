@@ -957,6 +957,23 @@ IOPRIM(prim_spit) {
     return PROTO_NONE;
 }
 
+// The next line of descriptor `fd` without its end, or nil at the end of
+// the stream. A line protoIO already holds in its read-ahead buffer is taken
+// without leaving the collector's quorum: readBufferedLine never reads and
+// never waits, and a 64 KiB read holds hundreds of lines, so only the line
+// that needs a read pays the UnmanagedScope of blocking() (two passes
+// through protoCore's global mutex and a wake-up of the collector thread).
+// Both calls take the line off the same buffer, so read-line and line-seq
+// on one reader still see each line exactly once, in order.
+const PO* readLineOf(proto::ProtoContext* ctx, int fd) {
+    std::optional<std::string> line = protoio::readBufferedLine(fd);
+    if (!line) {
+        line = blocking(ctx, [&] { return protoio::readLine(fd); });
+        if (!line) return PROTO_NONE;
+    }
+    return makeString(ctx, *line);
+}
+
 // (read-line) from standard input, or (read-line rdr) from a reader or a
 // socket: the next line without its end, nil at the end of the stream.
 IOPRIM(prim_read_line) {
@@ -964,8 +981,7 @@ IOPRIM(prim_read_line) {
     if (n > 1) arity(ctx, n, "read-line");
     const int fd = n == 0 ? 0
         : openFd(ctx, arg(ctx, args, 0), "read-line", {HandleKind::Reader, HandleKind::Socket});
-    const std::optional<std::string> line = blocking(ctx, [&] { return protoio::readLine(fd); });
-    return line ? makeString(ctx, *line) : PROTO_NONE;
+    return readLineOf(ctx, fd);
 }
 
 // (write w x): writes (str x) to a writer or a socket; nil.
@@ -1030,8 +1046,7 @@ IOPRIM(prim_writer) {
 // The next line of a reader or a socket handle, or nil at its end.
 const PO* nextLine(proto::ProtoContext* ctx, const PO* h) {
     const int fd = openFd(ctx, h, "line-seq", {HandleKind::Reader, HandleKind::Socket});
-    const std::optional<std::string> line = blocking(ctx, [&] { return protoio::readLine(fd); });
-    return line ? makeString(ctx, *line) : PROTO_NONE;
+    return readLineOf(ctx, fd);
 }
 
 // The line, then a lazy seq that reads the next one when it is first read:

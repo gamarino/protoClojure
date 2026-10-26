@@ -24,8 +24,8 @@ concurrency:
 env:
   PROTOCORE_REPO: numaes/protoCore
   PROTOIO_REPO: gamarino/protoIO
-  # protoIO 0.2.2 (main), the floor find_package(protoIO 0.2.2) requires
-  PROTOIO_REF: 1611ff9cf8d499cdc42a6e108e42ecfc36fd8164
+  # protoIO 0.2.3 (main, 7920332), the floor find_package(protoIO 0.2.3) requires
+  PROTOIO_REF: 792033281f77d4a771e4e417a7173a0e6d0a42fa
 
 jobs:
   test:
