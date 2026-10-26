@@ -15,7 +15,7 @@
  * stay distinguishable: `vector?`, `list?`, `conj` and printing (`[1 2]`
  * against `(1 2)`) all depend on it, and protoClojure cannot mint a protoCore
  * tag of its own. (Lists are protoCore ProtoLinkedLists now, a tag of their
- * own, SeqTypes.h, M46; the box stays, so that a bare ProtoList is never a Clojure value.) The one-entry sparse list is the cheapest immutable box that
+ * own, SeqTypes.h, M47; the box stays, so that a bare ProtoList is never a Clojure value.) The one-entry sparse list is the cheapest immutable box that
  * carries a distinct tag: one cell per vector (the Small inline form, which
  * a one-entry sparse list never outgrows), an inline scan of up to three
  * slots per unboxing, no wrapper object, no attribute lookup, no entry in

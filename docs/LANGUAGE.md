@@ -515,16 +515,16 @@ A singly-linked persistent list, as Clojure's `PersistentList`: `O(1)`
 (list? (cons 0 '(1)))  ;; => false: cons answers a seq, as in Clojure
 ```
 
-**Representation.** A non-empty list is a chain of immutable list cells,
-each holding its first element, the rest of the list and its count; the
-empty list `()` is one value (`src/runtime/SeqTypes.h`, DESIGN.md M44). The
-reader yields these lists and the compiler reads them as they are, so code
-is data with nothing converted. Walking a list allocates nothing, so a list
-nobody else holds is collected cell by cell as it is walked. A cell costs
-four protoCore cells (256 bytes), against one AVL node per element when
-lists were `ProtoList`s; what that buys is `rest` and `cons` in constant
-time where they copied a path of log2 n nodes. `(vec list)` copies the
-elements into the vector's storage (D60).
+**Representation.** A list is a protoCore `ProtoLinkedList`: an immutable
+chain of 64-byte cells of up to four elements, every cell full but the
+first, each holding the count of what follows; the empty list `()` is one
+value (`src/runtime/SeqTypes.h`, DESIGN.md M44, M47). The reader yields
+these lists and the compiler reads them as they are, so code is data with
+nothing converted. `first` and `count` read the first cell, `conj` adds one
+cell, and `rest` copies the first cell without its first element unless
+that element is alone in it (three steps in four). A list nobody else holds
+is collected cell by cell as it is walked. A list costs 16 bytes per
+element. `(vec list)` copies the elements into the vector's storage (D60).
 
 ### 4.2 Vector
 

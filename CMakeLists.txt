@@ -76,7 +76,7 @@ endif()
 # 3.1.0: lazy objects (ProtoObject::newLazyChild), which lazy sequences are
 # (src/runtime/LazySeq.h, docs/DESIGN.md M28).
 # 3.3.0: ProtoLinkedList, which Clojure lists are (src/runtime/SeqTypes.h,
-# docs/DESIGN.md M46).
+# docs/DESIGN.md M47).
 set(PROTOCORE_MIN_VERSION      "3.3.0")
 set(PROTOCORE_MIN_VERSION_FULL "3.3.0")
 set(PROTOCORE_NEXT_MAJOR       "4.0.0")

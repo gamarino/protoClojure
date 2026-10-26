@@ -171,8 +171,9 @@ and metadata are rejected with a "reserved-for-later token" error.
 
 Every reader output is a runtime value: the reader yields exactly what a
 program manipulates at run time, so code is data with no conversion at any
-boundary (decision M1, §10.1). A list is a chain of immutable list cells
-ending in the empty list (`src/runtime/SeqTypes.h`, decision M44); a vector
+boundary (decision M1, §10.1). A list is a protoCore `ProtoLinkedList`, an
+immutable chain of cells of four elements (`src/runtime/SeqTypes.h`,
+decisions M44 and M47); a vector
 is a `ProtoList` inside a one-entry `ProtoSparseList` box
 (`src/runtime/VectorOps.h`, decision R2); a map literal is the runtime map;
 a symbol or a keyword is its interned named value (`src/runtime/Named.h`); a
@@ -221,8 +222,8 @@ The user-facing rules are in `LANGUAGE.md` §4.3. Symbols and keywords are
 interned named values, never strings (`src/runtime/Named.h`).
 
 The reader is the place where "code is data" becomes literal: the result
-of `(read-string "(+ 1 2)")` is a real list of three elements (three list
-cells, M44) that the same code path can evaluate.
+of `(read-string "(+ 1 2)")` is a real list of three elements (one
+`ProtoLinkedList` cell, M47) that the same code path can evaluate.
 
 ## 4. The compiler / evaluator
 
@@ -801,7 +802,8 @@ the maintainer's review; each lists the alternatives considered.
 produces the values the runtime manipulates: a symbol or a keyword is its
 interned named value (`runtime/Named.h`), a string a protoCore string, a
 vector and a map the runtime's own, `nil` / `true` / `false` the values
-themselves, a list a `ProtoList` (a chain of list cells since M44). The
+themselves, a list a `ProtoList` (a chain of list cells since M44, a
+`ProtoLinkedList` since M47). The
 compiler consumes those values. There
 is no conversion at the reader/compiler boundary, and none at the
 compiler/macro boundary later: a macro receives and returns the same values
@@ -1628,7 +1630,7 @@ cost (now the largest, about half of a primitive call), deferred: it is a
 change to every opcode and has hurt before (icache layout, protoJS).
 
 **M44. A Clojure list is a chain of immutable list cells** (*agent,
-pending review*). A list was a protoCore `ProtoList`, an AVL tree: `rest`
+pending review*; the cell representation is superseded by M47). A list was a protoCore `ProtoList`, an AVL tree: `rest`
 and `cons` rebuilt a root-to-leaf path, log2 n cells each (14.8 cells per
 element walking a list of 10^6 with `rest`, 7.3 per `cons`), and `first`
 was an O(log n) read. Clojure's `PersistentList` is a cell holding first,
@@ -1786,6 +1788,50 @@ keyword-argument arity of a multi-arity fn takes key/value pairs:
 before each inlined form, jumping to a compiled general call, rejected:
 twice the code for every arithmetic form, for a case almost no program
 reaches.
+
+**M47. A Clojure list is a protoCore `ProtoLinkedList`** (*agent,
+pending review*). M44's list cell was a protoCore lazy object published
+with a three-element field list: four protoCore cells, 256 bytes, per
+element. M44 asked protoCore for a one-cell record; protoCore 3.3.0 added
+instead a collectable list type built at the front, `ProtoLinkedList`
+(protoCore `docs/specs/2026-10-25-linked-list-design.md`): an immutable
+chain of 64-byte cells of up to four elements, every cell full but the
+head, each holding the count of its suffix, with a pointer tag of its own
+(29). Now (`src/runtime/SeqTypes.h`) a non-empty list is a
+`ProtoLinkedList` and `()` is protoCore's one empty list of the process;
+the list prototype is gone, and a list is told by its tag alone (no
+prototype read). Costs: `first`, `count` and `empty?` read the head cell;
+`conj` onto a list allocates one cell; `rest` allocates nothing when the
+head holds one element and one cell otherwise (three steps in four), the
+one cost M44 did not have; `nth` walks n / 4 cells. A list of n elements
+takes ceil(n / 4) cells, 16 bytes per element instead of 256. Everything
+that reads a list without handing its rest to Clojure code -- printing,
+`=`, `hash`, map keys, `apply`, `sort`, `str`/`join`, `(vec list)`, the
+compiler's `FormList`, the reader, macro arguments, the debugger -- walks it
+with a cursor (`ListCursor`) and allocates nothing; `SeqWalk` and `reduce`
+read the head cell by index and step to the next cell without allocating
+(`listHeadCount`), rooting only the current cell, so a list nobody else
+holds is still collected cell by cell as it is walked
+(`tests/cli/list-walk-under-heap-limit.sh`, resized to 2 x 10^6 elements
+under 800,000 cells, because a list of 10^6 no longer reaches the old
+ceiling). Measured (`benchmarks/reports/2026-10-25-linked-list`, n = 10^6,
+ns per element, main -> M47, Babashka 1.4.192 in brackets): a list walk
+with `rest` 245 -> 217 [169]; `reduce +` over a list 89 -> 21 [27] (the
+A/A copy of main: 50); `empty?` + `first` 225 -> 177 [183]; `(vec list)`
+1094 -> 768; `(count (rest xs))` 238 -> 239; cons-build then count 474 ->
+462. Building a list of 10^6 with `(apply list (range n))`: 8.3 -> 7.3
+Gcycles and 788 -> 562 MB peak RSS. Start-up 67.2 -> 65.0 Mcycles (core.clj's
+lists are smaller). `benchmarks/bench.sh` and the showcase scripts within
+the A/A noise. At n = 10^4 a walk with `rest` reads 216 -> 395 ns per
+element: the 4 MB heap block that the walk's garbage first needs is mapped
+inside the timed window (about 1,020 page faults, no collection cycle), at
+n = 10^4 for M47 and at n = 8,000 for main, whose start-up already used
+those pages; it is a cost per process, not per element. Alternatives: (a)
+keep M44's cells, rejected: 256 bytes per kept element; (b) a one-cell
+record type in protoCore (M44's request), not chosen by protoCore: a list
+type also gives counted suffixes and four elements per cache line; (c) walk
+lists with `rest` everywhere, rejected: one garbage cell per three steps
+where a cursor allocates nothing.
 
 ## 11. The standard library
 

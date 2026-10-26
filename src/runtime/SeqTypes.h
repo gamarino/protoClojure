@@ -1,6 +1,6 @@
 /*
  * SeqTypes — the representation of protoClojure's sequence objects: lists,
- * lazy seqs, cons cells and chunks (docs/DESIGN.md §10.2, M28, M46).
+ * lazy seqs, cons cells and chunks (docs/DESIGN.md §10.2, M28, M47).
  *
  * Vectors stay protoCore's own structure (a boxed ProtoList, VectorOps.h),
  * and so do lists: a Clojure list is a protoCore ProtoLinkedList (see
@@ -94,7 +94,7 @@ inline bool isSeqObject(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
 // Clojure code go through ListCursor or listNth and allocate nothing.
 //
 // The reader yields these lists, the compiler and the macros read them, and
-// every primitive that answers a list answers one (docs/DESIGN.md, M44, M46).
+// every primitive that answers a list answers one (docs/DESIGN.md, M44, M47).
 // A protoCore ProtoList is never a Clojure value: it is the element storage
 // of a vector (VectorOps.h) and an internal container.
 //

@@ -3,7 +3,7 @@
 # CLI check: a long list is collected cell by cell as it is walked.
 #
 # A Clojure list is a protoCore ProtoLinkedList, one 64-byte cell per four
-# elements (docs/DESIGN.md, M46), so a list of 2,000,000 elements holds
+# elements (docs/DESIGN.md, M47), so a list of 2,000,000 elements holds
 # 500,000 cells. Under a ceiling of 800,000 cells two such lists cannot be
 # alive at once. Each program below builds a second list while it walks the
 # first (rev), or builds and walks one list after another, without holding

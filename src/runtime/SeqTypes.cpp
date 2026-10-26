@@ -1,6 +1,8 @@
 #include "CallerSlots.h"
 #include "SeqTypes.h"
 
+#include "ListBuilder.h"
+
 #include "protoCore.h"
 
 #include <stdexcept>
@@ -128,7 +130,17 @@ const proto::ProtoObject* listFromProtoList(proto::ProtoContext* ctx, const prot
 
 const proto::ProtoList* listToProtoList(proto::ProtoContext* ctx, const proto::ProtoObject* l) {
     if (l == g_seqProtos.empty) return ctx->newList();
-    return asLinkedList(l)->asList(ctx);
+    // The list is rooted by the caller, and so is every cell the cursor
+    // reads; the builder roots what it has built. (ProtoLinkedList::asList
+    // goes through ProtoContext::newList(n, items), which copies a path per
+    // element: (vec list) measured 20-40 % slower with it.)
+    const proto::ProtoObject* out;
+    {
+        ListBuilder b(ctx);
+        for (ListCursor c(l); c.hasNext();) b.push(c.next());
+        out = b.finish();
+    }
+    return out->asList(ctx);
 }
 
 void setSeqToList(SeqToListFn fn) { g_seqToList = fn; }

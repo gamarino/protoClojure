@@ -9,6 +9,24 @@ first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Changed — lists are protoCore `ProtoLinkedList`s; requires protoCore 3.3.0 (2026-10-25)
+
+- A Clojure list is a protoCore `ProtoLinkedList` (protoCore 3.3.0): cells
+  of four elements, 16 bytes per element instead of 256 (DESIGN.md M47).
+  `()` is protoCore's one empty list. `rest` of a list allocates one cell
+  three steps in four; printing, `=`, `hash`, map keys, `apply`, `sort`,
+  `(vec list)`, `reduce`, seq walks, the compiler and the reader read lists
+  without allocating.
+- Measured at n = 10^6 (`benchmarks/reports/2026-10-25-linked-list`, ns per
+  element): `reduce +` over a list 89 -> 21, a walk with `rest` 245 -> 217,
+  `(vec list)` 1094 -> 768; `(apply list (range 10^6))` 788 -> 562 MB peak
+  RSS; start-up -3 % cycles; `bench.sh` and the showcase within noise.
+- Requires protoCore 3.3.0 (CMake floor, `Depends: protocore (>= 3.3.0)`);
+  CI pinned to protoCore v3.3.0, and the Windows floor job is dropped while
+  the floor equals the pinned release.
+- `cli/list-walk-under-heap-limit` resized to 2 x 10^6 elements under
+  800,000 cells; new fixture `08-collections/list-cell-boundaries.clj`.
+
 ### Changed — primitives run in the caller's context (2026-10-25)
 
 - A primitive (a C++ built-in) runs in its caller's context: calling one

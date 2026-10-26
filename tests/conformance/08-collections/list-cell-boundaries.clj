@@ -1,6 +1,6 @@
 ;; EXPECT: ok
 ;; A list is a protoCore ProtoLinkedList: cells of four elements, every cell
-;; full but the head (docs/DESIGN.md, M46). Every size from 0 to 13, built
+;; full but the head (docs/DESIGN.md, M47). Every size from 0 to 13, built
 ;; five ways, is read every way against the vector of the same elements, so
 ;; each operation crosses a partial head, a full head and a cell boundary.
 (defn walk-rest [l] (loop [l l acc []] (if (empty? l) acc (recur (rest l) (conj acc (first l))))))

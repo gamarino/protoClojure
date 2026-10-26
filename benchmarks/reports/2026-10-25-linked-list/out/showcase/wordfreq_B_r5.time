@@ -1,0 +1,23 @@
+	Command being timed: "/home/gamarino/Documentos/proyectos/.agent_scratch/linked-list/bench-scratch/fresh.lkcv/protoclj /home/gamarino/Documentos/proyectos/.agent_scratch/linked-list/clj-lists/examples/showcase/word-freq.clj"
+	User time (seconds): 25.09
+	System time (seconds): 1.26
+	Percent of CPU this job got: 141%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:18.62
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 147224
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 320
+	Minor (reclaiming a frame) page faults: 35897
+	Voluntary context switches: 248171
+	Involuntary context switches: 11081
+	Swaps: 0
+	File system inputs: 4624
+	File system outputs: 0
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
