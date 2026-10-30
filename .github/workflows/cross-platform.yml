@@ -38,7 +38,7 @@ jobs:
       matrix:
         include:
           - name: macOS (Apple clang, arm64)
-            os: macos-14
+            os: macos-15
             # protoCore 3.3.1 (tag v3.3.1)
             protocore_ref: 5a8cd7c7aae68edbb34720445736b14685efae6f
           - name: Windows (MSVC, x64)
