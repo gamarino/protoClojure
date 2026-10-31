@@ -4,10 +4,27 @@ All notable changes to protoClojure are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The version declared in `CMakeLists.txt` (and printed by `protoclj --version`)
-is 0.0.2, the first tag: a preview with a Linux `.deb`. v0.1.0 remains the
-first planned release (`docs/ROADMAP.md`).
+is 0.0.4, a preview tag with a Linux `.deb` (0.0.2 was the first tag). v0.1.0
+remains the first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
+
+## [0.0.4] - 2026-10-31
+
+**Requires protoCore 3.4.0** (SOVERSION 5), the declared minimum for a build from source; the `.deb` depends on `protocore (>= 3.4.0)`. protoCore 3.4.0 removed `ProtoContext::pendingRoot`, which changed `ProtoContext`'s layout: a protoclj built against 3.4.0 does not load with an older libprotoCore, and vice versa. For protoClojure this is a rebuild; no source changed for the ABI. CI pins protoCore tag `v3.4.0` on every job, including the Windows floor job. Also requires protoIO 0.2.3 and PCRE2 to build.
+
+Since 0.0.3, the release brings the scripting vocabulary of the macros brief (`defmacro` and syntax-quote, the `clojure.core` macros in an embedded `core.clj`, destructuring, sets, regular expressions, `format` / `for` / `doseq`, lazy sequences, JSON and EDN, the everyday vocabulary of a 20-line script) and the showcase against Babashka; a Debug Adapter Protocol server (`protoclj --dap`) and a VS Code extension; lists as protoCore `ProtoLinkedList`s, primitives that run in the caller's context and direct seq primitives in the VM; `protoclj --disasm` and the VM documentation; regular expressions on PCRE2 with its JIT; and buffered `line-seq` / `read-line`.
+
+### Changed — protoCore 3.4.0 (SOVERSION 5), 2026-10-31
+
+- `PROTOCORE_MIN_VERSION` 3.3.0 -> 3.4.0 and `PROTOCORE_ABI_SOVERSION`
+  4 -> 5; the DEB depends on `protocore (>= 3.4.0), protocore (<< 4.0.0)`.
+- CI (ci.yml, cross-platform.yml) builds protoCore tag v3.4.0 instead of
+  v3.3.1. No protoCore older than 3.4.0 carries SOVERSION 5, so the Windows
+  floor job moves to 3.4.0 as well: floor and pin coincide for now, and the
+  floor stays on 3.4.0 when the pin moves to a later 3.4.x or 3.5.x.
+- The macOS job runs on `macos-15` (GitHub retires the macOS 14 images on
+  2026-11-02).
 
 ### Changed — CI on protoCore 3.3.1 (2026-10-26)
 
@@ -228,6 +245,14 @@ first planned release (`docs/ROADMAP.md`).
 
 - ci.yml and cross-platform.yml pin protoCore 3.1.0 (master 34eca79f; not
   tagged yet), the minimum CMakeLists.txt declares since lazy sequences.
+- The first cross-platform runs of the macros branch fixed: a pointer cast
+  to a 32-bit `unsigned long` under MSVC's LLP64 and size arguments that
+  narrowed on Windows, a `-Werror=switch` in `realized?`, raw string
+  literals with escapes inside gtest macros (MSVC's preprocessor), the CLI
+  checks under MSYS (`cli/core-embedded` keeps `protoclj.exe`'s name and
+  copies the build's DLLs beside it), and the per-library `std::regex`
+  differences of the time (libc++ continued searches, MSVC's recursion
+  bound), since made moot by PCRE2.
 
 ### Fixed — the macros-branch regression (2026-10-24)
 

@@ -6,7 +6,7 @@ protoClojure is a Clojure-inspired language runtime built on the [protoCore](htt
 
 protoClojure is **not** a drop-in replacement for Clojure-JVM. There is no JVM, no Java interop, no Maven, no `clojure.java.*`. What it offers instead is the Clojure idiom — `defn`, `let`, `loop`/`recur`, closures, persistent collections, higher-order functions, keywords, multi-arity — running on a runtime that **starts in milliseconds**, **uses real OS threads with no GIL**, and **promotes to LargeInteger automatically** when an arithmetic result no longer fits in a tagged word. The design reaches the companion runtimes through the same UMD module system protoST and protoPython share, so that `(:require [py/numpy :as np])` becomes a pointer hand-off rather than a separate process; that module system is not implemented yet.
 
-protoClojure is at an early stage: version 0.0.3, a preview tag with a Linux `.deb`; v0.1.0 is the first planned release.
+protoClojure is at an early stage: version 0.0.4, a preview tag with a Linux `.deb`; v0.1.0 is the first planned release.
 
 ## Why this exists
 
@@ -356,7 +356,7 @@ The property this membership is designed to confer: a value materialised in any 
 
 ## Project status
 
-protoClojure runs scripts and an interactive REPL, both one top-level form at a time: each form is read, compiled and run before the next is read, as in Clojure. Version 0.0.3, a preview tag (v0.1.0 is the first planned release). Shipped changes are listed in [CHANGELOG.md](CHANGELOG.md).
+protoClojure runs scripts and an interactive REPL, both one top-level form at a time: each form is read, compiled and run before the next is read, as in Clojure. Version 0.0.4, a preview tag (v0.1.0 is the first planned release). Shipped changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 | Area | Status |
 |---|---|
@@ -487,7 +487,7 @@ Before this default (2026-10-10), protoclj set no limit and protoCore never
 started a collection by itself: a program grew its heap with every allocation
 (with six allocating tasks, `coll_alloc` was killed at 16 GB). A protoclj built
 against a protoCore older than 2.10.0 had no controller and kept that old
-behaviour (the declared minimum is now 3.3.0).
+behaviour (the declared minimum is now 3.4.0).
 
 ### Packaging
 
@@ -498,23 +498,23 @@ protoClojure configures installable packages for Linux, macOS, and Windows via C
 cd build_release
 
 # --- Linux ---------------------------------------------------------------
-cpack -G TGZ                # protoclojure-0.0.3-Linux.tar.gz (universal)
-cpack -G DEB                # protoclojure-0.0.3-Linux.deb   (Debian / Ubuntu)
-cpack -G RPM                # protoclojure-0.0.3-Linux.rpm   (Fedora / RHEL)
+cpack -G TGZ                # protoclojure-0.0.4-Linux.tar.gz (universal)
+cpack -G DEB                # protoclojure-0.0.4-Linux.deb   (Debian / Ubuntu)
+cpack -G RPM                # protoclojure-0.0.4-Linux.rpm   (Fedora / RHEL)
 
 # --- macOS ---------------------------------------------------------------
-cpack -G DragNDrop          # protoclojure-0.0.3-Darwin.dmg
+cpack -G DragNDrop          # protoclojure-0.0.4-Darwin.dmg
 
 # --- Windows -------------------------------------------------------------
-cpack -G NSIS               # protoclojure-0.0.3-win64.exe   (NSIS installer)
-cpack -G ZIP                # protoclojure-0.0.3-win64.zip   (portable)
+cpack -G NSIS               # protoclojure-0.0.4-win64.exe   (NSIS installer)
+cpack -G ZIP                # protoclojure-0.0.4-win64.zip   (portable)
 ```
 
 The DEB artifact declares a runtime dependency on `protocore` and the RPM artifact on `protoCore` (`CPACK_DEBIAN_PACKAGE_DEPENDS` and `CPACK_RPM_PACKAGE_REQUIRES` in `CMakeLists.txt`), so the package manager fails cleanly if libprotoCore is not installed. The TGZ / DMG / NSIS / ZIP artifacts do **not** carry libprotoCore — install it from its own package first, or build it side by side and add its install prefix to your loader path. The installed `protoclj` has an `INSTALL_RPATH` of `$ORIGIN/../lib` (Linux) / `@executable_path/../lib` (macOS), so as long as protoCore lives under the same `<prefix>/lib` no environment variable is needed.
 
 ```bash
 # Quick sanity check after installing the DEB:
-sudo dpkg -i protoclojure-0.0.3-Linux.deb
+sudo dpkg -i protoclojure-0.0.4-Linux.deb
 protoclj --version
 protoclj /usr/share/protoClojure/examples/02-factorial.clj
 ```
