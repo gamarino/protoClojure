@@ -4,6 +4,12 @@
 > finished, or dropped. If a feature you expect is not listed as
 > implemented here, it is not implemented.
 
+**Version 0.0.4 (2026-10-31), a preview tag.** Requires protoCore 3.4.0
+(SOVERSION 5). `ctest` registers 885 test cases (690 conformance fixtures,
+146 unit tests and module checks, 49 CLI and documentation checks); all 885
+pass locally on Linux against protoCore 3.4.0 (2026-10-31). The README's
+"Project status" section describes what is implemented.
+
 **Branch `perf/seq-cost-cons-lists` (2026-10-24).** `ctest` registers 868
 test cases: 683 conformance fixtures, 138 GoogleTest unit tests and module
 checks, 46 CLI checks and the documentation snippet check; all pass locally
@@ -14,7 +20,7 @@ not isolated. Lists are chains of cells (DESIGN.md M44) and the VM answers
 the hot seq primitives directly (M43).
 The paragraph below describes the 0.0.3 tag.
 
-**Current state.** Version 0.0.3 (2026-10-22), a preview tag. The interpreter runs
+**0.0.3 tag.** Version 0.0.3 (2026-10-22), a preview tag. The interpreter runs
 scripts and an interactive REPL. `ctest` registers 528 test cases: 408
 conformance fixtures under `tests/conformance/`, 99 GoogleTest unit
 tests for the lexer, the reader, the bytecode module, the runtime map,

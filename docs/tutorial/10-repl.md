@@ -23,7 +23,7 @@ Launch `protoclj` with no arguments:
 
 ```
 $ protoclj
-protoClojure 0.0.3
+protoClojure 0.0.4
 REPL — :help for commands, :quit or Ctrl-D to exit
 user=>
 ```

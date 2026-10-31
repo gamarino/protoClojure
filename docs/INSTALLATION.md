@@ -17,8 +17,9 @@ dependency on protoCore's own package instead of shipping a copy.
   REPL needs history, arrow-key editing and the multi-line continuation prompt,
   and configuration fails with a `FATAL_ERROR` when it is missing (except on
   Windows, where the REPL uses the console's own line editing).
-- **protoCore 3.3.0 or newer, below 4.0.0** (3.1.0 adds the lazy objects lazy
-  sequences are built on, 3.3.0 the `ProtoLinkedList` Clojure lists are; name
+- **protoCore 3.4.0 or newer, below 4.0.0** (3.1.0 adds the lazy objects lazy
+  sequences are built on, 3.3.0 the `ProtoLinkedList` Clojure lists are, 3.4.0
+  moves to SOVERSION 5 because `ProtoContext::pendingRoot` was removed; name
   its install prefix with `-DPROTO_CORE_PREFIX=<prefix>` if it is not in a
   system prefix), installed, with its CMake package configuration. See
   protoCore's `docs/INSTALLATION.md`.
@@ -71,20 +72,24 @@ The discovery is `find_package(protoCore 2.0 CONFIG)`, so the prefix must hold
 configuration there is no way to tell protoCore 1.x from 2.x, and linking the
 wrong major version is silent.
 
-The version floor is `2.6.1` and the ceiling is the next major version.
-The HTTP server creates a thread per connection from its accept thread, and
-protoCore before 2.6.1 could detach a live context's roots when a thread was
-created from another thread. (protoClojure's maps are protoCore `ProtoMap`s and
-its actor mailboxes protoCore `ProtoMPSCQueue`s, both added in 2.1.0.)
-protoCore's major version and its soname move together.
-protoClojure additionally asserts that the package's `SOVERSION` is `2`.
+The version floor is `3.4.0` and the ceiling is the next major version
+(`PROTOCORE_MIN_VERSION` and `PROTOCORE_NEXT_MAJOR` in `CMakeLists.txt`, whose
+comment lists what each step of the floor brought). The HTTP server creates a
+thread per connection from its accept thread, and protoCore before 2.6.1 could
+detach a live context's roots when a thread was created from another thread.
+(protoClojure's maps are protoCore `ProtoMap`s and its actor mailboxes protoCore
+`ProtoMPSCQueue`s, both added in 2.1.0.) protoCore's major version and its
+soname move together.
+protoClojure additionally asserts that the package's `SOVERSION` is `5`
+(`PROTOCORE_ABI_SOVERSION`), the one protoCore 3.4.0 introduced when it removed
+`ProtoContext::pendingRoot`.
 
 ## Building against a sibling developer tree
 
 When no installed package is found *and* no prefix was named, protoClojure falls
 back to the sibling source tree `../protoCore`, searching `build_release`, then
 `build`, then `build_check`. The fallback prints a `WARNING`: it performs no
-package version check (it does check that the build carries `SOVERSION 2`) and
+package version check (it does check that the build carries `SOVERSION 5`) and
 must not be used to produce a distributable package.
 
 Pass `-DPROTOCORE_REQUIRE_PACKAGE=ON` to turn the fallback into a hard error.
@@ -241,8 +246,8 @@ dependency on protoCore's own package:
 
 | Format | Relation |
 |--------|----------|
-| DEB | `Depends: protocore (>= 3.3.0), protocore (<< 4.0.0)` |
-| RPM | `Requires: protoCore >= 3.3.0, protoCore < 4.0.0` |
+| DEB | `Depends: protocore (>= 3.4.0), protocore (<< 4.0.0)` |
+| RPM | `Requires: protoCore >= 3.4.0, protoCore < 4.0.0` |
 
 `CPACK_DEBIAN_PACKAGE_SHLIBDEPS` is enabled, so `dpkg-shlibdeps` adds the
 shared libraries `protoclj` links to the DEB's `Depends`: `libc6`,

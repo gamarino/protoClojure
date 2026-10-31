@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoClojure VERSION 0.0.3 LANGUAGES CXX)
+project(protoClojure VERSION 0.0.4 LANGUAGES CXX)
 
 # Default to RelWithDebInfo so casual builds are not -O0 (matches the protoST
 # convention). Override with -DCMAKE_BUILD_TYPE=Release for a stripped -O3.
@@ -77,10 +77,13 @@ endif()
 # (src/runtime/LazySeq.h, docs/DESIGN.md M28).
 # 3.3.0: ProtoLinkedList, which Clojure lists are (src/runtime/SeqTypes.h,
 # docs/DESIGN.md M47).
-set(PROTOCORE_MIN_VERSION      "3.3.0")
-set(PROTOCORE_MIN_VERSION_FULL "3.3.0")
+# 3.4.0: SOVERSION 5, ProtoContext::pendingRoot removed (the ProtoContext
+# layout changed, so a build against 3.4.0 headers does not load with an
+# older libprotoCore, and vice versa).
+set(PROTOCORE_MIN_VERSION      "3.4.0")
+set(PROTOCORE_MIN_VERSION_FULL "3.4.0")
 set(PROTOCORE_NEXT_MAJOR       "4.0.0")
-set(PROTOCORE_ABI_SOVERSION    "4")
+set(PROTOCORE_ABI_SOVERSION    "5")
 option(PROTOCORE_REQUIRE_PACKAGE
     "Require an installed protoCore CMake package; never fall back to ../protoCore" OFF)
 
