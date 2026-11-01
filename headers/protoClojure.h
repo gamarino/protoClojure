@@ -15,7 +15,7 @@ namespace protoClojure {
 // Major.minor.patch.  Matches CMake's project() version.
 constexpr int kVersionMajor = 0;
 constexpr int kVersionMinor = 0;
-constexpr int kVersionPatch = 4;
+constexpr int kVersionPatch = 5;
 
 const char* versionString();
 

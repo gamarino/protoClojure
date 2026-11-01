@@ -15,8 +15,10 @@
  * map in O(1), and protoClojure cannot mint a protoCore pointer tag. The
  * vector's trick (a one-entry sparse list, VectorOps.h) has no free tag left
  * that the collector traces and protoCore does not intern; protoCore's own
- * ProtoSet keys elements by a 64-bit hash with no collision bucket, so two
- * different elements with one hash would be one element. The object costs
+ * ProtoSet compares elements by pointer (since protoCore 3.5.0; through 3.4.0
+ * it kept one element per 64-bit hash, so two different elements with one
+ * hash were one element), while a Clojure set compares strings, numbers and
+ * collections by value. The object costs
  * one cell and one own-attribute read per operation (protoCore's attribute
  * cache), the same shape protoScala uses for its sets.
  *
