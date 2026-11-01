@@ -9,6 +9,20 @@ remains the first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-10-31
+
+**Built and tested against protoCore 3.5.0** (SOVERSION 5, unchanged from 3.4.0). The declared minimum for a build from source stays **protoCore 3.4.0**, which the Windows floor job still builds; the `.deb` is built against the 3.5.0 package, so it depends on `protocore (>= 3.5.0)` through protoCore's shlibs file, besides the declared `protocore (>= 3.4.0), protocore (<< 4.0.0)`.
+
+protoCore 3.5.0 changed `ProtoSet` and `ProtoMultiset` (collision buckets, pointer-identity equality, a multiset iterator that returns elements). protoClojure uses neither (its sets are `ProtoMap`s, `src/runtime/SetOps.h`), so this release is a rebuild with no code change.
+
+### Changed — protoCore 3.5.0 pin, 2026-10-31
+
+- CI (ci.yml, cross-platform.yml) builds protoCore tag v3.5.0 on Linux, macOS
+  and the first Windows job; the Windows floor job keeps building 3.4.0.
+- The comment in `src/runtime/SetOps.h` that explained why a set does not use
+  protoCore's `ProtoSet` gave the 3.4.0 reason (one element per hash); it now
+  gives the one that holds from 3.5.0 (pointer equality).
+
 ## [0.0.4] - 2026-10-31
 
 **Requires protoCore 3.4.0** (SOVERSION 5), the declared minimum for a build from source; the `.deb` depends on `protocore (>= 3.4.0)`. protoCore 3.4.0 removed `ProtoContext::pendingRoot`, which changed `ProtoContext`'s layout: a protoclj built against 3.4.0 does not load with an older libprotoCore, and vice versa. For protoClojure this is a rebuild; no source changed for the ABI. CI pins protoCore tag `v3.4.0` on every job, including the Windows floor job. Also requires protoIO 0.2.3 and PCRE2 to build.
