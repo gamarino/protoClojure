@@ -53,13 +53,13 @@ concurrency:
 
 env:
   PROTOCORE_REPO: numaes/protoCore
-  # protoCore 3.5.0 (tag v3.5.0, commit 64ca282e), SOVERSION 5:
+  # protoCore 3.6.0 (tag v3.6.0, commit 799d7615), SOVERSION 5:
   # the release users install.  The minimum CMakeLists.txt declares
   # (PROTOCORE_MIN_VERSION) is 3.4.0: it removed ProtoContext::pendingRoot,
   # so a build against older headers does not load with it, and vice versa;
-  # 3.5.0 kept SOVERSION 5.  The floor job in cross-platform.yml builds
-  # 3.4.0.  Bump this deliberately.
-  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '64ca282e2ec7d2de31255dc7c3a16b06b3cc5e00' }}
+  # 3.5.0 and 3.6.0 kept SOVERSION 5.  The floor job in cross-platform.yml
+  # builds 3.4.0.  Bump this deliberately.
+  PROTOCORE_REF: ${{ github.event_name == 'schedule' && 'master' || '799d7615d0b4f8c3ab8bb708c282815d7f7cfb8b' }}
   PROTOIO_REPO: gamarino/protoIO
   # protoIO 0.2.3 (main, 7920332): readBufferedLine, which line-seq and
   # read-line use, and line reading without a per-line move of the read

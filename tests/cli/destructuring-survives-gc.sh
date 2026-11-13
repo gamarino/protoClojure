@@ -4,9 +4,13 @@
 # The compiler rewrites a binding form into the symbol bindings it stands for
 # (docs/DESIGN.md §10.1, M23) and compiles the rewritten forms; macros in the
 # bodies run at compile time and allocate garbage meanwhile, under a
-# 1,000,000-cell hard ceiling, so collection cycles run while the rewritten
+# 500,000-cell hard ceiling, so collection cycles run while the rewritten
 # forms are being compiled: a form the collector reclaimed shows up as a
-# wrong sum or a crash. The program covers fn parameters, a destructuring
+# wrong sum or a crash. (The ceiling was 1,000,000 cells until 2026-11-13.
+# protoCore 3.6.0's RRB ProtoList, which vectors are, makes far less garbage
+# per vector, and under that ceiling the REPL run saw 3 cycles locally and 2
+# on CI, below the 3 this check requires; 500,000 gives 9 locally against
+# 3.6.0 and 14 against 3.5.0.) The program covers fn parameters, a destructuring
 # let and loop inside a function, a defmacro whose parameters destructure,
 # and eval of a destructuring let in a loop, and its run-time destructuring
 # allocates while it walks large collections.
@@ -36,7 +40,7 @@ expected="15 55 120"
 check() {
     local mode="$1" out="$2" rc="$3"
     if [[ $rc -ne 0 ]]; then
-        echo "FAIL ($mode): protoclj exited $rc under PROTOCORE_HEAP_LIMIT_CELLS=1000000"
+        echo "FAIL ($mode): protoclj exited $rc under PROTOCORE_HEAP_LIMIT_CELLS=500000"
         printf '%s\n' "$out" | grep -v '^protoCore heap:' | tail -5
         exit 1
     fi
@@ -53,6 +57,6 @@ check() {
     fi
     echo "OK ($mode, $cycles cycles)"
 }
-export PROTOCORE_HEAP_TRACE=1 PROTOCORE_ADAPTIVE_HEAP=0 PROTOCORE_HEAP_LIMIT_CELLS=1000000
+export PROTOCORE_HEAP_TRACE=1 PROTOCORE_ADAPTIVE_HEAP=0 PROTOCORE_HEAP_LIMIT_CELLS=500000
 out=$(program | "$PROTOCLJ" /dev/stdin 2>&1); check file "$out" $?
 out=$(program | "$PROTOCLJ" 2>&1); check repl "$out" $?

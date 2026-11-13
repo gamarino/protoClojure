@@ -41,6 +41,13 @@
  *     `(= [1 2] [1 2])` a pointer comparison; it is now an element-by-element
  *     walk, like every other sequential comparison (`valuesEqual`).
  *
+ * Since protoCore 3.6.0 `ProtoList` is an RRB tree (six elements per leaf
+ * cell, open tail), no longer the one-element-per-node AVL tree the two
+ * paragraphs above describe: `nth`, `conj` (appendLast), `assoc` (setAt),
+ * `pop` (removeLast) and sequential walks of a vector are cheaper than they
+ * say. protoClojure does not call the ProtoList operations 3.6.0 made slower
+ * (appendFirst, insertAt, extend, getSlice, removeAt).
+ *
  * GC rooting: `newVector` allocates, so its `items` must be rooted by the
  * caller; the vector it returns is UNROOTED, like every other value a
  * primitive builds.

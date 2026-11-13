@@ -4,10 +4,38 @@ All notable changes to protoClojure are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 The version declared in `CMakeLists.txt` (and printed by `protoclj --version`)
-is 0.0.4, a preview tag with a Linux `.deb` (0.0.2 was the first tag). v0.1.0
+is 0.0.6, a preview tag with a Linux `.deb` (0.0.2 was the first tag). v0.1.0
 remains the first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
+
+## [0.0.6] - 2026-11-13
+
+**Built, tested and released against protoCore 3.6.0** (SOVERSION 5, unchanged since 3.4.0). The declared minimum for a build from source stays **protoCore 3.4.0**, which the Windows floor job still builds; the `.deb` is built against the 3.6.0 package, so it depends on `protocore (>= 3.6.0)` through protoCore's shlibs file. This release is a rebuild with no functional code change.
+
+protoCore 3.6.0 makes `ProtoList` a relaxed radix balanced (RRB) tree instead of an AVL tree. In protoCore's own measurements at 100,000 elements, `getAt`, `appendLast`, `setAt`, `removeLast` and iteration became faster (2x to 26x), while `appendFirst`, `insertAt`, `extend`, slicing and concatenation became 1.2x to 2.7x slower (`extend` up to 4.5x slower at 1,000 elements). What that means for protoClojure:
+
+- **Clojure lists are not affected.** They are protoCore `ProtoLinkedList`s (M47), not `ProtoList`s.
+- **Vectors are `ProtoList`s** (inside a one-entry `ProtoSparseList` box, `src/runtime/VectorOps.h`). `nth`, `conj`, `assoc`, `pop`, `peek` and sequential walks use only the operations 3.6.0 made faster. protoClojure calls none of the operations 3.6.0 made slower (`appendFirst`, `insertAt`, `extend`, `getSlice`, `removeAt`) on a `ProtoList`; `getSlice` is called only on strings.
+- `ProtoList` is also the accumulator of `ListBuilder` (appends only) and the storage of lazy-sequence chunks (indexed reads), both on the faster side.
+- **Measured:** fib, reduce-list, sum-loop, sum-squares and tak are neutral (within ±4 %) against 3.6.0. These benchmarks run on SmallIntegers and linked lists, so `ProtoList` is not on their hot paths. No vector-heavy benchmark was measured for this release, so the vector speedup above is expected from the protoCore figures but not measured in protoClojure.
+
+### Changed — protoCore 3.6.0 pin, 2026-11-13
+
+- CI (ci.yml, cross-platform.yml) builds protoCore tag v3.6.0 (commit 799d7615) on Linux, macOS
+  and the first Windows job; the Windows floor job keeps building 3.4.0.
+- The comment in `src/runtime/VectorOps.h` that described a vector's `ProtoList` as an AVL tree now
+  notes the RRB form from 3.6.0.
+
+### Changed — tests, 2026-11-13
+
+- `cli/destructuring-survives-gc` and `cli/primitive-callbacks-survive-gc` run under a 500,000-cell
+  heap ceiling instead of 1,000,000. Each requires at least 3 collection cycles, so that collection
+  runs while the forms under test hold their values. 3.6.0's RRB `ProtoList` makes far less garbage
+  per vector: under the old ceiling the REPL run of `destructuring-survives-gc` saw 2 cycles on CI and
+  3 locally (5 against 3.5.0), and `primitive-callbacks-survive-gc` saw 3 locally (9 against 3.5.0).
+  With the lower ceiling they see 8 to 11 cycles against 3.6.0. The programs, expected results and
+  minimum cycle counts are unchanged.
 
 ## [0.0.5] - 2026-10-31
 

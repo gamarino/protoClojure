@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(protoClojure VERSION 0.0.5 LANGUAGES CXX)
+project(protoClojure VERSION 0.0.6 LANGUAGES CXX)
 
 # Default to RelWithDebInfo so casual builds are not -O0 (matches the protoST
 # convention). Override with -DCMAKE_BUILD_TYPE=Release for a stripped -O3.
@@ -83,6 +83,8 @@ endif()
 # 3.5.0 keeps SOVERSION 5; it changed ProtoSet and ProtoMultiset, which
 # protoClojure does not use (sets are ProtoMaps, src/runtime/SetOps.h), so the
 # floor stays 3.4.0.
+# 3.6.0 keeps SOVERSION 5; ProtoList became an RRB tree (internal change), so
+# the floor stays 3.4.0.
 set(PROTOCORE_MIN_VERSION      "3.4.0")
 set(PROTOCORE_MIN_VERSION_FULL "3.4.0")
 set(PROTOCORE_NEXT_MAJOR       "4.0.0")

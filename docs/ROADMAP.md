@@ -10,7 +10,7 @@
 ## Versioning
 
 The version declared in `CMakeLists.txt` (and printed by `protoclj --version`)
-is **0.0.5**, tagged on 2026-10-31 as a preview with a Linux `.deb`.
+is **0.0.6**, tagged on 2026-11-13 as a preview with a Linux `.deb`.
 **v0.1.0** is the first planned release;
 the milestones under [Towards v0.1](#towards-v01) define its scope. Version
 labels such as v0.2 and v0.3 in this document and in the design documents

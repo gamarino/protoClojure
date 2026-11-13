@@ -4,11 +4,11 @@
 > finished, or dropped. If a feature you expect is not listed as
 > implemented here, it is not implemented.
 
-**Version 0.0.5 (2026-10-31), a preview tag.** Requires protoCore 3.4.0
-(SOVERSION 5) built from source; the `.deb` is built against 3.5.0 and depends
-on `protocore (>= 3.5.0)`. `ctest` registers 885 test cases (690 conformance fixtures,
-146 unit tests and module checks, 49 CLI and documentation checks); all 885
-pass locally on Linux against protoCore 3.4.0 (2026-10-31). The README's
+**Version 0.0.6 (2026-11-13), a preview tag.** Requires protoCore 3.4.0
+(SOVERSION 5) built from source; the `.deb` is built against 3.6.0 and depends
+on `protocore (>= 3.6.0)`. `ctest` registers 886 test cases (690 conformance fixtures,
+147 unit tests and module checks, 49 CLI and documentation checks); all 886
+pass locally on Linux against protoCore 3.6.0 (2026-11-13). The README's
 "Project status" section describes what is implemented.
 
 **Branch `perf/seq-cost-cons-lists` (2026-10-24).** `ctest` registers 868
