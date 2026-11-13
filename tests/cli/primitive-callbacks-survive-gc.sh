@@ -11,8 +11,11 @@
 # over a range and over a list, a lazy map reduced, swap! in a loop,
 # sort-by with a key fn, reduce inside a reduce callback, a primitive passed
 # directly as the reducing fn (conj, called through invoke), run! and
-# frequencies over a lazy map. It runs under a 1,000,000-cell hard ceiling
-# with PROTOCORE_GC_CONTEXT_THRESHOLD=200, so contexts submit their young
+# frequencies over a lazy map. It runs under a 500,000-cell hard ceiling
+# (1,000,000 until 2026-11-13: protoCore 3.6.0's RRB ProtoList, which vectors
+# are, makes far less garbage per vector, and under that ceiling the REPL run
+# saw 3 cycles, the minimum this check requires; 500,000 gives 9 against
+# 3.6.0 and 22 against 3.5.0) with PROTOCORE_GC_CONTEXT_THRESHOLD=200, so contexts submit their young
 # chains at nearly every safepoint and collection cycles run while the
 # primitives hold their values: a value the collector reclaimed shows up as
 # a wrong result or a crash. Every result is checked; the file and the REPL
@@ -42,7 +45,7 @@ expected="397 197780 348890 8 0 70500 40000 188890 1000"
 check() {
     local mode="$1" out="$2" rc="$3"
     if [[ $rc -ne 0 ]]; then
-        echo "FAIL ($mode): protoclj exited $rc under PROTOCORE_HEAP_LIMIT_CELLS=1000000"
+        echo "FAIL ($mode): protoclj exited $rc under PROTOCORE_HEAP_LIMIT_CELLS=500000"
         printf '%s\n' "$out" | grep -v '^protoCore heap:' | tail -5
         exit 1
     fi
@@ -59,7 +62,7 @@ check() {
     fi
     echo "OK ($mode, $cycles cycles)"
 }
-export PROTOCORE_HEAP_TRACE=1 PROTOCORE_ADAPTIVE_HEAP=0 PROTOCORE_HEAP_LIMIT_CELLS=1000000
+export PROTOCORE_HEAP_TRACE=1 PROTOCORE_ADAPTIVE_HEAP=0 PROTOCORE_HEAP_LIMIT_CELLS=500000
 export PROTOCORE_GC_CONTEXT_THRESHOLD=200
 out=$(program | "$PROTOCLJ" /dev/stdin 2>&1); check file "$out" $?
 out=$(program | "$PROTOCLJ" 2>&1); check repl "$out" $?

@@ -27,6 +27,16 @@ protoCore 3.6.0 makes `ProtoList` a relaxed radix balanced (RRB) tree instead of
 - The comment in `src/runtime/VectorOps.h` that described a vector's `ProtoList` as an AVL tree now
   notes the RRB form from 3.6.0.
 
+### Changed — tests, 2026-11-13
+
+- `cli/destructuring-survives-gc` and `cli/primitive-callbacks-survive-gc` run under a 500,000-cell
+  heap ceiling instead of 1,000,000. Each requires at least 3 collection cycles, so that collection
+  runs while the forms under test hold their values. 3.6.0's RRB `ProtoList` makes far less garbage
+  per vector: under the old ceiling the REPL run of `destructuring-survives-gc` saw 2 cycles on CI and
+  3 locally (5 against 3.5.0), and `primitive-callbacks-survive-gc` saw 3 locally (9 against 3.5.0).
+  With the lower ceiling they see 8 to 11 cycles against 3.6.0. The programs, expected results and
+  minimum cycle counts are unchanged.
+
 ## [0.0.5] - 2026-10-31
 
 **Built and tested against protoCore 3.5.0** (SOVERSION 5, unchanged from 3.4.0). The declared minimum for a build from source stays **protoCore 3.4.0**, which the Windows floor job still builds; the `.deb` is built against the 3.5.0 package, so it depends on `protocore (>= 3.5.0)` through protoCore's shlibs file, besides the declared `protocore (>= 3.4.0), protocore (<< 4.0.0)`.
