@@ -12,11 +12,13 @@ namespace protoClojure {
 // Set once per ProtoSpace by initSetOps, before any thread other than the
 // initialising one runs Clojure code; rooted by the caller (the globals).
 const proto::ProtoObject* g_setPrototype = nullptr;
+const proto::ProtoObject* g_setTemplate  = nullptr;
+const proto::ProtoString* g_elementsKey  = nullptr;
 
 namespace {
 
 const proto::ProtoString* elementsKey(proto::ProtoContext* ctx) {
-    return proto::ProtoString::createSymbol(ctx, "__set__");
+    return g_elementsKey ? g_elementsKey : proto::ProtoString::createSymbol(ctx, "__set__");
 }
 
 constexpr proto::proto_ulong kSaltSet = PROTO_UL(0x7C9F2D6A1B3E5F81);
@@ -25,15 +27,24 @@ constexpr proto::proto_ulong kSaltSet = PROTO_UL(0x7C9F2D6A1B3E5F81);
 const proto::ProtoObject* wrap(proto::ProtoContext* ctx, const proto::ProtoObject* elements) {
     CallerSlots scope(ctx, 1);
     scope.set(0, elements);
-    return g_setPrototype->newChild(ctx, /*isMutable=*/false)
-        ->setAttribute(ctx, elementsKey(ctx), scope.get(0));
+    const proto::ProtoObject* base = g_setTemplate
+        ? g_setTemplate : g_setPrototype->newChild(ctx, /*isMutable=*/false);
+    return base->setAttribute(ctx, elementsKey(ctx), scope.get(0));
 }
 
 } // namespace
 
 const proto::ProtoObject* initSetOps(proto::ProtoContext* ctx) {
+    CallerSlots scope(ctx, 2);
+    g_elementsKey = proto::ProtoString::createSymbol(ctx, "__set__");
     g_setPrototype = ctx->space->objectPrototype->newChild(ctx, /*isMutable=*/false);
-    return g_setPrototype;
+    scope.set(0, g_setPrototype);
+    g_setTemplate = g_setPrototype->newChild(ctx, /*isMutable=*/false)
+        ->setAttribute(ctx, g_elementsKey, PROTO_NONE)
+        ->removeAttribute(ctx, g_elementsKey);
+    scope.set(1, g_setTemplate);
+    const proto::ProtoObject* items[2] = {scope.get(0), scope.get(1)};
+    return ctx->newList(2, items)->asObject(ctx);
 }
 
 

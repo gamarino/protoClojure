@@ -83,10 +83,10 @@ endif()
 # 3.5.0 keeps SOVERSION 5; it changed ProtoSet and ProtoMultiset, which
 # protoClojure does not use (sets are ProtoMaps, src/runtime/SetOps.h), so the
 # floor stays 3.4.0.
-# 3.6.0 keeps SOVERSION 5; ProtoList became an RRB tree (internal change), so
-# the floor stays 3.4.0.
-set(PROTOCORE_MIN_VERSION      "3.4.0")
-set(PROTOCORE_MIN_VERSION_FULL "3.4.0")
+# 3.6.0 keeps SOVERSION 5; ProtoObject uses shared ProtoShape + inline values
+# and newClone / setAttributes for template-based instantiation.
+set(PROTOCORE_MIN_VERSION      "3.6.0")
+set(PROTOCORE_MIN_VERSION_FULL "3.6.0")
 set(PROTOCORE_NEXT_MAJOR       "4.0.0")
 set(PROTOCORE_ABI_SOVERSION    "5")
 option(PROTOCORE_REQUIRE_PACKAGE

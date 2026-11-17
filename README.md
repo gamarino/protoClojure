@@ -229,6 +229,7 @@ Against the previous README figures: from the June table (`ce9819d`), `fib` is 4
 
 Earlier measurements, each with its report (the README's text of 2026-10-24 for these is kept in [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md#earlier-readme-performance-sections-moved-2026-10-25)):
 
+- 2026-11-17, template objects and shared shapes on protoCore 3.6.0: [`reports/2026-11-17-template-objects/`](benchmarks/reports/2026-11-17-template-objects/README.md).
 - 2026-10-25, lists as `ProtoLinkedList`s (M47): [`reports/2026-10-25-linked-list/`](benchmarks/reports/2026-10-25-linked-list/README.md); primitives in the caller's context: [`reports/2026-10-25-primitive-context/`](benchmarks/reports/2026-10-25-primitive-context/).
 - 2026-10-24, seq cost and cons lists: [`reports/2026-10-24-seq-cost/`](benchmarks/reports/2026-10-24-seq-cost/README.md); the macros branch end to end and its regression fixes (start-up +35.7 % in cycles): [`reports/2026-10-24-regression/`](benchmarks/reports/2026-10-24-regression/README.md).
 - 2026-10-22, protoCore's unified exception model: [`reports/2026-10-22-unified-exceptions/`](benchmarks/reports/2026-10-22-unified-exceptions/).

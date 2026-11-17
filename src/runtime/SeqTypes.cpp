@@ -27,6 +27,27 @@ const proto::ProtoObject* initSeqTypes(proto::ProtoContext* ctx) {
         holder = holder->appendLast(ctx, *p);
         scope.set(0, holder->asObject(ctx));
     }
+    static constexpr const char* kFieldKeyNames[4] = {"__f0__", "__f1__", "__f2__", "__f3__"};
+    for (int i = 0; i < 4; ++i) {
+        g_seqProtos.fieldKeys[i] = proto::ProtoString::createSymbol(ctx, kFieldKeyNames[i]);
+    }
+    const proto::ProtoObject* dummyVals[4] = {PROTO_NONE, PROTO_NONE, PROTO_NONE, PROTO_NONE};
+    const proto::ProtoObject* consTmpl =
+        g_seqProtos.cons->newChild(ctx, /*isMutable=*/false)
+            ->setAttributes(ctx, 2, g_seqProtos.fieldKeys, dummyVals);
+    for (int i = 0; i < 2; ++i) consTmpl = consTmpl->removeAttribute(ctx, g_seqProtos.fieldKeys[i]);
+    g_seqProtos.consTemplate = consTmpl;
+    holder = holder->appendLast(ctx, consTmpl);
+    scope.set(0, holder->asObject(ctx));
+
+    const proto::ProtoObject* chunkTmpl =
+        g_seqProtos.chunk->newChild(ctx, /*isMutable=*/false)
+            ->setAttributes(ctx, 4, g_seqProtos.fieldKeys, dummyVals);
+    for (int i = 0; i < 4; ++i) chunkTmpl = chunkTmpl->removeAttribute(ctx, g_seqProtos.fieldKeys[i]);
+    g_seqProtos.chunkTemplate = chunkTmpl;
+    holder = holder->appendLast(ctx, chunkTmpl);
+    scope.set(0, holder->asObject(ctx));
+
     // One value per process, never collected (protoCore 3.3.0).
     g_seqProtos.empty = ctx->newLinkedList()->asObject(ctx);
     return scope.get(0);
@@ -47,14 +68,34 @@ SeqObject seqObjectKind(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
 // ---- seq nodes -------------------------------------------------------------------
 
 const proto::ProtoList* seqNodeFields(proto::ProtoContext* ctx, const proto::ProtoObject* node) {
+    const proto::ProtoObject* p = node->getPrototype(ctx);
+    if (p == g_seqProtos.cons) {
+        const proto::ProtoObject* vals[2] = {
+            orNil(node->getOwnAttributeDirect(ctx, g_seqProtos.fieldKeys[0])),
+            orNil(node->getOwnAttributeDirect(ctx, g_seqProtos.fieldKeys[1]))};
+        return ctx->newList(2, vals);
+    }
+    if (p == g_seqProtos.chunk) {
+        const proto::ProtoObject* vals[4] = {
+            orNil(node->getOwnAttributeDirect(ctx, g_seqProtos.fieldKeys[0])),
+            orNil(node->getOwnAttributeDirect(ctx, g_seqProtos.fieldKeys[1])),
+            orNil(node->getOwnAttributeDirect(ctx, g_seqProtos.fieldKeys[2])),
+            orNil(node->getOwnAttributeDirect(ctx, g_seqProtos.fieldKeys[3]))};
+        return ctx->newList(4, vals);
+    }
     return node->getLazyValue(ctx)->asList(ctx);
 }
 
 const proto::ProtoObject* newSeqNode(proto::ProtoContext* ctx, const proto::ProtoObject* proto,
                                      unsigned n, const proto::ProtoObject* const* fields) {
-    // A lazy object published at once with its fields: three cells for the
-    // object and one for the fields list (up to five fields fit one cell).
-    // Both are young cells of `ctx`, which the collector does not reclaim.
+    // Cons (2 fields) and chunk (4 fields) derive from pre-shaped templates so
+    // each node fits in a single 64-byte ProtoObjectCell with inline values[0..3].
+    if (proto == g_seqProtos.cons && n == 2 && g_seqProtos.consTemplate) {
+        return g_seqProtos.consTemplate->setAttributes(ctx, 2, g_seqProtos.fieldKeys, fields);
+    }
+    if (proto == g_seqProtos.chunk && n == 4 && g_seqProtos.chunkTemplate) {
+        return g_seqProtos.chunkTemplate->setAttributes(ctx, 4, g_seqProtos.fieldKeys, fields);
+    }
     const proto::ProtoObject* node = proto->newLazyChild(ctx, PROTO_NONE);
     node->publishLazy(ctx, ctx->newList(n, fields)->asObject(ctx));
     return node;

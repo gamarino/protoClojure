@@ -65,14 +65,15 @@ find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_FOUND AND PROTOCLJ_HAS_ADAPTIVE_HEAP)
     set(_ah_check "${CMAKE_CURRENT_SOURCE_DIR}/cli/adaptive_heap_check.py")
     set(_ah_prog "${CMAKE_CURRENT_SOURCE_DIR}/cli/adaptive-heap-garbage.clj")
-    # On by default: nothing in the environment; 20000 rounds allocate about
-    # 14 M cells, well past the controller's initial 2 M-cell soft limit.
+    # On by default: nothing in the environment; 50000 rounds allocate enough
+    # cells to exercise the controller's initial 2 M-cell soft limit with the
+    # denser 1-cell cons nodes.
     add_test(NAME cli/adaptive-heap-on-by-default
         COMMAND ${Python3_EXECUTABLE} "${_ah_check}" --expect on
             --sentinel "adaptive heap garbage done"
             --unset PROTOCORE_ADAPTIVE_HEAP --unset PROTOCORE_HEAP_LIMIT_CELLS
             --unset PROTOCORE_ADAPTIVE_HEAP_START
-            -- "$<TARGET_FILE:protoclj>" "${_ah_prog}" 20000)
+            -- "$<TARGET_FILE:protoclj>" "${_ah_prog}" 50000)
     # Off with PROTOCORE_ADAPTIVE_HEAP=0: the budget becomes a fixed hard limit.
     add_test(NAME cli/adaptive-heap-off-by-env
         COMMAND ${Python3_EXECUTABLE} "${_ah_check}" --expect off
@@ -80,16 +81,15 @@ if(Python3_FOUND AND PROTOCLJ_HAS_ADAPTIVE_HEAP)
             --set PROTOCORE_ADAPTIVE_HEAP=0 --set PROTOCORE_HEAP_LIMIT_CELLS=1000000
             --unset PROTOCORE_ADAPTIVE_HEAP_START
             -- "$<TARGET_FILE:protoclj>" "${_ah_prog}" 20000)
-    # Bounded memory: a 1 M-cell budget (64 MiB of cells) and 60000 rounds,
-    # about 40 times that in garbage; at least 10 cycles, and the peak RSS
-    # bounded by the budget plus the interpreter's own footprint.
+    # Bounded memory: a 1 M-cell budget (64 MiB of cells) and 100000 rounds,
+    # at least 10 cycles, and the peak RSS bounded by the budget plus the interpreter's own footprint.
     add_test(NAME cli/adaptive-heap-bounded-memory
         COMMAND ${Python3_EXECUTABLE} "${_ah_check}" --expect on
             --sentinel "adaptive heap garbage done"
             --set PROTOCORE_HEAP_LIMIT_CELLS=1000000
             --unset PROTOCORE_ADAPTIVE_HEAP --unset PROTOCORE_ADAPTIVE_HEAP_START
             --min-cycles 10 --max-rss-mb 160
-            -- "$<TARGET_FILE:protoclj>" "${_ah_prog}" 60000)
+            -- "$<TARGET_FILE:protoclj>" "${_ah_prog}" 100000)
     set_tests_properties(cli/adaptive-heap-on-by-default cli/adaptive-heap-off-by-env
         cli/adaptive-heap-bounded-memory PROPERTIES TIMEOUT 300)
     unset(_ah_check)

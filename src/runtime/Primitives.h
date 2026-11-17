@@ -198,6 +198,10 @@ struct ActiveCallContext {
     const proto::ProtoString*  mailboxKey;
     // Keyword and symbol values (Named.h).
     NamedLayout                named;
+    // Pre-shaped immutable function wrapper templates (populated per space).
+    const proto::ProtoObject*  fnSingleTemplate  = nullptr;
+    const proto::ProtoObject*  fnClosureTemplate = nullptr;
+    const proto::ProtoObject*  fnMultiTemplate   = nullptr;
 };
 void setActiveCallContext(const ActiveCallContext& cc);
 void clearActiveCallContext();

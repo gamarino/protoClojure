@@ -54,14 +54,17 @@ inline bool isListTag(const PO* v) {
 inline bool truthy(const PO* v) { return v && v != PROTO_NONE && v != PROTO_FALSE; }
 inline const PO* orNil(const PO* v) { return v ? v : PROTO_NONE; }
 
-// The fields of a cons or a chunk (SeqTypes.h); a cons is [first more].
-const proto::ProtoList* fieldsOf(proto::ProtoContext* ctx, const PO* node) {
-    return seqNodeFields(ctx, node);
+// The fields of a cons or a chunk (SeqTypes.h); a cons is [first more] inline
+// in ProtoObjectCell::values[0..1], and a chunk is [items off end more] in
+// values[0..3], sharing g_seqProtos.consTemplate / chunkTemplate's ProtoShape.
+const PO* consFirst(proto::ProtoContext* ctx, const PO* c) {
+    return orNil(c->getOwnAttributeDirect(ctx, g_seqProtos.fieldKeys[0]));
 }
-const PO* consFirst(proto::ProtoContext* ctx, const PO* c) { return orNil(fieldsOf(ctx, c)->getAt(ctx, 0)); }
-const PO* consMore(proto::ProtoContext* ctx, const PO* c)  { return orNil(fieldsOf(ctx, c)->getAt(ctx, 1)); }
+const PO* consMore(proto::ProtoContext* ctx, const PO* c) {
+    return orNil(c->getOwnAttributeDirect(ctx, g_seqProtos.fieldKeys[1]));
+}
 
-// A lazy object of prototype `proto` published at once with `fields`.
+// A node of prototype `proto` holding `fields` (single-cell template clone).
 const PO* newNode(proto::ProtoContext* ctx, const PO* proto, unsigned n, const PO* const* fields) {
     return newSeqNode(ctx, proto, n, fields);
 }
@@ -143,13 +146,12 @@ struct ChunkView {
 };
 ChunkView chunkOf(proto::ProtoContext* ctx, const PO* c) {
     ChunkView v;
-    const proto::ProtoList* f = fieldsOf(ctx, c);
-    v.items = f->getAt(ctx, 0)->asList(ctx);
-    v.off = proto::asSmallInt(f->getAt(ctx, 1));
-    const long long e = proto::asSmallInt(f->getAt(ctx, 2));
+    v.items = c->getOwnAttributeDirect(ctx, g_seqProtos.fieldKeys[0])->asList(ctx);
+    v.off = proto::asSmallInt(c->getOwnAttributeDirect(ctx, g_seqProtos.fieldKeys[1]));
+    const long long e = proto::asSmallInt(c->getOwnAttributeDirect(ctx, g_seqProtos.fieldKeys[2]));
     v.chunked = e < 0;
     v.end = e < 0 ? -e - 1 : e;
-    v.more = orNil(f->getAt(ctx, 3));
+    v.more = orNil(c->getOwnAttributeDirect(ctx, g_seqProtos.fieldKeys[3]));
     return v;
 }
 
@@ -753,7 +755,7 @@ bool lazyIsRealized(proto::ProtoContext* ctx, const PO* ls) {
 
 bool isChunkedSeq(proto::ProtoContext* ctx, const PO* s) {
     if (seqObjectKind(ctx, s) != SeqObject::Chunk) return false;
-    return proto::asSmallInt(fieldsOf(ctx, s)->getAt(ctx, 2)) < 0;
+    return proto::asSmallInt(s->getOwnAttributeDirect(ctx, g_seqProtos.fieldKeys[2])) < 0;
 }
 
 // ---- the seq protocol ---------------------------------------------------------
@@ -1013,7 +1015,6 @@ void SeqWalk::load(proto::ProtoContext* ctx, const PO* node) {
     const SeqObject k = seqObjectKind(ctx, node);
     if (k == SeqObject::Cons) {
         mode_ = Mode::Cons;
-        fields_ = fieldsOf(ctx, node);
         return;
     }
     if (k == SeqObject::List) {
@@ -1031,7 +1032,7 @@ void SeqWalk::load(proto::ProtoContext* ctx, const PO* node) {
 }
 
 const PO* SeqWalk::first(proto::ProtoContext* ctx) const {
-    if (mode_ == Mode::Cons) return orNil(fields_->getAt(ctx, 0));
+    if (mode_ == Mode::Cons) return consFirst(ctx, node_);
     if (mode_ == Mode::List) return listNth(ctx, node_, i_);
     return items_->getAt(ctx, static_cast<int>(i_));
 }
@@ -1039,7 +1040,7 @@ const PO* SeqWalk::first(proto::ProtoContext* ctx) const {
 void SeqWalk::advance(proto::ProtoContext* ctx) {
     if (!node_) return;
     if (mode_ != Mode::Cons && ++i_ < end_) return;
-    const PO* more = mode_ == Mode::Cons  ? orNil(fields_->getAt(ctx, 1))
+    const PO* more = mode_ == Mode::Cons  ? consMore(ctx, node_)
                    : mode_ == Mode::List  ? listDrop(ctx, node_, end_)
                    : chunkOf(ctx, node_).more;
     if (more == PROTO_NONE || more == emptyListValue()) {

@@ -148,11 +148,10 @@ void forEachMatch(std::string_view s, const CompiledPattern* cp, F&& f) {
     }
 }
 
-// Creates the pattern and matcher prototypes of this ProtoSpace. Returns
-// the pattern prototype; the matcher prototype is a child-free sibling the
-// caller roots through matcherPrototype().
+// Creates the pattern and matcher prototypes and templates of this ProtoSpace.
 const proto::ProtoObject* initRegex(proto::ProtoContext* ctx);
 const proto::ProtoObject* matcherPrototype();
+const proto::ProtoObject* matcherTemplate();
 
 // The compiled form of `source`, from the cache or compiled now. Throws
 // PatternSyntaxError.

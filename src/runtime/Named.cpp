@@ -29,6 +29,7 @@ namespace {
 struct NamedCaches {
     static constexpr std::size_t kMaxEntries = 1u << 16;
     std::uint64_t epoch = 0;
+    const proto::ProtoObject* tmpl = nullptr;
     std::unordered_map<std::string, const proto::ProtoString*> symbols;
     std::unordered_map<std::string, const proto::ProtoObject*> named;
     std::unordered_map<const proto::ProtoObject*, std::string> spellings;
@@ -37,6 +38,7 @@ struct NamedCaches {
 NamedCaches& cachesFor(const NamedLayout& layout) {
     thread_local NamedCaches caches;
     if (caches.epoch != layout.epoch) {
+        caches.tmpl = nullptr;
         caches.symbols.clear();
         caches.named.clear();
         caches.spellings.clear();
@@ -101,11 +103,25 @@ static const proto::ProtoObject* internNamedUncached(proto::ProtoContext* ctx,
     const proto::ProtoObject* found = layout.table->getOwnAttributeDirect(ctx, key);
     if (found) { namedcache::record(found); return found; }
 
-    // First use of this spelling: build the value, rooted in a child
-    // context until the table holds it.
+    // First use of this spelling: derive from the space's pre-shaped named
+    // template (rooted in layout.table under "\x01tmpl") so all keywords and
+    // symbols share one ProtoShape* and fit in a single 64-byte cell.
+    NamedCaches& c = cachesFor(layout);
+    if (!c.tmpl) {
+        const proto::ProtoString* tmplKey = proto::ProtoString::createSymbol(ctx, "\x01tmpl");
+        const proto::ProtoObject* t = layout.table->getOwnAttributeDirect(ctx, tmplKey);
+        if (!t) {
+            CallerSlots tscope(ctx, 1);
+            tscope.set(0, layout.marker->newChild(ctx, /*isMutable=*/false)
+                ->setAttribute(ctx, layout.spellingKey, PROTO_NONE)
+                ->removeAttribute(ctx, layout.spellingKey));
+            layout.table->setAttributeIfEqual(ctx, tmplKey, nullptr, tscope.get(0));
+            t = layout.table->getOwnAttributeDirect(ctx, tmplKey);
+        }
+        c.tmpl = t;
+    }
     CallerSlots scope(ctx, 1);
-    scope.set(0, layout.marker->newChild(ctx, /*isMutable=*/false));
-    scope.set(0, scope.get(0)->setAttribute(
+    scope.set(0, c.tmpl->setAttribute(
         ctx, layout.spellingKey,
         reinterpret_cast<const proto::ProtoObject*>(key)));
     const proto::ProtoObject* fresh = scope.get(0);

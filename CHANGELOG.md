@@ -9,6 +9,19 @@ remains the first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Added — template-based object instantiation and protoCore 3.6.0 pin, 2026-11-17
+
+- Adopted template prototypes (`ProtoShape` + inline values, `newClone`, `setAttributes`) for heavily allocated runtime objects:
+  - **Functions & closures (`MAKE_FN`, `MAKE_MULTI_FN`):** `fnSingleTemplate`, `fnClosureTemplate`, and `fnMultiTemplate` pre-build the complete shape with bytecode and captures, allocating 1 cell (64 bytes) instead of 4-6 cells and achieving 100% attribute cache hits across function invocations.
+  - **Sequence nodes (`cons`, `chunk`):** `consTemplate` (2 slots inline, $d=0$) and `chunkTemplate` (4 slots inline, $d=0$) store node attributes inline, reducing node allocation from 3 cells (192 bytes) down to 1 cell (64 bytes, -67% memory).
+  - **Keywords and Symbols:** `named.templateObj` pre-populates the name shape; all keywords and symbols share a single `ProtoShape*`.
+  - **Persistent Sets:** `g_setTemplate` provides 1-cell inline representations per version.
+  - **Exceptions and Regex:** Template-based instantiation via `setAttributes`.
+- Raised minimum required protoCore to **3.6.0** in `CMakeLists.txt` for `ProtoObject::newClone` and `setAttributes`.
+- Updated test round thresholds in `tests/CMakeLists.txt` for `cli/adaptive-heap-on-by-default` and `cli/adaptive-heap-bounded-memory` to reflect the denser 1-cell node allocations.
+- Documented 5-round benchmark results against Babashka 1.4.192 in `benchmarks/reports/2026-11-17-template-objects/README.md`.
+
+
 ## [0.0.6] - 2026-11-13
 
 **Built, tested and released against protoCore 3.6.0** (SOVERSION 5, unchanged since 3.4.0). The declared minimum for a build from source stays **protoCore 3.4.0**, which the Windows floor job still builds; the `.deb` is built against the 3.6.0 package, so it depends on `protocore (>= 3.6.0)` through protoCore's shlibs file. This release is a rebuild with no functional code change.

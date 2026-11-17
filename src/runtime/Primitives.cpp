@@ -1739,11 +1739,11 @@ const proto::ProtoObject* prim_re_matcher(proto::ProtoContext* ctx,
     patternArg(ctx, args, 0, "re-matcher");
     stringArgOf(ctx, args, 1, "re-matcher");
     CallerSlots scope(ctx, 1);
-    scope.set(0, matcherPrototype()->newChild(ctx, /*isMutable=*/true));
+    scope.set(0, matcherTemplate()->newClone(ctx, /*isMutable=*/true));
     proto::ProtoObject* m = const_cast<proto::ProtoObject*>(scope.get(0));
-    m->setAttribute(ctx, mPatternKey(ctx), args->getAt(ctx, 0));
-    m->setAttribute(ctx, mSubjectKey(ctx), args->getAt(ctx, 1));
-    m->setAttribute(ctx, mPosKey(ctx), ctx->fromLong(0));
+    const proto::ProtoString* keys[3] = {mPatternKey(ctx), mSubjectKey(ctx), mPosKey(ctx)};
+    const proto::ProtoObject* vals[3] = {args->getAt(ctx, 0), args->getAt(ctx, 1), ctx->fromLong(0)};
+    m->setAttributes(ctx, 3, keys, vals);
     return scope.get(0);
 }
 
@@ -1766,8 +1766,9 @@ const proto::ProtoObject* matcherFind(proto::ProtoContext* ctx, const proto::Pro
         match.length() == 0 ? nextCharacter(subject, match.end()) : match.end());
     CallerSlots scope(ctx, 1);
     scope.set(0, matchValue(ctx, subject, match, cp->groups));
-    m->setAttribute(ctx, mGroupsKey(ctx), scope.get(0));
-    m->setAttribute(ctx, mPosKey(ctx), ctx->fromLong(next));
+    const proto::ProtoString* keys[2] = {mGroupsKey(ctx), mPosKey(ctx)};
+    const proto::ProtoObject* vals[2] = {scope.get(0), ctx->fromLong(next)};
+    m->setAttributes(ctx, 2, keys, vals);
     return scope.get(0);
 }
 

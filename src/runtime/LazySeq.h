@@ -211,7 +211,6 @@ private:
     const proto::ProtoList*   items_ = nullptr; // a chunk's elements
     long long                 i_ = 0, end_ = 0; // position in a chunk or a list's head
     Mode                      mode_ = Mode::Chunk;
-    const proto::ProtoList*   fields_ = nullptr; // a cons's fields, [first more ...]
 };
 
 // Installs the lazy-sequence functions (map, filter, take, range, ...) on

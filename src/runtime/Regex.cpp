@@ -24,6 +24,8 @@ namespace {
 // Set once per ProtoSpace by initRegex; rooted by the caller.
 const proto::ProtoObject* g_patternPrototype = nullptr;
 const proto::ProtoObject* g_matcherPrototype = nullptr;
+const proto::ProtoObject* g_patternTemplate  = nullptr;
+const proto::ProtoObject* g_matcherTemplate  = nullptr;
 
 std::mutex g_cacheMutex;
 // Never erased: a CompiledPattern's address is stored in pattern values.
@@ -439,13 +441,32 @@ std::size_t nextCharacter(std::string_view s, std::size_t pos) {
 const proto::ProtoObject* initRegex(proto::ProtoContext* ctx) {
     g_patternPrototype = ctx->space->objectPrototype->newChild(ctx, /*isMutable=*/false);
     g_matcherPrototype = ctx->space->objectPrototype->newChild(ctx, /*isMutable=*/false);
-    return ctx->newList()
-        ->appendLast(ctx, g_patternPrototype)
-        ->appendLast(ctx, g_matcherPrototype)
-        ->asObject(ctx);
+
+    const proto::ProtoString* pKeys[2] = {sourceKey(ctx), regexKey(ctx)};
+    const proto::ProtoObject* pDummy[2] = {PROTO_NONE, PROTO_NONE};
+    const proto::ProtoObject* pTmpl =
+        g_patternPrototype->newChild(ctx, /*isMutable=*/false)->setAttributes(ctx, 2, pKeys, pDummy);
+    for (int i = 0; i < 2; ++i) pTmpl = pTmpl->removeAttribute(ctx, pKeys[i]);
+    g_patternTemplate = pTmpl;
+
+    const proto::ProtoString* mKeys[4] = {
+        proto::ProtoString::createSymbol(ctx, "__m_pattern__"),
+        proto::ProtoString::createSymbol(ctx, "__m_subject__"),
+        proto::ProtoString::createSymbol(ctx, "__m_pos__"),
+        proto::ProtoString::createSymbol(ctx, "__m_groups__")};
+    const proto::ProtoObject* mDummy[4] = {PROTO_NONE, PROTO_NONE, PROTO_NONE, PROTO_NONE};
+    const proto::ProtoObject* mTmpl =
+        g_matcherPrototype->newChild(ctx, /*isMutable=*/false)->setAttributes(ctx, 4, mKeys, mDummy);
+    for (int i = 0; i < 4; ++i) mTmpl = mTmpl->removeAttribute(ctx, mKeys[i]);
+    g_matcherTemplate = mTmpl;
+
+    const proto::ProtoObject* items[4] = {
+        g_patternPrototype, g_matcherPrototype, g_patternTemplate, g_matcherTemplate};
+    return ctx->newList(4, items)->asObject(ctx);
 }
 
 const proto::ProtoObject* matcherPrototype() { return g_matcherPrototype; }
+const proto::ProtoObject* matcherTemplate()  { return g_matcherTemplate; }
 
 const CompiledPattern* compilePattern(const std::string& source) {
     std::lock_guard<std::mutex> lock(g_cacheMutex);
@@ -465,11 +486,12 @@ const CompiledPattern* compilePattern(const std::string& source) {
 
 const proto::ProtoObject* makePattern(proto::ProtoContext* ctx, const std::string& source) {
     const CompiledPattern* compiled = compilePattern(source);
-    CallerSlots scope(ctx, 1);
-    scope.set(0, g_patternPrototype->newChild(ctx, /*isMutable=*/false)
-        ->setAttribute(ctx, sourceKey(ctx), ctx->fromUTF8String(source.c_str())));
-    return scope.get(0)->setAttribute(ctx, regexKey(ctx),
-        ctx->fromExternalPointer(const_cast<CompiledPattern*>(compiled)));
+    CallerSlots scope(ctx, 2);
+    scope.set(0, ctx->fromUTF8String(source.c_str()));
+    scope.set(1, ctx->fromExternalPointer(const_cast<CompiledPattern*>(compiled)));
+    const proto::ProtoString* keys[2] = {sourceKey(ctx), regexKey(ctx)};
+    const proto::ProtoObject* vals[2] = {scope.get(0), scope.get(1)};
+    return g_patternTemplate->setAttributes(ctx, 2, keys, vals);
 }
 
 bool isPattern(proto::ProtoContext* ctx, const proto::ProtoObject* v) {

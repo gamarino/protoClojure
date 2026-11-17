@@ -46,6 +46,7 @@ class ProtoContext;
 class ProtoObject;
 class ProtoList;
 class ProtoLinkedList;
+class ProtoString;
 }
 
 namespace protoClojure {
@@ -55,6 +56,9 @@ struct SeqPrototypes {
     const proto::ProtoObject* cons  = nullptr;  // cons cells
     const proto::ProtoObject* chunk = nullptr;  // chunks
     const proto::ProtoObject* empty = nullptr;  // THE empty list `()` (not a prototype)
+    const proto::ProtoObject* consTemplate  = nullptr;  // pre-shaped 2-field cons template
+    const proto::ProtoObject* chunkTemplate = nullptr;  // pre-shaped 4-field chunk template
+    const proto::ProtoString* fieldKeys[4]  = {};       // "__f0__" .. "__f3__"
 };
 
 // The prototypes of the current ProtoSpace. Written by initSeqTypes before

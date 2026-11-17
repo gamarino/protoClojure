@@ -1,0 +1,6 @@
+bench round 1 18:44:40 load 4.91 4.13 4.17
+bench round 2 18:44:45 load 4.83 4.12 4.17
+bench round 3 18:44:51 load 4.61 4.09 4.16
+bench round 4 18:44:56 load 4.32 4.04 4.14
+bench round 5 18:45:01 load 4.21 4.02 4.14
+failures: 0

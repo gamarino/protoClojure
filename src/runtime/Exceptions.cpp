@@ -58,10 +58,11 @@ constexpr int kRuntimeException = 3;
 constexpr int kExceptionInfo    = 4;
 
 // Set once per ProtoSpace by initExceptions, before any thread other than the
-// initialising one runs Clojure code. The prototypes are reachable from the
-// globals namespace, which every entry point roots, so the error factory
-// reaches them through GC-rooted state.
+// initialising one runs Clojure code. The prototypes and templates are
+// reachable from the globals namespace, which every entry point roots, so the
+// error factory reaches them through GC-rooted state.
 const proto::ProtoObject* g_classPrototypes[kExceptionClassCount] = {};
+const proto::ProtoObject* g_classTemplates[kExceptionClassCount]  = {};
 
 const proto::ProtoString* classKey(proto::ProtoContext* ctx) {
     return proto::ProtoString::createSymbol(ctx, "__ex_class__");
@@ -176,9 +177,12 @@ const proto::ProtoString* foreignMessageKey(proto::ProtoContext* ctx) {
 } // namespace
 
 void initExceptions(proto::ProtoContext* ctx, proto::ProtoObject* globals) {
-    // One prototype per class; a parent always precedes its children in the
-    // table, so each class is created as a child of its finished parent.
+    // One prototype and one pre-shaped instance template per class; a parent
+    // always precedes its children in the table, so each class is created as a
+    // child of its finished parent.
     const proto::ProtoList* all = ctx->newList();
+    const proto::ProtoString* exKeys[3] = {messageKey(ctx), dataKey(ctx), causeKey(ctx)};
+    const proto::ProtoObject* exDummy[3] = {PROTO_NONE, PROTO_NONE, PROTO_NONE};
     for (int i = 0; i < kExceptionClassCount; ++i) {
         const ExceptionClass& c = kExceptionClasses[i];
         const proto::ProtoObject* parent = c.parent < 0
@@ -188,6 +192,12 @@ void initExceptions(proto::ProtoContext* ctx, proto::ProtoObject* globals) {
         cls = cls->setAttribute(ctx, nameKey(ctx), ctx->fromUTF8String(c.name));
         g_classPrototypes[i] = cls;
         all = all->appendLast(ctx, cls);
+
+        const proto::ProtoObject* tmpl =
+            cls->newChild(ctx, /*isMutable=*/false)->setAttributes(ctx, 3, exKeys, exDummy);
+        for (int k = 0; k < 3; ++k) tmpl = tmpl->removeAttribute(ctx, exKeys[k]);
+        g_classTemplates[i] = tmpl;
+        all = all->appendLast(ctx, tmpl);
     }
     // Reachable from the globals namespace, which every entry point roots.
     globals->setAttribute(ctx,
@@ -253,16 +263,13 @@ const proto::ProtoObject* makeException(proto::ProtoContext* ctx, int cls,
                                         const proto::ProtoObject* message,
                                         const proto::ProtoObject* data,
                                         const proto::ProtoObject* cause) {
-    if (cls < 0 || cls >= kExceptionClassCount || !g_classPrototypes[cls])
+    if (cls < 0 || cls >= kExceptionClassCount || !g_classTemplates[cls])
         throw std::logic_error("makeException: initExceptions was not called");
-    // An immutable child of the class prototype: each setAttribute returns a
-    // new object with the same parents. The intermediates are young cells of
-    // `ctx`, which stays alive for the whole construction.
-    const proto::ProtoObject* e = g_classPrototypes[cls]->newChild(ctx);
-    e = e->setAttribute(ctx, messageKey(ctx), orNil(message));
-    e = e->setAttribute(ctx, dataKey(ctx), orNil(data));
-    e = e->setAttribute(ctx, causeKey(ctx), orNil(cause));
-    return e;
+    // Derived from the class's pre-shaped template: one 64-byte cell with
+    // message, data and cause stored inline in values[0..2].
+    const proto::ProtoString* exKeys[3] = {messageKey(ctx), dataKey(ctx), causeKey(ctx)};
+    const proto::ProtoObject* exVals[3] = {orNil(message), orNil(data), orNil(cause)};
+    return g_classTemplates[cls]->setAttributes(ctx, 3, exKeys, exVals);
 }
 
 std::string exceptionToString(proto::ProtoContext* ctx,

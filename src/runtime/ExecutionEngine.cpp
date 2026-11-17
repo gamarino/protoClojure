@@ -42,6 +42,50 @@ namespace protoClojure {
 
 namespace {
 
+void ensureFnTemplates(proto::ProtoContext* ctx, ActiveCallContext& cc) {
+    if (cc.fnSingleTemplate && cc.fnClosureTemplate && cc.fnMultiTemplate) return;
+    if (!cc.fnSingleProto || !cc.fnMultiProto || !cc.bytecodeKey ||
+        !cc.capturesKey || !cc.aritiesKey) return;
+    const proto::ProtoString* key =
+        proto::ProtoString::createSymbol(ctx, "__fn_templates__");
+    const proto::ProtoObject* existing =
+        cc.globals ? cc.globals->getOwnAttributeDirect(ctx, key) : nullptr;
+    if (existing && existing != PROTO_NONE) {
+        const proto::ProtoList* l = existing->asList(ctx);
+        cc.fnSingleTemplate  = l->getAt(ctx, 0);
+        cc.fnClosureTemplate = l->getAt(ctx, 1);
+        cc.fnMultiTemplate   = l->getAt(ctx, 2);
+        return;
+    }
+    CallerSlots scope(ctx, 3);
+    const proto::ProtoObject* s =
+        cc.fnSingleProto->newChild(ctx, false)
+            ->setAttribute(ctx, cc.bytecodeKey, PROTO_NONE)
+            ->removeAttribute(ctx, cc.bytecodeKey);
+    scope.set(0, s);
+    const proto::ProtoString* ckeys[2] = {cc.bytecodeKey, cc.capturesKey};
+    const proto::ProtoObject* cvals[2] = {PROTO_NONE, PROTO_NONE};
+    const proto::ProtoObject* c =
+        cc.fnSingleProto->newChild(ctx, false)
+            ->setAttributes(ctx, 2, ckeys, cvals)
+            ->removeAttribute(ctx, cc.bytecodeKey)
+            ->removeAttribute(ctx, cc.capturesKey);
+    scope.set(1, c);
+    const proto::ProtoObject* m =
+        cc.fnMultiProto->newChild(ctx, false)
+            ->setAttribute(ctx, cc.aritiesKey, PROTO_NONE)
+            ->removeAttribute(ctx, cc.aritiesKey);
+    scope.set(2, m);
+    const proto::ProtoObject* items[3] = {scope.get(0), scope.get(1), scope.get(2)};
+    const proto::ProtoObject* listObj = ctx->newList(3, items)->asObject(ctx);
+    if (cc.globals) {
+        const_cast<proto::ProtoObject*>(cc.globals)->setAttribute(ctx, key, listObj);
+    }
+    cc.fnSingleTemplate  = scope.get(0);
+    cc.fnClosureTemplate = scope.get(1);
+    cc.fnMultiTemplate   = scope.get(2);
+}
+
 // A frame's locals (params + let-bindings) live in slots
 // 0..(arity + localCount - 1); its operand stack starts at offset
 // arity + localCount with the capacity the compiled body needs
@@ -540,6 +584,12 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
 
     const ActiveCallContext* cc = activeCallContext();
     if (!cc) throwError(ctx, "VM: invoke() called outside a run()");
+    if (!cc->fnSingleTemplate && cc->fnSingleProto) {
+        ActiveCallContext updated = *cc;
+        ensureFnTemplates(ctx, updated);
+        setActiveCallContext(updated);
+        cc = activeCallContext();
+    }
 
     // Session 12 — single getPrototype probe picks the path. Single-
     // arity wrappers cost ONE getAttribute (bytecode); the captures
@@ -721,7 +771,7 @@ ExecutionEngine::run(proto::ProtoContext* parent,
     // share the installed context.
     const ActiveCallContext* prior = activeCallContext();
     ActiveCallContext saved = prior ? *prior : ActiveCallContext{};
-    const ActiveCallContext cc{this, globals,
+    ActiveCallContext cc{this, globals,
                          fnSingleProto, fnMultiProto,
                          atomMarkerProto, futureMarkerProto, promiseMarkerProto,
                          actorMarkerProto,
@@ -729,6 +779,18 @@ ExecutionEngine::run(proto::ProtoContext* parent,
                          valueKey, watchesKey,
                          thunkKey, ccBlobKey, threadKey, resultKey, doneKey,
                          actorStateKey, mailboxKey, named};
+    if (prior && prior->fnSingleProto == fnSingleProto && prior->fnSingleTemplate) {
+        cc.fnSingleTemplate  = prior->fnSingleTemplate;
+        cc.fnClosureTemplate = prior->fnClosureTemplate;
+        cc.fnMultiTemplate   = prior->fnMultiTemplate;
+    } else {
+        ensureFnTemplates(parent, cc);
+        if (prior && prior->fnSingleProto == fnSingleProto) {
+            saved.fnSingleTemplate  = cc.fnSingleTemplate;
+            saved.fnClosureTemplate = cc.fnClosureTemplate;
+            saved.fnMultiTemplate   = cc.fnMultiTemplate;
+        }
+    }
     setActiveCallContext(cc);
     struct Guard {
         const ActiveCallContext* prior; ActiveCallContext saved;
@@ -1214,20 +1276,25 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                     sp -= static_cast<unsigned int>(nCaps);
                 }
 
-                // Single-arity wrapper — a child of fnSingleProto carrying
-                // __bytecode__ always and __captures__ only when the body
-                // has captures. A wrapper is never mutated once built, so
-                // it is an immutable object: each setAttribute returns a
-                // new object with the same prototype, and no wrapper enters
-                // protoCore's mutables tree. The intermediates are young
-                // cells of this frame's context until pushVal roots the
-                // result.
-                const proto::ProtoObject* wrap =
-                    env.fnSingleProto->newChild(&frame)->setAttribute(
-                        &frame, env.bytecodeKey,
-                        frame.fromLong(reinterpret_cast<long long>(&subMod)));
-                if (nCaps > 0) {
-                    wrap = wrap->setAttribute(&frame, env.capturesKey, capsList);
+                // Single-arity wrapper — derived from fnSingleTemplate (0
+                // captures) or fnClosureTemplate (nCaps > 0) so every wrapper
+                // of each kind shares one pre-populated ProtoShape* and fits
+                // in a single 64-byte cell.
+                const proto::ProtoObject* codeVal =
+                    frame.fromLong(reinterpret_cast<long long>(&subMod));
+                const proto::ProtoObject* wrap = nullptr;
+                if (nCaps == 0) {
+                    const proto::ProtoObject* base = env.fnSingleTemplate
+                        ? env.fnSingleTemplate : env.fnSingleProto->newChild(&frame);
+                    wrap = base->setAttribute(&frame, env.bytecodeKey, codeVal);
+                } else if (env.fnClosureTemplate) {
+                    const proto::ProtoString* keys[2] = {env.bytecodeKey, env.capturesKey};
+                    const proto::ProtoObject* vals[2] = {codeVal, capsList};
+                    wrap = env.fnClosureTemplate->setAttributes(&frame, 2, keys, vals);
+                } else {
+                    wrap = env.fnSingleProto->newChild(&frame)
+                        ->setAttribute(&frame, env.bytecodeKey, codeVal)
+                        ->setAttribute(&frame, env.capturesKey, capsList);
                 }
                 pushVal(wrap);
                 break;
@@ -1482,9 +1549,11 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 }
                 sp = baseSp;
 
-                // Immutable, like the single-arity wrapper (MAKE_FN).
-                pushVal(env.fnMultiProto->newChild(&frame)
-                            ->setAttribute(&frame, env.aritiesKey, aritiesList));
+                // Immutable, like the single-arity wrapper (MAKE_FN), derived
+                // from fnMultiTemplate so all multi-arity fns share one shape.
+                const proto::ProtoObject* mbase = env.fnMultiTemplate
+                    ? env.fnMultiTemplate : env.fnMultiProto->newChild(&frame);
+                pushVal(mbase->setAttribute(&frame, env.aritiesKey, aritiesList));
                 break;
             }
 
