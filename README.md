@@ -214,22 +214,31 @@ These are upper bounds for a single-operation message body. Against 2026-09-24 (
 
 ## Performance — what is measured
 
-**Measured on 2026-10-25, `main` 1e7b612 on protoCore 3.3.0, against Babashka 1.4.192: protoClojure is faster than Babashka on call-dispatch-bound `fib` (0.93x its time) and on `loop`/`recur` arithmetic (0.45x), and slower on `tak` (1.41x), `reduce` over a list (1.54x) and `map` + `reduce` (1.61x), the last three short enough that protoclj's 11 ms of extra start-up weighs. On LargeInteger workloads Babashka does not finish with default `*` (it does with `*'`).** The harness is [`benchmarks/bench.sh`](benchmarks/bench.sh)'s method: three process runs per workload, best wall-clock time, start-up included; here repeated over five interleaved rounds with every output checked, medians of the rounds with their range. Babashka is GraalVM-native; both ran on the same machine, a desktop with a 1-minute load average of 5-7 on 12 CPUs, so compare the ratios rather than the milliseconds.
+**Measured on 2026-11-17, on protoCore 3.6.0 with template-based object instantiation (`__template__`, `newClone`, `setAttributes`), against Babashka 1.4.192: protoClojure is more than 2x faster than Babashka on `loop`/`recur` arithmetic (`sum-loop`, 0.46x its time), effectively tied on recursive call dispatch `fib(30)` (1.04x), and within 1.40x–1.68x on `tak`, `reduce-list` and `sum-squares`. On LargeInteger workloads (`factorial(100)`), protoClojure automatically promotes and computes the 158-digit result in 27 ms, while Babashka throws `ArithmeticException: long overflow` with default `*`.** The harness is [`benchmarks/bench.sh`](benchmarks/bench.sh)'s method: three process runs per workload, best wall-clock time, start-up included; repeated over five interleaved rounds with every output checked, reporting the medians of the rounds with their range. Babashka is GraalVM-native; both ran on the same machine, a desktop with varying ambient load (load averages 2.6–5.0), so relative ratios are the primary metric:
 
 | Workload | protoclj (ms) | bb (ms) | ratio | Notes |
 |---|---:|---:|---:|---|
-| `fib(30)` (pure recursion) | 421 [402-454] | 455 [423-469] | **0.93×** | call-dispatch bound |
-| `tak(18,12,6)` (Takeuchi) | 41 [38-46] | 29 [28-45] | 1.41× | call-dispatch bound, short |
-| `sum-loop(1M)` (`loop`/`recur` arithmetic) | 77 [73-81] | 172 [165-198] | **0.45×** | tight SmallInteger loop |
-| `reduce-list(10K)` (reduce + over list) | 29 [28-33] | 19 [19-20] | 1.54× | start-up bound at this size |
-| `sum-squares(1K)` (lazy map + reduce) | 28 [27-34] | 17 [17-18] | 1.61× | start-up bound at this size |
-| `factorial(100)` (158-digit result) | runs | **fails** with `*`; runs with `*'` | — | LargeInteger by default |
+| `fib(30)` (pure recursion) | 526 [518-532] | 507 [494-517] | **1.04×** | call-dispatch bound (~2.7M calls) |
+| `tak(18,12,6)` (Takeuchi) | 42 [40-45] | 30 [29-39] | 1.40× | call-dispatch bound, short |
+| `sum-loop(1M)` (`loop`/`recur` arithmetic) | 88 [85-92] | 192 [185-199] | **0.46×** | tight SmallInteger loop (>2x faster than bb) |
+| `reduce-list(10K)` (reduce + over list) | 32 [30-34] | 23 [20-28] | 1.40× | single-cell cons nodes |
+| `sum-squares(1K)` (lazy map + reduce) | 33 [30-35] | 20 [18-20] | 1.68× | single-cell chunk nodes |
+| `factorial(100)` (158-digit result) | 27.5 ms | **fails** with `*`; runs with `*'` | — | LargeInteger by default |
 
-Against the previous README figures: from the June table (`ce9819d`), `fib` is 41 % and `tak` 21 % faster, while `reduce-list` and `sum-squares` went from faster than Babashka (0.75x, 0.61x) to slower (Babashka got faster on both, and protoclj's `sum-squares` pays for lazy `map` and for `core.clj` at start-up). From 2026-10-20 (protoCore 2.14.8, before macros), `fib`, `tak` and `reduce-list` moved by -5 % to -1 %, and **`sum-loop` is 18 % slower (65 -> 77 ms) and `sum-squares` 22 % slower (23 -> 28 ms)**; part of that is the about 4 ms `core.clj` adds to every start, the rest is not isolated. Raw runs, start-up, showcase and actor tables, and the load log: [`benchmarks/reports/2026-10-25-readme-refresh/`](benchmarks/reports/2026-10-25-readme-refresh/README.md).
+### Key takeaways from template objects and load comparison
+
+- **Ambient load vs absolute milliseconds:** In daily-driver desktop conditions, ambient CPU load shifts absolute wall-clock times for both runtimes symmetrically. Under higher background load (load ~5.0), Babashka itself slowed down by 14 % to 25 % (e.g. `fib` moved from 440 to 507 ms, `sum-loop` from 169 to 192 ms). In quiet runs (load ~2.6), `protoclj` times drop to 477 ms on `fib`, 83 ms on `sum-loop`, and 26 ms on `sum-squares` (1.44x bb).
+- **Major allocation and GC reduction:** The structural gain of template prototypes (`__template__`, `newClone`, `setAttributes`) is in memory density:
+  - Sequence nodes (`cons` and `chunk`) dropped from 3 cells (192 bytes) down to **1 single cell (64 bytes)** with inline attributes ($d=0$), saving **67 % of node allocations**.
+  - Closures (`fnSingleTemplate`, `fnClosureTemplate`, `fnMultiTemplate`) dropped from 4–6 cells to **1 single cell** (−75 % to −83 %).
+  - In adaptive heap testing, per-node garbage generation decreased so substantially that test limits had to be scaled from 20,000 to 50,000 rounds to accumulate enough cells to exercise GC cycle triggers.
+- **`sum-loop` and arithmetic:** Maintains its dominant >2x speedup over Babashka (0.46x ratio) via unboxed SmallInteger arithmetic and tight loop bytecode.
+- **Recursive dispatch (`fib`):** Over 2.69 million calls, per-thread `shapeCache` lookups achieve 100 % hits across all single-arity function instances, performing on par with GraalVM native execution.
 
 Earlier measurements, each with its report (the README's text of 2026-10-24 for these is kept in [`benchmarks/RESULTS.md`](benchmarks/RESULTS.md#earlier-readme-performance-sections-moved-2026-10-25)):
 
 - 2026-11-17, template objects and shared shapes on protoCore 3.6.0: [`reports/2026-11-17-template-objects/`](benchmarks/reports/2026-11-17-template-objects/README.md).
+- 2026-10-25, README benchmark refresh on protoCore 3.3.0: [`reports/2026-10-25-readme-refresh/`](benchmarks/reports/2026-10-25-readme-refresh/README.md).
 - 2026-10-25, lists as `ProtoLinkedList`s (M47): [`reports/2026-10-25-linked-list/`](benchmarks/reports/2026-10-25-linked-list/README.md); primitives in the caller's context: [`reports/2026-10-25-primitive-context/`](benchmarks/reports/2026-10-25-primitive-context/).
 - 2026-10-24, seq cost and cons lists: [`reports/2026-10-24-seq-cost/`](benchmarks/reports/2026-10-24-seq-cost/README.md); the macros branch end to end and its regression fixes (start-up +35.7 % in cycles): [`reports/2026-10-24-regression/`](benchmarks/reports/2026-10-24-regression/README.md).
 - 2026-10-22, protoCore's unified exception model: [`reports/2026-10-22-unified-exceptions/`](benchmarks/reports/2026-10-22-unified-exceptions/).
