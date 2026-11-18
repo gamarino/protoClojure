@@ -9,6 +9,15 @@ remains the first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Changed — protoCore floor 3.6.1, 2026-11-18
+
+- **The protoCore floor is 3.6.1** (`find_package(protoCore 3.6.1)`, DEB
+  `Depends: protocore (>= 3.6.1)`, RPM `Requires: protoCore >= 3.6.1`), and CI pins
+  protoCore `v3.6.1` (`00a90df3`) in `ci.yml` and `cross-platform.yml`, the floor job
+  included. Template-based instantiation calls `ProtoObject::newClone`, which
+  protoCore first releases in 3.6.1 (SOVERSION still 5); the CMake minimum already
+  said 3.6.0 and the docs 3.4.0, and a 3.6.0 library cannot build the tree.
+
 ### Changed — protoCore's public API only, 2026-11-18
 
 - **No hand-copied protoCore pointer tags.** `MapOps`, `VectorOps.h`, `SeqTypes`,
