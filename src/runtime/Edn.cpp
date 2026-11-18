@@ -65,7 +65,7 @@ const PO* eofOption(proto::ProtoContext* ctx, const ActiveCallContext& cc, const
                     const char* who, bool* present) {
     *present = false;
     if (opts == PROTO_NONE) return PROTO_NONE;
-    if (!isMap(opts))
+    if (!isMap(ctx, opts))
         throwClassed(ctx, "ClassCastException",
                      std::string(who) + ": options must be a map, got " + valueTypeName(ctx, opts));
     return mapGet(ctx, opts, internNamed(ctx, cc.named, ":eof"), present);

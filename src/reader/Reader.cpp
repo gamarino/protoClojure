@@ -535,12 +535,12 @@ const proto::ProtoObject* Reader::syntaxQuote(proto::ProtoContext* parent,
             return listOf(parent, {sym(parent, "clojure.core/list")});
         }
         for (ListCursor c(form); c.hasNext();) items.push_back(c.next());
-    } else if (isVector(form)) {
+    } else if (isVector(ctx_, form)) {
         builder = "clojure.core/vector";
         const proto::ProtoList* lst = vectorItems(parent, form);
         const proto::proto_ulong n = lst->getSize(parent);
         for (proto::proto_ulong i = 0; i < n; ++i) items.push_back(lst->getAt(parent, static_cast<int>(i)));
-    } else if (isMap(form)) {
+    } else if (isMap(ctx_, form)) {
         builder = "clojure.core/hash-map";
         const std::vector<const proto::ProtoObject*>* order = nullptr;
         if (info_) {

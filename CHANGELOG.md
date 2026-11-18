@@ -9,6 +9,69 @@ remains the first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Changed — protoCore floor 3.6.1, 2026-11-18
+
+- **The protoCore floor is 3.6.1** (`find_package(protoCore 3.6.1)`, DEB
+  `Depends: protocore (>= 3.6.1)`, RPM `Requires: protoCore >= 3.6.1`), and CI pins
+  protoCore `v3.6.1` (`00a90df3`) in `ci.yml` and `cross-platform.yml`, the floor job
+  included. Template-based instantiation calls `ProtoObject::newClone`, which
+  protoCore first releases in 3.6.1 (SOVERSION still 5); the CMake minimum already
+  said 3.6.0 and the docs 3.4.0, and a 3.6.0 library cannot build the tree.
+
+### Changed — decide by type, not by representation, 2026-11-18
+
+- **No "is this an object cell?" question.** `isObjectCell`, its exclusion list
+  `isAliasedCellKind` and the `isObjectTag` wrapper are gone. protoCore answers
+  `getAttribute`, `hasAttribute` and `isInstanceOf` for every value through its
+  prototype, so the runtime asks directly: `isException` is `isInstanceOf(Throwable)`,
+  `a/b` (`GET_MEMBER`, catch types `a/T`) reads the member of any value, and `=` compares
+  numbers by value and strings by content and every other pair by identity, decided by
+  the operands' types (it no longer reaches protoCore's `partialCompare` for an object,
+  so a `__data__` wrapper is never equal to the value it wraps, as before).
+- **A foreign value is a value of no Clojure type**, whatever protoCore kind holds it
+  (`isForeignObject` asks `valueTypeName`). Behaviour change for module values that
+  protoCore does not hold as objects (a byte buffer, an external pointer, a thread):
+  `throw` now accepts them and a catch clause accepts them as a type, as it already did
+  for a module's objects. Every Clojure value is unaffected. New tests pin the
+  semantics across value kinds: `ExceptionsFixture.ThrowabilityIsDecidedByTypeAcrossValueKinds`,
+  `ValuesFixture.EqualityIsDecidedByTypeAcrossValueKinds` and the conformance fixtures
+  `26-exceptions/throwability-by-type.clj`, `08-collections/equality-by-type.clj` and
+  `02-special-forms/member-of-any-value.clj`.
+
+### Changed — protoCore's public API only, 2026-11-18
+
+- **No hand-copied protoCore pointer tags.** `MapOps`, `VectorOps.h`, `SeqTypes`,
+  `SetOps.h`, `LazySeq`, `Primitives`, `ExecutionEngine`, `Exceptions`, `IO` and `Regex`
+  tested values against copies of protoCore's internal tags (`kTagMap = 27`,
+  `kTagLinkedList = 29`, sparse list 8/26, list 2/25, method 12, double 15, LargeInteger
+  14, object cell 0, the SmallInteger mask `0x3FF`). Every test is now a composition of
+  `headers/protoCore.h` alone, gathered in `src/runtime/ValueKinds.h`: `isSmallInt` /
+  `asSmallInt` / `makeSmallInt`, `isDouble`, `isInteger`, `isMethod`, `getPrototype`
+  against the ProtoSpace prototypes of kinds that have one of their own (`listPrototype`,
+  `mapPrototype`, `sparseListPrototype`, `getLinkedListPrototype()`), and `getFirstParent`
+  / `isCellPointer` for "a plain object cell". protoCore aliases several kinds'
+  prototypes to `objectPrototype` (LargeIntegers, doubles, methods, byte buffers,
+  threads, external pointers), so those are told apart by their tag-only predicates,
+  never by prototype identity. `isVector`, `isMap`, `isListTag` and `isObjectTag` now take
+  the `ProtoContext`. The ProtoObject collection predicates (`isMap`, `asList`, ...) are
+  not used for kind tests: they also accept an object wrapping a value under `__data__`.
+  `keyIsIdentity`, `keyHash` and `keyEquals` classify a key once (`keyClassOf`) instead
+  of asking up to eight predicates per operand.
+  No behaviour changes: the suite gives the same result as before (886 of 886, now 888
+  with the two new tests). New: the CTest case `source/no-protocore-internals`
+  (`tests/cli/no-protocore-internals.sh`) fails if `src/` or `headers/` includes
+  `proto_internal.h`, names a `POINTER_TAG_*` / `EMBEDDED_TYPE_*` constant or masks a
+  pointer with `0x3F` / `0x3FF`; the unit test `ValueKinds.KindTestsUsePublicApiExactly`
+  pins every kind helper against real values.
+  **Measured cost** (interleaved A/B, `perf stat -r 3` cycles, medians of 7 rounds, every
+  run's printed result verified, protoCore master `eced46bd`, shared machine at load
+  average 5-6): the `benchmarks/` workloads `fib` -0.8 %, `tak` -1.3 %, `sum-loop` -5.0 %,
+  `reduce-list` +2.8 %, `sum-squares` +2.5 %, `factorial-100` +1.8 % (all within the
+  run-to-run noise); a map-heavy scratch workload (20000 `assoc`s of integer, string and
+  vector keys, 60000 `get`s, 200000 keyword lookups and set `contains?`) +7.1 % in the
+  A/B median, +3.4 % in instructions. The cost is the out-of-line `getPrototype` /
+  `getFirstParent` calls that replace a one-instruction tag test on the key paths.
+
 ### Added — template-based object instantiation and protoCore 3.6.0 pin, 2026-11-17
 
 - Adopted template prototypes (`ProtoShape` + inline values, `newClone`, `setAttributes`) for heavily allocated runtime objects:

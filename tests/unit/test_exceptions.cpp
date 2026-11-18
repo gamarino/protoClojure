@@ -4,6 +4,7 @@
 
 #include "runtime/Exceptions.h"
 #include "runtime/Primitives.h"
+#include "runtime/VectorOps.h"
 
 #include "protoCore.h"
 #include <gtest/gtest.h>
@@ -155,6 +156,72 @@ TEST_F(ExceptionsFixture, ThrowClassedCarriesClassMessageAndToString) {
         try { throw; } catch (...) { EXPECT_EQ(caughtErrorValue(&live), t.value()); }
     }
     EXPECT_THROW(throwClassed(&live, "NoSuchException", "x"), std::logic_error);
+}
+
+// Throwability is a question of the value's type, never of its
+// representation (docs/DESIGN.md: runtimes do not ask protoCore whether a
+// value is an object cell). A Clojure exception is an instance of Throwable;
+// a foreign value is any value of no Clojure type, an object a module made
+// whatever protoCore kind it is; every value of a Clojure type is neither.
+// Keywords and symbols need the VM's ActiveCallContext to be named and are
+// covered by tests/conformance/26-exceptions/throwability-by-type.clj.
+namespace {
+const proto::ProtoObject* nopPrimitive(proto::ProtoContext*, const proto::ProtoObject*,
+                                       const proto::ParentLink*, const proto::ProtoArguments*,
+                                       const proto::ProtoKeywordArguments*) {
+    return PROTO_NONE;
+}
+}  // namespace
+
+TEST_F(ExceptionsFixture, ThrowabilityIsDecidedByTypeAcrossValueKinds) {
+    proto::ProtoContext* ctx = &live;
+    const proto::ProtoObject* clojureValues[] = {
+        ctx->fromLong(7),
+        ctx->fromDouble(2.5),
+        ctx->fromString("123456789012345678901234567890", 10),
+        ctx->fromUTF8String("ab"),
+        ctx->fromUTF8String("a string longer than the inline form"),
+        newVector(ctx, ctx->newList()->appendLast(ctx, ctx->fromLong(1))),
+        ctx->newMap()->asObject(ctx),
+        ctx->newList()->asObject(ctx),
+        ctx->fromMethod(nullptr, nopPrimitive),
+        PROTO_NONE, PROTO_TRUE, PROTO_FALSE,
+    };
+    for (const proto::ProtoObject* v : clojureValues) {
+        EXPECT_FALSE(isException(ctx, v)) << valueTypeName(ctx, v);
+        EXPECT_FALSE(isForeignObject(ctx, v)) << valueTypeName(ctx, v);
+        EXPECT_FALSE(isThrowable(ctx, v)) << valueTypeName(ctx, v);
+    }
+
+    // Objects of no Clojure type, parentless or parented: foreign values.
+    const proto::ProtoObject* parentless = ctx->newObject(false);
+    const proto::ProtoObject* parented = space.objectPrototype->newChild(ctx, false);
+    const proto::ProtoObject* grandchild = parented->newChild(ctx, false);
+    for (const proto::ProtoObject* v : {parentless, parented, grandchild}) {
+        EXPECT_FALSE(isException(ctx, v));
+        EXPECT_TRUE(isForeignObject(ctx, v));
+        EXPECT_TRUE(isThrowable(ctx, v));
+    }
+
+    // A module value of no Clojure type that protoCore does not represent as
+    // an object (a byte buffer): foreign by its type, like any other.
+    const proto::ProtoObject* buffer = ctx->newBuffer(8);
+    EXPECT_FALSE(isException(ctx, buffer));
+    EXPECT_TRUE(isForeignObject(ctx, buffer));
+    EXPECT_TRUE(isThrowable(ctx, buffer));
+
+    // A Clojure exception, and an object whose chain includes a Clojure
+    // exception class: exceptions, not foreign values.
+    const proto::ProtoObject* e = makeException(ctx, exceptionClassId("ExceptionInfo"),
+        ctx->fromUTF8String("boom"), nullptr, nullptr);
+    live.setAutomaticLocal(1, e);
+    const proto::ProtoObject* derived =
+        exceptionClassPrototype(exceptionClassId("IOException"))->newChild(ctx, false);
+    for (const proto::ProtoObject* v : {e, derived}) {
+        EXPECT_TRUE(isException(ctx, v));
+        EXPECT_FALSE(isForeignObject(ctx, v));
+        EXPECT_TRUE(isThrowable(ctx, v));
+    }
 }
 
 // The premise of protoCore's pin: an exception whose only owner is a

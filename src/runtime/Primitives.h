@@ -97,23 +97,12 @@ void installPrimitives(proto::ProtoContext* ctx,
                        proto::ProtoObject* globals);
 
 // True when `v` is a number: an integer (SmallInteger or LargeInteger) or a
-// float. nullptr is nil, not a number. Decided by the pointer tag alone, with
-// the tag values of protoCore's headers/proto_internal.h (a SmallInteger
-// carries POINTER_TAG_EMBEDDED_VALUE with EMBEDDED_TYPE_SMALLINT in its low
-// ten bits; POINTER_TAG_LARGE_INTEGER = 14, POINTER_TAG_DOUBLE = 15), so the
-// check on the arithmetic opcodes' slow path costs three compares and no
-// call.
-inline bool isNumber([[maybe_unused]] proto::ProtoContext* ctx,
-                     const proto::ProtoObject* v) {
-    constexpr proto::proto_ulong kSmallIntMask     = PROTO_UL(0x3FF);
-    constexpr proto::proto_ulong kSmallIntValue    = PROTO_UL(0x001);
-    constexpr proto::proto_ulong kPointerTagMask   = PROTO_UL(0x3F);
-    constexpr proto::proto_ulong kTagLargeInteger  = 14;
-    constexpr proto::proto_ulong kTagDouble        = 15;
-    const auto bits = reinterpret_cast<proto::proto_ulong>(v);
-    const proto::proto_ulong tag = bits & kPointerTagMask;
-    return (bits & kSmallIntMask) == kSmallIntValue ||
-           (v != nullptr && (tag == kTagDouble || tag == kTagLargeInteger));
+// float. nullptr is nil, not a number. protoCore's public predicates: the
+// inline SmallInteger test first, then isInteger (LargeInteger) and
+// isDouble, each a tag-only test behind one call.
+inline bool isNumber(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    if (proto::isSmallInt(v)) return true;
+    return v != nullptr && (v->isDouble(ctx) || v->isInteger(ctx));
 }
 
 // The type of `v` as error messages name it, with its article: "nil",

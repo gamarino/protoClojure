@@ -92,8 +92,9 @@ void initExceptions(proto::ProtoContext* ctx, proto::ProtoObject* globals);
 // True when `v` is a Clojure exception value: an instance of Throwable.
 bool isException(proto::ProtoContext* ctx, const proto::ProtoObject* v);
 
-// True when `v` is a protoCore object that is no Clojure value (no
-// collection, fn, atom, exception, ...): what a module typically raises.
+// True when `v` is a value of no Clojure type (no number, string,
+// collection, fn, atom, exception, ...), whatever protoCore kind holds it:
+// what a module typically raises. Decided by valueTypeName.
 bool isForeignObject(proto::ProtoContext* ctx, const proto::ProtoObject* v);
 
 // True when `throw` accepts `v`: a Clojure exception or a foreign object.

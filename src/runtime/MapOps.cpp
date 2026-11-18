@@ -16,16 +16,6 @@ namespace protoClojure {
 
 namespace {
 
-// Pointer tags of protoCore's headers/proto_internal.h.
-constexpr proto::proto_ulong kTagMask         = 0x3F;
-constexpr proto::proto_ulong kTagObject       = 0;
-constexpr proto::proto_ulong kTagEmbedded     = 1;
-constexpr proto::proto_ulong kTagList         = 2;
-constexpr proto::proto_ulong kTagLargeInteger = 14;
-constexpr proto::proto_ulong kTagDouble       = 15;
-constexpr proto::proto_ulong kTagListSmall    = 25;
-// kTagLinkedList (29), a Clojure list, comes from SeqTypes.h.
-
 // One salt per key class, so keys of different classes never share a hash by
 // construction: a string, a one-element vector and a big integer that happen
 // to reduce to the same number still land in different slots.
@@ -41,26 +31,15 @@ constexpr proto::proto_ulong kSaltMap      = PROTO_UL(0x9FB21C651E98DF25);
 constexpr unsigned int kSlotMap   = 0;
 constexpr unsigned int kSlotCount = 1;
 
-inline proto::proto_ulong tagOf(const proto::ProtoObject* v) {
-    return reinterpret_cast<proto::proto_ulong>(v) & kTagMask;
-}
-
-// The tag has already been checked by isMap / isSequential, so the cast is
+// The kind has already been checked by isMap / SequenceView::of, so the cast is
 // the whole conversion: ProtoObject::asMap would first probe a tag-0 object
 // for a `__data__` wrapper attribute, which this runtime never sets.
 inline const proto::ProtoMap* asMapFast(const proto::ProtoObject* m) {
     return reinterpret_cast<const proto::ProtoMap*>(m);
 }
 
-inline bool isListTag(const proto::ProtoObject* v) {
-    const proto::proto_ulong tag = tagOf(v);
-    return tag == kTagList || tag == kTagListSmall;
-}
-
-// A vector, a Clojure list (SeqTypes.h), or the ProtoList a seq object was
-// read into (keyHash, keyEquals): what is matched element by element.
-inline bool isSequential(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    return v != nullptr && (isVector(v) || isListTag(v) || isListValue(ctx, v));
+inline bool isListTag(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    return isProtoList(ctx, v);
 }
 
 // The elements of a sequential value in order: a vector's or a ProtoList's
@@ -72,8 +51,8 @@ struct SequenceView {
 
     static SequenceView of(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
         SequenceView s;
-        if (isVector(v))          s.list = vectorItems(ctx, v);
-        else if (isListTag(v))    s.list = v->asList(ctx);
+        if (isVector(ctx, v))          s.list = vectorItems(ctx, v);
+        else if (isListTag(ctx, v))    s.list = v->asList(ctx);
         else                      s.cursor = ListCursor(v);
         s.n = s.list ? s.list->getSize(ctx) : static_cast<proto::proto_ulong>(listCount(ctx, v));
         return s;
@@ -242,46 +221,63 @@ void requireEven(proto::proto_ulong n) {
 
 } // namespace
 
+namespace {
+
+// The key classes of Clojure's key semantics, decided together so that a
+// key pays for its kind once. `v` is a cell (not a SmallInteger, not an
+// embedded word) and not a string.
+struct KeyClass {
+    bool sequential = false;  // a vector, a ProtoList or a Clojure list (SeqTypes.h)
+    bool seqNode = false;     // a lazy seq, a cons or a chunk: sequential once realised
+    bool map = false;
+    bool set = false;
+    bool dbl = false;
+    bool bigInt = false;
+};
+
+KeyClass keyClassOf(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    const proto::ProtoSpace* sp = ctx->space;
+    KeyClass c;
+    const proto::ProtoObject* p = v->getPrototype(ctx);
+    if (v->getFirstParent(ctx) != PROTO_NONE) {
+        // An object cell with a parent: a set, a seq node, or an identity key.
+        c.set = g_setPrototype && p == g_setPrototype;
+        c.seqNode = g_seqProtos.lazy &&
+                    (p == g_seqProtos.lazy || p == g_seqProtos.cons || p == g_seqProtos.chunk);
+        return c;
+    }
+    // Kinds with a ProtoSpace prototype of their own.
+    c.sequential = p == sp->sparseListPrototype || p == sp->listPrototype ||
+                   p == sp->getLinkedListPrototype();
+    c.map = p == sp->mapPrototype;
+    if (c.sequential || c.map) return c;
+    // Doubles and LargeIntegers, whose prototypes may alias objectPrototype.
+    c.dbl = v->isDouble(ctx);
+    c.bigInt = !c.dbl && v->isInteger(ctx);
+    return c;
+}
+
+} // namespace
+
 bool keyIsIdentity(proto::ProtoContext* ctx, const proto::ProtoObject* key) {
     if (!key) return true;
-    // A string is matched by content whatever protoCore stores it in: a
-    // pointer tag (6, 22) or an inline string in an embedded word.
+    // A string is matched by content whatever protoCore stores it in: a heap
+    // string, a symbol or an inline string.
     if (proto::ProtoObject::isStringTagFast(key)) return false;
-    switch (tagOf(key)) {
-        case kTagEmbedded:
-            // nil, booleans and characters are unique words, so identity is
-            // their equality. A SmallInteger never reaches this answer:
-            // protoCore's helper always routes one through the hashed path.
-            return !proto::isSmallInt(key);
-        case kTagDouble:
-        case kTagLargeInteger:
-        case kTagList:
-        case kTagListSmall:
-            return false;
-        case kTagObject:
-            // Keywords and symbols (interned Named values), atoms, futures,
-            // promises, actors: equal only to themselves. A set (SetOps.h)
-            // is matched by its elements. The keyword or symbol a program
-            // looks up is found in the named-value cache (Named.h) without
-            // reading its prototype, so the set test costs nothing on the
-            // common path.
-            // A list, a lazy seq, a cons or a chunk (SeqTypes.h) is
-            // sequential and matched by its elements too.
-            if (isKnownNamed(key)) return true;
-            {
-                const proto::ProtoObject* p = key->getPrototype(ctx);
-                return p != g_setPrototype && p != g_seqProtos.lazy &&
-                       p != g_seqProtos.cons && p != g_seqProtos.chunk;
-            }
-        case kTagLinkedList:
-            // A list (SeqTypes.h), empty or not: matched by its elements.
-            return false;
-        default:
-            // A map and a vector are matched by value; anything else
-            // protoCore may hand out (a method, a thread, a byte buffer) is
-            // equal only to itself.
-            return !isMap(key) && !isVector(key);
-    }
+    // nil, booleans and characters are unique words, so identity is their
+    // equality. A SmallInteger never reaches this answer: protoCore's helper
+    // always routes one through the hashed path.
+    if (proto::isSmallInt(key)) return false;
+    if (!proto::ProtoObject::isCellPointer(key)) return true;
+    // Keywords and symbols (interned Named values) are found in the
+    // named-value cache (Named.h) without reading a prototype.
+    if (isKnownNamed(key)) return true;
+    // Atoms, futures, promises, actors, methods, threads and byte buffers are
+    // equal only to themselves. Numbers that are not unique words, maps,
+    // sets, and every sequential value (vectors, ProtoLists, Clojure lists,
+    // lazy seqs, conses, chunks) are matched by value.
+    const KeyClass c = keyClassOf(ctx, key);
+    return !(c.sequential || c.seqNode || c.map || c.set || c.dbl || c.bigInt);
 }
 
 proto::proto_ulong keyHash(proto::ProtoContext* ctx, const proto::ProtoObject* key) {
@@ -292,53 +288,48 @@ proto::proto_ulong keyHash(proto::ProtoContext* ctx, const proto::ProtoObject* k
         return combine(kSaltString,
                        reinterpret_cast<const proto::ProtoString*>(key)->getHash(ctx));
     }
-    switch (tagOf(key)) {
-        case kTagEmbedded:
-            return combine(proto::isSmallInt(key) ? kSaltInteger : kSaltIdentity,
-                           reinterpret_cast<proto::proto_ulong>(key));
-        case kTagDouble:
-            // The exact bit pattern, because that is what keyEquals compares:
-            // 0.0 and -0.0, and two NaNs with different payloads, are
-            // different keys and hash differently.
-            return combine(kSaltDouble, static_cast<proto::proto_ulong>(doubleBits(ctx, key)));
-        case kTagLargeInteger:
-            // protoCore hashes every digit of the canonical representation,
-            // so equal values computed differently hash equally.
-            return combine(kSaltBigInt, key->getHash(ctx));
-        case kTagList:
-        case kTagListSmall:
-            checkNativeStack();
-            return sequenceHash(ctx, key);
-        default:
-            if (isVector(key)) {
-                checkNativeStack();
-                return sequenceHash(ctx, key);
-            }
-            if (isMap(key)) {
-                checkNativeStack();
-                return mapHash(ctx, key);
-            }
-            if (isSet(ctx, key)) {
-                checkNativeStack();
-                return setHash(ctx, key);
-            }
-            if (isListValue(ctx, key)) {
-                checkNativeStack();
-                return sequenceHash(ctx, key);
-            }
-            if (isSeqObject(ctx, key)) {
-                // A seq hashes as the list of its elements, so it is the same
-                // key as an equal list or vector. Realises it (Clojure's
-                // hasheq walks it too).
-                checkNativeStack();
-                CallerSlots scope(ctx, 1);
-                const proto::ProtoList* lst = seqObjectToList(ctx, key);
-                if (!lst) lst = ctx->newList();
-                scope.set(0, lst->asObject(ctx));
-                return sequenceHash(ctx, scope.get(0));
-            }
-            return combine(kSaltIdentity, reinterpret_cast<proto::proto_ulong>(key));
+    if (proto::isSmallInt(key)) return combine(kSaltInteger, reinterpret_cast<proto::proto_ulong>(key));
+    // nil, booleans and characters: unique words, hashed by identity.
+    if (!proto::ProtoObject::isCellPointer(key))
+        return combine(kSaltIdentity, reinterpret_cast<proto::proto_ulong>(key));
+    // Keywords and symbols (Named.h): identity keys, found without a probe.
+    if (isKnownNamed(key)) return combine(kSaltIdentity, reinterpret_cast<proto::proto_ulong>(key));
+    const KeyClass c = keyClassOf(ctx, key);
+    if (c.dbl) {
+        // The exact bit pattern, because that is what keyEquals compares:
+        // 0.0 and -0.0, and two NaNs with different payloads, are
+        // different keys and hash differently.
+        return combine(kSaltDouble, static_cast<proto::proto_ulong>(doubleBits(ctx, key)));
     }
+    if (c.bigInt) {
+        // protoCore hashes every digit of the canonical representation,
+        // so equal values computed differently hash equally.
+        return combine(kSaltBigInt, key->getHash(ctx));
+    }
+    if (c.sequential) {
+        checkNativeStack();
+        return sequenceHash(ctx, key);
+    }
+    if (c.map) {
+        checkNativeStack();
+        return mapHash(ctx, key);
+    }
+    if (c.set) {
+        checkNativeStack();
+        return setHash(ctx, key);
+    }
+    if (c.seqNode) {
+        // A seq hashes as the list of its elements, so it is the same
+        // key as an equal list or vector. Realises it (Clojure's
+        // hasheq walks it too).
+        checkNativeStack();
+        CallerSlots scope(ctx, 1);
+        const proto::ProtoList* lst = seqObjectToList(ctx, key);
+        if (!lst) lst = ctx->newList();
+        scope.set(0, lst->asObject(ctx));
+        return sequenceHash(ctx, scope.get(0));
+    }
+    return combine(kSaltIdentity, reinterpret_cast<proto::proto_ulong>(key));
 }
 
 bool keyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
@@ -353,18 +344,22 @@ bool keyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
     const bool bString = proto::ProtoObject::isStringTagFast(b);
     if (aString || bString) return aString && bString && a->partialCompare(ctx, b) == 0;
 
+    // Distinct SmallIntegers, and distinct identity words, are never equal.
+    if (proto::isSmallInt(a) || proto::isSmallInt(b)) return false;
+
+    const KeyClass ca = keyClassOf(ctx, a);
+    const KeyClass cb = keyClassOf(ctx, b);
+
     // A lazy seq, a cons or a chunk is compared as the list of its elements
     // (SeqTypes.h), each realised in the caller's context; a list is read
-    // along its cells (isSequential).
-    const auto unrealised = [&](const proto::ProtoObject* v) {
-        return isSeqObject(ctx, v) && !isListValue(ctx, v);
-    };
-    if (unrealised(a) || unrealised(b)) {
+    // along its cells.
+    if (ca.seqNode || cb.seqNode) {
         CallerSlots scope(ctx, 2);
         const proto::ProtoObject* both[2] = {a, b};
+        const bool node[2] = {ca.seqNode, cb.seqNode};
         for (int i = 0; i < 2; ++i) {
             const proto::ProtoObject* v = both[i];
-            if (isSeqObject(ctx, v) && !isListValue(ctx, v)) {
+            if (node[i]) {
                 const proto::ProtoList* lst = seqObjectToList(ctx, v);
                 v = (lst ? lst : ctx->newList())->asObject(ctx);
             }
@@ -374,29 +369,18 @@ bool keyEquals(proto::ProtoContext* ctx, const proto::ProtoObject* a,
     }
 
     // A list and a vector with equal elements are one key.
-    const bool aSeq = isSequential(ctx, a);
-    const bool bSeq = isSequential(ctx, b);
-    if (aSeq || bSeq) return aSeq && bSeq && sequenceEquals(ctx, a, b);
+    if (ca.sequential || cb.sequential)
+        return ca.sequential && cb.sequential && sequenceEquals(ctx, a, b);
 
-    const bool aMap = isMap(a);
-    const bool bMap = isMap(b);
-    if (aMap || bMap) return aMap && bMap && mapKeyEquals(ctx, a, b);
+    if (ca.map || cb.map) return ca.map && cb.map && mapKeyEquals(ctx, a, b);
 
-    const bool aSet = isSet(ctx, a);
-    const bool bSet = isSet(ctx, b);
-    if (aSet || bSet) return aSet && bSet && setEquals(ctx, a, b);
+    if (ca.set || cb.set) return ca.set && cb.set && setEquals(ctx, a, b);
 
-    if (tagOf(a) != tagOf(b)) return false;
-    switch (tagOf(a)) {
-        case kTagDouble:
-            return doubleBits(ctx, a) == doubleBits(ctx, b);
-        case kTagLargeInteger:
-            return a->partialCompare(ctx, b) == 0;
-        default:
-            // Identity keys, and SmallIntegers, which are unique words: the
-            // pointer test above already decided them.
-            return false;
-    }
+    // Doubles by bit pattern, LargeIntegers by value. Identity keys: the
+    // pointer test above already decided them.
+    if (ca.dbl) return cb.dbl && doubleBits(ctx, a) == doubleBits(ctx, b);
+    if (ca.bigInt) return cb.bigInt && a->partialCompare(ctx, b) == 0;
+    return false;
 }
 
 const proto::KeySemantics& clojureKeySemantics() {

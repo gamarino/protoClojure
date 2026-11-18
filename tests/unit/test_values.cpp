@@ -203,6 +203,60 @@ TEST_F(ValuesFixture, NaNIsEqualOnlyToItself) {
     EXPECT_TRUE(eq(dbl(-0.0), num(0)));
 }
 
+// `=` decides by the values' types, never by their representation:
+// numbers by value across types (D15), strings by content, collections
+// element-wise, and every other value -- keywords and symbols, fns, objects
+// parentless or parented, byte buffers, booleans -- only when identical.
+// An object that wraps a value under protoCore's `__data__` convention is an
+// object, so it is not equal to the value it wraps.
+namespace {
+const proto::ProtoObject* nopFn(proto::ProtoContext*, const proto::ProtoObject*,
+                                const proto::ParentLink*, const proto::ProtoArguments*,
+                                const proto::ProtoKeywordArguments*) {
+    return PROTO_NONE;
+}
+}  // namespace
+
+TEST_F(ValuesFixture, EqualityIsDecidedByTypeAcrossValueKinds) {
+    // Numbers and strings: by value, distinct objects included.
+    EXPECT_TRUE(eq(ctx->fromString("123456789012345678901234567890", 10),
+                   ctx->fromString("123456789012345678901234567890", 10)));
+    EXPECT_TRUE(eq(num(3), ctx->fromDouble(3.0)));
+    EXPECT_TRUE(eq(ctx->fromUTF8String("a string longer than the inline form"),
+                   ctx->fromUTF8String("a string longer than the inline form")));
+    EXPECT_FALSE(eq(num(3), ctx->fromUTF8String("3")));
+
+    // Identity kinds: equal only to themselves.
+    const proto::ProtoObject* parentless = ctx->newObject(false);
+    const proto::ProtoObject* parented = space.objectPrototype->newChild(ctx, false);
+    const proto::ProtoObject* fn = ctx->fromMethod(nullptr, nopFn);
+    const proto::ProtoObject* buffer = ctx->newBuffer(4);
+    const proto::ProtoObject* identityValues[] = {
+        kw(":a"), kw("a"), parentless, parented, parented->newChild(ctx, false), fn,
+        ctx->fromMethod(nullptr, nopFn), buffer, ctx->newBuffer(4), PROTO_TRUE, PROTO_FALSE,
+        PROTO_NONE};
+    for (const proto::ProtoObject* a : identityValues) {
+        for (const proto::ProtoObject* b : identityValues)
+            EXPECT_EQ(eq(a, b), a == b) << valueTypeName(ctx, a) << " vs " << valueTypeName(ctx, b);
+        EXPECT_FALSE(eq(a, num(0))) << valueTypeName(ctx, a);
+        EXPECT_FALSE(eq(num(0), a)) << valueTypeName(ctx, a);
+        EXPECT_FALSE(eq(a, ctx->fromUTF8String(":a"))) << valueTypeName(ctx, a);
+        EXPECT_FALSE(eq(a, obj(list(0, 1)))) << valueTypeName(ctx, a);
+        EXPECT_FALSE(eq(tuple(list(0, 1)), a)) << valueTypeName(ctx, a);
+    }
+
+    // A `__data__` wrapper is an object, not the string or number it wraps.
+    const proto::ProtoString* dataKey = proto::ProtoString::createSymbol(ctx, "__data__");
+    const proto::ProtoObject* s = ctx->fromUTF8String("wrapped");
+    const proto::ProtoObject* wrapper = ctx->newObject(false)->setAttribute(ctx, dataKey, s);
+    EXPECT_FALSE(eq(wrapper, s));
+    EXPECT_FALSE(eq(s, wrapper));
+    const proto::ProtoObject* numberWrapper =
+        ctx->newObject(false)->setAttribute(ctx, dataKey, num(5));
+    EXPECT_FALSE(eq(numberWrapper, num(5)));
+    EXPECT_FALSE(eq(num(5), numberWrapper));
+}
+
 TEST_F(ValuesFixture, EqualValuesAreOneMapKeyExceptAcrossNumericTypes) {
     // Every value carries a group number: two values must name one map entry
     // exactly when their groups are equal. Values equal

@@ -72,10 +72,7 @@ long long indexArg(proto::ProtoContext* ctx, const proto::ProtoArguments* args,
                                  " expects an integer, got " +
                                  valueTypeName(ctx, a));
     }
-    constexpr proto::proto_ulong kSmallIntMask  = PROTO_UL(0x3FF);
-    constexpr proto::proto_ulong kSmallIntValue = PROTO_UL(0x001);
-    if ((reinterpret_cast<proto::proto_ulong>(a) & kSmallIntMask) == kSmallIntValue)
-        return reinterpret_cast<long long>(a) >> 10;
+    if (proto::isSmallInt(a)) return proto::asSmallInt(a);
     if (a->compare(ctx, ctx->fromLong(LLONG_MAX)) > 0) return LLONG_MAX;
     if (a->compare(ctx, ctx->fromLong(LLONG_MIN)) < 0) return LLONG_MIN;
     return a->asLong(ctx);
@@ -94,39 +91,23 @@ const proto::ProtoObject* numberArg(proto::ProtoContext* ctx,
 }
 
 // The sign of a - b for two integers, exact at every magnitude: two
-// SmallIntegers compare inline (tagged-pointer layout, headers/protoCore.h);
+// SmallIntegers compare inline (protoCore's public isSmallInt / asSmallInt);
 // anything larger goes through protoCore compare.
 int compareIntegers(proto::ProtoContext* ctx, const proto::ProtoObject* a,
                     const proto::ProtoObject* b) {
-    constexpr proto::proto_ulong kSmallIntMask  = PROTO_UL(0x3FF);
-    constexpr proto::proto_ulong kSmallIntValue = PROTO_UL(0x001);
-    if ((reinterpret_cast<proto::proto_ulong>(a) & kSmallIntMask) == kSmallIntValue &&
-        (reinterpret_cast<proto::proto_ulong>(b) & kSmallIntMask) == kSmallIntValue) {
-        const long long x = reinterpret_cast<long long>(a) >> 10;
-        const long long y = reinterpret_cast<long long>(b) >> 10;
+    if (proto::isSmallInt(a) && proto::isSmallInt(b)) {
+        const long long x = proto::asSmallInt(a);
+        const long long y = proto::asSmallInt(b);
         return (x > y) - (x < y);
     }
     return a->compare(ctx, b);
 }
 
-// Pointer-tag constants matching protoCore's internal layout. Mirrored
-// from headers/proto_internal.h. Used to tell a genuine list (large or
-// small inline form) apart from a string (which would otherwise look
-// list-shaped to asList(), which exposes the char-list view).
-constexpr unsigned int kTagList      = 2;
-constexpr unsigned int kTagListSmall = 25;
-
-bool isListTag(const proto::ProtoObject* v) {
-    if (!v) return false;
-    unsigned int t =
-        static_cast<unsigned int>(reinterpret_cast<uintptr_t>(v) & 0x3F);
-    return t == kTagList || t == kTagListSmall;
-}
-
-// True for a protoCore object cell (POINTER_TAG_OBJECT = 0): maps, keywords
-// and symbols, atoms, functions, futures, promises and actors.
-bool isObjectTag(const proto::ProtoObject* v) {
-    return v && (reinterpret_cast<uintptr_t>(v) & 0x3F) == 0;
+// A genuine ProtoList (large or small inline form), not a string, which
+// would otherwise look list-shaped to asList(), which exposes the char-list
+// view (ValueKinds.h).
+bool isListTag(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    return isProtoList(ctx, v);
 }
 
 // The value delivered to `promise`, with `*delivered` set; nullptr, with
@@ -200,13 +181,10 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
     if (v == PROTO_TRUE)        { out += "true"; return; }
     if (v == PROTO_FALSE)       { out += "false"; return; }
     if (v->isInteger(ctx)) {
-        // SmallInt: the tagged-pointer fast extract, mirror of the check in
-        // ExecutionEngine.cpp. LargeInt: protoCore's asIntegerString.
-        constexpr proto::proto_ulong kSmallIntMask  = PROTO_UL(0x3FF);
-        constexpr proto::proto_ulong kSmallIntValue = PROTO_UL(0x001);
-        proto::proto_ulong bits = reinterpret_cast<proto::proto_ulong>(v);
-        if ((bits & kSmallIntMask) == kSmallIntValue) {
-            out += std::to_string(reinterpret_cast<long long>(v) >> 10);
+        // SmallInt: protoCore's public inline extract. LargeInt:
+        // protoCore's asIntegerString.
+        if (proto::isSmallInt(v)) {
+            out += std::to_string(proto::asSmallInt(v));
         } else {
             out += v->asIntegerString(ctx)->toStdString(ctx);
         }
@@ -229,7 +207,7 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
     }
     // A ProtoList is never a Clojure value (SeqTypes.h); one reaching the
     // printer is a runtime defect, shown as such rather than as a list.
-    if (isListTag(v)) { out += "#<internal list>"; return; }
+    if (isListTag(ctx, v)) { out += "#<internal list>"; return; }
     if (isSeqObject(ctx, v)) {
         // A lazy seq, a cons or a chunk prints as a list, realised as it is
         // printed (an endless one never finishes, as in Clojure without
@@ -244,7 +222,7 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
         out += ')';
         return;
     }
-    if (isVector(v)) {
+    if (isVector(ctx, v)) {
         const proto::ProtoList* items = vectorItems(ctx, v);
         out += '[';
         proto::proto_ulong n = items->getSize(ctx);
@@ -257,7 +235,7 @@ void printTo(proto::ProtoContext* ctx, std::string& out,
     }
     // A map, `{k v, k v}`: each entry's original key, in the map's
     // unspecified walk order (MapOps.h).
-    if (isMap(v)) {
+    if (isMap(ctx, v)) {
         out += '{';
         struct Acc { std::string* out; bool readable; bool first; }
             acc{&out, readable, true};
@@ -710,7 +688,7 @@ bool pushSeqElements(ListBuilder& out, const proto::ProtoObject* v);
 const proto::ProtoList* asSeqOrNull(proto::ProtoContext* ctx,
                                     const proto::ProtoObject* v) {
     if (!v || v == PROTO_NONE) return nullptr;
-    if (isVector(v)) return vectorItems(ctx, v);
+    if (isVector(ctx, v)) return vectorItems(ctx, v);
     // A list, a lazy seq, a cons or a chunk: its elements, realised to its
     // end (LazySeq.h). The
     // functions that need only a prefix (first, next, nth, take, ...) and
@@ -768,7 +746,7 @@ const proto::ProtoObject* prim_vec(proto::ProtoContext* ctx,
     if (!args || args->getSize(ctx) != 1)
         throwError(ctx, "vec: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
-    if (isVector(v)) return v;  // already a vector
+    if (isVector(ctx, v)) return v;  // already a vector
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
     return newVector(ctx, lst ? lst : ctx->newList());
 }
@@ -828,7 +806,7 @@ const proto::ProtoObject* prim_nth(proto::ProtoContext* ctx,
             s->getSlice(ctx, static_cast<int>(idx), static_cast<int>(idx) + 1));
     }
 
-    const bool vector = isVector(coll);
+    const bool vector = isVector(ctx, coll);
     if (isSeqObject(ctx, coll)) {
         // A list, a lazy seq, a cons or a chunk: walked to the index, O(i).
         if (idx < 0) {
@@ -871,7 +849,7 @@ const proto::ProtoObject* prim_vector_p(proto::ProtoContext* ctx,
     if (!args || args->getSize(ctx) != 1)
         throwError(ctx, "vector?: expects 1 arg");
     const proto::ProtoObject* v = args->getAt(ctx, 0);
-    return isVector(v) ? PROTO_TRUE : PROTO_FALSE;
+    return isVector(ctx, v) ? PROTO_TRUE : PROTO_FALSE;
 }
 
 const proto::ProtoObject* prim_list_p(proto::ProtoContext* ctx,
@@ -898,7 +876,7 @@ const proto::ProtoObject* prim_map_p(proto::ProtoContext* ctx,
                                      const proto::ProtoKeywordArguments*) {
     if (!args || args->getSize(ctx) != 1)
         throwError(ctx, "map?: expects 1 arg");
-    return isMap(args->getAt(ctx, 0)) ? PROTO_TRUE : PROTO_FALSE;
+    return isMap(ctx, args->getAt(ctx, 0)) ? PROTO_TRUE : PROTO_FALSE;
 }
 
 // Also the target of every `{...}` literal, whose entries the compiler
@@ -930,7 +908,7 @@ const proto::ProtoObject* prim_assoc(proto::ProtoContext* ctx,
     // nil is the empty map, as in Clojure: (assoc nil :a 1) is {:a 1}, which
     // assoc-in and update-in rely on.
     if (!m || m == PROTO_NONE) return mapAssocPairs(ctx, nullptr, args->values() + 1, n - 1);
-    if (isVector(m)) {
+    if (isVector(ctx, m)) {
         // A vector by index, 0 to its count (the count appends), as in
         // Clojure; any other index raises IndexOutOfBoundsException.
         CallerSlots scope(ctx, 1);
@@ -952,7 +930,7 @@ const proto::ProtoObject* prim_assoc(proto::ProtoContext* ctx,
         const proto::ProtoObject* r = newVector(ctx, scope.get(0)->asList(ctx));
         return r;
     }
-    if (!isMap(m))
+    if (!isMap(ctx, m))
         throwClassed(ctx, "ClassCastException",
                      std::string("assoc expects a map, a vector or nil, got ") + valueTypeName(ctx, m));
     return mapAssocPairs(ctx, m, args->values() + 1, n - 1);
@@ -974,7 +952,7 @@ const proto::ProtoObject* prim_dissoc(proto::ProtoContext* ctx,
     if (!cc) throwError(ctx, "dissoc: no active VM context");
     const proto::ProtoObject* m = args->getAt(ctx, 0);
     if (!m || m == PROTO_NONE) return PROTO_NONE;
-    if (!isMap(m)) {
+    if (!isMap(ctx, m)) {
         throwClassed(ctx, "ClassCastException", std::string("dissoc expects a map, got ") +
                                  valueTypeName(ctx, m));
     }
@@ -1005,7 +983,7 @@ const proto::ProtoObject* prim_get(proto::ProtoContext* ctx,
     const proto::ProtoObject* nf = (n == 3) ? args->getAt(ctx, 2) : PROTO_NONE;
     bool found = false;
     // A map first: the common case pays one tag test.
-    if (isMap(m)) {
+    if (isMap(ctx, m)) {
         const proto::ProtoObject* v = mapGet(ctx, m, k, &found);
         return found ? v : nf;
     }
@@ -1028,7 +1006,7 @@ const proto::ProtoObject* prim_contains_p(proto::ProtoContext* ctx,
     const proto::ProtoObject* m = args->getAt(ctx, 0);
     const proto::ProtoObject* k = args->getAt(ctx, 1);
     bool found = false;
-    if (isMap(m)) {
+    if (isMap(ctx, m)) {
         mapGet(ctx, m, k, &found);
         return found ? PROTO_TRUE : PROTO_FALSE;
     }
@@ -1046,7 +1024,7 @@ const proto::ProtoObject* prim_contains_p(proto::ProtoContext* ctx,
 static const proto::ProtoObject* mapWalk(proto::ProtoContext* ctx,
                                          const proto::ProtoObject* m,
                                          bool wantValues) {
-    if (!isMap(m))
+    if (!isMap(ctx, m))
         return emptyListValue();
     // One entry per map entry, so the result grows with user data: chunked.
     ListBuilder out(ctx);
@@ -1158,7 +1136,7 @@ const proto::ProtoObject* prim_count(proto::ProtoContext* ctx,
         return ctx->fromLong(static_cast<long long>(asProtoString(v)->getSize(ctx)));
     }
     // A map: its number of entries; a set: its number of elements (O(n), D25).
-    if (isMap(v)) return ctx->fromLong(static_cast<long long>(mapCount(ctx, v)));
+    if (isMap(ctx, v)) return ctx->fromLong(static_cast<long long>(mapCount(ctx, v)));
     if (isSet(ctx, v)) return ctx->fromLong(static_cast<long long>(setCount(ctx, v)));
     if (long long c = 0; isSeqObject(ctx, v) && tryCount(ctx, v, &c)) return ctx->fromLong(c);
     if (isSeqObject(ctx, v)) {
@@ -1195,7 +1173,7 @@ const proto::ProtoObject* prim_empty_p(proto::ProtoContext* ctx,
     if (isStringLike(v)) {
         return asProtoString(v)->getSize(ctx) == 0 ? PROTO_TRUE : PROTO_FALSE;
     }
-    if (isMap(v)) return mapIsEmpty(ctx, v) ? PROTO_TRUE : PROTO_FALSE;
+    if (isMap(ctx, v)) return mapIsEmpty(ctx, v) ? PROTO_TRUE : PROTO_FALSE;
     if (isSet(ctx, v)) return setIsEmpty(ctx, v) ? PROTO_TRUE : PROTO_FALSE;
     if (isSeqObject(ctx, v)) return seqOf(ctx, v) == PROTO_NONE ? PROTO_TRUE : PROTO_FALSE;
     const proto::ProtoList* lst = asSeqOrNull(ctx, v);
@@ -1278,14 +1256,14 @@ bool pushSeqElements(ListBuilder& out, const proto::ProtoObject* v) {
         }
         return true;
     }
-    if (isVector(v)) {
+    if (isVector(c, v)) {
         const proto::ProtoList* lst = vectorItems(c, v);
         const proto::proto_ulong n = lst->getSize(c);
         for (proto::proto_ulong i = 0; i < n; ++i)
             out.push(lst->getAt(out.context(), static_cast<int>(i)));
         return true;
     }
-    if (isMap(v)) {
+    if (isMap(c, v)) {
         std::vector<const proto::ProtoObject*> kv;
         mapForEach(c, v, &kv,
             [](proto::ProtoContext*, void* self, const proto::ProtoObject* k,
@@ -2366,7 +2344,7 @@ static void fireWatches(proto::ProtoContext* ctx,
     constexpr unsigned int kSlotWatchList  = 1;
     const proto::ProtoObject* watchesObj =
         atomObj->getAttribute(ctx, cc->watchesKey);
-    if (!isMap(watchesObj)) return;
+    if (!isMap(ctx, watchesObj)) return;
     scope.pin(kSlotWatchesMap, watchesObj);
 
     // Collect (key fn key fn ...) first, then call the watches after the
@@ -3173,7 +3151,7 @@ const proto::ProtoObject* prim_add_watch(proto::ProtoContext* ctx,
             a->getOwnAttributeDirect(ctx, cc->watchesKey);
         scope.pin(1, old);
         const proto::ProtoObject* base =
-            isMap(old) ? old : nullptr;
+            isMap(ctx, old) ? old : nullptr;
         scope.set(0,
             mapAssocPairs(ctx, base, kf, 2));
         if (a->setAttributeIfEqual(ctx, cc->watchesKey, old,
@@ -3203,7 +3181,7 @@ const proto::ProtoObject* prim_remove_watch(proto::ProtoContext* ctx,
         const proto::ProtoObject* old =
             a->getOwnAttributeDirect(ctx, cc->watchesKey);
         scope.pin(1, old);
-        if (!isMap(old)) return a;
+        if (!isMap(ctx, old)) return a;
         scope.set(0, mapDissoc(ctx, old, k));
         if (scope.get(0) == old) return a;   // key absent
         if (a->setAttributeIfEqual(ctx, cc->watchesKey, old,
@@ -3799,11 +3777,11 @@ const proto::ProtoObject* prim_conj(proto::ProtoContext* ctx,
     if (n == 0) return newVector(ctx, ctx->newList());
     const proto::ProtoObject* coll = args->getAt(ctx, 0);
     if (n == 1) return coll;
-    if (isMap(coll)) {
+    if (isMap(ctx, coll)) {
         std::vector<const proto::ProtoObject*> kv;
         for (proto::proto_ulong i = 1; i < n; ++i) {
             const proto::ProtoObject* x = args->getAt(ctx, static_cast<int>(i));
-            if (isMap(x)) {
+            if (isMap(ctx, x)) {
                 mapForEach(ctx, x, &kv,
                     [](proto::ProtoContext*, void* self, const proto::ProtoObject* k,
                        const proto::ProtoObject* v) {
@@ -3811,7 +3789,7 @@ const proto::ProtoObject* prim_conj(proto::ProtoContext* ctx,
                         acc->push_back(k);
                         acc->push_back(v);
                     });
-            } else if (isVector(x) && vectorItems(ctx, x)->getSize(ctx) == 2) {
+            } else if (isVector(ctx, x) && vectorItems(ctx, x)->getSize(ctx) == 2) {
                 kv.push_back(vectorItems(ctx, x)->getAt(ctx, 0));
                 kv.push_back(vectorItems(ctx, x)->getAt(ctx, 1));
             } else if (x && x != PROTO_NONE) {
@@ -3825,7 +3803,7 @@ const proto::ProtoObject* prim_conj(proto::ProtoContext* ctx,
         // Every element is reachable from the rooted arguments.
         return setConj(ctx, coll, args->values() + 1, n - 1);
     }
-    if (isVector(coll)) {
+    if (isVector(ctx, coll)) {
         proto::ProtoContext::CriticalSection guard(ctx);
         const proto::ProtoList* items = vectorItems(ctx, coll);
         for (proto::proto_ulong i = 1; i < n; ++i)
@@ -4223,7 +4201,7 @@ const proto::ProtoObject* fastIndexed(proto::ProtoContext* ctx, const proto::Pro
                                       const proto::ProtoObject* i) {
     if (!proto::isSmallInt(i)) return nullptr;
     const long long idx = proto::asSmallInt(i);
-    if (isVector(coll)) {
+    if (isVector(ctx, coll)) {
         const proto::ProtoList* lst = vectorItems(ctx, coll);
         if (idx < 0 || idx >= static_cast<long long>(lst->getSize(ctx))) return nullptr;
         return lst->getAt(ctx, static_cast<int>(idx));
@@ -4445,7 +4423,7 @@ const proto::ProtoList* seqItems(proto::ProtoContext* ctx, const proto::ProtoObj
 // Declared in LazySeq.h: the list seqOf answers for a map, a set or a string.
 bool collectionItems(proto::ProtoContext* ctx, const proto::ProtoObject* v,
                      const proto::ProtoList** out) {
-    if (!isMap(v) && !isSet(ctx, v) && !isStringLike(v)) return false;
+    if (!isMap(ctx, v) && !isSet(ctx, v) && !isStringLike(v)) return false;
     ListBuilder b(ctx);
     pushSeqElements(b, v);
     *out = b.size() == 0 ? nullptr : b.finishList();
@@ -4508,7 +4486,7 @@ struct SequentialView {
 SequentialView sequentialView(proto::ProtoContext* ctx,
                               const proto::ProtoObject* v) {
     SequentialView s;
-    if (isVector(v)) s.list = vectorItems(ctx, v);
+    if (isVector(ctx, v)) s.list = vectorItems(ctx, v);
     return s;
 }
 
@@ -4520,8 +4498,8 @@ const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v)
     if (v->isInteger(ctx))                  return "an integer";
     if (v->isDouble(ctx))                   return "a float";
     if (proto::ProtoObject::isStringTagFast(v)) return "a string";
-    if (isListTag(v))                       return "an internal list";
-    if (isVector(v))                        return "a vector";
+    if (isListTag(ctx, v))                       return "an internal list";
+    if (isVector(ctx, v))                        return "a vector";
     switch (seqObjectKind(ctx, v)) {
         case SeqObject::List:
         case SeqObject::Empty: return "a list";
@@ -4530,7 +4508,7 @@ const char* valueTypeName(proto::ProtoContext* ctx, const proto::ProtoObject* v)
         case SeqObject::Chunk: return "a seq";
         case SeqObject::None:  break;
     }
-    if (isMap(v))                           return "a map";
+    if (isMap(ctx, v))                           return "a map";
     if (isSet(ctx, v))                      return "a set";
     if (isPattern(ctx, v))                  return "a pattern";
     if (isMatcher(ctx, v))                  return "a matcher";
@@ -4646,12 +4624,34 @@ bool valuesEqual(proto::ProtoContext* ctx,
     if (!a) a = PROTO_NONE;
     if (!b) b = PROTO_NONE;
     if (a == b) return true;
+
+    // Numbers by value across types (D15) with IEEE semantics, so NaN is equal
+    // to no number, itself included (the identity test above still makes one
+    // NaN object `=` to itself, as JVM Clojure's Util.equiv does); strings by
+    // content. Decided by the types, so protoCore's partialCompare never reads
+    // an object's `__data__` wrapper as the string or number it holds.
+    if (isNumber(ctx, a)) return isNumber(ctx, b) && a->partialCompare(ctx, b) == 0;
+    if (proto::ProtoObject::isStringTagFast(a))
+        return proto::ProtoObject::isStringTagFast(b) && a->partialCompare(ctx, b) == 0;
+
+    // A value whose type has no value equality -- keywords and symbols
+    // (interned, Named.h), atoms, fns, objects, nil, booleans -- is equal only
+    // to itself, which the identity test answered. One prototype read of `a`
+    // tells it from the collections below.
+    {
+        const proto::ProtoObject* p = a->getPrototype(ctx);
+        const proto::ProtoSpace* space = ctx->space;
+        if (p != space->mapPrototype && p != space->sparseListPrototype && p != setPrototype() &&
+            p != g_seqProtos.cons && p != g_seqProtos.lazy && p != g_seqProtos.chunk &&
+            p != space->getLinkedListPrototype())
+            return false;
+    }
     // Recurses once per level of nesting (StackGuard.h).
     checkNativeStack();
 
     // Maps: the same keys, with `=` values (MapOps.h).
-    const bool aMap = isMap(a);
-    const bool bMap = isMap(b);
+    const bool aMap = isMap(ctx, a);
+    const bool bMap = isMap(ctx, b);
     if (aMap || bMap) {
         return aMap && bMap &&
             mapEquals(ctx, a, b, nullptr,
@@ -4668,13 +4668,6 @@ bool valuesEqual(proto::ProtoContext* ctx,
     const bool bSet = isSet(ctx, b);
     if (aSet || bSet) return aSet && bSet && setEquals(ctx, a, b);
 
-    // Any other object — keywords and symbols (interned, Named.h), atoms,
-    // functions, ... — is equal only to itself. Decided by the pointer tag:
-    // protoCore's isString and compare would first probe the
-    // object for a `__data__` wrapper attribute, which the runtime never sets.
-    if ((isObjectTag(a) && !isSeqObject(ctx, a)) || (isObjectTag(b) && !isSeqObject(ctx, b)))
-        return false;
-
     // Sequential collections (lists and vectors) are equal when they hold
     // equal elements in the same order, whatever their concrete types, and
     // are never equal to anything else. One pass over the elements that
@@ -4685,7 +4678,7 @@ bool valuesEqual(proto::ProtoContext* ctx,
     // stopping at the first mismatch (only the elements compared are
     // realised).
     if (isSeqObject(ctx, a) || isSeqObject(ctx, b)) {
-        if (!(isSeqValue(ctx, a) || isVector(a)) || !(isSeqValue(ctx, b) || isVector(b)))
+        if (!(isSeqValue(ctx, a) || isVector(ctx, a)) || !(isSeqValue(ctx, b) || isVector(ctx, b)))
             return false;
         if (isListValue(ctx, a) && isListValue(ctx, b)) {
             // Two lists: their counts, then their cells in step.
@@ -4715,11 +4708,8 @@ bool valuesEqual(proto::ProtoContext* ctx,
         return true;
     }
 
-    // Numbers by value across types (D15) with IEEE semantics, so NaN is equal
-    // to no number, itself included (the identity test above still makes one
-    // NaN object `=` to itself, as JVM Clojure's Util.equiv does); strings by
-    // content; any other pair only when identical.
-    return a->partialCompare(ctx, b) == 0;
+    // A collection and a value of another kind.
+    return false;
 }
 
 void installPrimitives(proto::ProtoContext* ctx,
@@ -4796,7 +4786,7 @@ const proto::ProtoObject* fastPrimitiveCall(proto::ProtoContext* ctx, proto::Pro
             // one of them (tryCount); strings, maps and sets go the general
             // way.
             long long c = 0;
-            if (!isVector(v) && v && v != PROTO_NONE && !isSeqObject(ctx, v)) return nullptr;
+            if (!isVector(ctx, v) && v && v != PROTO_NONE && !isSeqObject(ctx, v)) return nullptr;
             return tryCount(ctx, v, &c) ? proto::makeSmallInt(c) : nullptr;
         }
         return nullptr;
@@ -4810,7 +4800,7 @@ const proto::ProtoObject* fastPrimitiveCall(proto::ProtoContext* ctx, proto::Pro
             const proto::ProtoObject* coll = argv[0];
             if (!coll || coll == PROTO_NONE) return listCons(ctx, argv[1], emptyListValue());
             if (isListValue(ctx, coll)) return listCons(ctx, argv[1], coll);
-            if (isVector(coll)) return newVector(ctx, vectorItems(ctx, coll)->appendLast(ctx, argv[1]));
+            if (isVector(ctx, coll)) return newVector(ctx, vectorItems(ctx, coll)->appendLast(ctx, argv[1]));
             return nullptr;
         }
         if (fn == &prim_plus) {

@@ -298,7 +298,7 @@ void Compiler::destructure(proto::ProtoContext* ctx, const CompilerMarkers& mark
         return;
     }
 
-    if (isVector(pattern)) {
+    if (isVector(ctx, pattern)) {
         const proto::ProtoList* items = vectorItems(ctx, pattern);
         const proto::proto_ulong n = items->getSize(ctx);
         const proto::ProtoObject* amp = sym("&");
@@ -356,7 +356,7 @@ void Compiler::destructure(proto::ProtoContext* ctx, const CompilerMarkers& mark
         return;
     }
 
-    if (isMap(pattern)) {
+    if (isMap(ctx, pattern)) {
         const std::vector<const proto::ProtoObject*> entries = mapFormEntries(ctx, pattern);
         const proto::ProtoObject* gmap = freshSymbol(ctx, named, "map__");
         out.push_back(gmap);
@@ -367,7 +367,7 @@ void Compiler::destructure(proto::ProtoContext* ctx, const CompilerMarkers& mark
         std::unordered_map<std::string, const proto::ProtoObject*> defaults;
         for (std::size_t j = 0; j < entries.size(); j += 2) {
             if (entries[j] != sym(":or")) continue;
-            if (!isMap(entries[j + 1])) throw CompileError(":or must be a map, got " + printedForm(ctx, entries[j + 1]));
+            if (!isMap(ctx, entries[j + 1])) throw CompileError(":or must be a map, got " + printedForm(ctx, entries[j + 1]));
             const std::vector<const proto::ProtoObject*> ors = mapFormEntries(ctx, entries[j + 1]);
             for (std::size_t t = 0; t < ors.size(); t += 2) {
                 if (!isNameForm(ctx, named, ors[t]))
@@ -401,7 +401,7 @@ void Compiler::destructure(proto::ProtoContext* ctx, const CompilerMarkers& mark
                     throw CompileError("Unsupported binding key: " + nameOf(ctx, named, k));
                 if (kind == "strs" && !kwNs.empty())
                     throw CompileError("Unsupported binding key: " + nameOf(ctx, named, k));
-                if (!isVector(v))
+                if (!isVector(ctx, v))
                     throw CompileError(nameOf(ctx, named, k) + " must be followed by a vector, got " +
                                        printedForm(ctx, v));
                 const proto::ProtoList* names = vectorItems(ctx, v);
@@ -645,7 +645,7 @@ Compiler::compileFnBody(proto::ProtoContext* ctx,
         paramsForm = fnForm->getAt(ctx, (int)paramsAt);
     }
     FormList params;
-    if (isVector(paramsForm)) {
+    if (isVector(ctx, paramsForm)) {
         params = FormList(ctx, vectorItems(ctx, paramsForm), paramsForm);
     } else if (isList(ctx, paramsForm)) {
         params = FormList(ctx, paramsForm);
@@ -680,7 +680,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
                 if (!isNameForm(ctx, markers.named, es[j])) return false;
                 const std::string k = nameOf(ctx, markers.named, es[j]);
                 if (k == ":keys") {
-                    if (!isVector(es[j + 1])) return false;
+                    if (!isVector(ctx, es[j + 1])) return false;
                     const proto::ProtoList* ks = vectorItems(ctx, es[j + 1]);
                     for (proto::proto_ulong t = 0; t < ks->getSize(ctx); ++t) {
                         const proto::ProtoObject* s = ks->getAt(ctx, static_cast<int>(t));
@@ -690,7 +690,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
                     }
                     keys = true;
                 } else if (k == ":or") {
-                    if (!isMap(es[j + 1])) return false;
+                    if (!isMap(ctx, es[j + 1])) return false;
                 } else if (k == ":as") {
                     if (!isNameForm(ctx, markers.named, es[j + 1])) return false;
                 } else {
@@ -705,10 +705,10 @@ Compiler::compileArity(proto::ProtoContext* ctx,
             const proto::ProtoObject* p = params->getAt(ctx, static_cast<int>(i));
             const bool afterAmp = i > 0 && isNameForm(ctx, markers.named, params->getAt(ctx, static_cast<int>(i - 1))) &&
                                   nameOf(ctx, markers.named, params->getAt(ctx, static_cast<int>(i - 1))) == "&";
-            if (!isVector(p) && !isMap(p) &&
+            if (!isVector(ctx, p) && !isMap(ctx, p) &&
                 (!isNameForm(ctx, markers.named, p) || isKeywordForm(ctx, markers.named, p)))
                 throw CompileError("Unsupported binding form: " + printedForm(ctx, p));
-            if (isVector(p) || (isMap(p) && !(afterAmp && kwPathTakes(p)))) {
+            if (isVector(ctx, p) || (isMap(ctx, p) && !(afterAmp && kwPathTakes(p)))) {
                 const proto::ProtoObject* g = freshSymbol(ctx, markers.named, "p__");
                 pairs.push_back(p);
                 pairs.push_back(g);
@@ -776,7 +776,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
             const proto::ProtoObject* rp = params->getAt(ctx, (int)(i + 1));
             fixedArity = i;
 
-            if (isMap(rp)) {
+            if (isMap(ctx, rp)) {
                 // `& {:keys [k1 k2] :or {k1 default} :as opts}` — kw
                 // destructuring.
                 isKwBased = true;
@@ -795,7 +795,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
                     std::string mkName = nameOf(ctx, markers.named, mk);
                     const proto::ProtoObject* mv = entries[j + 1];
                     if (mkName == ":keys") {
-                        if (!isVector(mv)) {
+                        if (!isVector(ctx, mv)) {
                             throw CompileError(
                                 "fn/defn: `:keys` must be a vector of symbols");
                         }
@@ -809,7 +809,7 @@ Compiler::compileArity(proto::ProtoContext* ctx,
                         }
                         sawKeys = true;
                     } else if (mkName == ":or") {
-                        if (!isMap(mv)) {
+                        if (!isMap(ctx, mv)) {
                             throw CompileError("fn/defn: `:or` must be a map");
                         }
                         orEntries = mapFormEntries(ctx, mv);
@@ -1377,7 +1377,7 @@ void Compiler::compileDefmacro(proto::ProtoContext* ctx, const FormList* lst,
     // An optional docstring and attribute map come before the arities.
     proto::proto_ulong i = 2;
     if (i < n && isStringForm(lst->getAt(ctx, static_cast<int>(i))) && i + 1 < n) ++i;
-    if (i < n && isMap(lst->getAt(ctx, static_cast<int>(i)))) ++i;
+    if (i < n && isMap(ctx, lst->getAt(ctx, static_cast<int>(i)))) ++i;
     if (i >= n) throw CompileError("defmacro: missing parameter vector");
 
     // Every arity gains the hidden parameters &form and &env in front.
@@ -1388,7 +1388,7 @@ void Compiler::compileDefmacro(proto::ProtoContext* ctx, const FormList* lst,
     const proto::ProtoObject* amp_env  = symbolForm(&scope, markers.named, "&env");
     auto withHidden = [&](const proto::ProtoObject* params) -> const proto::ProtoObject* {
         const proto::ProtoList* items = nullptr;
-        if (isVector(params)) items = vectorItems(&scope, params);
+        if (isVector(ctx, params)) items = vectorItems(&scope, params);
         else throw CompileError("defmacro: parameter list must be a vector");
         const proto::ProtoList* full = scope.newList()
             ->appendLast(&scope, amp_form)->appendLast(&scope, amp_env);
@@ -1401,7 +1401,7 @@ void Compiler::compileDefmacro(proto::ProtoContext* ctx, const FormList* lst,
     // the rebuilt arities are rooted in a vector in slot 1 meanwhile.
     std::vector<const proto::ProtoObject*> fnItems{symbolForm(&scope, markers.named, "fn")};
     const proto::ProtoObject* first = lst->getAt(ctx, static_cast<int>(i));
-    if (isVector(first)) {
+    if (isVector(ctx, first)) {
         scope.setAutomaticLocal(1, withHidden(first));
         fnItems.push_back(scope.getAutomaticLocal(1));
         for (proto::proto_ulong k = i + 1; k < n; ++k)
@@ -1413,7 +1413,7 @@ void Compiler::compileDefmacro(proto::ProtoContext* ctx, const FormList* lst,
         for (proto::proto_ulong k = i; k < n; ++k) {
             const proto::ProtoObject* arity = lst->getAt(&scope, static_cast<int>(k));
             if (!isList(&scope, arity) || FormList(&scope, arity).getSize(&scope) == 0) {
-                if (k + 1 == n && isMap(arity)) break;  // a trailing attribute map
+                if (k + 1 == n && isMap(ctx, arity)) break;  // a trailing attribute map
                 throw CompileError("defmacro: each arity must be a list ([params] body...)");
             }
             const FormList al(&scope, arity);
@@ -1456,7 +1456,7 @@ PROTOCLJ_FRAME_HELPER void Compiler::compileFnForm(proto::ProtoContext* ctx, con
     if (headName == "defn" && n > 3) {
         proto::proto_ulong skip = 2;
         if (isStringForm(lst->getAt(ctx, 2))) ++skip;
-        if (skip < n - 1 && isMap(lst->getAt(ctx, static_cast<int>(skip)))) ++skip;
+        if (skip < n - 1 && isMap(ctx, lst->getAt(ctx, static_cast<int>(skip)))) ++skip;
         if (skip > 2) {
             proto::ProtoContext scope(ctx->space, ctx);
             scope.resizeAutomaticLocals(1);
@@ -1490,7 +1490,7 @@ PROTOCLJ_FRAME_HELPER void Compiler::compileFnForm(proto::ProtoContext* ctx, con
     bool multiArity = false;
     if (isList(ctx, first)) {
         const FormList fl(ctx, first);
-        multiArity = fl.getSize(ctx) >= 1 && isVector(fl.getAt(ctx, 0));
+        multiArity = fl.getSize(ctx) >= 1 && isVector(ctx, fl.getAt(ctx, 0));
     }
 
     auto emitCapsThenOp = [&](std::size_t blockIdx, Op makeOp,
@@ -1526,7 +1526,7 @@ PROTOCLJ_FRAME_HELPER void Compiler::compileFnForm(proto::ProtoContext* ctx, con
             }
             const proto::ProtoObject* paramsForm = alist.getAt(ctx, 0);
             FormList params;
-            if (isVector(paramsForm)) {
+            if (isVector(ctx, paramsForm)) {
                 params = FormList(ctx, vectorItems(ctx, paramsForm), paramsForm);
             } else if (isList(ctx, paramsForm)) {
                 params = FormList(ctx, paramsForm);
@@ -1573,7 +1573,7 @@ PROTOCLJ_FRAME_HELPER void Compiler::compileLetForm(proto::ProtoContext* ctx, co
     if (n < 2) throw CompileError("let: expects bindings vector");
     const proto::ProtoObject* bindings = lst->getAt(ctx, 1);
     FormList bitems;
-    if (isVector(bindings)) {
+    if (isVector(ctx, bindings)) {
         bitems = FormList(ctx, vectorItems(ctx, bindings), bindings);
     } else if (isList(ctx, bindings)) {
         bitems = FormList(ctx, bindings);
@@ -1642,7 +1642,7 @@ PROTOCLJ_FRAME_HELPER void Compiler::compileLoopForm(proto::ProtoContext* ctx, c
     if (n < 2) throw CompileError("loop: expects bindings vector");
     const proto::ProtoObject* bindings = lst->getAt(ctx, 1);
     FormList bitems;
-    if (isVector(bindings)) {
+    if (isVector(ctx, bindings)) {
         bitems = FormList(ctx, vectorItems(ctx, bindings), bindings);
     } else if (isList(ctx, bindings)) {
         bitems = FormList(ctx, bindings);
@@ -2207,7 +2207,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
     // `{..}` map literal in expression position: a call to the `hash-map`
     // primitive with every key and value form, in source order (SourceInfo.h),
     // so they are evaluated left to right as in Clojure.
-    if (isMap(form)) {
+    if (isMap(ctx, form)) {
         const std::vector<const proto::ProtoObject*> entries = mapFormEntries(ctx, form);
         std::size_t headIdx = out.addSymbol(ctx, "hash-map");
         out.emit(Op::PUSH_VAR, headIdx);
@@ -2218,7 +2218,7 @@ void Compiler::compileForm(proto::ProtoContext* ctx,
 
     // `[..]` vector literal in expression position: a call to the `vector`
     // primitive with every item form, so the items are evaluated.
-    if (isVector(form)) {
+    if (isVector(ctx, form)) {
         const proto::ProtoList* items = vectorItems(ctx, form);
         proto::proto_ulong ni = items->getSize(ctx);
         std::size_t headIdx = out.addSymbol(ctx, "vector");

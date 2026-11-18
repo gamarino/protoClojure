@@ -55,9 +55,9 @@ const proto::ProtoObject* initSeqTypes(proto::ProtoContext* ctx) {
 
 SeqObject seqObjectKind(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     if (!v || !g_seqProtos.lazy) return SeqObject::None;
-    const proto::proto_ulong tag = reinterpret_cast<proto::proto_ulong>(v) & 0x3F;
-    if (tag == kTagLinkedList) return v == g_seqProtos.empty ? SeqObject::Empty : SeqObject::List;
-    if (tag != 0) return SeqObject::None;
+    if (isListValue(ctx, v)) return v == g_seqProtos.empty ? SeqObject::Empty : SeqObject::List;
+    // Seq nodes are object cells with one of the three prototypes below;
+    // no other value answers one of them from getPrototype.
     const proto::ProtoObject* p = v->getPrototype(ctx);
     if (p == g_seqProtos.lazy)  return SeqObject::Lazy;
     if (p == g_seqProtos.cons)  return SeqObject::Cons;

@@ -111,7 +111,7 @@ TEST_F(ReaderFixture, NilTrueFalseAreTheValues) {
 TEST_F(ReaderFixture, VectorLiteralIsARuntimeVector) {
     Reader r(ctx, "[1 x \"s\"]", markers);
     const proto::ProtoObject* form = r.readOne();
-    ASSERT_TRUE(protoClojure::isVector(form));
+    ASSERT_TRUE(protoClojure::isVector(ctx, form));
     const proto::ProtoList* items = protoClojure::vectorItems(ctx, form);
     ASSERT_EQ(items->getSize(ctx), 3u);
     EXPECT_EQ(items->getAt(ctx, 0)->asLong(ctx), 1);
@@ -122,7 +122,7 @@ TEST_F(ReaderFixture, VectorLiteralIsARuntimeVector) {
 TEST_F(ReaderFixture, MapLiteralIsARuntimeMap) {
     Reader r(ctx, "{:a 1 \"b\" [2]} {}", markers);
     const proto::ProtoObject* form = r.readOne();
-    ASSERT_TRUE(protoClojure::isMap(form));
+    ASSERT_TRUE(protoClojure::isMap(ctx, form));
     EXPECT_EQ(protoClojure::mapCount(ctx, form), 2u);
     bool found = false;
     const proto::ProtoObject* a = protoClojure::mapGet(
@@ -132,9 +132,9 @@ TEST_F(ReaderFixture, MapLiteralIsARuntimeMap) {
     const proto::ProtoObject* b =
         protoClojure::mapGet(ctx, form, ctx->fromUTF8String("b"), &found);
     ASSERT_TRUE(found);
-    EXPECT_TRUE(protoClojure::isVector(b));
+    EXPECT_TRUE(protoClojure::isVector(ctx, b));
     const proto::ProtoObject* empty = r.readOne();
-    ASSERT_TRUE(protoClojure::isMap(empty));
+    ASSERT_TRUE(protoClojure::isMap(ctx, empty));
     EXPECT_TRUE(protoClojure::mapIsEmpty(ctx, empty));
 }
 
@@ -266,7 +266,7 @@ TEST_F(ReaderFixture, MapLiteralKeysAreRecordedInSourceOrder) {
     protoClojure::SourceInfo info;
     Reader r(ctx, "{:z 1 :a 2 :m {:q 3}}", markers, &info);
     const proto::ProtoObject* form = r.readOne();
-    ASSERT_TRUE(protoClojure::isMap(form));
+    ASSERT_TRUE(protoClojure::isMap(ctx, form));
     auto it = info.mapKeyOrder.find(form);
     ASSERT_NE(it, info.mapKeyOrder.end());
     ASSERT_EQ(it->second.size(), 3u);
@@ -291,7 +291,7 @@ std::string show(proto::ProtoContext* ctx, const NamedLayout& named,
     if (proto::ProtoObject::isStringTagFast(f))
         return "\"" + reinterpret_cast<const proto::ProtoString*>(f)->toStdString(ctx) + "\"";
     if (f->isInteger(ctx)) return std::to_string(f->asLong(ctx));
-    const bool vec = protoClojure::isVector(f);
+    const bool vec = protoClojure::isVector(ctx, f);
     const proto::ProtoList* l = vec ? protoClojure::vectorItems(ctx, f)
                                     : protoClojure::listToProtoList(ctx, f);
     std::string out = vec ? "[" : "(";
@@ -373,7 +373,7 @@ TEST_F(ReaderFixture, SetLiteral) {
         bool found = false;
         protoClojure::setGet(ctx, form, ctx->fromLong(1), &found);
         EXPECT_TRUE(found);
-        EXPECT_FALSE(protoClojure::isMap(form));
+        EXPECT_FALSE(protoClojure::isMap(ctx, form));
     }
     {
         Reader r(ctx, "#{:a :a}", markers);

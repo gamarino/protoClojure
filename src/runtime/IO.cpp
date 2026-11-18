@@ -89,7 +89,8 @@ const proto::ProtoString* serverKey(proto::ProtoContext* ctx) {
 
 bool isHandle(proto::ProtoContext* ctx, const PO* v) {
     if (!v || v == PROTO_NONE || !g_ioMarker) return false;
-    if ((reinterpret_cast<std::uintptr_t>(v) & 0x3F) != 0) return false;  // not an object cell
+    // g_ioMarker is an object; no value but an object cell inheriting from
+    // it answers it from getPrototype.
     return v->getPrototype(ctx) == g_ioMarker;
 }
 
@@ -116,7 +117,7 @@ bool truthy(const PO* v) { return v && v != PROTO_NONE && v != PROTO_FALSE; }
 // The elements of a list or a vector, which hold them; false for any other
 // value.
 bool sequentialItems(proto::ProtoContext* ctx, const PO* v, std::vector<const PO*>& out) {
-    if (isVector(v)) {
+    if (isVector(ctx, v)) {
         const proto::ProtoList* items = vectorItems(ctx, v);
         const proto::proto_ulong n = items->getSize(ctx);
         for (proto::proto_ulong i = 0; i < n; ++i) out.push_back(items->getAt(ctx, static_cast<int>(i)));
@@ -309,7 +310,7 @@ const PO* optionsArg(proto::ProtoContext* ctx, const proto::ProtoArguments* args
     if (n - from == 1) {
         const PO* only = arg(ctx, args, from);
         if (only == PROTO_NONE) return nullptr;
-        if (isMap(only)) return only;
+        if (isMap(ctx, only)) return only;
     }
     if ((n - from) % 2 != 0)
         throwClassed(ctx, "IllegalArgumentException",
@@ -361,7 +362,7 @@ int timeoutOption(proto::ProtoContext* ctx, const PO* opts, const char* name, in
 protoio::http::Headers headersArg(proto::ProtoContext* ctx, const PO* v, const char* who) {
     protoio::http::Headers out;
     if (!v || v == PROTO_NONE) return out;
-    if (!isMap(v)) wrongType(ctx, who, "a map of headers", v);
+    if (!isMap(ctx, v)) wrongType(ctx, who, "a map of headers", v);
     mapForEach(ctx, v, &out, [](proto::ProtoContext* c, void* self, const PO* k, const PO* val) {
         auto* hs = static_cast<protoio::http::Headers*>(self);
         std::string name = isString(k) ? bytesOf(c, k) : namedName(c, k);
@@ -566,7 +567,7 @@ struct Answer {
 
 Answer answerOf(proto::ProtoContext* ctx, const PO* r) {
     Answer a;
-    if (!isMap(r)) {
+    if (!isMap(ctx, r)) {
         a.error = std::string("run-server: the handler answered ") + valueTypeName(ctx, r) +
                   ", not a response map";
         return a;
@@ -581,7 +582,7 @@ Answer answerOf(proto::ProtoContext* ctx, const PO* r) {
         }
     }
     if (const PO* hs = option(ctx, r, ":headers")) {
-        if (hs != PROTO_NONE && !isMap(hs)) {
+        if (hs != PROTO_NONE && !isMap(ctx, hs)) {
             a.error = "run-server: :headers must be a map";
             return a;
         }
@@ -1250,7 +1251,7 @@ IOPRIM(prim_sh) {
     using Environment = std::vector<std::pair<std::string, std::string>>;
     std::optional<Environment> env;
     if (const PO* e = option(ctx, opts, ":env"); e && e != PROTO_NONE) {
-        if (!isMap(e)) wrongType(ctx, "sh :env", "a map", e);
+        if (!isMap(ctx, e)) wrongType(ctx, "sh :env", "a map", e);
         env.emplace();
         mapForEach(ctx, e, &*env, [](proto::ProtoContext* c, void* self, const PO* k, const PO* v) {
             std::string name = isString(k) ? bytesOf(c, k) : namedName(c, k);
@@ -1408,7 +1409,7 @@ IOPRIM(prim_http_request) {
     const proto::proto_ulong n = argCount(ctx, args);
     if (n != 1) arity(ctx, n, "http-request");
     const PO* opts = arg(ctx, args, 0);
-    if (!isMap(opts)) wrongType(ctx, "http-request", "a request map", opts);
+    if (!isMap(ctx, opts)) wrongType(ctx, "http-request", "a request map", opts);
     return httpCall(ctx, "http-request", opts, std::nullopt, std::nullopt);
 }
 

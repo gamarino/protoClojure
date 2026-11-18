@@ -38,10 +38,6 @@ const proto::ProtoString* regexKey(proto::ProtoContext* ctx) {
     return proto::ProtoString::createSymbol(ctx, "__regex__");
 }
 
-bool isObjectCell(const proto::ProtoObject* v) {
-    return v && (reinterpret_cast<proto::proto_ulong>(v) & 0x3F) == 0;
-}
-
 // ------------------------------------------------------------ translation
 
 [[noreturn]] void syntaxError(const std::string& what, const std::string& src) {
@@ -495,11 +491,11 @@ const proto::ProtoObject* makePattern(proto::ProtoContext* ctx, const std::strin
 }
 
 bool isPattern(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    return g_patternPrototype && isObjectCell(v) && v->getPrototype(ctx) == g_patternPrototype;
+    return g_patternPrototype && v && v->getPrototype(ctx) == g_patternPrototype;
 }
 
 bool isMatcher(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    return g_matcherPrototype && isObjectCell(v) && v->getPrototype(ctx) == g_matcherPrototype;
+    return g_matcherPrototype && v && v->getPrototype(ctx) == g_matcherPrototype;
 }
 
 const CompiledPattern* patternOf(proto::ProtoContext* ctx, const proto::ProtoObject* v) {

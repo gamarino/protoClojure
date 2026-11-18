@@ -55,6 +55,7 @@
 #pragma once
 
 #include "protoCore.h"  // proto::proto_long / proto_ulong
+#include "ValueKinds.h"
 
 namespace proto {
 class ProtoContext;
@@ -65,14 +66,9 @@ class ProtoList;
 namespace protoClojure {
 
 // True when `v` is a vector: the one-entry sparse-list box above, in either
-// of protoCore's forms (pointer tags 8 and 26 of headers/proto_internal.h;
-// one entry always fits the Small form, but both are accepted).
-inline bool isVector(const proto::ProtoObject* v) {
-    constexpr proto::proto_ulong kTagMask            = 0x3F;
-    constexpr proto::proto_ulong kTagSparseList      = 8;
-    constexpr proto::proto_ulong kTagSparseListSmall = 26;
-    const proto::proto_ulong tag = reinterpret_cast<proto::proto_ulong>(v) & kTagMask;
-    return v != nullptr && (tag == kTagSparseList || tag == kTagSparseListSmall);
+// of protoCore's storage forms (ValueKinds.h).
+inline bool isVector(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    return isProtoSparseList(ctx, v);
 }
 
 // The vector holding `items`, in that order. O(1): the list is stored as it

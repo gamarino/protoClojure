@@ -50,12 +50,12 @@ const proto::ProtoObject* initSetOps(proto::ProtoContext* ctx);
 extern const proto::ProtoObject* g_setPrototype;
 inline const proto::ProtoObject* setPrototype() { return g_setPrototype; }
 
-// True when `v` is a set. O(1): a pointer-tag test and, for an object cell
-// only, a prototype read. Inline: `get`, `contains?` and keyword lookups ask
-// it on every call.
+// True when `v` is a set. O(1): one prototype read. g_setPrototype is an
+// object, and no value but an object cell inheriting from it answers it
+// from getPrototype. Inline: `get`, `contains?` and keyword lookups ask it
+// on every call.
 inline bool isSet(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    // Only object cells (pointer tag 0) have a prototype worth reading.
-    if (!v || (reinterpret_cast<proto::proto_ulong>(v) & 0x3F) != 0 || !g_setPrototype) return false;
+    if (!v || !g_setPrototype) return false;
     return v->getPrototype(ctx) == g_setPrototype;
 }
 
