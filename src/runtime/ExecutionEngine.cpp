@@ -339,12 +339,14 @@ void splitQualified(const std::string& name, std::string& prefix, std::string& m
     member = name.substr(slash + 1);
 }
 
-// Whether `obj` has an attribute `key`, its prototype chain included. A
-// read answers PROTO_NONE both for a missing attribute and for one bound to
-// nil, so a PROTO_NONE read is confirmed by a presence probe.
+// Whether `obj` has an attribute `key`, its prototype chain included;
+// protoCore answers the lookup for every value through its prototype, and
+// nil has no members. A read answers PROTO_NONE both for a missing attribute
+// and for one bound to nil, so a PROTO_NONE read is confirmed by a presence
+// probe.
 bool readMember(proto::ProtoContext* ctx, const proto::ProtoObject* obj,
                 const proto::ProtoString* key, const proto::ProtoObject*& out) {
-    if (!obj || obj == PROTO_NONE || !isObjectCell(ctx, obj))
+    if (!obj || obj == PROTO_NONE)
         return false;
     out = obj->getAttribute(ctx, key);
     if (out && out != PROTO_NONE) return true;
