@@ -11,10 +11,20 @@
 //    mapPrototype, sparseListPrototype, getLinkedListPrototype(), ...); for
 //    an object cell it answers the object's first parent, or
 //    objectPrototype when it has none. Several kinds' prototypes are
-//    aliases of objectPrototype (see isAliasedCellKind), so prototype
-//    identity is used only for kinds with a prototype of their own.
+//    aliases of objectPrototype (doubles, LargeIntegers, methods, buffers,
+//    ...), so prototype identity is used only for kinds with a prototype of
+//    their own.
 //  - ProtoObject::getFirstParent answers PROTO_NONE for every value that is
 //    not an object cell, and for a parentless object.
+//
+// There is deliberately no "is this an object cell?" test. protoCore answers
+// getAttribute, hasAttribute and isInstanceOf for every value through its
+// prototype, so the runtime looks up and dispatches directly, and a language
+// question (is this an exception, a foreign value, equal only to itself?) is
+// decided by the value's type -- its class chain (isInstanceOf) or the kind
+// tests below -- never by how protoCore represents it. The kind tests below
+// exist because Clojure maps, vectors and lists are protoCore collections
+// held bare, not wrapped in objects of a Clojure type.
 //
 // The ProtoObject::is*/as* predicates for collections (isMap, isTuple,
 // isLinkedList, asList, ...) are deliberately not used for kind tests: they
@@ -33,30 +43,6 @@ inline bool isPrimitiveOfKind(proto::ProtoContext* ctx, const proto::ProtoObject
                               const proto::ProtoObject* kindProto) {
     if (!v || v->getPrototype(ctx) != kindProto) return false;
     return !proto::ProtoObject::isCellPointer(v) || v->getFirstParent(ctx) == PROTO_NONE;
-}
-
-// protoCore leaves the ProtoSpace prototype of several cell kinds aliased to
-// objectPrototype (LargeIntegers, doubles, methods, byte buffers, threads,
-// external pointers and buffers), so getPrototype cannot tell such a value
-// from a parentless object. The public tag-only predicates do.
-inline bool isAliasedCellKind(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    return v->isDouble(ctx) || v->isInteger(ctx) || v->isMethod(ctx) || v->isByteBuffer(ctx) ||
-           v->asThread(ctx) != nullptr || v->asExternalPointer(ctx) != nullptr ||
-           v->asExternalBuffer(ctx) != nullptr;
-}
-
-// True when `v` is a plain protoCore object cell: maps of attributes such as
-// keywords, symbols, atoms, functions, futures, promises, actors, sets and
-// seq nodes. False for every number, string, collection and method.
-inline bool isObjectCell(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    // Inline rejects first; then the common case, an object with a parent,
-    // is decided by one call.
-    if (!v || proto::isSmallInt(v) || proto::ProtoObject::isStringTagFast(v)) return false;
-    if (v->getFirstParent(ctx) != PROTO_NONE) return true;
-    if (!proto::ProtoObject::isCellPointer(v)) return false;
-    const proto::ProtoObject* p = v->getPrototype(ctx);
-    if (p != nullptr && p != ctx->space->objectPrototype) return false;
-    return !isAliasedCellKind(ctx, v);
 }
 
 // A protoCore ProtoList, in either of its storage forms. Not a string, which

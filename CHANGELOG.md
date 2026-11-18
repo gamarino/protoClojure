@@ -18,6 +18,26 @@ remains the first planned release (`docs/ROADMAP.md`).
   protoCore first releases in 3.6.1 (SOVERSION still 5); the CMake minimum already
   said 3.6.0 and the docs 3.4.0, and a 3.6.0 library cannot build the tree.
 
+### Changed — decide by type, not by representation, 2026-11-18
+
+- **No "is this an object cell?" question.** `isObjectCell`, its exclusion list
+  `isAliasedCellKind` and the `isObjectTag` wrapper are gone. protoCore answers
+  `getAttribute`, `hasAttribute` and `isInstanceOf` for every value through its
+  prototype, so the runtime asks directly: `isException` is `isInstanceOf(Throwable)`,
+  `a/b` (`GET_MEMBER`, catch types `a/T`) reads the member of any value, and `=` compares
+  numbers by value and strings by content and every other pair by identity, decided by
+  the operands' types (it no longer reaches protoCore's `partialCompare` for an object,
+  so a `__data__` wrapper is never equal to the value it wraps, as before).
+- **A foreign value is a value of no Clojure type**, whatever protoCore kind holds it
+  (`isForeignObject` asks `valueTypeName`). Behaviour change for module values that
+  protoCore does not hold as objects (a byte buffer, an external pointer, a thread):
+  `throw` now accepts them and a catch clause accepts them as a type, as it already did
+  for a module's objects. Every Clojure value is unaffected. New tests pin the
+  semantics across value kinds: `ExceptionsFixture.ThrowabilityIsDecidedByTypeAcrossValueKinds`,
+  `ValuesFixture.EqualityIsDecidedByTypeAcrossValueKinds` and the conformance fixtures
+  `26-exceptions/throwability-by-type.clj`, `08-collections/equality-by-type.clj` and
+  `02-special-forms/member-of-any-value.clj`.
+
 ### Changed — protoCore's public API only, 2026-11-18
 
 - **No hand-copied protoCore pointer tags.** `MapOps`, `VectorOps.h`, `SeqTypes`,

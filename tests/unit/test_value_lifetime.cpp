@@ -183,8 +183,8 @@ TEST(VectorRepresentation, IsVectorIsAKindTestAndItemsAreNotCopied) {
 
 // The kind tests of ValueKinds.h use protoCore's public API only. protoCore
 // aliases several kinds' prototypes to objectPrototype (doubles, LargeIntegers,
-// methods, byte buffers), so an object cell is not decided by getPrototype
-// alone, and a value inheriting from a kind prototype is not of that kind.
+// methods, byte buffers), so no such kind is decided by getPrototype alone,
+// and a value inheriting from a kind prototype is not of that kind.
 namespace {
 const proto::ProtoObject* nopMethod(proto::ProtoContext*, const proto::ProtoObject*,
                                     const proto::ParentLink*, const proto::ProtoArguments*,
@@ -205,11 +205,19 @@ TEST(ValueKinds, KindTestsUsePublicApiExactly) {
     const proto::ProtoObject* buffer = ctx->newBuffer(8);
     const proto::ProtoObject* list = ctx->newList()->asObject(ctx);
 
-    EXPECT_TRUE(protoClojure::isObjectCell(ctx, parentless));
-    EXPECT_TRUE(protoClojure::isObjectCell(ctx, child));
-    for (const proto::ProtoObject* v : {dbl, big, method, buffer, list, ctx->fromLong(7),
-                                        ctx->newMap()->asObject(ctx), PROTO_NONE, PROTO_TRUE})
-        EXPECT_FALSE(protoClojure::isObjectCell(ctx, v));
+    // No value but a bare collection of the kind answers a kind test.
+    for (const proto::ProtoObject* v : {parentless, child, dbl, big, method, buffer,
+                                        ctx->fromLong(7), PROTO_NONE, PROTO_TRUE}) {
+        EXPECT_FALSE(protoClojure::isProtoList(ctx, v));
+        EXPECT_FALSE(protoClojure::isProtoMap(ctx, v));
+        EXPECT_FALSE(protoClojure::isProtoSparseList(ctx, v));
+        EXPECT_FALSE(protoClojure::isProtoLinkedList(ctx, v));
+    }
+    EXPECT_FALSE(protoClojure::isProtoList(ctx, ctx->newMap()->asObject(ctx)));
+    EXPECT_TRUE(protoClojure::isProtoMap(ctx, ctx->newMap()->asObject(ctx)));
+    EXPECT_FALSE(protoClojure::isDoubleValue(ctx, parentless));
+    EXPECT_FALSE(protoClojure::isLargeIntegerValue(ctx, parentless));
+    EXPECT_FALSE(protoClojure::isMethodValue(ctx, parentless));
 
     EXPECT_TRUE(protoClojure::isDoubleValue(ctx, dbl));
     EXPECT_TRUE(protoClojure::isLargeIntegerValue(ctx, big));
