@@ -110,12 +110,6 @@ bool isListTag(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     return isProtoList(ctx, v);
 }
 
-// True for a protoCore object cell: keywords and symbols, atoms, functions,
-// futures, promises and actors (ValueKinds.h).
-bool isObjectTag(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    return isObjectCell(ctx, v);
-}
-
 // The value delivered to `promise`, with `*delivered` set; nullptr, with
 // `*delivered` false, while the promise is pending. One own-attribute read
 // answers both, because deliverPromise installs the one-element list holding
@@ -4652,13 +4646,6 @@ bool valuesEqual(proto::ProtoContext* ctx,
     const bool bSet = isSet(ctx, b);
     if (aSet || bSet) return aSet && bSet && setEquals(ctx, a, b);
 
-    // Any other object — keywords and symbols (interned, Named.h), atoms,
-    // functions, ... — is equal only to itself. Decided by the pointer tag:
-    // protoCore's isString and compare would first probe the
-    // object for a `__data__` wrapper attribute, which the runtime never sets.
-    if ((isObjectTag(ctx, a) && !isSeqObject(ctx, a)) || (isObjectTag(ctx, b) && !isSeqObject(ctx, b)))
-        return false;
-
     // Sequential collections (lists and vectors) are equal when they hold
     // equal elements in the same order, whatever their concrete types, and
     // are never equal to anything else. One pass over the elements that
@@ -4702,8 +4689,13 @@ bool valuesEqual(proto::ProtoContext* ctx,
     // Numbers by value across types (D15) with IEEE semantics, so NaN is equal
     // to no number, itself included (the identity test above still makes one
     // NaN object `=` to itself, as JVM Clojure's Util.equiv does); strings by
-    // content; any other pair only when identical.
-    return a->partialCompare(ctx, b) == 0;
+    // content; any other pair -- keywords and symbols (interned, Named.h),
+    // atoms, fns, objects -- only when identical, which the test above
+    // answered. Decided by the types, so protoCore's partialCompare never
+    // reads an object's `__data__` wrapper as the string or number it holds.
+    if (proto::ProtoObject::isStringTagFast(a) && proto::ProtoObject::isStringTagFast(b))
+        return a->partialCompare(ctx, b) == 0;
+    return isNumber(ctx, a) && isNumber(ctx, b) && a->partialCompare(ctx, b) == 0;
 }
 
 void installPrimitives(proto::ProtoContext* ctx,
