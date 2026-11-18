@@ -367,8 +367,8 @@ JVM Clojure resolves the class at compile time. A `try` whose body
 completes, or whose exception an earlier clause handles, never looks the
 type up. The lookup never fails silently: a name that resolves to nothing
 raises `RuntimeException: Unable to resolve classname: X`, and a value
-that is not a prototype object (a number, a string, a collection, an
-atom, nil) raises `IllegalArgumentException: catch: X is an integer, not
+of a Clojure type that is not an exception (a number, a string, a
+collection, an atom, nil) raises `IllegalArgumentException: catch: X is an integer, not
 an exception type`; either error replaces the exception being matched.
 The clause matches when the type is on the thrown value's prototype
 chain.
@@ -378,9 +378,12 @@ catch every value; `Exception` catches every value that is not a Clojure
 `Error` (a module's error is treated as a library's exception, which JVM
 Clojure would also catch with `Exception`); the other built-in classes
 catch only their own instances. `throw` accepts a Clojure exception or a
-foreign object (any protoCore object that is no Clojure value), so a
-caught module error can be rethrown; any other value raises
-`ClassCastException` as before. `ex-message` answers a foreign object's
+foreign object (any value of no Clojure type, an object a module made
+whatever protoCore kind holds it), so a caught module error can be
+rethrown; any other value raises `ClassCastException` as before. Both
+questions are answered by the value's type (its class chain, through
+protoCore's `isInstanceOf`, and `valueTypeName`), never by how protoCore
+represents the value. `ex-message` answers a foreign object's
 `message` attribute when it is a string; `ex-data` and `ex-cause` answer
 nil for it.
 

@@ -208,14 +208,13 @@ void initExceptions(proto::ProtoContext* ctx, proto::ProtoObject* globals) {
 
 bool isException(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     if (!v || v == PROTO_NONE || !g_classPrototypes[0]) return false;
-    // Only object cells have a prototype worth asking for.
-    if (!isObjectCell(ctx, v)) return false;
+    // protoCore answers isInstanceOf for every value through its prototype.
     return v->isInstanceOf(ctx, g_classPrototypes[0]) == PROTO_TRUE;
 }
 
 bool isForeignObject(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     if (!v || v == PROTO_NONE) return false;
-    if (!isObjectCell(ctx, v)) return false;
+    // A value of no Clojure type, whatever protoCore kind holds it.
     return std::strcmp(valueTypeName(ctx, v), "an object") == 0;
 }
 
