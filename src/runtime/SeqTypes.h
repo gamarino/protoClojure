@@ -38,6 +38,7 @@
 #pragma once
 
 #include "protoCore.h"  // proto::proto_ulong
+#include "ValueKinds.h"
 
 #include <cstddef>
 
@@ -106,13 +107,10 @@ inline bool isSeqObject(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
 // references the next, so a list is collected from its head as the head
 // becomes unreachable.
 
-// protoCore's pointer tag for a ProtoLinkedList (headers/proto_internal.h,
-// POINTER_TAG_LINKED_LIST).
-constexpr proto::proto_ulong kTagLinkedList = 29;
-
-// True when `v` is a Clojure list, empty or not: its pointer tag.
-inline bool isListValue(proto::ProtoContext*, const proto::ProtoObject* v) {
-    return (reinterpret_cast<proto::proto_ulong>(v) & 0x3F) == kTagLinkedList;
+// True when `v` is a Clojure list, empty or not: a protoCore
+// ProtoLinkedList (ValueKinds.h).
+inline bool isListValue(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    return isProtoLinkedList(ctx, v);
 }
 
 // The list behind a value isListValue accepted: the handle is the word.

@@ -132,7 +132,7 @@ void churnVectors(proto::ProtoSpace& space, proto::ProtoContext* parent, int fro
                                                 ->appendLast(&batch, batch.fromLong(from + i + 2))
                                                 ->appendLast(&batch, batch.fromLong(from + i + 3));
             const proto::ProtoObject* v = protoClojure::newVector(&batch, items);
-            ASSERT_TRUE(protoClojure::isVector(v));
+            ASSERT_TRUE(protoClojure::isVector(&batch, v));
             ASSERT_EQ(protoClojure::vectorItems(&batch, v)->getSize(&batch), 4u);
         }
     }
@@ -156,27 +156,67 @@ TEST(VectorLifetime, DistinctVectorsDoNotAccumulate) {
         << kChurnKeys << " distinct vectors: vectors are being retained";
 }
 
-TEST(VectorRepresentation, IsVectorIsATagTestAndItemsAreNotCopied) {
+TEST(VectorRepresentation, IsVectorIsAKindTestAndItemsAreNotCopied) {
     proto::ProtoSpace space;
     proto::ProtoContext* ctx = space.rootContext;
     const proto::ProtoList* items =
         ctx->newList()->appendLast(ctx, ctx->fromLong(1))->appendLast(ctx, ctx->fromLong(2));
     const proto::ProtoObject* v = protoClojure::newVector(ctx, items);
 
-    EXPECT_TRUE(protoClojure::isVector(v));
+    EXPECT_TRUE(protoClojure::isVector(ctx, v));
     // The box stores the list as it is: building a vector is O(1).
     EXPECT_EQ(protoClojure::vectorItems(ctx, v), items);
     EXPECT_EQ(protoClojure::vectorItems(ctx, v)->getSize(ctx), 2u);
-    EXPECT_TRUE(protoClojure::isVector(protoClojure::newVector(ctx, ctx->newList())));
+    EXPECT_TRUE(protoClojure::isVector(ctx, protoClojure::newVector(ctx, ctx->newList())));
 
     // Nothing else the runtime hands out is a vector, and in particular not a
-    // map (which is what used to occupy this pointer tag) or a list.
-    EXPECT_FALSE(protoClojure::isVector(nullptr));
-    EXPECT_FALSE(protoClojure::isVector(PROTO_NONE));
-    EXPECT_FALSE(protoClojure::isVector(items->asObject(ctx)));
-    EXPECT_FALSE(protoClojure::isVector(ctx->newMap()->asObject(ctx)));
-    EXPECT_FALSE(protoClojure::isVector(ctx->fromLong(7)));
-    EXPECT_FALSE(protoClojure::isVector(
+    // map or a list.
+    EXPECT_FALSE(protoClojure::isVector(ctx, nullptr));
+    EXPECT_FALSE(protoClojure::isVector(ctx, PROTO_NONE));
+    EXPECT_FALSE(protoClojure::isVector(ctx, items->asObject(ctx)));
+    EXPECT_FALSE(protoClojure::isVector(ctx, ctx->newMap()->asObject(ctx)));
+    EXPECT_FALSE(protoClojure::isVector(ctx, ctx->fromLong(7)));
+    EXPECT_FALSE(protoClojure::isVector(ctx, 
         reinterpret_cast<const proto::ProtoObject*>(proto::ProtoString::fromUTF8(ctx, "ab"))));
-    EXPECT_FALSE(protoClojure::isMap(v)) << "a vector must not read as a map";
+    EXPECT_FALSE(protoClojure::isMap(ctx, v)) << "a vector must not read as a map";
+}
+
+// The kind tests of ValueKinds.h use protoCore's public API only. protoCore
+// aliases several kinds' prototypes to objectPrototype (doubles, LargeIntegers,
+// methods, byte buffers), so an object cell is not decided by getPrototype
+// alone, and a value inheriting from a kind prototype is not of that kind.
+namespace {
+const proto::ProtoObject* nopMethod(proto::ProtoContext*, const proto::ProtoObject*,
+                                    const proto::ParentLink*, const proto::ProtoArguments*,
+                                    const proto::ProtoKeywordArguments*) {
+    return PROTO_NONE;
+}
+}  // namespace
+
+TEST(ValueKinds, KindTestsUsePublicApiExactly) {
+    proto::ProtoSpace space;
+    proto::ProtoContext* ctx = space.rootContext;
+    const proto::ProtoObject* parentless = ctx->newObject(false);
+    const proto::ProtoObject* child = parentless->newChild(ctx, false);
+    const proto::ProtoObject* dbl = ctx->fromDouble(2.5);
+    const proto::ProtoObject* big = ctx->fromString("123456789012345678901234567890", 10);
+    const proto::ProtoObject* method =
+        ctx->fromMethod(const_cast<proto::ProtoObject*>(parentless), nopMethod);
+    const proto::ProtoObject* buffer = ctx->newBuffer(8);
+    const proto::ProtoObject* list = ctx->newList()->asObject(ctx);
+
+    EXPECT_TRUE(protoClojure::isObjectCell(ctx, parentless));
+    EXPECT_TRUE(protoClojure::isObjectCell(ctx, child));
+    for (const proto::ProtoObject* v : {dbl, big, method, buffer, list, ctx->fromLong(7),
+                                        ctx->newMap()->asObject(ctx), PROTO_NONE, PROTO_TRUE})
+        EXPECT_FALSE(protoClojure::isObjectCell(ctx, v));
+
+    EXPECT_TRUE(protoClojure::isDoubleValue(ctx, dbl));
+    EXPECT_TRUE(protoClojure::isLargeIntegerValue(ctx, big));
+    EXPECT_FALSE(protoClojure::isLargeIntegerValue(ctx, ctx->fromLong(7)));
+    EXPECT_TRUE(protoClojure::isMethodValue(ctx, method));
+    EXPECT_TRUE(protoClojure::isProtoList(ctx, list));
+    EXPECT_FALSE(protoClojure::isProtoList(ctx, space.listPrototype->newChild(ctx, false)));
+    EXPECT_FALSE(protoClojure::isProtoMap(ctx, space.mapPrototype->newChild(ctx, false)));
+    EXPECT_TRUE(protoClojure::isProtoLinkedList(ctx, ctx->newLinkedList()->asObject(ctx)));
 }

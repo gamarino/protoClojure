@@ -64,6 +64,7 @@
 #pragma once
 
 #include "protoCore.h"  // proto::proto_long / proto_ulong
+#include "ValueKinds.h"
 
 namespace proto {
 class ProtoContext;
@@ -76,13 +77,10 @@ struct KeySemantics;
 namespace protoClojure {
 
 // True when `v` is a map: a protoCore ProtoMap in its AVL or its small form
-// (pointer tag 27 of protoCore's headers/proto_internal.h, shared by both).
-// The runtime never hands a ProtoMap to user code for anything else.
-inline bool isMap(const proto::ProtoObject* v) {
-    constexpr proto::proto_ulong kTagMask = 0x3F;
-    constexpr proto::proto_ulong kTagMap  = 27;
-    const proto::proto_ulong tag = reinterpret_cast<proto::proto_ulong>(v) & kTagMask;
-    return v != nullptr && tag == kTagMap;
+// (ValueKinds.h). The runtime never hands a ProtoMap to user code for
+// anything else.
+inline bool isMap(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
+    return isProtoMap(ctx, v);
 }
 
 // The Clojure key semantics handed to protoCore's hashed-collection helper.

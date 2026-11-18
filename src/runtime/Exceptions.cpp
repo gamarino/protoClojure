@@ -208,14 +208,14 @@ void initExceptions(proto::ProtoContext* ctx, proto::ProtoObject* globals) {
 
 bool isException(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     if (!v || v == PROTO_NONE || !g_classPrototypes[0]) return false;
-    // Only object cells have a prototype worth asking for (pointer tag 0).
-    if ((reinterpret_cast<std::uintptr_t>(v) & 0x3F) != 0) return false;
+    // Only object cells have a prototype worth asking for.
+    if (!isObjectCell(ctx, v)) return false;
     return v->isInstanceOf(ctx, g_classPrototypes[0]) == PROTO_TRUE;
 }
 
 bool isForeignObject(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     if (!v || v == PROTO_NONE) return false;
-    if ((reinterpret_cast<std::uintptr_t>(v) & 0x3F) != 0) return false;
+    if (!isObjectCell(ctx, v)) return false;
     return std::strcmp(valueTypeName(ctx, v), "an object") == 0;
 }
 
@@ -438,7 +438,7 @@ const proto::ProtoObject* prim_ex_info(proto::ProtoContext* ctx,
     if (data == PROTO_NONE)
         throwClassed(ctx, "IllegalArgumentException",
                      "Additional data must be non-nil.");
-    if (!isMap(data))
+    if (!isMap(ctx, data))
         throwClassed(ctx, "ClassCastException",
             std::string("ex-info expects a map, got ") + valueTypeName(ctx, data));
     if (cause != PROTO_NONE && !isThrowable(ctx, cause))

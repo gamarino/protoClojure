@@ -95,28 +95,13 @@ void ensureFnTemplates(proto::ProtoContext* ctx, ActiveCallContext& cc) {
 // arguments as one).
 constexpr unsigned int kMaxBoundParameters = 17;
 
-// SmallInt tagged pointer constants — mirror of protoCore's
-// PROTO_SMALL_INT_TAG_MASK/VALUE for the hot-path checks. Re-declared here
-// to dodge the per-call function-call cost of going through the inline
-// helper; both definitions must match headers/protoCore.h.
-constexpr proto::proto_ulong kSmallIntTagMask  = PROTO_UL(0x3FF);
-constexpr proto::proto_ulong kSmallIntTagValue = PROTO_UL(0x001);
+// SmallInteger hot-path helpers: protoCore's public inline SmallInteger API
+// (headers/protoCore.h), named for the opcodes that use them.
+inline bool isSmallIntFast(const proto::ProtoObject* v) { return proto::isSmallInt(v); }
 
-inline bool isSmallIntFast(const proto::ProtoObject* v) {
-    return (reinterpret_cast<proto::proto_ulong>(v) & kSmallIntTagMask) ==
-           kSmallIntTagValue;
-}
+inline long long smallIntValueFast(const proto::ProtoObject* v) { return proto::asSmallInt(v); }
 
-inline long long smallIntValueFast(const proto::ProtoObject* v) {
-    // Inverse of fromLong's `(v << 10) | tag` — arithmetic right-shift
-    // preserves sign for negatives, since the tag bits are always zero.
-    return reinterpret_cast<long long>(v) >> 10;
-}
-
-inline const proto::ProtoObject* smallIntFromLong(long long v) {
-    return reinterpret_cast<const proto::ProtoObject*>(
-        (v << 10) | static_cast<long long>(kSmallIntTagValue));
-}
+inline const proto::ProtoObject* smallIntFromLong(long long v) { return proto::makeSmallInt(v); }
 
 // The operator a binary arithmetic or comparison opcode compiles, for error
 // messages.
@@ -174,10 +159,6 @@ void noteGlobalStore(proto::ProtoContext* ctx, const proto::ProtoObject* globals
         return;
     }
 }
-
-// protoCore's pointer tag of a method value (POINTER_TAG_METHOD,
-// headers/proto_internal.h): every primitive.
-constexpr proto::proto_ulong kTagMethod = 12;
 
 inline bool smallIntFitsLong(long long v) {
     // Same bounds as PROTO_SMALL_INT_MIN/MAX (53-bit).
@@ -254,7 +235,7 @@ const proto::ProtoObject* callLookup(proto::ProtoContext* ctx,
         const proto::ProtoObject* e = setGet(ctx, m, key, &found);
         return found ? e : notFound;
     }
-    if (!callableIsMap && !isMap(m)) return notFound;
+    if (!callableIsMap && !isMap(ctx, m)) return notFound;
     const proto::ProtoObject* v = mapGet(ctx, m, key, &found);
     return found ? v : notFound;
 }
@@ -363,8 +344,7 @@ void splitQualified(const std::string& name, std::string& prefix, std::string& m
 // nil, so a PROTO_NONE read is confirmed by a presence probe.
 bool readMember(proto::ProtoContext* ctx, const proto::ProtoObject* obj,
                 const proto::ProtoString* key, const proto::ProtoObject*& out) {
-    if (!obj || obj == PROTO_NONE ||
-        (reinterpret_cast<std::uintptr_t>(obj) & 0x3F) != 0)
+    if (!obj || obj == PROTO_NONE || !isObjectCell(ctx, obj))
         return false;
     out = obj->getAttribute(ctx, key);
     if (out && out != PROTO_NONE) return true;
@@ -460,7 +440,7 @@ static bool extractKwVals(proto::ProtoContext* ctx,
                           const proto::ProtoObject* maybeMap,
                           const proto::ProtoObject** out) {
     const auto& kkeys = subMod->kwKeys();
-    if (!isMap(maybeMap)) {
+    if (!isMap(ctx, maybeMap)) {
         for (std::size_t i = 0; i < kkeys.size(); ++i) out[i] = PROTO_NONE;
         return false;
     }
@@ -576,7 +556,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
     // A primitive that reads its arguments without running Clojure code
     // and without allocating (fastPrimitiveCall): no context of its own.
     // Nothing is allocated in `ctx`, which may be a long-lived scope.
-    if ((reinterpret_cast<proto::proto_ulong>(callable) & 0x3F) == kTagMethod) {
+    if (isMethodValue(ctx, callable)) {
         if (const proto::ProtoObject* r = fastPrimitiveCall(
                 ctx, callable->asMethod(ctx), args, argc, false))
             return r;
@@ -692,7 +672,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
     }
 
     // Keywords, quoted symbols and maps are functions: a map lookup.
-    if (proto == cc->named.marker || isMap(callable) || (proto && proto == setPrototype())) {
+    if (proto == cc->named.marker || isMap(ctx, callable) || (proto && proto == setPrototype())) {
         return callLookup(ctx, cc->named, callable,
                           proto != cc->named.marker, args, argc);
     }
@@ -703,7 +683,7 @@ ExecutionEngine::invoke(proto::ProtoContext* ctx,
     // while the primitive runs, because it counts as a nested activation on
     // the current PrimitiveWindow and so never safepoints.
     proto::ProtoMethod fn = callable->asMethod(ctx);
-    if (!fn && isVector(callable)) return callVector(ctx, callable, args, argc);
+    if (!fn && isVector(ctx, callable)) return callVector(ctx, callable, args, argc);
     if (!fn) throwError(ctx, "VM: invoke: value is not callable");
     const proto::ProtoObject* self = callable->asMethodSelf(ctx);
     const proto::ProtoArguments positional(args, argc);
@@ -936,7 +916,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
         // slots until the result replaces them, and what it allocates is
         // this frame's garbage, handed to the collector at the next loop
         // back-edge, as the arithmetic opcodes' is.
-        if ((reinterpret_cast<proto::proto_ulong>(callable) & 0x3F) == kTagMethod) {
+        if (isMethodValue(&frame, callable)) {
             const proto::ProtoObject** argSlots =
                 frame.getAutomaticLocals() + stackBase + sp - argc;
             if (const proto::ProtoObject* r = fastPrimitiveCall(
@@ -1109,7 +1089,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
         // stack slots until the lookup returns.
         const bool callableIsNamed = proto == env.named.marker;
         const bool callableIsMap =
-            !callableIsNamed && (isMap(callable) || (proto && proto == setPrototype()));
+            !callableIsNamed && (isMap(&frame, callable) || (proto && proto == setPrototype()));
         if (callableIsNamed || callableIsMap) {
             const proto::ProtoObject* lookupArgs[2] = {nullptr, nullptr};
             for (unsigned int i = 0; i < argc && i < 2; ++i) {
@@ -1132,7 +1112,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
         // safepoint, and the free slots above its arguments are its
         // PrimitiveWindow.
         proto::ProtoMethod fn = callable->asMethod(&frame);
-        if (!fn && isVector(callable)) {
+        if (!fn && isVector(&frame, callable)) {
             const proto::ProtoObject* vargs[1] = {
                 argc >= 1 ? frame.getAutomaticLocal(stackBase + sp - argc) : nullptr};
             const proto::ProtoObject* result = callVector(&frame, callable, vargs, argc);
@@ -1331,7 +1311,7 @@ ExecutionEngine::executeFrame(proto::ProtoContext* parent,
                 const proto::ProtoList* argsList = nullptr;
                 if (!listObj || listObj == PROTO_NONE) {
                     argsList = frame.newList();
-                } else if (isVector(listObj)) {
+                } else if (isVector(&frame, listObj)) {
                     argsList = vectorItems(&frame, listObj);
                 } else {
                     // A lazy seq, a map, a set or a string spreads its seq

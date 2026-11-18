@@ -134,7 +134,7 @@ struct MapOpsFixture : ::testing::Test {
 // compare.
 bool eqValues(proto::ProtoContext* ctx, void* self,
               const proto::ProtoObject* a, const proto::ProtoObject* b) {
-    if (protoClojure::isMap(a) && protoClojure::isMap(b))
+    if (protoClojure::isMap(ctx, a) && protoClojure::isMap(ctx, b))
         return protoClojure::mapEquals(ctx, a, b, self, &eqValues);
     return a == b || a->compare(ctx, b) == 0;
 }
@@ -146,14 +146,14 @@ bool mapsEqual(proto::ProtoContext* ctx, const proto::ProtoObject* a,
 
 TEST_F(MapOpsFixture, MapsAreProtoMapsRecognisedByTag) {
     const proto::ProtoObject* m = assoc(nullptr, kw(":a"), num(1));
-    EXPECT_TRUE(protoClojure::isMap(m));
-    EXPECT_TRUE(protoClojure::isMap(ctx->newMap()->asObject(ctx)));
+    EXPECT_TRUE(protoClojure::isMap(ctx, m));
+    EXPECT_TRUE(protoClojure::isMap(ctx, ctx->newMap()->asObject(ctx)));
     // The sparse list the map used to be built on is no longer a map.
-    EXPECT_FALSE(protoClojure::isMap(ctx->newSparseList()->asObject(ctx)));
-    EXPECT_FALSE(protoClojure::isMap(nullptr));
-    EXPECT_FALSE(protoClojure::isMap(PROTO_NONE));
-    EXPECT_FALSE(protoClojure::isMap(list({num(1)})));
-    EXPECT_FALSE(protoClojure::isMap(kw(":a")));
+    EXPECT_FALSE(protoClojure::isMap(ctx, ctx->newSparseList()->asObject(ctx)));
+    EXPECT_FALSE(protoClojure::isMap(ctx, nullptr));
+    EXPECT_FALSE(protoClojure::isMap(ctx, PROTO_NONE));
+    EXPECT_FALSE(protoClojure::isMap(ctx, list({num(1)})));
+    EXPECT_FALSE(protoClojure::isMap(ctx, kw(":a")));
 }
 
 TEST_F(MapOpsFixture, CountIsTheNumberOfEntriesAndAssocOfAnEqualKeyAddsNone) {
@@ -572,7 +572,7 @@ TEST_F(MapOpsFixture, SetsAreValueKeys) {
     const proto::ProtoObject* s2 = protoClojure::setConj(ctx, nullptr, ba, 2);
     ASSERT_NE(s1, s2);
     EXPECT_TRUE(protoClojure::isSet(ctx, s1));
-    EXPECT_FALSE(protoClojure::isMap(s1));
+    EXPECT_FALSE(protoClojure::isMap(ctx, s1));
     EXPECT_FALSE(protoClojure::keyIsIdentity(ctx, s1));
     EXPECT_TRUE(protoClojure::keyEquals(ctx, s1, s2));
     EXPECT_EQ(protoClojure::keyHash(ctx, s1), protoClojure::keyHash(ctx, s2));

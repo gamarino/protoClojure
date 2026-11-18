@@ -730,9 +730,9 @@ void Writer::value(proto::ProtoContext* ctx, const PO* v) {
         string(reinterpret_cast<const proto::ProtoString*>(v)->toStdString(ctx));
         return;
     }
-    if (isMap(v)) { map(ctx, v); return; }
+    if (isMap(ctx, v)) { map(ctx, v); return; }
     // A list is a seq object (SeqTypes.h).
-    if (isVector(v) || isSeqObject(ctx, v) || isSet(ctx, v)) {
+    if (isVector(ctx, v) || isSeqObject(ctx, v) || isSet(ctx, v)) {
         sequence(ctx, v);
         return;
     }
@@ -773,7 +773,7 @@ const PO* mapOption(proto::ProtoContext* ctx, const ActiveCallContext& cc, const
                     const char* name, bool* present = nullptr) {
     bool found = false;
     const PO* v = PROTO_NONE;
-    if (opts != PROTO_NONE && isMap(opts)) v = mapGet(ctx, opts, keywordValue(ctx, cc, name), &found);
+    if (opts != PROTO_NONE && isMap(ctx, opts)) v = mapGet(ctx, opts, keywordValue(ctx, cc, name), &found);
     if (present) *present = found;
     return v ? v : PROTO_NONE;
 }
@@ -936,7 +936,7 @@ std::string writeJson(proto::ProtoContext* ctx, const ActiveCallContext& cc, con
 
 WriteOptions cheshireWriteOptions(proto::ProtoContext* ctx, const ActiveCallContext& cc,
                                   const PO* opts, const char* who) {
-    if (opts != PROTO_NONE && !isMap(opts))
+    if (opts != PROTO_NONE && !isMap(ctx, opts))
         throwClassed(ctx, "ClassCastException",
                      std::string(who) + ": options must be a map, got " + valueTypeName(ctx, opts));
     WriteOptions o;

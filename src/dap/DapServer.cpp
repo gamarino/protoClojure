@@ -186,7 +186,7 @@ constexpr std::size_t kMaxLength = 8000;  // characters per value
 void formatInto(proto::ProtoContext* ctx, std::string& out, const proto::ProtoObject* v, int depth,
                 bool realize) {
     if (out.size() > kMaxLength) { out += "..."; return; }
-    if (depth > kMaxDepth && (isListValue(ctx, v) || isVector(v) || isMap(v) || isSet(ctx, v) ||
+    if (depth > kMaxDepth && (isListValue(ctx, v) || isVector(ctx, v) || isMap(ctx, v) || isSet(ctx, v) ||
                               isSeqObject(ctx, v))) {
         out += "...";
         return;
@@ -202,7 +202,7 @@ void formatInto(proto::ProtoContext* ctx, std::string& out, const proto::ProtoOb
         out += ')';
         return;
     }
-    if (isVector(v)) {
+    if (isVector(ctx, v)) {
         const proto::ProtoList* l = vectorItems(ctx, v);
         const proto::proto_ulong n = l->getSize(ctx);
         out += '[';
@@ -214,7 +214,7 @@ void formatInto(proto::ProtoContext* ctx, std::string& out, const proto::ProtoOb
         out += ']';
         return;
     }
-    if (isMap(v)) {
+    if (isMap(ctx, v)) {
         struct Acc { std::string* out; int depth; std::size_t n; bool realize; } acc{&out, depth, 0, realize};
         out += '{';
         mapForEach(ctx, v, &acc, [](proto::ProtoContext* c, void* self,
@@ -299,12 +299,12 @@ Children childrenOf(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
         std::size_t i = 0;
         for (ListCursor c(v); c.hasNext() && i < kMaxChildren; ++i)
             kids.emplace_back("[" + std::to_string(i) + "]", c.next());
-    } else if (isVector(v)) {
+    } else if (isVector(ctx, v)) {
         const proto::ProtoList* l = vectorItems(ctx, v);
         const proto::proto_ulong n = std::min<proto::proto_ulong>(l->getSize(ctx), kMaxChildren);
         for (proto::proto_ulong i = 0; i < n; ++i)
             kids.emplace_back("[" + std::to_string(i) + "]", l->getAt(ctx, static_cast<int>(i)));
-    } else if (isMap(v)) {
+    } else if (isMap(ctx, v)) {
         struct Acc { Children* kids; } acc{&kids};
         mapForEach(ctx, v, &acc, [](proto::ProtoContext* c, void* self,
                                     const proto::ProtoObject* k, const proto::ProtoObject* val) {
@@ -324,8 +324,8 @@ Children childrenOf(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
 
 bool hasChildren(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     if (isListValue(ctx, v)) return v != emptyListValue();
-    if (isVector(v)) return vectorItems(ctx, v)->getSize(ctx) > 0;
-    if (isMap(v)) return mapCount(ctx, v) > 0;
+    if (isVector(ctx, v)) return vectorItems(ctx, v)->getSize(ctx) > 0;
+    if (isMap(ctx, v)) return mapCount(ctx, v) > 0;
     if (isSet(ctx, v)) return !setIsEmpty(ctx, v);
     return false;
 }

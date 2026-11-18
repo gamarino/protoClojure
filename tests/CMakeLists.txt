@@ -98,6 +98,11 @@ endif()
 
 add_test(NAME cli/help
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/help.sh" "$<TARGET_FILE:protoclj>")
+# protoClojure depends on protoCore's public API only: no proto_internal.h, no
+# hand-copied pointer tags, embedded types or cell layouts under src/.
+add_test(NAME source/no-protocore-internals
+    COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/no-protocore-internals.sh"
+            "${CMAKE_SOURCE_DIR}")
 add_test(NAME cli/large-program
     COMMAND ${PROTOCLJ_SH} "${CMAKE_CURRENT_SOURCE_DIR}/cli/large-program.sh" "$<TARGET_FILE:protoclj>")
 add_test(NAME cli/bulk-builders-under-heap-limit

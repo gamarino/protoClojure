@@ -159,7 +159,7 @@ int compareValues(proto::ProtoContext* ctx, const PO* a, const PO* b) {
         const int c = x.compare(y);
         return c < 0 ? -1 : (c > 0 ? 1 : 0);
     }
-    if (isVector(a) && isVector(b)) {
+    if (isVector(ctx, a) && isVector(ctx, b)) {
         const proto::ProtoList* x = vectorItems(ctx, a);
         const proto::ProtoList* y = vectorItems(ctx, b);
         const proto::proto_ulong nx = x->getSize(ctx), ny = y->getSize(ctx);
@@ -398,7 +398,7 @@ COREPRIM(prim_require) {
             if (!isKnownNamespace(ns)) cannotLocate(ctx, ns);
             continue;
         }
-        const proto::ProtoList* parts = (isVector(spec) || isSeqValue(ctx, spec)) ? seqToList(ctx, spec) : nullptr;
+        const proto::ProtoList* parts = (isVector(ctx, spec) || isSeqValue(ctx, spec)) ? seqToList(ctx, spec) : nullptr;
         if (!parts || parts->getSize(ctx) == 0)
             throwClassed(ctx, "IllegalArgumentException",
                          "require: a spec is a symbol or [namespace & options], got " +
@@ -602,7 +602,7 @@ COREPRIM(prim_hash) {
 COREPRIM(prim_peek) {
     const PO* v = oneArg(ctx, args, "peek");
     if (v == PROTO_NONE) return PROTO_NONE;
-    if (isVector(v)) {
+    if (isVector(ctx, v)) {
         const proto::ProtoList* items = vectorItems(ctx, v);
         return items->getSize(ctx) == 0 ? PROTO_NONE : items->getLast(ctx);
     }
@@ -616,7 +616,7 @@ COREPRIM(prim_peek) {
 COREPRIM(prim_pop) {
     const PO* v = oneArg(ctx, args, "pop");
     if (v == PROTO_NONE) return PROTO_NONE;
-    if (isVector(v)) {
+    if (isVector(ctx, v)) {
         const proto::ProtoList* items = vectorItems(ctx, v);
         if (items->getSize(ctx) == 0) throwClassed(ctx, "IllegalStateException", "Can't pop empty vector");
         CallerSlots scope(ctx, 1);
