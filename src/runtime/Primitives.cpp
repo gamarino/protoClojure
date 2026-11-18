@@ -4624,6 +4624,28 @@ bool valuesEqual(proto::ProtoContext* ctx,
     if (!a) a = PROTO_NONE;
     if (!b) b = PROTO_NONE;
     if (a == b) return true;
+
+    // Numbers by value across types (D15) with IEEE semantics, so NaN is equal
+    // to no number, itself included (the identity test above still makes one
+    // NaN object `=` to itself, as JVM Clojure's Util.equiv does); strings by
+    // content. Decided by the types, so protoCore's partialCompare never reads
+    // an object's `__data__` wrapper as the string or number it holds.
+    if (isNumber(ctx, a)) return isNumber(ctx, b) && a->partialCompare(ctx, b) == 0;
+    if (proto::ProtoObject::isStringTagFast(a))
+        return proto::ProtoObject::isStringTagFast(b) && a->partialCompare(ctx, b) == 0;
+
+    // A value whose type has no value equality -- keywords and symbols
+    // (interned, Named.h), atoms, fns, objects, nil, booleans -- is equal only
+    // to itself, which the identity test answered. One prototype read of `a`
+    // tells it from the collections below.
+    {
+        const proto::ProtoObject* p = a->getPrototype(ctx);
+        const proto::ProtoSpace* space = ctx->space;
+        if (p != space->mapPrototype && p != space->sparseListPrototype && p != setPrototype() &&
+            p != g_seqProtos.cons && p != g_seqProtos.lazy && p != g_seqProtos.chunk &&
+            p != space->getLinkedListPrototype())
+            return false;
+    }
     // Recurses once per level of nesting (StackGuard.h).
     checkNativeStack();
 
@@ -4686,16 +4708,8 @@ bool valuesEqual(proto::ProtoContext* ctx,
         return true;
     }
 
-    // Numbers by value across types (D15) with IEEE semantics, so NaN is equal
-    // to no number, itself included (the identity test above still makes one
-    // NaN object `=` to itself, as JVM Clojure's Util.equiv does); strings by
-    // content; any other pair -- keywords and symbols (interned, Named.h),
-    // atoms, fns, objects -- only when identical, which the test above
-    // answered. Decided by the types, so protoCore's partialCompare never
-    // reads an object's `__data__` wrapper as the string or number it holds.
-    if (proto::ProtoObject::isStringTagFast(a) && proto::ProtoObject::isStringTagFast(b))
-        return a->partialCompare(ctx, b) == 0;
-    return isNumber(ctx, a) && isNumber(ctx, b) && a->partialCompare(ctx, b) == 0;
+    // A collection and a value of another kind.
+    return false;
 }
 
 void installPrimitives(proto::ProtoContext* ctx,
