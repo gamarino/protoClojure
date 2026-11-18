@@ -31,7 +31,7 @@ constexpr proto::proto_ulong kSaltMap      = PROTO_UL(0x9FB21C651E98DF25);
 constexpr unsigned int kSlotMap   = 0;
 constexpr unsigned int kSlotCount = 1;
 
-// The kind has already been checked by isMap / isSequential, so the cast is
+// The kind has already been checked by isMap / SequenceView::of, so the cast is
 // the whole conversion: ProtoObject::asMap would first probe a tag-0 object
 // for a `__data__` wrapper attribute, which this runtime never sets.
 inline const proto::ProtoMap* asMapFast(const proto::ProtoObject* m) {
@@ -40,12 +40,6 @@ inline const proto::ProtoMap* asMapFast(const proto::ProtoObject* m) {
 
 inline bool isListTag(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
     return isProtoList(ctx, v);
-}
-
-// A vector, a Clojure list (SeqTypes.h), or the ProtoList a seq object was
-// read into (keyHash, keyEquals): what is matched element by element.
-inline bool isSequential(proto::ProtoContext* ctx, const proto::ProtoObject* v) {
-    return v != nullptr && (isVector(ctx, v) || isListTag(ctx, v) || isListValue(ctx, v));
 }
 
 // The elements of a sequential value in order: a vector's or a ProtoList's
