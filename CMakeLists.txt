@@ -196,8 +196,10 @@ include_directories(include headers src)
 # -DCMAKE_PREFIX_PATH, or a build tree given with -DprotoIO_DIR), else the
 # sibling source tree ../protoIO built as part of this one. OpenSSL (TLS for
 # sockets and https) comes with protoIO's PUBLIC link interface;
-# dpkg-shlibdeps turns it into the package's libssl dependency. 0.2.3 is the
-# floor: readBufferedLine, which line-seq and read-line use (IO.cpp).
+# dpkg-shlibdeps turns it into the package's libssl dependency. 0.7.1 is the
+# floor: readBufferedLine (0.2.3), which line-seq and read-line use, and the
+# error kinds Internal, Conflict and DepthLimit that IO.cpp maps (0.5.0); the
+# build was validated on 0.7.1, and protoIO accepts only the same minor.
 find_package(protoIO 0.7.1 CONFIG QUIET)
 if(protoIO_FOUND)
     message(STATUS "protoClojure: installed protoIO ${protoIO_VERSION} from ${protoIO_DIR}")
