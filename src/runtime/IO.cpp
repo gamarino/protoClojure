@@ -222,6 +222,16 @@ KindMapping mappingOf(Kind kind) {
         case Kind::LineTooLong:        return {"IOException", ":line-too-long"};
         case Kind::BodyTooLarge:       return {"IOException", ":body-too-large"};
         case Kind::InvalidArgument:    return {"IllegalArgumentException", ":invalid-argument"};
+        // A depth limit is a refused value like any other limit, so it stays an
+        // IllegalArgumentException (what it was before protoIO told it apart
+        // from InvalidArgument); :type lets a caller name its own limit.
+        case Kind::DepthLimit:         return {"IllegalArgumentException", ":depth-limit"};
+        // A failure inside a library protoIO relies on, and an operation that
+        // clashes with one in progress on the same object: neither is the
+        // caller's argument or the environment, both are an object in a state
+        // that does not allow the call.
+        case Kind::Internal:           return {"IllegalStateException", ":internal"};
+        case Kind::Conflict:           return {"IllegalStateException", ":conflict"};
     }
     return {"IOException", ":io"};
 }

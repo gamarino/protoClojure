@@ -1836,7 +1836,8 @@ number when there is one.
 | `SocketTimeoutException` | `:timeout` |
 | `UnknownHostException` | `:unknown-host` |
 | `SocketException` | `:network` (other socket, TLS and HTTP protocol failures) |
-| `IllegalArgumentException` | `:invalid-argument` (a header with a line break, a bad URL) |
+| `IllegalArgumentException` | `:invalid-argument` (a header with a line break, a bad URL), `:depth-limit` (a document nested deeper than the limit) |
+| `IllegalStateException` | `:internal` (a failure inside a library protoIO relies on, such as OpenSSL), `:conflict` (an operation clashing with one already in progress on the same object) |
 
 ```clojure
 (try (slurp "missing.txt")

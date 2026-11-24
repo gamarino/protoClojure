@@ -24,7 +24,7 @@ dependency on protoCore's own package instead of shipping a copy.
   its install prefix with `-DPROTO_CORE_PREFIX=<prefix>` if it is not in a
   system prefix), installed, with its CMake package configuration. See
   protoCore's `docs/INSTALLATION.md`.
-- **protoIO 0.2.3 or a later 0.2** (the input and output library shared by the protoCore
+- **protoIO 0.7.1 or a later 0.7** (the input and output library shared by the protoCore
   runtimes), either installed (the `protoio-dev` package, or any prefix
   given with `-DCMAKE_PREFIX_PATH`, or a build tree given with
   `-DprotoIO_DIR=<path>/protoIO/build_release`) or checked out next to
@@ -33,7 +33,8 @@ dependency on protoCore's own package instead of shipping a copy.
   does not need it. 0.2.2 is the first with `RunOptions` (`sh`'s `:dir` and
   `:env` without a shell) and a dual-stack listener for servers started
   without a host; 0.2.3 the first with `readBufferedLine`, which `line-seq`
-  and `read-line` use.
+  and `read-line` use; 0.5.0 the first with the `Internal`, `Conflict` and
+  `DepthLimit` error kinds, which `IO.cpp` maps.
 - **PCRE2** 10.34 or newer, 8-bit (`libpcre2-dev` on Debian/Ubuntu,
   `pcre2-devel` on Fedora/RHEL, `brew install pcre2 pkgconf` on macOS), the
   regular-expression engine (DESIGN.md M48), found through `pkg-config` or

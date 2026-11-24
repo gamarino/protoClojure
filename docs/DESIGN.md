@@ -558,7 +558,8 @@ binds it, in three steps per primitive:
 | ConnectionTimedOut | `SocketTimeoutException` | `:timeout` |
 | NameLookup | `UnknownHostException` | `:unknown-host` |
 | Network | `SocketException` | `:network` |
-| InvalidArgument | `IllegalArgumentException` | `:invalid-argument` |
+| InvalidArgument, DepthLimit | `IllegalArgumentException` | `:invalid-argument`, `:depth-limit` |
+| Internal, Conflict | `IllegalStateException` | `:internal`, `:conflict` |
 
 **Handles.** Files named with `file`, readers, writers, sockets,
 listening sockets, UDP sockets and HTTP servers are protoCore objects whose
