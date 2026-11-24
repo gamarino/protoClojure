@@ -9,6 +9,13 @@ remains the first planned release (`docs/ROADMAP.md`).
 
 ## [Unreleased]
 
+### Fixed — protoIO error kinds Internal, Conflict, DepthLimit, 2026-11-24
+
+- The scheduled CI build (protoIO `main`) failed with `-Werror=switch`: newer protoIO
+  added three `protoio::Error::Kind` values that `IO.cpp` did not map. `Internal` and
+  `Conflict` now raise `IllegalStateException` (`:internal`, `:conflict`); `DepthLimit`
+  raises `IllegalArgumentException` (`:depth-limit`), the class it had as `InvalidArgument`.
+
 ### Changed — protoCore floor 3.6.1, 2026-11-18
 
 - **The protoCore floor is 3.6.1** (`find_package(protoCore 3.6.1)`, DEB
