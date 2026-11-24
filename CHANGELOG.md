@@ -15,6 +15,9 @@ remains the first planned release (`docs/ROADMAP.md`).
   added three `protoio::Error::Kind` values that `IO.cpp` did not map. `Internal` and
   `Conflict` now raise `IllegalStateException` (`:internal`, `:conflict`); `DepthLimit`
   raises `IllegalArgumentException` (`:depth-limit`), the class it had as `InvalidArgument`.
+  Those kinds exist from protoIO 0.5.0, so the protoIO floor is now 0.7.1
+  (`find_package(protoIO 0.7.1)`, the version the build was validated against) and CI pins
+  v0.7.1 (`ecdfb62`) in `ci.yml` and `cross-platform.yml`.
 
 ### Changed — protoCore floor 3.6.1, 2026-11-18
 

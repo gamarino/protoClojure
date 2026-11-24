@@ -198,7 +198,7 @@ include_directories(include headers src)
 # sockets and https) comes with protoIO's PUBLIC link interface;
 # dpkg-shlibdeps turns it into the package's libssl dependency. 0.2.3 is the
 # floor: readBufferedLine, which line-seq and read-line use (IO.cpp).
-find_package(protoIO 0.2.3 CONFIG QUIET)
+find_package(protoIO 0.7.1 CONFIG QUIET)
 if(protoIO_FOUND)
     message(STATUS "protoClojure: installed protoIO ${protoIO_VERSION} from ${protoIO_DIR}")
 elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../protoIO/CMakeLists.txt")
